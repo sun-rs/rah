@@ -61,6 +61,8 @@ export interface CodexRolloutTranslationState {
   terminalSessions: Map<number, CodexTerminalSessionToolState>;
   completedToolCallIds: Set<string>;
   lastTimelineTextSignature: string | null;
+  lastTimelineIdentity: TimelineIdentity | null;
+  lastTimelinePhase?: AssistantMessagePhase | undefined;
   lastGoalEventSignatureByThread: Map<string, string>;
   providerSessionId?: string | undefined;
   currentTurnId?: string | undefined;
@@ -76,6 +78,7 @@ export function createCodexRolloutTranslationState(
     terminalSessions: new Map(),
     completedToolCallIds: new Set(),
     lastTimelineTextSignature: null,
+    lastTimelineIdentity: null,
     lastGoalEventSignatureByThread: new Map(),
     nextTimelineItemIndex: 0,
   };
@@ -464,7 +467,50 @@ function shouldSkipDuplicateTimelineText(
     return true;
   }
   state.lastTimelineTextSignature = signature;
+  state.lastTimelineIdentity = null;
+  state.lastTimelinePhase = undefined;
   return false;
+}
+
+function rememberTimelineTextIdentity(
+  state: CodexRolloutTranslationState,
+  identity: TimelineIdentity | undefined,
+  phase?: AssistantMessagePhase,
+): void {
+  state.lastTimelineIdentity = identity ?? null;
+  state.lastTimelinePhase = phase;
+}
+
+function upgradeDuplicateAssistantToFinal(
+  state: CodexRolloutTranslationState,
+  record: Record<string, unknown>,
+  text: string,
+  phase: AssistantMessagePhase | undefined,
+): CodexTranslatedActivity[] {
+  if (
+    phase !== "final_answer" ||
+    state.lastTimelinePhase === "final_answer" ||
+    state.lastTimelineIdentity === null
+  ) {
+    return [];
+  }
+  state.lastTimelinePhase = "final_answer";
+  return [
+    persistedActivity(
+      record,
+      {
+        type: "timeline_item_updated",
+        item: {
+          kind: "assistant_message",
+          text,
+          phase: "final_answer",
+          ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
+        },
+        identity: state.lastTimelineIdentity,
+      },
+      "authoritative",
+    ),
+  ];
 }
 
 function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
@@ -1087,7 +1133,16 @@ function parseFunctionCallOutput(output: string): {
   };
 }
 
-function parseCustomToolCallOutput(output: unknown): {
+function isExplicitPatchFailure(toolCall: ToolCall, output: string): boolean {
+  if (toolCall.family !== "patch" && toolCall.providerToolName !== "apply_patch") {
+    return false;
+  }
+  return /(?:apply_patch verification failed|failed to find expected lines|invalid patch text|patch (?:apply )?failed)/i.test(
+    output,
+  );
+}
+
+function parseCustomToolCallOutput(output: unknown, toolCall: ToolCall): {
   successText?: string;
   exitCode?: number;
   failedText?: string;
@@ -1096,17 +1151,26 @@ function parseCustomToolCallOutput(output: unknown): {
   if (typeof output === "string") {
     try {
       const parsed = JSON.parse(output) as Record<string, unknown>;
-      return {
-        ...(typeof parsed.output === "string" ? { successText: parsed.output } : {}),
-        ...(parsed.metadata &&
+      const text = typeof parsed.output === "string" ? parsed.output : undefined;
+      const exitCode =
+        parsed.metadata &&
         typeof parsed.metadata === "object" &&
         !Array.isArray(parsed.metadata) &&
         typeof (parsed.metadata as Record<string, unknown>).exit_code === "number"
-          ? { exitCode: (parsed.metadata as Record<string, unknown>).exit_code as number }
-          : {}),
-        ...(typeof parsed.output === "string"
-          ? { fileRefs: extractUpdatedFiles(parsed.output) }
-          : {}),
+          ? ((parsed.metadata as Record<string, unknown>).exit_code as number)
+          : undefined;
+      if (exitCode !== undefined && exitCode !== 0) {
+        return {
+          failedText: text?.trim() || `Tool exited with code ${exitCode}.`,
+          exitCode,
+        };
+      }
+      if (text && isExplicitPatchFailure(toolCall, text)) {
+        return { failedText: text.trim() };
+      }
+      return {
+        ...(text ? { successText: text, fileRefs: extractUpdatedFiles(text) } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
       };
     } catch {
       const trimmed = output.trim();
@@ -1124,15 +1188,16 @@ function parseCustomToolCallOutput(output: unknown): {
               exitCode: processOutput.exitCode,
             };
       }
-      if (/^Success\./.test(trimmed)) {
+      if (isExplicitPatchFailure(toolCall, trimmed)) {
+        return { failedText: trimmed };
+      }
+      if (trimmed) {
         return {
           successText: trimmed,
           fileRefs: extractUpdatedFiles(trimmed),
         };
       }
-      return {
-        ...(trimmed ? { failedText: trimmed } : {}),
-      };
+      return {};
     }
   }
   return {};
@@ -1321,21 +1386,66 @@ export function finalizeCodexRolloutTranslationState(
   state: CodexRolloutTranslationState,
   options: { timestamp?: string } = {},
 ): CodexTranslatedActivity[] {
-  return interruptedPendingToolActivities(
-    state,
-    {
-      ...(options.timestamp ? { timestamp: options.timestamp } : {}),
-      type: "event_msg",
-      payload: {
-        type: "turn_aborted",
-        reason: "history_eof",
+  return scopeCodexTranslatedActivitiesToTurn(
+    interruptedPendingToolActivities(
+      state,
+      {
+        ...(options.timestamp ? { timestamp: options.timestamp } : {}),
+        type: "event_msg",
+        payload: {
+          type: "turn_aborted",
+          reason: "history_eof",
+        },
       },
-    },
-    { includeTimelineStatus: true, includeTerminalSessions: false },
+      { includeTimelineStatus: true, includeTerminalSessions: false },
+    ),
+    state.currentTurnId,
   );
 }
 
 export function translateCodexRolloutLine(
+  line: unknown,
+  state: CodexRolloutTranslationState,
+): CodexTranslatedActivity[] {
+  const turnIdBeforeTranslation = state.currentTurnId;
+  const translated = translateCodexRolloutLineUnscoped(line, state);
+  return scopeCodexTranslatedActivitiesToTurn(
+    translated,
+    state.currentTurnId ?? turnIdBeforeTranslation,
+  );
+}
+
+function scopeCodexTranslatedActivitiesToTurn(
+  translated: readonly CodexTranslatedActivity[],
+  currentTurnId: string | undefined,
+): CodexTranslatedActivity[] {
+  if (!currentTurnId) {
+    return [...translated];
+  }
+  return translated.map((item) => {
+    const activity = item.activity;
+    switch (activity.type) {
+      case "session_state":
+      case "session_failed":
+      case "session_exited":
+      case "host_updated":
+      case "transport_changed":
+      case "heartbeat":
+      case "terminal_output":
+      case "terminal_exited":
+        return item;
+      default:
+        return "turnId" in activity && activity.turnId
+          ? item
+          : {
+              ...item,
+              activity: { ...activity, turnId: currentTurnId } as ProviderActivity,
+            };
+    }
+  });
+}
+
+function translateCodexRolloutLineUnscoped(
   line: unknown,
   state: CodexRolloutTranslationState,
 ): CodexTranslatedActivity[] {
@@ -1465,6 +1575,7 @@ export function translateCodexRolloutLine(
       const identity = createHistoryTimelineIdentity(state, {
         itemKind: "reasoning",
       });
+      rememberTimelineTextIdentity(state, identity);
       return [
         persistedActivity(
           record,
@@ -1485,13 +1596,14 @@ export function translateCodexRolloutLine(
         }
         return invalidRolloutActivity(record, "agent_message did not contain text");
       }
+      const phase = assistantMessagePhase(payload);
       if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
-        return [];
+        return upgradeDuplicateAssistantToFinal(state, record, text, phase);
       }
       const identity = createHistoryTimelineIdentity(state, {
         itemKind: "assistant_message",
       });
-      const phase = assistantMessagePhase(payload);
+      rememberTimelineTextIdentity(state, identity, phase);
       return [
         persistedActivity(
           record,
@@ -1655,6 +1767,7 @@ export function translateCodexRolloutLine(
         itemKind: "user_message",
         ...(messageId !== null ? { providerMessageId: messageId } : {}),
       });
+      rememberTimelineTextIdentity(state, identity);
       return [
         ...(messageId
           ? [
@@ -1699,15 +1812,16 @@ export function translateCodexRolloutLine(
         }
         return invalidRolloutActivity(record, "assistant message did not contain output_text");
       }
+      const phase = assistantMessagePhase(payload);
       if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
-        return [];
+        return upgradeDuplicateAssistantToFinal(state, record, text, phase);
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
       const identity = createHistoryTimelineIdentity(state, {
         itemKind: "assistant_message",
         ...(messageId !== null ? { providerMessageId: messageId } : {}),
       });
-      const phase = assistantMessagePhase(payload);
+      rememberTimelineTextIdentity(state, identity, phase);
       return [
         ...(messageId
           ? [
@@ -2299,7 +2413,7 @@ export function translateCodexRolloutLine(
       }
       return invalidRolloutActivity(record, "custom_tool_call_output had no pending call");
     }
-    const parsedOutput = parseCustomToolCallOutput(payload.output);
+    const parsedOutput = parseCustomToolCallOutput(payload.output, pending.toolCall);
     const artifacts = [...(pending.toolCall.detail?.artifacts ?? [])];
     if (parsedOutput.successText) {
       artifacts.push({
@@ -2327,7 +2441,10 @@ export function translateCodexRolloutLine(
                   observation: {
                     ...pending.observation,
                     status: "failed",
-                    summary: "Patch apply failed.",
+                    summary:
+                      pending.toolCall.family === "patch"
+                        ? "Patch apply failed."
+                        : `${pending.toolCall.title} failed.`,
                     ...(parsedOutput.exitCode !== undefined
                       ? { exitCode: parsedOutput.exitCode }
                       : {}),

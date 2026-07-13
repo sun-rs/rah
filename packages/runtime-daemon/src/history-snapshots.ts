@@ -1,4 +1,4 @@
-import type { RahEvent, SessionHistoryPageResponse } from "@rah/runtime-protocol";
+import type { RahEvent, ConversationEvidencePage } from "@rah/runtime-protocol";
 import { normalizeTranscriptEvents } from "./timeline-reconciler";
 
 export type FrozenHistoryBoundary = {
@@ -24,6 +24,11 @@ export type FrozenHistoryPage = {
  * - reject or avoid mixing newer file content into older-page reads
  */
 export interface FrozenHistoryPageLoader {
+  /**
+   * Cheaply observable source revision for loaders that can determine their
+   * frozen boundary without reading and translating the first page.
+   */
+  readonly boundary?: FrozenHistoryBoundary;
   loadInitialPage(limit: number): FrozenHistoryPage;
   loadOlderPage(
     cursor: string,
@@ -40,7 +45,7 @@ type MaterializedHistorySnapshot = {
 type CachedFrozenPage = {
   requestCursor: string | null;
   limit: number;
-  response: SessionHistoryPageResponse;
+  response: ConversationEvidencePage;
 };
 
 type FrozenPagedHistorySnapshot = {
@@ -176,17 +181,27 @@ export class HistorySnapshotStore {
     cursor?: string;
     loadEvents: () => RahEvent[];
     loadFrozenPage?: () => FrozenHistoryPageLoader | undefined;
-  }): SessionHistoryPageResponse {
+  }): ConversationEvidencePage {
     const existing = this.snapshots.get(args.sessionId);
     if (existing?.mode === "frozen_paged") {
       if (!args.cursor) {
         const requestedLimit = normalizeHistoryPageLimit(args.limit);
         const cachedInitial = existing.pagesByRequestCursor.get(null);
-        const refreshed = this.createFrozenPagedSnapshot(
-          args.sessionId,
-          args.limit,
-          args.loadFrozenPage,
-        );
+        const candidateLoader = args.loadFrozenPage?.();
+        if (
+          candidateLoader?.boundary?.sourceRevision === existing.boundary.sourceRevision &&
+          cachedInitial?.limit === requestedLimit
+        ) {
+          return cachedInitial.response;
+        }
+        const refreshed = candidateLoader
+          ? this.createFrozenPagedSnapshot(
+              args.sessionId,
+              args.limit,
+              args.loadFrozenPage,
+              candidateLoader,
+            )
+          : null;
         if (
           refreshed &&
           (refreshed.boundary.sourceRevision !== existing.boundary.sourceRevision ||
@@ -274,8 +289,9 @@ export class HistorySnapshotStore {
     sessionId: string,
     limitValue: number | undefined,
     loadFrozenPage: (() => FrozenHistoryPageLoader | undefined) | undefined,
+    providedLoader?: FrozenHistoryPageLoader,
   ): FrozenPagedHistorySnapshot | null {
-    const frozenLoader = loadFrozenPage?.();
+    const frozenLoader = providedLoader ?? loadFrozenPage?.();
     if (!frozenLoader) {
       return null;
     }
@@ -316,7 +332,7 @@ export class HistorySnapshotStore {
     sessionId: string,
     limitValue?: number,
     cursor?: string,
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     const limit = normalizeHistoryPageLimit(limitValue);
     const endExclusive = cursor ? decodeOffsetCursor(cursor) : snapshot.events.length;
     const boundedEndExclusive = Math.max(0, Math.min(endExclusive, snapshot.events.length));
@@ -338,7 +354,7 @@ export class HistorySnapshotStore {
     limitValue: number | undefined,
     cursor: string | undefined,
     _loadFrozenPage: (() => FrozenHistoryPageLoader | undefined) | undefined,
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     const requestCursor = cursor ?? null;
     const limit = normalizeHistoryPageLimit(limitValue);
     const cached = snapshot.pagesByRequestCursor.get(requestCursor);
@@ -360,7 +376,7 @@ export class HistorySnapshotStore {
       }),
     );
     const nextBeforeTs = paginationTimestamp(page.nextCursor, events);
-    const response: SessionHistoryPageResponse = {
+    const response: ConversationEvidencePage = {
       sessionId,
       events,
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),

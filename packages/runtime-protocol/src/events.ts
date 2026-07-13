@@ -4,6 +4,8 @@ import type {
   ManagedSession,
   NativeTuiPromptState,
   ProviderKind,
+  SessionCloseDisposition,
+  SessionSideLifecycleState,
   StoredSessionIdentity,
   StoredSessionRef,
 } from "./session";
@@ -103,6 +105,12 @@ export interface TimelineRuntimeModel {
 
 export type AssistantMessagePhase = "commentary" | "final_answer";
 
+export type TimelinePlanStepStatus = "pending" | "in_progress" | "completed";
+export interface TimelinePlanStep {
+  text: string;
+  status: TimelinePlanStepStatus;
+}
+
 export type TimelineItem =
   | { kind: "user_message"; text: string; imageCount?: number; messageId?: string; clientMessageId?: string; clientTurnId?: string }
   | {
@@ -113,7 +121,7 @@ export type TimelineItem =
       runtimeModel?: TimelineRuntimeModel;
     }
   | { kind: "reasoning"; text: string; section?: string; runtimeModel?: TimelineRuntimeModel }
-  | { kind: "plan"; text: string }
+  | { kind: "plan"; text: string; explanation?: string; steps?: TimelinePlanStep[] }
   | { kind: "step"; title: string; status: "started" | "completed" | "interrupted"; text?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "todo"; items: Array<{ text: string; completed: boolean }> }
   | { kind: "system"; text: string }
@@ -342,8 +350,12 @@ export type RahEventPayloadMap = {
   "session.started": { session: ManagedSession };
   "session.attached": { clientId: string; clientKind: ClientKind };
   "session.detached": { clientId: string };
-  "session.closed": { clientId?: string };
+  "session.closed": { clientId?: string; disposition?: SessionCloseDisposition };
   "session.state.changed": { state: ManagedSession["runtimeState"] };
+  "session.side.state.changed": {
+    state: SessionSideLifecycleState;
+    detail?: string;
+  };
   "session.native_tui.prompt_state.changed": {
     promptState: NativeTuiPromptState;
     queuedInputCount?: number;

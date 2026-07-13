@@ -8,6 +8,7 @@ import {
   type ManagedSession,
   type PermissionResponseRequest,
   type ProviderModelCatalog,
+  type ResumeSessionRequest,
   type SessionInputRequest,
   type SessionModeDescriptor,
   type SessionRuntimeDiagnostics,
@@ -81,6 +82,7 @@ export interface LiveOpenCodeSession {
   abortPendingTurnId?: string;
   locallyCanceledTurnIds?: Set<string>;
   localCancelMirrorSuppressUntilMs?: number;
+  providerReadyForInput?: boolean;
 }
 
 const SESSION_SOURCE = {
@@ -89,7 +91,6 @@ const SESSION_SOURCE = {
   authority: "authoritative" as const,
 };
 
-const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
 const OPENCODE_HISTORY_MIRROR_INTERVAL_MS = 750;
 
 export function runtimeDiagnosticsForOpenCodeServer(
@@ -112,12 +113,10 @@ function openCodeNativeModeId(modeId: string): string {
 
 function resolveRequestedOpenCodeModeId(
   modeId: string | undefined,
-  providerConfig: StartSessionRequest["providerConfig"] | undefined,
   availableModes: readonly SessionModeDescriptor[],
 ): string {
-  const requestedMode = modeId ?? providerConfig?.[RAH_SESSION_MODE_CONFIG_KEY];
-  if (typeof requestedMode === "string" && requestedMode.trim()) {
-    const normalized = requestedMode.trim();
+  if (modeId?.trim()) {
+    const normalized = modeId.trim();
     if (!isOpenCodeModeId(normalized, availableModes)) {
       throw new Error(`Unsupported OpenCode mode '${normalized}'.`);
     }
@@ -170,11 +169,7 @@ function publishSessionBootstrap(
 function resolveOpenCodeReasoningId(args: {
   catalog: ProviderModelCatalog | null | undefined;
   modelId: string | null | undefined;
-  requestedReasoningId: string | null | undefined;
 }): string | null {
-  if (args.requestedReasoningId !== undefined) {
-    return normalizeOpenCodeReasoningId(args.requestedReasoningId) ?? null;
-  }
   if (!args.modelId) {
     return normalizeOpenCodeReasoningId(args.catalog?.currentReasoningId) ?? null;
   }
@@ -256,15 +251,30 @@ function shouldSuppressMirroredOpenCodeActivity(
   liveSession: LiveOpenCodeSession,
   activity: ProviderActivity,
 ): boolean {
-  if (activity.type !== "turn_canceled") {
-    return false;
-  }
-  if (liveSession.locallyCanceledTurnIds?.has(activity.turnId) === true) {
+  const withinLocalCancelWindow =
+    liveSession.localCancelMirrorSuppressUntilMs !== undefined &&
+    Date.now() <= liveSession.localCancelMirrorSuppressUntilMs;
+  if (
+    activity.type === "turn_canceled" &&
+    (liveSession.locallyCanceledTurnIds?.has(activity.turnId) === true ||
+      withinLocalCancelWindow)
+  ) {
     return true;
   }
   return (
-    liveSession.localCancelMirrorSuppressUntilMs !== undefined &&
-    Date.now() <= liveSession.localCancelMirrorSuppressUntilMs
+    activity.type === "turn_failed" &&
+    withinLocalCancelWindow &&
+    liveSession.activityState.currentTurnId === undefined &&
+    (liveSession.locallyCanceledTurnIds?.size ?? 0) > 0
+  );
+}
+
+export function normalizeOpenCodeLiveActivities(
+  liveSession: LiveOpenCodeSession,
+  activities: readonly ProviderActivity[],
+): ProviderActivity[] {
+  return normalizeOpenCodeAbortActivities(liveSession, activities).filter(
+    (activity) => !shouldSuppressMirroredOpenCodeActivity(liveSession, activity),
   );
 }
 
@@ -304,16 +314,47 @@ function drainOpenCodeHistoryMirror(
       continue;
     }
     liveSession.mirroredMessageRevisions.set(message.info.id, revision);
-    for (const activity of translateOpenCodeMessage(liveSession.activityState, message)) {
-      if (shouldSuppressMirroredOpenCodeActivity(liveSession, activity)) {
-        continue;
-      }
+    for (const activity of normalizeOpenCodeLiveActivities(
+      liveSession,
+      translateOpenCodeMessage(liveSession.activityState, message),
+    )) {
       applyActivity(services, liveSession.sessionId, activity, {
         source: "opencode-history-mirror",
         messageId: message.info.id,
       });
     }
   }
+}
+
+export function primeOpenCodeHistoryMirrorState(
+  liveSession: LiveOpenCodeSession,
+  messages: readonly OpenCodeMessageWithParts[],
+): void {
+  for (const message of messages) {
+    if (!isOpenCodeMessageReadyForHistoryMirror(message)) {
+      continue;
+    }
+    liveSession.mirroredMessageRevisions.set(
+      message.info.id,
+      openCodeMessageRevision(message),
+    );
+    // Resume with historyReplay=skip transfers the already rendered client
+    // projection. Rebuild only provider identity state here; emitting these
+    // activities would replay the same history over the wire.
+    translateOpenCodeMessage(liveSession.activityState, message);
+  }
+  delete liveSession.activityState.currentTurnId;
+}
+
+function primeOpenCodeHistoryMirror(liveSession: LiveOpenCodeSession): void {
+  const record = findOpenCodeStoredSessionRecord(liveSession.providerSessionId);
+  if (!record) {
+    return;
+  }
+  primeOpenCodeHistoryMirrorState(
+    liveSession,
+    loadOpenCodeStoredMessages(record, { limit: 1000 }),
+  );
 }
 
 function startOpenCodeHistoryMirror(params: {
@@ -374,7 +415,6 @@ export async function startOpenCodeLiveSession(params: {
   const availableModes = openCodeAvailableModes(params.modelCatalog);
   const initialModeId = resolveRequestedOpenCodeModeId(
     request.modeId,
-    request.providerConfig,
     availableModes,
   );
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
@@ -382,14 +422,12 @@ export async function startOpenCodeLiveSession(params: {
     ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
     : undefined;
   const requestedOptionValues = normalizeOpenCodeOptionValues(request.optionValues);
-  const requestedReasoningId = normalizeOpenCodeReasoningId(request.reasoningId);
   const optionValues = currentModel
     ? normalizeOpenCodeOptionValues(
         resolveModelOptionValues({
           catalog: params.modelCatalog ?? null,
           model: currentModel,
           optionValues: requestedOptionValues,
-          reasoningId: requestedReasoningId,
           useDefaults: Boolean(request.model),
         }),
       ) ?? {}
@@ -401,7 +439,6 @@ export async function startOpenCodeLiveSession(params: {
       : resolveOpenCodeReasoningId({
           catalog: params.modelCatalog,
           modelId: currentModelId,
-          requestedReasoningId,
         });
   const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
     catalog: params.modelCatalog,
@@ -458,7 +495,6 @@ export async function startOpenCodeLiveSession(params: {
       structuredControl: true,
       steerInput: true,
       queuedInput: true,
-      renameSession: false,
       modelSwitch: true,
       actions: {
         info: true,
@@ -492,6 +528,7 @@ export async function startOpenCodeLiveSession(params: {
     stopEvents: () => undefined,
     stopHistoryMirror: () => undefined,
     mirroredMessageRevisions: new Map(),
+    providerReadyForInput: true,
     modeId: initialModeId,
     availableModes,
     queuedInputs: [],
@@ -530,18 +567,16 @@ export async function resumeOpenCodeLiveSession(params: {
   cwd: string;
   attach?: StartSessionRequest["attach"];
   origin?: StartSessionRequest["origin"];
-  providerConfig?: StartSessionRequest["providerConfig"];
   modeId?: string;
   model?: string;
   optionValues?: StartSessionRequest["optionValues"];
-  reasoningId?: string | null | undefined;
   modelCatalog?: ProviderModelCatalog | null;
+  historyReplay?: ResumeSessionRequest["historyReplay"];
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services } = params;
   const availableModes = openCodeAvailableModes(params.modelCatalog);
   const initialModeId = resolveRequestedOpenCodeModeId(
     params.modeId,
-    params.providerConfig,
     availableModes,
   );
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
@@ -549,14 +584,12 @@ export async function resumeOpenCodeLiveSession(params: {
     ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
     : undefined;
   const requestedOptionValues = normalizeOpenCodeOptionValues(params.optionValues);
-  const requestedReasoningId = normalizeOpenCodeReasoningId(params.reasoningId);
   const optionValues = currentModel
     ? normalizeOpenCodeOptionValues(
         resolveModelOptionValues({
           catalog: params.modelCatalog ?? null,
           model: currentModel,
           optionValues: requestedOptionValues,
-          reasoningId: requestedReasoningId,
           useDefaults: Boolean(params.model),
         }),
       ) ?? {}
@@ -568,7 +601,6 @@ export async function resumeOpenCodeLiveSession(params: {
       : resolveOpenCodeReasoningId({
           catalog: params.modelCatalog,
           modelId: currentModelId,
-          requestedReasoningId,
         });
   const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
     catalog: params.modelCatalog,
@@ -617,7 +649,6 @@ export async function resumeOpenCodeLiveSession(params: {
       structuredControl: true,
       steerInput: true,
       queuedInput: true,
-      renameSession: false,
       modelSwitch: true,
       actions: {
         info: true,
@@ -651,6 +682,7 @@ export async function resumeOpenCodeLiveSession(params: {
     stopEvents: () => undefined,
     stopHistoryMirror: () => undefined,
     mirroredMessageRevisions: new Map(),
+    providerReadyForInput: true,
     modeId: initialModeId,
     availableModes,
     queuedInputs: [],
@@ -659,6 +691,9 @@ export async function resumeOpenCodeLiveSession(params: {
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
   await applyOpenCodePermissionMode(liveSession, initialModeId);
+  if (params.historyReplay === "skip") {
+    primeOpenCodeHistoryMirror(liveSession);
+  }
   liveSession.stopEvents = attachOpenCodeEventSink({ services, liveSession });
   liveSession.stopHistoryMirror = startOpenCodeHistoryMirror({ services, liveSession });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
@@ -681,7 +716,10 @@ export function sendInputToOpenCodeLiveSession(params: {
   request: SessionInputRequest;
 }): void {
   const { services, liveSession, request } = params;
-  if (liveSession.activityState.currentTurnId) {
+  if (
+    liveSession.activityState.currentTurnId ||
+    liveSession.providerReadyForInput === false
+  ) {
     liveSession.queuedInputs.push(request);
     return;
   }
@@ -725,6 +763,7 @@ function submitOpenCodePrompt(params: {
   // prompt starts, stale retry timers must not cancel that new provider turn.
   clearOpenCodeAbortRetries(liveSession);
   clearOpenCodeLocalCancelSuppression(liveSession);
+  liveSession.providerReadyForInput = false;
   const { text } = request;
   const turnId = randomUUID();
   for (const activity of startOpenCodeTurn(liveSession.activityState, turnId)) {
@@ -776,6 +815,7 @@ function submitOpenCodePrompt(params: {
         return;
       }
       delete liveSession.activityState.currentTurnId;
+      liveSession.providerReadyForInput = true;
       applyActivity(services, liveSession.sessionId, {
         type: "turn_failed",
         turnId,
@@ -790,6 +830,9 @@ function drainQueuedOpenCodeInput(
   liveSession: LiveOpenCodeSession,
 ): void {
   if (liveSession.activityState.currentTurnId) {
+    return;
+  }
+  if (liveSession.providerReadyForInput === false) {
     return;
   }
   const next = liveSession.queuedInputs.shift();
@@ -807,14 +850,23 @@ function attachOpenCodeEventSink(params: {
   return subscribeOpenCodeEvents({
     handle: liveSession.server,
     onEvent: (event) => {
-      const activities = normalizeOpenCodeAbortActivities(
+      if (event.type === "session.status") {
+        const status = event.properties?.status;
+        const statusType =
+          status && typeof status === "object" && !Array.isArray(status)
+            ? (status as { type?: unknown }).type
+            : undefined;
+        if (statusType === "busy" || statusType === "retry") {
+          liveSession.providerReadyForInput = false;
+        } else if (statusType === "idle") {
+          liveSession.providerReadyForInput = true;
+        }
+      }
+      const activities = normalizeOpenCodeLiveActivities(
         liveSession,
         translateOpenCodeEvent(liveSession.activityState, event),
       );
       for (const activity of activities) {
-        if (shouldSuppressMirroredOpenCodeActivity(liveSession, activity)) {
-          continue;
-        }
         if (activity.type === "turn_failed") {
           patchOpenCodeRuntimeError(services, liveSession, activity.error);
         }

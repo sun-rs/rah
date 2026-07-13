@@ -116,32 +116,10 @@ export function validateModelOptionValues(args: {
   return next;
 }
 
-function findLegacyReasoningConfigOption(args: {
-  catalog: ProviderModelCatalog | null | undefined;
-  model: SessionModelDescriptor;
-}): SessionConfigOption | null {
-  const options = modelConfigOptionsForModel({
-    catalog: args.catalog,
-    modelId: args.model.id,
-  }).filter((option) => option.kind === "select");
-  const reasoningOptionIds = new Set(
-    (args.model.reasoningOptions ?? []).map((option) => option.id),
-  );
-  return (
-    options.find((option) =>
-      option.options?.some((choice) => reasoningOptionIds.has(choice.id)),
-    ) ??
-    options.find((option) => option.backendKey !== undefined) ??
-    options[0] ??
-    null
-  );
-}
-
 export function resolveModelOptionValues(args: {
   catalog: ProviderModelCatalog | null | undefined;
   model: SessionModelDescriptor;
   optionValues?: Record<string, SessionConfigValue> | null | undefined;
-  reasoningId?: string | null | undefined;
   useDefaults?: boolean;
   requireMutable?: boolean;
 }): Record<string, SessionConfigValue> {
@@ -151,31 +129,6 @@ export function resolveModelOptionValues(args: {
     ...(args.optionValues !== undefined ? { optionValues: args.optionValues } : {}),
     ...(args.requireMutable !== undefined ? { requireMutable: args.requireMutable } : {}),
   });
-  const legacyOption = findLegacyReasoningConfigOption({
-    catalog: args.catalog,
-    model: args.model,
-  });
-
-  if (args.reasoningId !== undefined) {
-    if (legacyOption) {
-      const legacyValue =
-        args.reasoningId === null ? null : args.reasoningId.trim();
-      if (legacyValue === "") {
-        throw new Error("Reasoning option is required.");
-      }
-      const existingValue = next[legacyOption.id];
-      if (
-        existingValue !== undefined &&
-        existingValue !== legacyValue
-      ) {
-        throw new Error(
-          `Conflicting values for model option '${legacyOption.id}'.`,
-        );
-      }
-      next[legacyOption.id] = legacyValue;
-    }
-  }
-
   if (args.useDefaults) {
     for (const option of modelConfigOptionsForModel({
       catalog: args.catalog,

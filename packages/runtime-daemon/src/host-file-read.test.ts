@@ -90,6 +90,24 @@ describe("host file reads", () => {
     }
   });
 
+  test("keeps even local full-preview requests bounded for exceptionally large images", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-huge-image-"));
+    try {
+      const target = path.join(dir, "huge.png");
+      const png = Buffer.concat([pixelPng, Buffer.alloc(17 * 1024 * 1024)]);
+      await writeFile(target, png);
+
+      const file = await readHostFileDataAsync(target, { imagePreviewMode: "full" });
+
+      assert.equal(file.binary, true);
+      assert.equal(file.truncated, true);
+      assert.ok(file.contentBase64);
+      assert.ok(file.contentBase64.length < png.toString("base64").length);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("tags markdown files for rendered previews", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-markdown-"));
     try {

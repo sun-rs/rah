@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
-import {
-  readCodexConversationTurnDetail,
-  readCodexTurnHistory,
-} from "./codex-turn-history";
+import { readCodexConversationTurnDetail } from "./codex-turn-history";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 
 function line(timestamp: string, type: string, payload: Record<string, unknown>): string {
@@ -141,7 +138,7 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
 
     const range = await store.getTurnRange(record, "turn-1");
     assert.ok(range);
-    const turn = await readCodexTurnHistory({
+    const turn = await readCodexConversationTurnDetail({
       sessionId: "rah-session-1",
       turnId: "turn-1",
       record,
@@ -185,6 +182,36 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
     assert.equal(detailJson.includes("Checking"), true);
     assert.equal(detailJson.includes("x".repeat(4_096)), false);
     assert.ok((detail.approximateBytes ?? Number.POSITIVE_INFINITY) < 64 * 1024);
+  } finally {
+    await store.shutdown();
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Codex turn directory bounds navigation previews independently from turn detail", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-turn-directory-preview-"));
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_HOME = path.join(tempDir, "rah-home");
+  const rolloutPath = path.join(tempDir, "rollout.jsonl");
+  writeFileSync(
+    rolloutPath,
+    `${[
+      taskStarted("2026-07-10T00:00:00.000Z", "turn-preview"),
+      userMessage("2026-07-10T00:00:00.001Z", `user-${"u".repeat(300)}`),
+      agentMessage("2026-07-10T00:00:01.000Z", `assistant-${"a".repeat(500)}`, "final_answer"),
+    ].join("\n")}\n`,
+  );
+  const store = new CodexTurnDirectoryStore();
+  try {
+    const directory = await store.getDirectory("rah-session-preview", recordFor(rolloutPath));
+    assert.equal(directory.items.length, 1);
+    assert.ok((directory.items[0]?.userPreview.length ?? 0) <= 96);
+    assert.ok((directory.items[0]?.assistantPreview?.length ?? 0) <= 144);
   } finally {
     await store.shutdown();
     if (previousRahHome === undefined) {

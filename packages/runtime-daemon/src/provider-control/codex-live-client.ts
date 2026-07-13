@@ -1,4 +1,6 @@
 import {
+  type ForkSessionRequest,
+  type ManagedSession,
   type ProviderModelCatalog,
   type PermissionResponseRequest,
   type ResumeSessionRequest,
@@ -50,8 +52,15 @@ import {
 } from "../provider-mcp-server-spec";
 import { resolveSessionTitleAndPreview } from "../session-title-resolver";
 import { requestCodexThreadResumeWithoutTranscript } from "../codex-app-server-resume";
+import {
+  CODEX_SIDE_DEVELOPER_INSTRUCTIONS,
+  codexSideBoundaryItem,
+} from "../codex-side-conversation";
+import { publishSessionStateChanged } from "../runtime-session-events";
 
 export type { LiveCodexSession } from "../codex-live-types";
+
+type CodexForkMode = ReturnType<typeof resolveCodexStartupMode>;
 
 function codexNativeTuiAttachAvailable(args: {
   providerSessionId: string;
@@ -68,8 +77,6 @@ function codexNativeTuiAttachAvailable(args: {
 
 function resolveCodexStartupMode(args: {
   modeId?: string | undefined;
-  approvalPolicy?: string | undefined;
-  sandbox?: string | undefined;
   fallbackApprovalPolicy?: string | undefined;
   fallbackSandboxMode?: string | undefined;
   fallbackApprovalsReviewer?: "user" | "auto_review" | undefined;
@@ -122,8 +129,8 @@ function resolveCodexStartupMode(args: {
       approvalsReviewer: parsed.approvalsReviewer ?? "user",
     };
   }
-  const approvalPolicy = args.approvalPolicy ?? fallbackApprovalPolicy;
-  const sandboxMode = args.sandbox ?? fallbackSandboxMode;
+  const approvalPolicy = fallbackApprovalPolicy;
+  const sandboxMode = fallbackSandboxMode;
   const accessModeId = codexAccessModeIdForConfig({
     approvalPolicy,
     sandboxMode,
@@ -311,8 +318,6 @@ export async function startCodexLiveSession(params: {
   const planCollaborationMode = await loadCodexPlanCollaborationMode(client);
   const initialMode = resolveCodexStartupMode({
     modeId: request.modeId,
-    approvalPolicy: request.approvalPolicy,
-    sandbox: request.sandbox,
   });
   if (initialMode.activeModeId === "plan" && !planCollaborationMode) {
     await client.dispose();
@@ -355,12 +360,10 @@ export async function startCodexLiveSession(params: {
         catalog: params.initialModelCatalog ?? null,
         model: currentModel,
         optionValues: request.optionValues,
-        reasoningId: request.reasoningId,
       })
     : {};
   const currentReasoningId =
     optionValueAsString(currentOptionValues, "model_reasoning_effort") ??
-    request.reasoningId ??
     threadStart.reasoningEffort ??
     threadStart.reasoning_effort ??
     params.initialModelCatalog?.currentReasoningId ??
@@ -412,15 +415,16 @@ export async function startCodexLiveSession(params: {
     capabilities: {
       modelSwitch: true,
       structuredControl: true,
-      renameSession: true,
       actions: {
         info: true,
         stop: true,
+        archive: true,
         delete: true,
         rename: "native",
       },
       steerInput: true,
       queuedInput: true,
+      branching: { sameWorkspace: true, worktree: false, side: true },
     },
   });
   services.sessionStore.patchManagedSession(state.session.id, {
@@ -569,12 +573,10 @@ export async function resumeCodexLiveSession(params: {
           catalog: params.initialModelCatalog ?? null,
           model: currentModel,
           optionValues: request.optionValues,
-          reasoningId: request.reasoningId,
         })
       : {};
     const currentReasoningId =
       optionValueAsString(currentOptionValues, "model_reasoning_effort") ??
-      request.reasoningId ??
       resumeResponse.reasoningEffort ??
       resumeResponse.reasoning_effort ??
       params.initialModelCatalog?.currentReasoningId ??
@@ -651,15 +653,16 @@ export async function resumeCodexLiveSession(params: {
       capabilities: {
         modelSwitch: true,
         structuredControl: true,
-        renameSession: true,
         actions: {
           info: true,
           stop: true,
+          archive: true,
           delete: true,
           rename: "native",
         },
         steerInput: true,
         queuedInput: true,
+        branching: { sameWorkspace: true, worktree: false, side: true },
       },
     });
     services.sessionStore.patchManagedSession(state.session.id, {
@@ -732,6 +735,457 @@ export async function resumeCodexLiveSession(params: {
   }
 }
 
+function createForkedManagedSession(args: {
+  services: RuntimeServices;
+  parent: ManagedSession;
+  request: ForkSessionRequest;
+  client: CodexAppServerRpcClient;
+  threadId: string;
+  threadStatus?: unknown;
+  cwd: string;
+  modelId: string | null;
+  reasoningId: string | null;
+  mode: CodexForkMode;
+  planCollaborationMode: LiveCodexSession["planCollaborationMode"];
+  nativeTuiAttachAvailable: boolean;
+}) {
+  const state = args.services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: args.threadId,
+    launchSource: "web",
+    liveBackend: "native_local_server",
+    cwd: args.cwd,
+    rootDir: args.parent.rootDir,
+    title:
+      args.request.kind === "side"
+        ? `Side of ${args.parent.title ?? args.parent.preview ?? "Codex"}`
+        : `${args.parent.title ?? args.parent.preview ?? "Codex"} (fork)`,
+    relationship: {
+      parentSessionId: args.parent.id,
+      ...(args.parent.providerSessionId
+        ? { parentProviderSessionId: args.parent.providerSessionId }
+        : {}),
+      ...(args.request.lastTurnId ? { forkPointTurnId: args.request.lastTurnId } : {}),
+      kind: args.request.kind,
+      workspaceMode: args.request.workspaceMode,
+      persistence: args.request.kind === "side" ? "ephemeral" : "persistent",
+      ...(args.request.kind === "side" ? { sideState: "ready" as const } : {}),
+    },
+    runtimeDiagnostics: nativeLocalServerRuntimeDiagnostics({
+      provider: "codex",
+      providerSessionId: args.threadId,
+      endpoint: args.client.endpoint ?? "stdio:codex app-server",
+      ...(args.client.processId !== undefined ? { serverPid: args.client.processId } : {}),
+      attachState: args.client.endpoint ? "ready" : "unavailable",
+      lastEventCursor: `thread:${args.threadId}`,
+    }),
+    mode: buildCodexModeState({
+      currentModeId: args.mode.activeModeId,
+      mutable: true,
+      preferredAccessModeId: args.mode.accessModeId,
+      planAvailable: Boolean(args.planCollaborationMode),
+    }),
+    model: {
+      currentModelId: args.modelId,
+      currentReasoningId: args.reasoningId,
+      availableModels: args.parent.model?.availableModels ?? [],
+      mutable: true,
+      source: args.parent.model?.source ?? "native",
+    },
+    ...(args.parent.config ? { config: args.parent.config } : {}),
+    ...(args.parent.modelProfile ? { modelProfile: args.parent.modelProfile } : {}),
+    capabilities: {
+      modelSwitch: true,
+      structuredControl: true,
+      nativeTui: args.nativeTuiAttachAvailable,
+      rawPtyInput: args.nativeTuiAttachAvailable,
+      actions: {
+        info: true,
+        stop: true,
+        archive: args.request.kind !== "side",
+        delete: args.request.kind !== "side",
+        rename: args.request.kind === "side" ? "none" : "native",
+      },
+      steerInput: true,
+      queuedInput: true,
+      branching:
+        args.request.kind === "side"
+          ? { sameWorkspace: false, worktree: false, side: false }
+          : { sameWorkspace: true, worktree: false, side: true },
+    },
+  });
+  prepareForkedManagedSessionInfrastructure({
+    services: args.services,
+    sessionId: state.session.id,
+    nativeTuiAttachAvailable: args.nativeTuiAttachAvailable,
+  });
+  args.services.sessionStore.setRuntimeState(
+    state.session.id,
+    runtimeStateFromCodexThreadStatus(args.threadStatus) ?? "idle",
+  );
+  return args.services.sessionStore.getSession(state.session.id)!;
+}
+
+function prepareForkedManagedSessionInfrastructure(args: {
+  services: RuntimeServices;
+  sessionId: string;
+  nativeTuiAttachAvailable: boolean;
+}): void {
+  args.services.sessionStore.patchManagedSession(args.sessionId, {
+    nativeTui: {
+      terminalId: args.sessionId,
+      viewAvailable: args.nativeTuiAttachAvailable,
+      promptState: "prompt_clean",
+      queuedInputCount: 0,
+    },
+  });
+  args.services.ptyHub.ensureSession(args.sessionId);
+}
+
+function markForkRecoverySessionFailed(args: {
+  services: RuntimeServices;
+  sessionId: string;
+  creationError: unknown;
+  rollbackError: unknown;
+}) {
+  const state = args.services.sessionStore.getSession(args.sessionId);
+  if (!state) {
+    throw new Error(`Missing recovery session ${args.sessionId}.`);
+  }
+  const creationDetail =
+    args.creationError instanceof Error ? args.creationError.message : String(args.creationError);
+  const rollbackDetail =
+    args.rollbackError instanceof Error ? args.rollbackError.message : String(args.rollbackError);
+  args.services.sessionStore.patchManagedSession(args.sessionId, {
+    ...(state.session.relationship?.kind === "side"
+      ? {
+          relationship: {
+            ...state.session.relationship,
+            sideState: "cleanup_failed" as const,
+            sideStateDetail: `Provider rollback failed: ${rollbackDetail}`,
+          },
+        }
+      : {}),
+    runtimeDiagnostics: {
+      ...(state.session.runtimeDiagnostics ?? {}),
+      lastError: `Branch initialization failed: ${creationDetail}; provider rollback failed: ${rollbackDetail}`,
+    },
+  });
+  args.services.sessionStore.setRuntimeState(args.sessionId, "failed");
+  return args.services.sessionStore.getSession(args.sessionId)!;
+}
+
+function createForkedLiveSession(args: {
+  sessionId: string;
+  threadId: string;
+  request: ForkSessionRequest;
+  cwd: string;
+  mode: CodexForkMode;
+  modelId: string | null;
+  reasoningId: string | null;
+  modelCatalog: ProviderModelCatalog | null;
+  planCollaborationMode: LiveCodexSession["planCollaborationMode"];
+  client: CodexAppServerRpcClient;
+}): LiveCodexSession {
+  return {
+    sessionId: args.sessionId,
+    threadId: args.threadId,
+    ...(args.request.kind === "side" ? { ephemeral: true } : {}),
+    cwd: args.cwd,
+    approvalPolicy: args.mode.approvalPolicy,
+    sandboxMode: args.mode.sandboxMode,
+    approvalsReviewer: args.mode.approvalsReviewer,
+    modelId: args.modelId,
+    reasoningId: args.reasoningId,
+    modelCatalog: args.modelCatalog,
+    activeModeId: args.mode.activeModeId,
+    lastNonPlanModeId: args.mode.accessModeId,
+    planCollaborationMode: args.planCollaborationMode,
+    client: args.client,
+    translationState: createCodexAppServerTranslationState(),
+    currentTurnId: null,
+    finishedTurnIds: new Set(),
+    interruptingTurnIds: new Set(),
+    turnStartInFlight: false,
+    interruptWhenTurnStarts: false,
+    queuedInputs: [],
+    externalThreadMirrorSubscribeInFlight: false,
+    externalThreadMirrorSubscribed: true,
+    pendingQuestions: new Map(),
+    pendingApprovals: new Map(),
+  };
+}
+
+export async function forkCodexLiveSession(params: {
+  services: RuntimeServices;
+  parentSummary: ReturnType<typeof toSessionSummary>;
+  parentLive?: LiveCodexSession;
+  request: ForkSessionRequest;
+  onLiveSessionReady: (liveSession: LiveCodexSession) => void;
+}) {
+  const { services, parentSummary, parentLive, request } = params;
+  const parent = parentSummary.session;
+  const parentThreadId = parent.providerSessionId;
+  if (!parentThreadId) {
+    throw new Error(`Session ${parent.id} does not have a Codex thread id.`);
+  }
+  if (request.workspaceMode !== "shared") {
+    throw new Error("Codex worktree forks are not implemented yet.");
+  }
+
+  const client = await createCodexAppServerClient();
+  const bridge = createLiveSessionBridge(services, client);
+  let forkedThreadId: string | undefined;
+  let provisionalSessionId: string | undefined;
+  let provisionalLiveSession: LiveCodexSession | undefined;
+  let bootstrapPublished = false;
+  let bridgeActivated = false;
+  let planCollaborationMode: LiveCodexSession["planCollaborationMode"] =
+    parentLive?.planCollaborationMode ?? null;
+  const parentModeId = parentLive?.activeModeId ?? parent.mode?.currentModeId ?? undefined;
+  const forkMode = resolveCodexStartupMode({
+    ...(parentModeId ? { modeId: parentModeId } : {}),
+    ...(parentLive?.approvalPolicy
+      ? { fallbackApprovalPolicy: parentLive.approvalPolicy }
+      : {}),
+    ...(parentLive?.sandboxMode ? { fallbackSandboxMode: parentLive.sandboxMode } : {}),
+    ...(parentLive?.approvalsReviewer
+      ? { fallbackApprovalsReviewer: parentLive.approvalsReviewer }
+      : {}),
+  });
+  let resolvedMode = forkMode;
+  let forkCwd = parent.cwd;
+  let forkModelId = parentLive?.modelId ?? parent.model?.currentModelId ?? null;
+  let forkReasoningId = parentLive?.reasoningId ?? parent.model?.currentReasoningId ?? null;
+  let forkThreadStatus: unknown;
+  try {
+    planCollaborationMode = await loadCodexPlanCollaborationMode(client);
+    const forkResponse = (await client.request(
+      "thread/fork",
+      {
+        threadId: parentThreadId,
+        ...(request.lastTurnId ? { lastTurnId: request.lastTurnId } : {}),
+        cwd: parent.cwd,
+        approvalPolicy: forkMode.approvalPolicy,
+        sandbox: forkMode.sandboxMode,
+        ...(forkMode.approvalsReviewer === "auto_review"
+          ? { approvalsReviewer: forkMode.approvalsReviewer }
+          : {}),
+        ...(forkModelId ? { model: forkModelId } : {}),
+        ephemeral: request.kind === "side",
+        ...(request.kind === "side"
+          ? {
+              developerInstructions: CODEX_SIDE_DEVELOPER_INSTRUCTIONS,
+              threadSource: "sideConversation",
+            }
+          : { threadSource: "fork" }),
+      },
+      TURN_START_TIMEOUT_MS,
+    )) as {
+      thread?: { id?: string; status?: unknown };
+      model?: string;
+      reasoningEffort?: string | null;
+      reasoning_effort?: string | null;
+      cwd?: string;
+      approvalPolicy?: unknown;
+      approval_policy?: unknown;
+      sandbox?: unknown;
+      approvalsReviewer?: unknown;
+    };
+    const threadId = forkResponse.thread?.id;
+    if (!threadId) {
+      throw new Error("Codex app-server did not return a forked thread id.");
+    }
+    forkedThreadId = threadId;
+
+    forkCwd = forkResponse.cwd ?? parent.cwd;
+    forkModelId = forkResponse.model ?? forkModelId;
+    forkReasoningId =
+      forkResponse.reasoningEffort ?? forkResponse.reasoning_effort ?? forkReasoningId;
+    forkThreadStatus = forkResponse.thread?.status;
+    resolvedMode = resolveCodexStartupMode({
+      modeId: forkMode.activeModeId,
+      fallbackApprovalPolicy:
+        codexApprovalPolicyFromResponse(forkResponse) ?? forkMode.approvalPolicy,
+      fallbackSandboxMode:
+        codexSandboxModeFromResponse(forkResponse.sandbox) ?? forkMode.sandboxMode,
+      fallbackApprovalsReviewer:
+        codexApprovalsReviewerFromResponse(forkResponse.approvalsReviewer) ??
+        forkMode.approvalsReviewer,
+    });
+    const nativeTuiAttachAvailable =
+      request.kind !== "side" &&
+      codexNativeTuiAttachAvailable({ providerSessionId: threadId, endpoint: client.endpoint });
+    if (request.kind === "side") {
+      await client.request(
+        "thread/inject_items",
+        {
+          threadId,
+          items: [codexSideBoundaryItem()],
+        },
+        TURN_START_TIMEOUT_MS,
+      );
+    }
+    const state = createForkedManagedSession({
+      services,
+      parent,
+      request,
+      client,
+      threadId,
+      threadStatus: forkThreadStatus,
+      cwd: forkCwd,
+      modelId: forkModelId,
+      reasoningId: forkReasoningId,
+      mode: resolvedMode,
+      planCollaborationMode,
+      nativeTuiAttachAvailable,
+    });
+    provisionalSessionId = state.session.id;
+    const liveSession = createForkedLiveSession({
+      sessionId: state.session.id,
+      threadId,
+      request,
+      cwd: forkCwd,
+      mode: resolvedMode,
+      modelId: forkModelId,
+      reasoningId: forkReasoningId,
+      modelCatalog: parentLive?.modelCatalog ?? null,
+      planCollaborationMode,
+      client,
+    });
+    provisionalLiveSession = liveSession;
+
+    publishSessionBootstrap(services, state.session.id, state.session);
+    bootstrapPublished = true;
+    bridge.activate(liveSession);
+    bridgeActivated = true;
+    attachRequestedClient(services, state.session.id, request.attach);
+    const summary = toSessionSummary(services.sessionStore.getSession(state.session.id)!);
+    params.onLiveSessionReady(liveSession);
+    return {
+      sessionId: state.session.id,
+      summary,
+    };
+  } catch (error) {
+    let rollbackError: unknown;
+    if (forkedThreadId) {
+      try {
+        await client.request(
+          request.kind === "side" ? "thread/unsubscribe" : "thread/archive",
+          { threadId: forkedThreadId },
+          TURN_START_TIMEOUT_MS,
+        );
+      } catch (caught) {
+        rollbackError = caught;
+      }
+    }
+
+    if (!rollbackError) {
+      if (provisionalSessionId) {
+        services.sessionStore.removeSession(provisionalSessionId);
+        services.ptyHub.removeSession(provisionalSessionId);
+      }
+      await client.dispose();
+      throw error;
+    }
+
+    if (provisionalSessionId && provisionalLiveSession) {
+      const recoveryState = markForkRecoverySessionFailed({
+        services,
+        sessionId: provisionalSessionId,
+        creationError: error,
+        rollbackError,
+      });
+      if (!bootstrapPublished) {
+        publishSessionBootstrap(services, provisionalSessionId, recoveryState.session);
+      } else {
+        publishSessionStateChanged(services, provisionalSessionId, "failed");
+      }
+      if (!bridgeActivated) {
+        bridge.activate(provisionalLiveSession);
+      }
+      attachRequestedClient(services, provisionalSessionId, request.attach);
+      params.onLiveSessionReady(provisionalLiveSession);
+      return {
+        sessionId: provisionalSessionId,
+        summary: toSessionSummary(services.sessionStore.getSession(provisionalSessionId)!),
+      };
+    } else if (forkedThreadId) {
+      try {
+        const existingRecoveryState = services.sessionStore.findManagedByProviderSession(
+          "codex",
+          forkedThreadId,
+        );
+        const recoveryState =
+          existingRecoveryState ??
+          createForkedManagedSession({
+            services,
+            parent,
+            request,
+            client,
+            threadId: forkedThreadId,
+            threadStatus: forkThreadStatus,
+            cwd: forkCwd,
+            modelId: forkModelId,
+            reasoningId: forkReasoningId,
+            mode: resolvedMode,
+            planCollaborationMode,
+            nativeTuiAttachAvailable: false,
+          });
+        prepareForkedManagedSessionInfrastructure({
+          services,
+          sessionId: recoveryState.session.id,
+          nativeTuiAttachAvailable: false,
+        });
+        const failedRecoveryState = markForkRecoverySessionFailed({
+          services,
+          sessionId: recoveryState.session.id,
+          creationError: error,
+          rollbackError,
+        });
+        const recoveryLive = createForkedLiveSession({
+          sessionId: failedRecoveryState.session.id,
+          threadId: forkedThreadId,
+          request,
+          cwd: forkCwd,
+          mode: resolvedMode,
+          modelId: forkModelId,
+          reasoningId: forkReasoningId,
+          modelCatalog: parentLive?.modelCatalog ?? null,
+          planCollaborationMode,
+          client,
+        });
+        publishSessionBootstrap(
+          services,
+          failedRecoveryState.session.id,
+          failedRecoveryState.session,
+        );
+        bridge.activate(recoveryLive);
+        attachRequestedClient(services, failedRecoveryState.session.id, request.attach);
+        params.onLiveSessionReady(recoveryLive);
+        return {
+          sessionId: failedRecoveryState.session.id,
+          summary: toSessionSummary(
+            services.sessionStore.getSession(failedRecoveryState.session.id)!,
+          ),
+        };
+      } catch (recoveryError) {
+        await client.dispose();
+        throw new AggregateError(
+          [error, rollbackError, recoveryError],
+          `Failed to create, roll back, or register recovery for Codex ${request.kind} thread ${forkedThreadId}.`,
+        );
+      }
+    } else {
+      await client.dispose();
+    }
+    throw new AggregateError(
+      [error, rollbackError],
+      `Failed to create and roll back Codex ${request.kind} thread ${forkedThreadId ?? "unknown"}.`,
+    );
+  }
+}
+
 export async function respondToCodexLivePermission(params: {
   services: RuntimeServices;
   liveSession: LiveCodexSession;
@@ -800,6 +1254,9 @@ export async function respondToCodexLivePermission(params: {
   }
 
   pending.resolve({
-    decision: resolveCodexApprovalDecision(params.response, pending.approvalProtocol ?? "v2"),
+    decision: resolveCodexApprovalDecision(
+      params.response,
+      pending.approvalResponseShape ?? "action",
+    ),
   });
 }

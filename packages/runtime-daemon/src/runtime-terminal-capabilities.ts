@@ -18,7 +18,6 @@ export function buildNativeTuiSessionCapabilities(
     contextUsage: false,
     resumeByProvider: true,
     listProviderSessions: true,
-    renameSession: false,
     actions: {
       info: true,
       stop: true,

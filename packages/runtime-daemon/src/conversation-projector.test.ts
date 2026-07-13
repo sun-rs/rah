@@ -268,6 +268,71 @@ describe("conversation projector", () => {
     assert.equal(settled.turns[0]?.finalAnswerItemId, identity.canonicalItemId);
   });
 
+  test("settles a persisted user-only turn as interrupted", () => {
+    const identity = createTimelineIdentity({
+      provider: "claude",
+      providerSessionId: "claude-interrupted",
+      turnKey: "record:user-only",
+      itemKind: "user_message",
+      itemKey: "user-only",
+      origin: "history",
+      confidence: "native",
+    });
+    const events: RahEvent[] = [
+      event(1, "turn.started", CLAUDE_SOURCE, "turn:user-only", {}),
+      event(2, "timeline.item.added", CLAUDE_SOURCE, "turn:user-only", {
+        identity,
+        item: { kind: "user_message", text: "unfinished", messageId: "user-only" },
+      }),
+    ];
+
+    assert.equal(projectConversation("session-1", events).turns[0]?.status, "in_progress");
+    const settled = projectConversation("session-1", events, { assumeSettled: true });
+    assert.equal(settled.turns[0]?.status, "interrupted");
+    assert.equal(settled.turns[0]?.statusAuthority, "derived");
+  });
+
+  test("preserves optimistic correlation across persisted revisions of one canonical user item", () => {
+    const identity = createTimelineIdentity({
+      provider: "opencode",
+      providerSessionId: "opencode-session",
+      turnKey: "message:user-1",
+      itemKind: "user_message",
+      itemKey: "part-user-1",
+      origin: "live",
+      confidence: "native",
+    });
+    const events: RahEvent[] = [
+      event(1, "timeline.item.added", OPENCODE_SOURCE, "local-turn", {
+        identity,
+        item: {
+          kind: "user_message",
+          text: "queued question",
+          messageId: "user-1",
+          clientMessageId: "client-message-1",
+          clientTurnId: "client-turn-1",
+        },
+      }),
+      event(2, "timeline.item.updated", OPENCODE_SOURCE, "opencode:user-1", {
+        identity: { ...identity, origin: "history" },
+        item: {
+          kind: "user_message",
+          text: "queued question",
+          messageId: "user-1",
+        },
+      }),
+    ];
+
+    const projection = projectConversation("session-1", events);
+    assert.equal(projection.turns.length, 1);
+    const item = projection.turns[0]?.items[0];
+    assert.equal(item?.content.kind, "timeline");
+    if (item?.content.kind === "timeline" && item.content.item.kind === "user_message") {
+      assert.equal(item.content.item.clientMessageId, "client-message-1");
+      assert.equal(item.content.item.clientTurnId, "client-turn-1");
+    }
+  });
+
   test("prefers normalized observations over duplicate tool calls and localizes failures", () => {
     const events: RahEvent[] = [
       event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
@@ -298,6 +363,16 @@ describe("conversation projector", () => {
     assert.ok(turn);
     assert.equal(turn.status, "completed");
     assert.equal(turn.failedItemCount, 1);
+    assert.deepEqual(turn.activities, [
+      {
+        kind: "command",
+        totalCount: 1,
+        runningCount: 0,
+        interruptedCount: 0,
+        failureCount: 0,
+        issueCount: 1,
+      },
+    ]);
     assert.equal(turn.items.length, 1);
     assert.equal(turn.items[0]?.content.kind, "observation");
     assert.equal(turn.items[0]?.status, "failed");
@@ -362,5 +437,15 @@ describe("conversation projector", () => {
     assert.equal(turn?.items[0]?.status, "interrupted");
     assert.equal(turn?.items[0]?.completedAt, events[2]?.ts);
     assert.equal(turn?.failedItemCount, 0);
+    assert.deepEqual(turn?.activities, [
+      {
+        kind: "command",
+        totalCount: 1,
+        runningCount: 0,
+        interruptedCount: 1,
+        failureCount: 0,
+        issueCount: 0,
+      },
+    ]);
   });
 });

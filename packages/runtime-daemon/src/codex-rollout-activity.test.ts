@@ -132,6 +132,9 @@ describe("translateCodexRolloutLine", () => {
     assert.equal(reasoning?.type, "timeline_item");
     assert.equal(assistant?.type, "timeline_item");
     if (user?.type === "timeline_item" && reasoning?.type === "timeline_item" && assistant?.type === "timeline_item") {
+      assert.equal(user.turnId, "turn-1");
+      assert.equal(reasoning.turnId, "turn-1");
+      assert.equal(assistant.turnId, "turn-1");
       assert.equal(
         user.identity?.canonicalItemId,
         createCodexTimelineIdentity({
@@ -1049,6 +1052,97 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
+  test("treats ordinary code-mode custom tool text as completed output", () => {
+    for (const [name, output] of [
+      [
+        "exec",
+        "Script running with cell ID 2380\nWall time 10.0 seconds\nOutput:\n",
+      ],
+      [
+        "write_stdin",
+        "Process running with session ID 54919.\nLatest output is not available yet.",
+      ],
+    ] as const) {
+      const state = createCodexRolloutTranslationState();
+      translateCodexRolloutLine(
+        {
+          timestamp: "2026-07-11T01:00:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            status: "completed",
+            call_id: `call-${name}`,
+            name,
+            input: "{}",
+          },
+        },
+        state,
+      );
+      const completed = translateCodexRolloutLine(
+        {
+          timestamp: "2026-07-11T01:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call_output",
+            call_id: `call-${name}`,
+            output,
+          },
+        },
+        state,
+      );
+
+      assert.deepEqual(completed.map((item) => item.activity.type), [
+        "tool_call_completed",
+      ]);
+      if (completed[0]?.activity.type === "tool_call_completed") {
+        assert.equal(completed[0].activity.toolCall.providerToolName, name);
+        assert.ok(
+          completed[0].activity.toolCall.detail?.artifacts.some(
+            (artifact) => artifact.kind === "text" && artifact.text.includes(output.trim()),
+          ),
+        );
+      }
+    }
+  });
+
+  test("uses explicit custom tool exit codes as the failure boundary", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-07-11T01:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          status: "completed",
+          call_id: "call-explicit-failure",
+          name: "exec",
+          input: "{}",
+        },
+      },
+      state,
+    );
+    const failed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-07-11T01:01:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-explicit-failure",
+          output: JSON.stringify({
+            output: "command failed",
+            metadata: { exit_code: 2 },
+          }),
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(failed.map((item) => item.activity.type), ["tool_call_failed"]);
+    if (failed[0]?.activity.type === "tool_call_failed") {
+      assert.equal(failed[0].activity.error, "command failed");
+    }
+  });
+
   test("maps agent_message and reasoning response items into timeline activities", () => {
     const state = createCodexRolloutTranslationState();
     const agentMessage = translateCodexRolloutLine(
@@ -1211,6 +1305,61 @@ describe("translateCodexRolloutLine", () => {
 
     assert.equal(eventMsg.length, 1);
     assert.equal(responseItem.length, 0);
+  });
+
+  test("upgrades duplicate Codex commentary to the canonical final answer", () => {
+    const state = createCodexRolloutTranslationState({ providerSessionId: "session-1" });
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:00.000Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-final" },
+      },
+      state,
+    );
+    const commentary = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Same answer",
+          phase: "commentary",
+        },
+      },
+      state,
+    );
+    const finalAnswer = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:01.001Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Same answer" }],
+          phase: "final_answer",
+        },
+      },
+      state,
+    );
+
+    assert.equal(commentary[0]?.activity.type, "timeline_item");
+    assert.equal(finalAnswer[0]?.activity.type, "timeline_item_updated");
+    if (
+      commentary[0]?.activity.type === "timeline_item" &&
+      finalAnswer[0]?.activity.type === "timeline_item_updated"
+    ) {
+      assert.equal(commentary[0].activity.turnId, "turn-final");
+      assert.equal(finalAnswer[0].activity.turnId, "turn-final");
+      assert.equal(
+        finalAnswer[0].activity.identity?.canonicalItemId,
+        commentary[0].activity.identity?.canonicalItemId,
+      );
+      assert.equal(finalAnswer[0].activity.item.kind, "assistant_message");
+      if (finalAnswer[0].activity.item.kind === "assistant_message") {
+        assert.equal(finalAnswer[0].activity.item.phase, "final_answer");
+      }
+    }
   });
 
   test("deduplicates persisted assistant text when a frozen history window omits task_started", () => {

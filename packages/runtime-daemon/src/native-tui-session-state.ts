@@ -19,6 +19,7 @@ export type NativeTuiSubmittedInput = {
   clientId: string;
   text: string;
   submittedAt: string;
+  interruptedAt?: string;
   clientMessageId?: string;
   clientTurnId?: string;
 };
@@ -38,11 +39,8 @@ export type NativeTuiSessionState = {
   lastInjectedInputAtMs?: number;
   clearPromptBeforeNextInput?: boolean;
   stopPending?: boolean;
-  stopTurnId?: string;
   stopTimer?: ReturnType<typeof setTimeout>;
   lastInterruptCompletedAtMs?: number;
-  promptClearTimer?: ReturnType<typeof setTimeout>;
-  promptClearScheduledAtMs?: number;
   queuedDrainTimer?: ReturnType<typeof setTimeout>;
   recentOutputTail?: string;
   bindingTimer?: ReturnType<typeof setInterval>;
@@ -87,17 +85,11 @@ export function clearNativeTuiSessionTimers(native: NativeTuiSessionState | unde
     clearTimeout(native.stopTimer);
     delete native.stopTimer;
   }
-  if (native.promptClearTimer) {
-    clearTimeout(native.promptClearTimer);
-    delete native.promptClearTimer;
-  }
   if (native.queuedDrainTimer) {
     clearTimeout(native.queuedDrainTimer);
     delete native.queuedDrainTimer;
   }
-  delete native.promptClearScheduledAtMs;
   delete native.stopPending;
-  delete native.stopTurnId;
 }
 
 export function enqueueNativeTuiQueuedInput(

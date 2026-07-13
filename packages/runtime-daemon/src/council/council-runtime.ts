@@ -845,7 +845,6 @@ export class CouncilRuntime {
         agentLabel: agent.label,
       },
       ...(agent.modelId ? { model: agent.modelId } : {}),
-      ...(typeof agent.reasoningId === "string" ? { reasoningId: agent.reasoningId } : {}),
       ...(agent.optionValues !== undefined ? { optionValues: agent.optionValues } : {}),
       ...(agent.modeId ? { modeId: agent.modeId } : {}),
       extraMcpServers: [councilMcpServerSpec(council.id, agent.id)],

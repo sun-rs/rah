@@ -39,6 +39,12 @@ type PendingLiveToolCall = {
   toolCall: ToolCall;
 };
 
+export type CodexSubmittedUserMessage = {
+  text: string;
+  clientMessageId?: string;
+  clientTurnId?: string;
+};
+
 export interface CodexAppServerTranslationState {
   pendingToolCalls: Map<string, PendingLiveToolCall>;
   agentMessageByItemId: Map<string, string[]>;
@@ -53,6 +59,9 @@ export interface CodexAppServerTranslationState {
   userTimelineItemIndexByTurnId: Map<string, number>;
   reservedUserTimelineItemIndexByTurnId: Map<string, number>;
   nextTimelineItemIndexByTurnId: Map<string, number>;
+  pendingSubmittedUserMessage?: CodexSubmittedUserMessage;
+  submittedUserMessageByTurnId: Map<string, CodexSubmittedUserMessage>;
+  clientUserMessageEmittedTurnIds: Set<string>;
   pendingRuntimeModel?: TimelineRuntimeModel;
   runtimeModelByTurnId: Map<string, TimelineRuntimeModel>;
   lastAgentMessageDeltaByItemId: Map<string, string>;
@@ -80,6 +89,8 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     userTimelineItemIndexByTurnId: new Map(),
     reservedUserTimelineItemIndexByTurnId: new Map(),
     nextTimelineItemIndexByTurnId: new Map(),
+    submittedUserMessageByTurnId: new Map(),
+    clientUserMessageEmittedTurnIds: new Set(),
     runtimeModelByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
     lastReasoningDeltaByItemId: new Map(),
@@ -90,6 +101,43 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     commandObservationByCallId: new Map(),
     patchObservationByCallId: new Map(),
   };
+}
+
+export function recordCodexSubmittedUserMessage(
+  state: CodexAppServerTranslationState,
+  message: CodexSubmittedUserMessage,
+): void {
+  state.pendingSubmittedUserMessage = message;
+}
+
+export function bindCodexSubmittedUserMessageToTurn(
+  state: CodexAppServerTranslationState,
+  turnId: string,
+): CodexSubmittedUserMessage | undefined {
+  const existing = state.submittedUserMessageByTurnId.get(turnId);
+  if (existing) {
+    return existing;
+  }
+  const pending = state.pendingSubmittedUserMessage;
+  if (!pending) {
+    return undefined;
+  }
+  state.submittedUserMessageByTurnId.set(turnId, pending);
+  delete state.pendingSubmittedUserMessage;
+  return pending;
+}
+
+export function discardPendingCodexSubmittedUserMessage(
+  state: CodexAppServerTranslationState,
+  clientMessageId: string | undefined,
+): void {
+  if (
+    state.pendingSubmittedUserMessage &&
+    (clientMessageId === undefined ||
+      state.pendingSubmittedUserMessage.clientMessageId === clientMessageId)
+  ) {
+    delete state.pendingSubmittedUserMessage;
+  }
 }
 
 type JsonRpcNotification = {
@@ -630,7 +678,11 @@ function itemIdFromParams(params: Record<string, unknown>): string | null {
   return stringField(params, "itemId") ?? stringField(params, "item_id");
 }
 
-function parsePlanUpdate(notification: JsonRpcNotification): string | null {
+function parsePlanUpdate(notification: JsonRpcNotification): {
+  text: string;
+  explanation?: string;
+  steps: Array<{ text: string; status: "pending" | "in_progress" | "completed" }>;
+} | null {
   if (!notification.params || typeof notification.params !== "object" || Array.isArray(notification.params)) {
     return null;
   }
@@ -638,16 +690,35 @@ function parsePlanUpdate(notification: JsonRpcNotification): string | null {
   if (!Array.isArray(params.plan)) {
     return null;
   }
-  const lines = params.plan
+  const steps = params.plan
     .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
     .map((entry) => entry as Record<string, unknown>)
-    .map((entry) => (typeof entry.step === "string" ? entry.step.trim() : ""))
-    .filter(Boolean)
-    .map((step) => (/^(#{1,6}\s|[-*+]\s|\d+\.\s)/.test(step) ? step : `- ${step}`));
-  if (lines.length === 0) {
+    .map((entry) => {
+      const text = typeof entry.step === "string" ? entry.step.trim() : "";
+      const rawStatus = typeof entry.status === "string" ? entry.status : "pending";
+      const status =
+        rawStatus === "completed"
+          ? "completed"
+          : rawStatus === "inProgress" || rawStatus === "in_progress"
+            ? "in_progress"
+            : "pending";
+      return { text, status } as const;
+    })
+    .filter((step) => step.text.length > 0);
+  if (steps.length === 0) {
     return null;
   }
-  return lines.join("\n");
+  const explanation =
+    typeof params.explanation === "string" && params.explanation.trim()
+      ? params.explanation.trim()
+      : undefined;
+  return {
+    text: steps
+      .map(({ text }) => (/^(#{1,6}\s|[-*+]\s|\d+\.\s)/.test(text) ? text : `- ${text}`))
+      .join("\n"),
+    ...(explanation ? { explanation } : {}),
+    steps,
+  };
 }
 
 function parseUsage(notification: JsonRpcNotification) {
@@ -1397,6 +1468,12 @@ function mapThreadItem(
         state.emittedUserMessageItemIds.add(id);
         return [];
       }
+      const submitted = bindCodexSubmittedUserMessageToTurn(state, turnId);
+      if (submitted && state.clientUserMessageEmittedTurnIds.has(turnId)) {
+        state.emittedUserMessageItemIds.add(id);
+        state.submittedUserMessageByTurnId.delete(turnId);
+        return [];
+      }
       const identity = createLiveTimelineIdentity(state, {
         providerSessionId,
         turnId,
@@ -1416,6 +1493,12 @@ function mapThreadItem(
                 kind: "user_message",
                 text,
                 messageId: id,
+                ...(submitted?.clientMessageId !== undefined
+                  ? { clientMessageId: submitted.clientMessageId }
+                  : {}),
+                ...(submitted?.clientTurnId !== undefined
+                  ? { clientTurnId: submitted.clientTurnId }
+                  : {}),
                 ...(imageCount > 0 ? { imageCount } : {}),
               },
               ...timelineIdentityProps(identity),
@@ -1423,6 +1506,7 @@ function mapThreadItem(
           ]
         : [{ type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "unknown", metadata: item as never } }];
       state.emittedUserMessageItemIds.add(id);
+      state.submittedUserMessageByTurnId.delete(turnId);
       return activities;
     }
     case "agentMessage": {
@@ -2021,6 +2105,7 @@ export function translateCodexAppServerNotification(
         state.runtimeModelByTurnId.set(turn.id, runtimeModel);
       }
       delete state.pendingRuntimeModel;
+      const submitted = bindCodexSubmittedUserMessageToTurn(state, turn.id);
       const providerSessionId = providerSessionIdFromParams(params);
       const identity = providerSessionId
         ? createCodexTimelineTurnIdentity({
@@ -2031,7 +2116,7 @@ export function translateCodexAppServerNotification(
           })
         : undefined;
       const timing = turnLifecycleTiming(turn);
-      return [
+      const activities: CodexLiveTranslatedActivity[] = [
         translated(notification, {
           type: "turn_started",
           turnId: turn.id,
@@ -2039,6 +2124,39 @@ export function translateCodexAppServerNotification(
           ...(timing.startedAt !== undefined ? { startedAt: timing.startedAt } : {}),
         }),
       ];
+      if (submitted) {
+        const messageId =
+          submitted.clientMessageId ??
+          submitted.clientTurnId ??
+          `client-input:${turn.id}`;
+        const userIdentity = createLiveTimelineIdentity(state, {
+          providerSessionId,
+          turnId: turn.id,
+          itemKind: "user_message",
+          providerItemKey: messageId,
+          providerMessageId: messageId,
+        });
+        state.clientUserMessageEmittedTurnIds.add(turn.id);
+        activities.push(
+          translated(notification, {
+            type: "timeline_item",
+            turnId: turn.id,
+            item: {
+              kind: "user_message",
+              text: submitted.text,
+              messageId,
+              ...(submitted.clientMessageId !== undefined
+                ? { clientMessageId: submitted.clientMessageId }
+                : {}),
+              ...(submitted.clientTurnId !== undefined
+                ? { clientTurnId: submitted.clientTurnId }
+                : {}),
+            },
+            ...timelineIdentityProps(userIdentity),
+          }),
+        );
+      }
+      return activities;
     }
     case "hook/started": {
       const params = paramsRecord(notification);
@@ -2062,6 +2180,7 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "turn/completed did not include turn.status");
       }
       const turnId = typeof turn.id === "string" ? turn.id : "current-turn";
+      state.submittedUserMessageByTurnId.delete(turnId);
       const timing = turnLifecycleTiming(turn);
       const providerSessionId = providerSessionIdFromParams(params);
       const identity = providerSessionId
@@ -2332,8 +2451,8 @@ export function translateCodexAppServerNotification(
       ];
     }
     case "turn/plan/updated": {
-      const text = parsePlanUpdate(notification);
-      if (!text) {
+      const plan = parsePlanUpdate(notification);
+      if (!plan) {
         return invalidStreamActivities(notification, "plan update payload was not recognized");
       }
       const params = paramsRecord(notification);
@@ -2350,7 +2469,7 @@ export function translateCodexAppServerNotification(
       return [
         translated(notification, {
           type: "timeline_item",
-          item: { kind: "plan", text },
+          item: { kind: "plan", ...plan },
           ...timelineIdentityProps(identity),
         }),
       ];

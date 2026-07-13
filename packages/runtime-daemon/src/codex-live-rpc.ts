@@ -248,6 +248,7 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
     | null = null;
   private closeHandler: ((error: Error) => void) | null = null;
   private closeNotified = false;
+  private transportClosed = false;
   private disposed = false;
 
   constructor(
@@ -289,7 +290,7 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
   }
 
   request(method: string, params?: unknown, timeoutMs = JSON_RPC_TIMEOUT_MS): Promise<unknown> {
-    if (this.disposed || this.socket.readyState !== WebSocket.OPEN) {
+    if (this.disposed || this.transportClosed || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("Codex websocket JSON-RPC client is closed"));
     }
     const id = this.nextId++;
@@ -309,7 +310,7 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
   }
 
   notify(method: string, params?: unknown): void {
-    if (this.disposed || this.socket.readyState !== WebSocket.OPEN) {
+    if (this.disposed || this.transportClosed || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
     this.socket.send(JSON.stringify({ method, params }));
@@ -386,7 +387,10 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
       this.closeNotified = true;
       this.closeHandler?.(error);
     }
-    this.disposed = true;
+    // A closed socket makes RPC unavailable, but the owned app-server child
+    // can still be alive. Keep explicit disposal available so callers can
+    // terminate that process instead of leaking an orphan.
+    this.transportClosed = true;
   }
 
   private rejectPending(key: string, error: Error): void {

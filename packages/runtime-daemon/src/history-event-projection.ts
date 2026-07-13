@@ -1,7 +1,7 @@
 import type {
   RahEvent,
-  SessionHistoryItemDetailKind,
-  SessionHistoryPageResponse,
+  ConversationItemDetailKind,
+  ConversationEvidencePage,
   ToolCall,
   ToolCallDetail,
   WorkbenchObservation,
@@ -170,7 +170,7 @@ export function summarizeHistoryEvent(event: RahEvent): RahEvent {
   }
 }
 
-export function summarizeHistoryPage(page: SessionHistoryPageResponse): SessionHistoryPageResponse {
+export function summarizeHistoryPage(page: ConversationEvidencePage): ConversationEvidencePage {
   const events = page.events.map(summarizeHistoryEvent);
   return {
     ...page,
@@ -180,7 +180,7 @@ export function summarizeHistoryPage(page: SessionHistoryPageResponse): SessionH
   };
 }
 
-export function chatHistoryPage(page: SessionHistoryPageResponse): SessionHistoryPageResponse {
+export function chatHistoryPage(page: ConversationEvidencePage): ConversationEvidencePage {
   const events = page.events
     .filter(isChatHistoryTimelineEvent)
     .map(summarizeHistoryEvent);
@@ -192,7 +192,7 @@ export function chatHistoryPage(page: SessionHistoryPageResponse): SessionHistor
   };
 }
 
-export function fullHistoryPage(page: SessionHistoryPageResponse): SessionHistoryPageResponse {
+export function fullHistoryPage(page: ConversationEvidencePage): ConversationEvidencePage {
   return {
     ...page,
     detailMode: "full",
@@ -202,7 +202,7 @@ export function fullHistoryPage(page: SessionHistoryPageResponse): SessionHistor
 
 export function historyEventMatchesItem(
   event: RahEvent,
-  kind: SessionHistoryItemDetailKind,
+  kind: ConversationItemDetailKind,
   itemId: string,
 ): boolean {
   if (kind === "tool_call") {

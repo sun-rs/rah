@@ -122,7 +122,6 @@ test("runtime descriptor helpers preserve explicit runtime metadata", () => {
       contextUsage: false,
       resumeByProvider: true,
       listProviderSessions: true,
-      renameSession: false,
       actions: {
         info: true,
         stop: true,

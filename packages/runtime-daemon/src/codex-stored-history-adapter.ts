@@ -1,9 +1,8 @@
 import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
-  SessionHistoryPageResponse,
-  SessionTurnDirectoryResponse,
-  SessionTurnHistoryResponse,
+  ConversationEvidencePage,
+  ConversationTurnDirectoryResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import { canFinalizeCodexStoredHistory } from "./codex-history-liveness";
@@ -22,15 +21,16 @@ import type {
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
+import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { movePathToTrash } from "./trash";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
+import { CodexTurnPageCache } from "./codex-turn-page-cache";
 import {
   readCodexConversationTurnDetail,
-  readCodexTurnHistory,
 } from "./codex-turn-history";
 import { createCodexAppServerClient } from "./codex-app-server-client";
 import type { CodexAppServerRpcClient } from "./codex-live-rpc";
@@ -40,6 +40,7 @@ import {
   materializeCodexAppServerTurnItems,
   type CodexAppServerItemsPage,
   type CodexAppServerTurnsPage,
+  reconcileCodexTrailingTurnLiveness,
 } from "./codex-app-server-turns-page";
 
 function isUnsupportedExperimentalListError(error: unknown): boolean {
@@ -61,6 +62,7 @@ export class CodexStoredHistoryAdapter
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly turnDirectories = new CodexTurnDirectoryStore();
+  private readonly turnPages = new CodexTurnPageCache();
   private turnsListSupport: "unknown" | "available" | "unavailable" = "unknown";
   private itemsListSupport: "unknown" | "available" | "unavailable" = "unknown";
   private pagingClient: CodexAppServerRpcClient | undefined;
@@ -105,10 +107,10 @@ export class CodexStoredHistoryAdapter
     }
   }
 
-  getSessionHistoryPage(
+  getConversationEvidencePage(
     sessionId: string,
     options: { beforeTs?: string; cursor?: string; limit?: number } = {},
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     const record = this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return { sessionId, events: [] };
@@ -121,10 +123,10 @@ export class CodexStoredHistoryAdapter
     });
   }
 
-  async getSessionConversationHistoryPage(
+  async getConversationSummaryEvidencePage(
     sessionId: string,
     options: { cursor?: string; limit?: number } = {},
-  ): Promise<SessionHistoryPageResponse | undefined> {
+  ): Promise<ConversationEvidencePage | undefined> {
     if (this.turnsListSupport === "unavailable") {
       return undefined;
     }
@@ -133,26 +135,42 @@ export class CodexStoredHistoryAdapter
       return undefined;
     }
     try {
-      const client = await this.getPagingClient();
-      const raw = (await client.request(
-        "thread/turns/list",
-        {
-          threadId: record.ref.providerSessionId,
-          ...(options.cursor ? { cursor: options.cursor } : {}),
-          limit: Math.max(1, Math.min(options.limit ?? 20, 100)),
-          sortDirection: "desc",
-          itemsView: "summary",
+      const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+      const sourceSettled = this.canFinalizeStoredHistory(record);
+      const page = await this.turnPages.getOrLoad({
+        providerSessionId: record.ref.providerSessionId,
+        rolloutPath: record.rolloutPath,
+        ...(options.cursor ? { cursor: options.cursor } : {}),
+        limit,
+        sourceSettled,
+        load: async (revision) => {
+          const client = await this.getPagingClient();
+          const raw = (await client.request(
+            "thread/turns/list",
+            {
+              threadId: record.ref.providerSessionId,
+              ...(options.cursor ? { cursor: options.cursor } : {}),
+              limit,
+              sortDirection: "desc",
+              itemsView: "summary",
+            },
+            8_000,
+          )) as CodexAppServerTurnsPage;
+          if (!Array.isArray(raw?.data)) {
+            throw new Error("Codex thread/turns/list returned an invalid page.");
+          }
+          this.turnsListSupport = "available";
+          return reconcileCodexTrailingTurnLiveness(raw, {
+            latestPage: !options.cursor,
+            sourceSettled,
+            fallbackCompletedAtMs: revision.mtimeMs,
+          });
         },
-        8_000,
-      )) as CodexAppServerTurnsPage;
-      if (!Array.isArray(raw?.data)) {
-        throw new Error("Codex thread/turns/list returned an invalid page.");
-      }
-      this.turnsListSupport = "available";
+      });
       return materializeCodexAppServerTurnsPage({
         sessionId,
         providerSessionId: record.ref.providerSessionId,
-        page: raw,
+        page,
       });
     } catch (error) {
       if (isUnsupportedExperimentalListError(error)) {
@@ -177,7 +195,7 @@ export class CodexStoredHistoryAdapter
   async getSessionConversationItemDetail(
     sessionId: string,
     options: { providerTurnId: string; providerItemId: string },
-  ): Promise<SessionHistoryPageResponse | undefined> {
+  ): Promise<ConversationEvidencePage | undefined> {
     const record = this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return undefined;
@@ -208,7 +226,7 @@ export class CodexStoredHistoryAdapter
   async getSessionConversationTurnDetail(
     sessionId: string,
     options: { providerTurnId: string },
-  ): Promise<SessionHistoryPageResponse | undefined> {
+  ): Promise<ConversationEvidencePage | undefined> {
     const record = this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return undefined;
@@ -246,7 +264,7 @@ export class CodexStoredHistoryAdapter
     });
   }
 
-  async getSessionTurnDirectory(sessionId: string): Promise<SessionTurnDirectoryResponse> {
+  async getSessionConversationDirectory(sessionId: string): Promise<ConversationTurnDirectoryResponse> {
     const record = this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return {
@@ -258,21 +276,6 @@ export class CodexStoredHistoryAdapter
       };
     }
     return this.turnDirectories.getDirectory(sessionId, record);
-  }
-
-  async getSessionTurnHistory(
-    sessionId: string,
-    turnId: string,
-  ): Promise<SessionTurnHistoryResponse> {
-    const record = this.findRecordForRuntimeSession(sessionId);
-    if (!record) {
-      return { sessionId, turnId, events: [] };
-    }
-    const range = await this.turnDirectories.getTurnRange(record, turnId);
-    if (!range) {
-      return { sessionId, turnId, events: [] };
-    }
-    return readCodexTurnHistory({ sessionId, turnId, record, range });
   }
 
   listStoredSessions(): StoredSessionRef[] {
@@ -287,8 +290,62 @@ export class CodexStoredHistoryAdapter
     return this.listStoredSessions();
   }
 
+  hydrateStoredSessionsCatalog(records: readonly StoredSessionCatalogRecord[]): void {
+    this.storedSessionIndex = new Map(
+      records
+        .filter((record) => record.ref.provider === "codex")
+        .map((record) => [
+          record.ref.providerSessionId,
+          {
+            ref: record.ref,
+            rolloutPath: record.storagePath,
+            archived: record.archived ?? record.ref.providerState?.archived === true,
+          },
+        ] as const),
+    );
+  }
+
   listStoredSessionWatchRoots(): string[] {
     return resolveCodexStoredSessionWatchRoots();
+  }
+
+  async archiveStoredSession(session: StoredSessionRef): Promise<void> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
+    }
+    if (record.archived) {
+      return;
+    }
+    try {
+      const client = await this.getPagingClient();
+      await client.request(
+        "thread/archive",
+        { threadId: session.providerSessionId },
+        8_000,
+      );
+    } catch (error) {
+      if (isBrokenPagingTransport(error)) {
+        await this.resetPagingClient();
+      }
+      throw error;
+    }
+    this.turnDirectories.clear(session.providerSessionId);
+    this.turnPages.clear(session.providerSessionId);
+    this.storedSessionIndex.set(session.providerSessionId, {
+      ...record,
+      archived: true,
+      ref: {
+        ...record.ref,
+        providerState: {
+          ...record.ref.providerState,
+          archived: true,
+          archivedAt: new Date().toISOString(),
+        },
+      },
+    });
   }
 
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
@@ -300,6 +357,7 @@ export class CodexStoredHistoryAdapter
     }
     await movePathToTrash(record.rolloutPath);
     this.turnDirectories.clear(session.providerSessionId);
+    this.turnPages.clear(session.providerSessionId);
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 

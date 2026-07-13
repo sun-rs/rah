@@ -15,11 +15,18 @@ import {
   requestErrorStatus,
 } from "./http-server-response";
 import {
+  parseCreateCouncilRequest,
+  parsePermissionResponseRequest,
   parseResumeSessionRequest,
+  parseSetSessionModelRequest,
   parseStartSessionRequest,
 } from "./http-server-request-validation";
 import { isLoopbackRemoteAddress, sendJsonWithBackpressure } from "./http-server-websocket";
-import { isLocalMachineRemoteAddress } from "./http-server-client-address";
+import {
+  isLocalMachineRemoteAddress,
+  isLocalNetworkRemoteAddress,
+  resolveImagePreviewModeForPeer,
+} from "./http-server-client-address";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -138,6 +145,7 @@ describe("startRahDaemon", () => {
     daemon = await startRahDaemon({
       port,
       engine,
+      auth: false,
     });
   });
 
@@ -235,7 +243,7 @@ describe("startRahDaemon", () => {
       payload: {
         item: {
           kind: "assistant_message",
-          text: "Conversation V2 is ready.",
+          text: "Conversation is ready.",
           phase: "final_answer",
           messageId: "assistant-1",
         },
@@ -360,6 +368,33 @@ describe("startRahDaemon", () => {
     assert.equal(streamedDelta?.sourceSeq, published.seq);
     assert.equal(streamedDelta?.baseRevision, 0);
     assert.equal(streamedDelta?.revision, 1);
+  });
+
+  test("closes promptly while an event websocket is still connected", async () => {
+    const socket = await openWebSocket(`ws://127.0.0.1:${port}/api/events`);
+    const socketClosed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    const startedAt = Date.now();
+    let timeout: NodeJS.Timeout | undefined;
+
+    try {
+      await Promise.race([
+        daemon!.close(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Daemon close waited on its own websocket client.")),
+            3_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+    daemon = null;
+
+    await socketClosed;
+    assert.ok(Date.now() - startedAt < 3_000);
   });
 
   test("serves native TUI diagnostics", async () => {
@@ -599,6 +634,66 @@ describe("startRahDaemon", () => {
     assert.equal(resume.liveBackend, "native_local_server");
   });
 
+  test("rejects removed model and access aliases at the public HTTP boundary", () => {
+    assert.throws(
+      () =>
+        parseStartSessionRequest({
+          provider: "codex",
+          cwd: tempHome,
+          reasoningId: "xhigh",
+        }),
+      /reasoningId was removed/,
+    );
+    assert.throws(
+      () =>
+        parseResumeSessionRequest({
+          provider: "codex",
+          providerSessionId: "thread-1",
+          approvalPolicy: "never",
+        }),
+      /approvalPolicy was removed/,
+    );
+    assert.throws(
+      () => parseSetSessionModelRequest({ modelId: "gpt-5.5", reasoningId: "xhigh" }),
+      /reasoningId was removed/,
+    );
+    assert.throws(
+      () =>
+        parseCreateCouncilRequest({
+          workspace: tempHome,
+          agents: [
+            {
+              provider: "codex",
+              label: "reviewer",
+              reasoningId: "xhigh",
+            },
+          ],
+        }),
+      /reasoningId was removed/,
+    );
+  });
+
+  test("keeps provider-native permission decisions behind the adapter boundary", () => {
+    assert.deepEqual(
+      parsePermissionResponseRequest({
+        behavior: "allow",
+        decision: "approved_for_session",
+      }),
+      {
+        behavior: "allow",
+        decision: "approved_for_session",
+      },
+    );
+    assert.throws(
+      () =>
+        parsePermissionResponseRequest({
+          behavior: "allow",
+          decision: "acceptForSession",
+        }),
+      /decision is invalid/,
+    );
+  });
+
   test("rejects unsupported live providers at the public HTTP boundary", async () => {
     const start = await requestJson({
       port,
@@ -690,6 +785,50 @@ describe("startRahDaemon", () => {
     assert.equal(isLocalMachineRemoteAddress("::ffff:127.0.0.1"), true);
     assert.equal(isLocalMachineRemoteAddress("203.0.113.10"), false);
     assert.equal(isLocalMachineRemoteAddress(undefined), false);
+  });
+
+  test("distinguishes direct LAN peers from Tailscale and public peers", () => {
+    assert.equal(isLocalNetworkRemoteAddress("127.0.0.1"), true);
+    assert.equal(isLocalNetworkRemoteAddress("::ffff:192.168.1.20"), true);
+    assert.equal(isLocalNetworkRemoteAddress("10.0.0.8"), true);
+    assert.equal(isLocalNetworkRemoteAddress("172.20.4.2"), true);
+    assert.equal(isLocalNetworkRemoteAddress("100.64.0.9"), false);
+    assert.equal(isLocalNetworkRemoteAddress("203.0.113.10"), false);
+  });
+
+  test("allows full image previews only for direct local-network requests", () => {
+    assert.equal(
+      resolveImagePreviewModeForPeer({
+        hostname: "192.168.1.86",
+        remoteAddress: "192.168.1.20",
+        clientHint: "local",
+      }),
+      "full",
+    );
+    assert.equal(
+      resolveImagePreviewModeForPeer({
+        hostname: "100.64.0.8",
+        remoteAddress: "100.64.0.9",
+        clientHint: "local",
+      }),
+      "bounded",
+    );
+    assert.equal(
+      resolveImagePreviewModeForPeer({
+        hostname: "192.168.1.86",
+        remoteAddress: "100.64.0.9",
+        clientHint: "local",
+      }),
+      "bounded",
+    );
+    assert.equal(
+      resolveImagePreviewModeForPeer({
+        hostname: "127.0.0.1",
+        remoteAddress: "127.0.0.1",
+        clientHint: "remote",
+      }),
+      "bounded",
+    );
   });
 
   test("sends websocket JSON while under the backpressure threshold", () => {

@@ -8,7 +8,9 @@ import type {
   ConversationTurnStateProjection,
   RahEvent,
 } from "@rah/runtime-protocol";
+import { summarizeConversationActivities } from "@rah/runtime-protocol";
 import { projectConversation } from "./conversation-projector";
+import { projectConversationTurnResources } from "./conversation-resource-projector";
 import type { EventBus } from "./event-bus";
 import { summarizeHistoryEvent } from "./history-event-projection";
 
@@ -280,8 +282,11 @@ function mergeConversationTurn(
     durationMs: _existingDurationMs,
     error: _existingError,
     finalAnswerItemId: _existingFinalAnswerItemId,
+    outputs: _existingOutputs,
+    sources: _existingSources,
     ...existingBase
   } = existing;
+  const resources = projectConversationTurnResources(mergedItems);
   return {
     ...existingBase,
     id: incoming.id,
@@ -300,6 +305,9 @@ function mergeConversationTurn(
     ...(completedAt ? { completedAt } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
     items: mergedItems,
+    activities: summarizeConversationActivities(mergedItems),
+    ...(resources.outputs.length > 0 ? { outputs: resources.outputs } : {}),
+    ...(resources.sources.length > 0 ? { sources: resources.sources } : {}),
     ...(finalAnswerItemId ? { finalAnswerItemId } : {}),
     failedItemCount: mergedItems.filter((item) => item.status === "failed").length,
     ...(incoming.usage ?? existing.usage ? { usage: incoming.usage ?? existing.usage } : {}),

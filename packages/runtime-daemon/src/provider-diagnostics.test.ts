@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -102,12 +102,8 @@ describe("provider diagnostics version helpers", () => {
       },
     })) as typeof globalThis.fetch;
 
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-codex-doctor-"));
-    const binaryPath = path.join(tempDir, "codex");
     try {
-      writeFileSync(
-        binaryPath,
-        `#!/usr/bin/env ${path.basename(process.execPath)}
+      const fakeCli = `
 if (process.argv.includes("doctor")) {
   console.log(JSON.stringify({
     generatedAt: "now",
@@ -134,11 +130,13 @@ if (process.argv.includes("doctor")) {
 } else {
   process.exit(2);
 }
-`,
-      );
-      chmodSync(binaryPath, 0o755);
+`;
 
-      const diagnostic = await probeProviderDiagnostic("codex", { argv: [binaryPath] }, { forceRefresh: true });
+      const diagnostic = await probeProviderDiagnostic(
+        "codex",
+        { argv: [process.execPath, "-e", fakeCli, "--"] },
+        { forceRefresh: true },
+      );
 
       assert.equal(diagnostic.status, "ready");
       assert.equal(diagnostic.installedVersion, "0.132.0");
@@ -146,6 +144,93 @@ if (process.argv.includes("doctor")) {
       assert.equal(diagnostic.providerHealth?.auth?.mode, "chatgpt");
       assert.equal(diagnostic.providerHealth?.auth?.storedChatGptTokens, true);
       assert.equal(diagnostic.providerHealth?.appServer?.status, "not running");
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetProviderDiagnosticsCacheForTests();
+    }
+  });
+
+  test("can probe the Codex version without running doctor", async () => {
+    resetProviderDiagnosticsCacheForTests();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ tag_name: "v0.132.0" }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+      },
+    })) as typeof globalThis.fetch;
+
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-codex-version-only-"));
+    const doctorMarkerPath = path.join(tempDir, "doctor-called");
+    try {
+      const fakeCli = `
+const fs = require("node:fs");
+if (process.argv.includes("doctor")) {
+  fs.writeFileSync(${JSON.stringify(doctorMarkerPath)}, "called");
+  process.exit(2);
+}
+if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.132.0");
+  process.exit(0);
+}
+process.exit(2);
+`;
+
+      const diagnostic = await probeProviderDiagnostic(
+        "codex",
+        { argv: [process.execPath, "-e", fakeCli, "--"] },
+        { forceRefresh: true, includeHealth: false },
+      );
+
+      assert.equal(diagnostic.status, "ready");
+      assert.equal(diagnostic.installedVersion, "0.132.0");
+      assert.equal(diagnostic.providerHealth, undefined);
+      assert.equal(existsSync(doctorMarkerPath), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetProviderDiagnosticsCacheForTests();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("probes the installed version while the latest-version request is still pending", async () => {
+    resetProviderDiagnosticsCacheForTests();
+    const originalFetch = globalThis.fetch;
+    let resolveFetch: ((response: Response) => void) | undefined;
+    globalThis.fetch = (() => new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    })) as typeof globalThis.fetch;
+
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-provider-version-concurrency-"));
+    const versionMarkerPath = path.join(tempDir, "version-called");
+    try {
+      const fakeCli = `
+const fs = require("node:fs");
+if (process.argv.includes("--version")) {
+  fs.writeFileSync(${JSON.stringify(versionMarkerPath)}, "called");
+  console.log("codex-cli 0.132.0");
+  process.exit(0);
+}
+process.exit(2);
+`;
+      const diagnosticPromise = probeProviderDiagnostic(
+        "codex",
+        { argv: [process.execPath, "-e", fakeCli, "--"] },
+        { forceRefresh: true, includeHealth: false },
+      );
+
+      for (let attempt = 0; attempt < 50 && !existsSync(versionMarkerPath); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(existsSync(versionMarkerPath), true);
+
+      assert.ok(resolveFetch);
+      resolveFetch(new Response(JSON.stringify({ tag_name: "v0.132.0" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+      const diagnostic = await diagnosticPromise;
+      assert.equal(diagnostic.status, "ready");
     } finally {
       globalThis.fetch = originalFetch;
       resetProviderDiagnosticsCacheForTests();

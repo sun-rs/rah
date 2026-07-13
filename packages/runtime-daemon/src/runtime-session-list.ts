@@ -60,6 +60,8 @@ export function storedSessionRefKey(entry: StoredSessionRef): string {
     entry.historyMeta?.bytes ?? "",
     entry.historyMeta?.lines ?? "",
     entry.historyMeta?.messages ?? "",
+    entry.providerState?.archived ?? "",
+    entry.providerState?.archivedAt ?? "",
   ]);
 }
 
@@ -153,7 +155,7 @@ function runningSessionRef(state: StoredSessionState): StoredSessionRef | null {
 }
 
 function buildGlobalRecentSessions(args: {
-  storedSessions: Iterable<StoredSessionRef>;
+  discoveredStoredSessions: Iterable<StoredSessionRef>;
   rememberedRecentSessions: readonly StoredSessionRef[];
   visibleRunningStates: readonly StoredSessionState[];
   hiddenSessionKeys: ReadonlySet<string>;
@@ -161,6 +163,10 @@ function buildGlobalRecentSessions(args: {
   applyTitleOverride: (session: StoredSessionRef) => StoredSessionRef;
 }): StoredSessionRef[] {
   const recentByKey = new Map<string, StoredSessionRef>();
+  const discoveredProviderStateByKey = new Map<
+    string,
+    StoredSessionRef["providerState"]
+  >();
   const addCandidate = (session: StoredSessionRef) => {
     const key = sessionProviderKey(session);
     if (args.hiddenSessionKeys.has(key)) {
@@ -173,7 +179,8 @@ function buildGlobalRecentSessions(args: {
     recentByKey.set(key, existing ? mergeStoredSessionRef(existing, session) : session);
   };
 
-  for (const session of args.storedSessions) {
+  for (const session of args.discoveredStoredSessions) {
+    discoveredProviderStateByKey.set(sessionProviderKey(session), session.providerState);
     addCandidate(session);
   }
   for (const session of args.rememberedRecentSessions) {
@@ -187,6 +194,22 @@ function buildGlobalRecentSessions(args: {
   }
 
   return [...recentByKey.values()]
+    .map((session) => {
+      const key = sessionProviderKey(session);
+      if (!discoveredProviderStateByKey.has(key)) {
+        return session;
+      }
+      const providerState = discoveredProviderStateByKey.get(key);
+      if (providerState) {
+        return {
+          ...session,
+          providerState,
+        };
+      }
+      const { providerState: _staleProviderState, ...withoutProviderState } = session;
+      void _staleProviderState;
+      return withoutProviderState;
+    })
     .sort((a, b) => sessionRecentTimestamp(b).localeCompare(sessionRecentTimestamp(a)))
     .slice(0, RECENT_SESSION_LIMIT)
     .map(args.applyTitleOverride);
@@ -272,7 +295,7 @@ export function buildSessionsResponse(args: {
   }
   const allStoredSessions = [...storedSessions.values()].map(applyCanonicalTitle);
   const recentSessions = buildGlobalRecentSessions({
-    storedSessions: storedSessions.values(),
+    discoveredStoredSessions,
     rememberedRecentSessions,
     visibleRunningStates,
     hiddenSessionKeys,

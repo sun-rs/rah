@@ -15,6 +15,7 @@ import {
   updateClaudeSessionTitle,
 } from "./claude-session-files";
 import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
+import { projectConversation } from "./conversation-projector";
 
 describe("Claude session files", () => {
   let tmpClaudeConfig: string;
@@ -253,6 +254,127 @@ describe("Claude session files", () => {
       assert.equal(completed.payload.durationMs, 3_217);
       assert.equal(completed.payload.completedAt, "2026-07-11T04:28:46.808Z");
     }
+  });
+
+  test("treats Claude queue records as metadata and emits only canonical user records", () => {
+    writeClaudeSession("session-queued-command.jsonl", [
+      {
+        type: "user",
+        uuid: "user-queued-command",
+        cwd: workDir,
+        sessionId: "session-queued-command",
+        timestamp: "2026-07-12T05:26:52.345Z",
+        message: { content: "first question" },
+      },
+      {
+        type: "queue-operation",
+        operation: "enqueue",
+        timestamp: "2026-07-12T05:26:53.107Z",
+        sessionId: "session-queued-command",
+        content: "second queued question",
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-first-final",
+        cwd: workDir,
+        sessionId: "session-queued-command",
+        timestamp: "2026-07-12T05:26:55.437Z",
+        message: {
+          model: "claude-opus-4-7",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "first final" }],
+        },
+      },
+      {
+        type: "queue-operation",
+        operation: "remove",
+        timestamp: "2026-07-12T05:27:00.580Z",
+        sessionId: "session-queued-command",
+        content: "second queued question",
+      },
+      {
+        type: "user",
+        uuid: "user-dequeued-command",
+        cwd: workDir,
+        sessionId: "session-queued-command",
+        timestamp: "2026-07-12T05:27:01.000Z",
+        message: { content: "second queued question" },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-queued-final",
+        cwd: workDir,
+        sessionId: "session-queued-command",
+        timestamp: "2026-07-12T05:27:03.864Z",
+        message: {
+          model: "claude-opus-4-7",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "second final" }],
+        },
+      },
+      {
+        type: "system",
+        uuid: "turn-duration-queued-command",
+        cwd: workDir,
+        sessionId: "session-queued-command",
+        timestamp: "2026-07-12T05:27:03.900Z",
+        subtype: "turn_duration",
+        durationMs: 11_555,
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-queued-command", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "replay-queued-command",
+      record,
+      limit: 100,
+    });
+    const timeline = page.events.flatMap((event) => {
+      if (event.type !== "timeline.item.added") {
+        return [];
+      }
+      const item = event.payload.item;
+      return item.kind === "user_message" || item.kind === "assistant_message"
+        ? [{ turnId: event.turnId, kind: item.kind, text: item.text }]
+        : [];
+    });
+
+    assert.deepEqual(timeline, [
+      { turnId: "turn:user-queued-command", kind: "user_message", text: "first question" },
+      { turnId: "turn:user-queued-command", kind: "assistant_message", text: "first final" },
+      { turnId: "turn:user-dequeued-command", kind: "user_message", text: "second queued question" },
+      { turnId: "turn:user-dequeued-command", kind: "assistant_message", text: "second final" },
+    ]);
+  });
+
+  test("settles a stopped Claude user-only tail as interrupted instead of Working", () => {
+    writeClaudeSession("session-user-only-tail.jsonl", [
+      {
+        type: "user",
+        uuid: "user-only-tail",
+        cwd: workDir,
+        sessionId: "session-user-only-tail",
+        timestamp: "2026-07-12T05:30:00.000Z",
+        message: { content: "休眠五秒" },
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-user-only-tail", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "replay-user-only-tail",
+      record,
+      limit: 100,
+    });
+    const projectionSessionId = page.events[0]?.sessionId;
+    assert.ok(projectionSessionId);
+    const projection = projectConversation(projectionSessionId, page.events, {
+      assumeSettled: true,
+    });
+    assert.equal(projection.turns.length, 1);
+    assert.equal(projection.turns[0]?.status, "interrupted");
+    assert.equal(projection.turns[0]?.statusAuthority, "derived");
   });
 
   test("projects Claude Council channel_post tool results as assistant messages with native model", () => {

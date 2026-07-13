@@ -4,6 +4,7 @@ import path from "node:path";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { readLeadingLines } from "./file-snippets";
 import {
+  getCachedStoredSessionHistoryMeta,
   getCachedStoredSessionRef,
   loadStoredSessionMetadataCache,
   setCachedStoredSessionRef,
@@ -31,6 +32,7 @@ import {
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
 const MAX_ROLLOUT_FILES = 400;
+const CODEX_STORED_SESSION_CACHE_VERSION = 2;
 
 function resolveCodexBaseHome(): string {
   return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
@@ -112,34 +114,31 @@ function isCodexBootstrapUserMessage(text: string): boolean {
 function listRolloutFiles(root: string): string[] {
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
   const files: string[] = [];
-  while (queue.length > 0 && files.length < MAX_ROLLOUT_FILES) {
+  while (queue.length > 0) {
     const current = queue.pop()!;
-    let entries: string[] = [];
+    let entries;
     try {
-      entries = readdirSync(current.dir);
+      entries = readdirSync(current.dir, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const entryName of entries) {
-      const fullPath = path.join(current.dir, entryName);
-      let stats;
-      try {
-        stats = statSync(fullPath);
-      } catch {
-        continue;
-      }
-      if (stats.isFile()) {
-        if (entryName.startsWith("rollout-") && entryName.endsWith(".jsonl")) {
+    for (const entry of entries) {
+      const fullPath = path.join(current.dir, entry.name);
+      if (entry.isFile()) {
+        if (entry.name.startsWith("rollout-") && entry.name.endsWith(".jsonl")) {
           files.push(fullPath);
         }
         continue;
       }
-      if (stats.isDirectory() && current.depth < MAX_SEARCH_DEPTH) {
+      if (entry.isDirectory() && current.depth < MAX_SEARCH_DEPTH) {
         queue.push({ dir: fullPath, depth: current.depth + 1 });
       }
     }
   }
-  return files;
+  // Rollout paths contain YYYY/MM/DD and an ISO-like timestamp in the file
+  // name. Sorting the complete path therefore selects the newest files
+  // deterministically instead of depending on filesystem readdir order.
+  return files.sort((left, right) => right.localeCompare(left)).slice(0, MAX_ROLLOUT_FILES);
 }
 
 function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | null {
@@ -161,16 +160,20 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
     }
     const record = parsed as Record<string, unknown>;
     if (record.type === "session_meta") {
+      // A forked rollout starts with metadata for the child thread and can then
+      // contain copied parent session_meta records. The first valid record owns
+      // the file; later records are transcript history, never catalog identity.
+      if (sessionId !== null) {
+        continue;
+      }
       const payload =
         record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
           ? (record.payload as Record<string, unknown>)
           : null;
-      if (!payload) {
+      if (!payload || typeof payload.id !== "string" || !payload.id.trim()) {
         continue;
       }
-      if (typeof payload.id === "string") {
-        sessionId = payload.id;
-      }
+      sessionId = payload.id;
       if (typeof payload.cwd === "string") {
         cwd = payload.cwd;
       }
@@ -317,16 +320,23 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
     for (const file of listRolloutFiles(root)) {
       const stats = statSync(file);
       const archived = isCodexStoredSessionArchivedPath(file);
-      const cachedRef = getCachedStoredSessionRef({
+      const cachedHistoryMeta = getCachedStoredSessionHistoryMeta({
         cache,
         filePath: file,
         size: stats.size,
         mtimeMs: stats.mtimeMs,
       });
+      const cachedRef = getCachedStoredSessionRef({
+        cache,
+        filePath: file,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        version: CODEX_STORED_SESSION_CACHE_VERSION,
+      });
       if (cachedRef && !shouldInvalidateCachedCodexTitle(cachedRef, file)) {
         const createdAtRecord = !cachedRef.createdAt ? parseStoredSessionRecord(file) : null;
         const renamedTitle = renamedTitles.get(cachedRef.providerSessionId);
-        const refWithHistoryMeta = withHistoryFileMeta(
+        const baseRef =
           renamedTitle && renamedTitle !== cachedRef.title
             ? {
                 ...cachedRef,
@@ -340,10 +350,10 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
                   ...cachedRef,
                   createdAt: createdAtRecord.ref.createdAt,
                 }
-              : cachedRef,
-          file,
-          stats,
-        );
+              : cachedRef;
+        const refWithHistoryMeta = cachedHistoryMeta
+          ? { ...baseRef, historyMeta: cachedHistoryMeta }
+          : withHistoryFileMeta(baseRef, file, stats);
         const nextRef = withCodexArchivedProviderState(refWithHistoryMeta, archived);
         if (nextRef !== cachedRef) {
           setCachedStoredSessionRef({
@@ -352,6 +362,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
             size: stats.size,
             mtimeMs: stats.mtimeMs,
             ref: nextRef,
+            version: CODEX_STORED_SESSION_CACHE_VERSION,
           });
         }
         setPreferredCodexStoredSessionRecord(records, {
@@ -372,13 +383,16 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
           title: renamedTitle,
         };
       }
-      parsed.ref = withHistoryFileMeta(parsed.ref, file, stats);
+      parsed.ref = cachedHistoryMeta
+        ? { ...parsed.ref, historyMeta: cachedHistoryMeta }
+        : withHistoryFileMeta(parsed.ref, file, stats);
       setCachedStoredSessionRef({
         cache,
         filePath: file,
         size: stats.size,
         mtimeMs: stats.mtimeMs,
         ref: parsed.ref,
+        version: CODEX_STORED_SESSION_CACHE_VERSION,
       });
       setPreferredCodexStoredSessionRecord(records, parsed);
     }
@@ -394,6 +408,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
             ref: record.ref,
             size: stats.size,
             mtimeMs: stats.mtimeMs,
+            version: CODEX_STORED_SESSION_CACHE_VERSION,
           },
         ] as const;
       }),
@@ -432,6 +447,7 @@ export function patchCodexStoredSessionTitle(
     size: stats.size,
     mtimeMs: stats.mtimeMs,
     ref: record.ref,
+    version: CODEX_STORED_SESSION_CACHE_VERSION,
   });
   writeStoredSessionMetadataCache("codex", cache);
   return record;

@@ -19,14 +19,15 @@ export const REHYDRATED_CAPABILITIES = {
   listProviderSessions: true,
   steerInput: false,
   queuedInput: false,
-  renameSession: true,
   actions: {
     info: true,
     stop: false,
+    archive: true,
     delete: true,
     rename: "native",
   },
   modelSwitch: false,
   planMode: false,
   subagents: false,
+  branching: { sameWorkspace: true, worktree: false, side: true },
 } as const;

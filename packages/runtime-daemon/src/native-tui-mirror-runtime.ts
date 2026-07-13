@@ -18,6 +18,7 @@ import {
 } from "./native-tui-runtime-config";
 import {
   nativeTuiProviderRuntimeSession,
+  type NativeTuiSubmittedInput,
   type NativeTuiSessionState,
 } from "./native-tui-session-state";
 import { nextPromptStateFromActivity } from "./native-tui-prompt-state";
@@ -103,7 +104,8 @@ export class NativeTuiMirrorRuntime {
     meta: ProviderActivityMeta,
     activity: ProviderActivity,
   ): RahEvent[] {
-    const activityWithClientInput = attachSubmittedClientInput(native, activity);
+    const attachedInput = attachSubmittedClientInput(native, activity);
+    const activityWithClientInput = attachedInput.activity;
     const activeTurnId = this.deps.sessionStore.getSession(native.sessionId)?.activeTurnId;
     const nextPromptState = nextPromptStateFromActivity(native.promptState, activityWithClientInput);
     if (shouldIgnoreStaleMirrorStateActivity(native, meta, activityWithClientInput, nextPromptState)) {
@@ -124,6 +126,38 @@ export class NativeTuiMirrorRuntime {
       meta,
       activityWithClientInput,
     );
+    if (
+      attachedInput.input?.interruptedAt !== undefined &&
+      activityWithClientInput.type === "timeline_item" &&
+      activityWithClientInput.item.kind === "user_message" &&
+      activityWithClientInput.turnId !== undefined
+    ) {
+      events.push(
+        ...applyProviderActivity(
+          {
+            eventBus: this.deps.eventBus,
+            ptyHub: this.deps.ptyHub,
+            sessionStore: this.deps.sessionStore,
+          },
+          native.sessionId,
+          {
+            provider: meta.provider,
+            channel: "structured_persisted",
+            authority: "derived",
+            ts: attachedInput.input.interruptedAt,
+          },
+          {
+            type: "turn_canceled",
+            turnId: activityWithClientInput.turnId,
+            reason: "interrupted",
+            completedAt: attachedInput.input.interruptedAt,
+          },
+        ),
+      );
+      native.promptTracker.draftText = "";
+      this.deps.updatePromptState(native.sessionId, "prompt_clean");
+      return events;
+    }
     if (shouldClearDirtyPromptForCurrentTurn) {
       native.promptTracker.draftText = "";
       this.deps.updatePromptState(native.sessionId, "prompt_clean");
@@ -134,6 +168,7 @@ export class NativeTuiMirrorRuntime {
       native.promptTracker.draftText.length === 0 &&
       activityWithClientInput.type === "timeline_item" &&
       activityWithClientInput.item.kind === "assistant_message" &&
+      activityWithClientInput.item.phase === "final_answer" &&
       native.provider === "claude"
     ) {
       if (shouldIgnoreStaleMirrorPromptClean(native, meta)) {
@@ -187,33 +222,36 @@ export class NativeTuiMirrorRuntime {
 function attachSubmittedClientInput(
   native: NativeTuiSessionState,
   activity: ProviderActivity,
-): ProviderActivity {
+): { activity: ProviderActivity; input?: NativeTuiSubmittedInput } {
   if (
     activity.type !== "timeline_item" ||
     activity.item.kind !== "user_message" ||
     activity.item.clientMessageId !== undefined
   ) {
     pruneSubmittedInputs(native);
-    return activity;
+    return { activity };
   }
   const inputs = native.submittedInputs;
   if (!inputs || inputs.length === 0) {
-    return activity;
+    return { activity };
   }
   const userText = activity.item.text;
   const matchIndex = inputs.findIndex((input) => input.text === userText);
   if (matchIndex < 0) {
     pruneSubmittedInputs(native);
-    return activity;
+    return { activity };
   }
   const [match] = inputs.splice(matchIndex, 1);
   return {
-    ...activity,
-    item: {
-      ...activity.item,
-      ...(match?.clientMessageId !== undefined ? { clientMessageId: match.clientMessageId } : {}),
-      ...(match?.clientTurnId !== undefined ? { clientTurnId: match.clientTurnId } : {}),
+    activity: {
+      ...activity,
+      item: {
+        ...activity.item,
+        ...(match?.clientMessageId !== undefined ? { clientMessageId: match.clientMessageId } : {}),
+        ...(match?.clientTurnId !== undefined ? { clientTurnId: match.clientTurnId } : {}),
+      },
     },
+    ...(match ? { input: match } : {}),
   };
 }
 

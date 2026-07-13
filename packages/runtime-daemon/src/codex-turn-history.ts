@@ -1,7 +1,6 @@
 import type {
   RahEvent,
-  SessionHistoryPageResponse,
-  SessionTurnHistoryResponse,
+  ConversationEvidencePage,
 } from "@rah/runtime-protocol";
 import { scanSelectedJsonlLines } from "./bounded-jsonl-reader";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
@@ -9,7 +8,7 @@ import {
   collapseDuplicateCodexTimelineEvents,
   translateCodexRolloutWindowToHistoryEvents,
 } from "./codex-stored-session-history";
-import { chatHistoryPage, summarizeHistoryPage } from "./history-event-projection";
+import { summarizeHistoryPage } from "./history-event-projection";
 
 function shouldTranslateLine(line: string): boolean {
   const head = line.slice(0, 1_024);
@@ -118,30 +117,12 @@ function reanchorTurnEvents(
   });
 }
 
-export async function readCodexTurnHistory(args: {
-  sessionId: string;
-  turnId: string;
-  record: CodexStoredSessionRecord;
-  range: { startOffset: number; endOffset: number };
-}): Promise<SessionTurnHistoryResponse> {
-  const translated = await translatedTurnEvents({ ...args, includeProcess: false });
-  const events = chatHistoryPage({
-    sessionId: args.sessionId,
-    events: translated,
-  }).events;
-  return {
-    sessionId: args.sessionId,
-    turnId: args.turnId,
-    events,
-  };
-}
-
 export async function readCodexConversationTurnDetail(args: {
   sessionId: string;
   turnId: string;
   record: CodexStoredSessionRecord;
   range: { startOffset: number; endOffset: number };
-}): Promise<SessionHistoryPageResponse> {
+}): Promise<ConversationEvidencePage> {
   const events = await translatedTurnEvents({ ...args, includeProcess: true });
   return summarizeHistoryPage({
     sessionId: args.sessionId,

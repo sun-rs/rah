@@ -4,11 +4,12 @@ import type {
   ProviderKind,
   RahEvent,
 } from "@rah/runtime-protocol";
+import { summarizeConversationActivities } from "@rah/runtime-protocol";
 import {
   chooseFinalAnswer,
   closeTurn,
-  fallbackItemId,
-  fallbackTurnId,
+  deriveCanonicalItemId,
+  deriveCanonicalTurnId,
   mergeTurn,
   observationStatus,
   orderedItems,
@@ -21,6 +22,7 @@ import {
   upsertItem,
   type MutableConversationTurn as MutableTurn,
 } from "./conversation-projector-internal";
+import { projectConversationTurnResources } from "./conversation-resource-projector";
 
 export interface ProjectConversationOptions {
   /**
@@ -60,7 +62,7 @@ export function projectConversation(
     const canonicalId =
       identity?.canonicalTurnId ??
       mappedId ??
-      fallbackTurnId({
+      deriveCanonicalTurnId({
         sessionId,
         provider,
         providerTurnId: event.turnId,
@@ -96,6 +98,7 @@ export function projectConversation(
           statusAuthority: sourceStatusAuthority(event.source),
           startedAt: event.ts,
           items: [],
+          activities: [],
           failedItemCount: 0,
           ...(identity ? { identityConfidence: identity.confidence } : {}),
           revision: event.seq,
@@ -210,7 +213,7 @@ export function projectConversation(
           ("messageId" in timeline ? timeline.messageId : undefined);
         const itemId =
           itemIdentity?.canonicalItemId ??
-          fallbackItemId({
+          deriveCanonicalItemId({
             provider,
             sessionId,
             turnId: turn.projection.id,
@@ -219,6 +222,12 @@ export function projectConversation(
             eventId: event.id,
           });
         const role = timelineRole(timeline);
+        const existingTimeline = turn.items.get(itemId)?.content;
+        const mergedTimeline =
+          existingTimeline?.kind === "timeline" &&
+          existingTimeline.item.kind === timeline.kind
+            ? { ...existingTimeline.item, ...timeline }
+            : timeline;
         if (role === "final" && turn.projection.finalAnswerItemId !== itemId) {
           const previous = turn.projection.finalAnswerItemId
             ? turn.items.get(turn.projection.finalAnswerItemId)
@@ -238,7 +247,11 @@ export function projectConversation(
             status: timelineStatus(timeline),
             startedAt: event.ts,
             completedAt: event.ts,
-            content: { kind: "timeline", item: timeline },
+            // The same provider item can arrive first from the live stream and
+            // later from persisted mirroring. Keep live-only correlation fields
+            // (notably clientMessageId/clientTurnId) when the persisted revision
+            // omits them, so the matching optimistic bubble stays retired.
+            content: { kind: "timeline", item: mergedTimeline },
             source: projectionSource(event.source, itemIdentity) ?? source,
             revision: event.seq,
           },
@@ -249,7 +262,7 @@ export function projectConversation(
       case "tool.call.started":
       case "tool.call.completed": {
         const toolCall = event.payload.toolCall;
-        const itemId = fallbackItemId({
+        const itemId = deriveCanonicalItemId({
           provider,
           sessionId,
           turnId: turn.projection.id,
@@ -284,7 +297,7 @@ export function projectConversation(
         break;
       }
       case "tool.call.failed": {
-        const itemId = fallbackItemId({
+        const itemId = deriveCanonicalItemId({
           provider,
           sessionId,
           turnId: turn.projection.id,
@@ -328,7 +341,7 @@ export function projectConversation(
       case "observation.failed": {
         const observation = event.payload.observation;
         const providerItemId = observation.subject?.providerCallId ?? observation.id;
-        const itemId = fallbackItemId({
+        const itemId = deriveCanonicalItemId({
           provider,
           sessionId,
           turnId: turn.projection.id,
@@ -377,7 +390,7 @@ export function projectConversation(
           event.type === "permission.requested"
             ? event.payload.request.id
             : event.payload.resolution.requestId;
-        const itemId = fallbackItemId({
+        const itemId = deriveCanonicalItemId({
           provider,
           sessionId,
           turnId: turn.projection.id,
@@ -416,7 +429,7 @@ export function projectConversation(
       case "operation.requested":
       case "operation.resolved": {
         const operation = event.payload.operation;
-        const itemId = fallbackItemId({
+        const itemId = deriveCanonicalItemId({
           provider,
           sessionId,
           turnId: turn.projection.id,
@@ -456,14 +469,22 @@ export function projectConversation(
 
   if (options.assumeSettled) {
     for (const turn of turns.values()) {
-      if (
-        turn.projection.status !== "in_progress" ||
-        ![...turn.items.values()].some(
-          (item) =>
-            item.content.kind === "timeline" &&
-            item.content.item.kind === "assistant_message",
-        )
-      ) {
+      if (turn.projection.status !== "in_progress") {
+        continue;
+      }
+      const hasAssistant = [...turn.items.values()].some(
+        (item) =>
+          item.content.kind === "timeline" &&
+          item.content.item.kind === "assistant_message",
+      );
+      const hasUser = [...turn.items.values()].some(
+        (item) =>
+          item.content.kind === "timeline" &&
+          item.content.item.kind === "user_message",
+      );
+      if (!hasAssistant && !hasUser) {
+        // A partial history page may begin inside a turn. Without its user
+        // boundary there is not enough evidence to infer interruption.
         continue;
       }
       const lastTimestamp =
@@ -472,7 +493,7 @@ export function projectConversation(
           .filter((value): value is string => Boolean(value))
           .sort()
           .at(-1) ?? turn.projection.startedAt ?? options.generatedAt ?? new Date().toISOString();
-      closeTurn(turn, "completed", lastTimestamp, "derived");
+      closeTurn(turn, hasAssistant ? "completed" : "interrupted", lastTimestamp, "derived");
     }
   }
 
@@ -485,6 +506,18 @@ export function projectConversation(
       const items = orderedItems(turn);
       turn.projection.items = items;
       turn.projection.failedItemCount = items.filter((item) => item.status === "failed").length;
+      turn.projection.activities = summarizeConversationActivities(items);
+      const resources = projectConversationTurnResources(items);
+      if (resources.outputs.length > 0) {
+        turn.projection.outputs = resources.outputs;
+      } else {
+        delete turn.projection.outputs;
+      }
+      if (resources.sources.length > 0) {
+        turn.projection.sources = resources.sources;
+      } else {
+        delete turn.projection.sources;
+      }
       return turn.projection;
     });
 

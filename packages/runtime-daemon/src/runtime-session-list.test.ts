@@ -4,7 +4,10 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
-import { buildSessionsResponse } from "./runtime-session-list";
+import {
+  buildSessionsResponse,
+  sameStoredSessionRefs,
+} from "./runtime-session-list";
 import type { StoredSessionState } from "./session-store";
 
 function storedSessionState(providerSessionId: string): StoredSessionState {
@@ -33,7 +36,6 @@ function storedSessionState(providerSessionId: string): StoredSessionState {
         listProviderSessions: true,
         steerInput: true,
         queuedInput: false,
-        renameSession: true,
         actions: {
           info: true,
           stop: true,
@@ -76,6 +78,66 @@ function storedRef(providerSessionId: string): StoredSessionRef {
 }
 
 describe("buildSessionsResponse", () => {
+  test("treats provider archive state as a stored-session revision", () => {
+    const active = storedRef("archive-state");
+    const archived: StoredSessionRef = {
+      ...active,
+      providerState: {
+        archived: true,
+        archivedAt: "2026-07-12T10:00:00.000Z",
+      },
+    };
+
+    assert.equal(sameStoredSessionRefs([active], [archived]), false);
+    assert.equal(
+      sameStoredSessionRefs(
+        [archived],
+        [{ ...archived, providerState: { ...archived.providerState, archivedAt: "2026-07-12T10:01:00.000Z" } }],
+      ),
+      false,
+    );
+  });
+
+  test("keeps current provider archive state authoritative in recent history", () => {
+    const archived: StoredSessionRef = {
+      ...storedRef("archive-authority"),
+      providerState: { archived: true },
+    };
+    const staleRemembered: StoredSessionRef = {
+      ...storedRef("archive-authority"),
+      lastUsedAt: "2026-07-12T11:00:00.000Z",
+    };
+    const archivedResponse = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: [archived],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [staleRemembered],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+    assert.equal(archivedResponse.recentSessions[0]?.providerState?.archived, true);
+
+    const unarchivedResponse = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: [storedRef("archive-authority")],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [{ ...staleRemembered, providerState: { archived: true } }],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+    assert.equal(unarchivedResponse.recentSessions[0]?.providerState, undefined);
+  });
+
   test("keeps provider-backed running sessions visible in stored history", () => {
     const response = buildSessionsResponse({
       liveStates: [storedSessionState("session-1")],

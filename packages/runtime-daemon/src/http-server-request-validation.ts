@@ -13,6 +13,7 @@ import type {
   DetachSessionRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
+  ForkSessionRequest,
   IndependentTerminalStartRequest,
   InterruptSessionRequest,
   NativeTuiSurfaceClaimRequest,
@@ -36,11 +37,16 @@ type JsonRecord = Record<string, unknown>;
 const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode", "custom"]);
 const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode"]);
 const CLIENT_KINDS = new Set(["web", "ios", "ipad", "api"]);
-const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
 const PUBLIC_LIVE_BACKENDS = new Set([
   "native_tui",
   "tui_mux",
   "native_local_server",
+]);
+const REMOVED_SESSION_CONFIG_FIELDS = new Set([
+  "reasoningId",
+  "providerConfig",
+  "approvalPolicy",
+  "sandbox",
 ]);
 const COUNCIL_MCP_TOOLS = new Set<CouncilMcpToolName>([
   "channel_join",
@@ -146,6 +152,29 @@ export function parseResumeSessionRequest(body: unknown): ResumeSessionRequest {
   }
   if (record.attach !== undefined) {
     request.attach = parseAttachPayload(record.attach);
+  }
+  return request;
+}
+
+export function parseForkSessionRequest(body: unknown): ForkSessionRequest {
+  const record = requireObjectBody(body);
+  const request: ForkSessionRequest = {
+    operationId: requireString(record, "operationId"),
+    kind: requireEnum(record, "kind", ["fork", "side"]) as ForkSessionRequest["kind"],
+    workspaceMode: requireEnum(record, "workspaceMode", [
+      "shared",
+      "worktree",
+    ]) as ForkSessionRequest["workspaceMode"],
+  };
+  const lastTurnId = optionalString(record, "lastTurnId");
+  if (lastTurnId !== undefined) {
+    request.lastTurnId = lastTurnId;
+  }
+  if (record.attach !== undefined) {
+    request.attach = parseAttachPayload(record.attach);
+  }
+  if (request.kind === "side" && request.workspaceMode !== "shared") {
+    throw new Error("Side tasks must share the parent workspace.");
   }
   return request;
 }
@@ -275,6 +304,7 @@ export function parseSetSessionModeRequest(body: unknown): { modeId: string } {
 
 export function parseSetSessionModelRequest(body: unknown): SetSessionModelRequest {
   const record = requireObjectBody(body);
+  rejectRemovedSessionConfigFields(record);
   const modelId = requireString(record, "modelId").trim();
   if (!modelId) {
     throw badRequest("Session model is required.");
@@ -283,9 +313,6 @@ export function parseSetSessionModelRequest(body: unknown): SetSessionModelReque
   const optionValues = optionalConfigValues(record, "optionValues");
   if (optionValues !== undefined) {
     request.optionValues = optionValues;
-  }
-  if (record.reasoningId === null || typeof record.reasoningId === "string") {
-    request.reasoningId = record.reasoningId;
   }
   return request;
 }
@@ -297,7 +324,12 @@ export function parsePermissionResponseRequest(body: unknown): PermissionRespons
   };
   const message = optionalString(record, "message");
   const selectedActionId = optionalString(record, "selectedActionId");
-  const decision = optionalString(record, "decision");
+  const decision = optionalEnum(record, "decision", [
+    "approved",
+    "approved_for_session",
+    "denied",
+    "abort",
+  ]);
   if (message !== undefined) {
     request.message = message;
   }
@@ -305,7 +337,7 @@ export function parsePermissionResponseRequest(body: unknown): PermissionRespons
     request.selectedActionId = selectedActionId;
   }
   if (decision !== undefined) {
-    request.decision = decision as NonNullable<PermissionResponseRequest["decision"]>;
+    request.decision = decision;
   }
   if (record.answers !== undefined) {
     request.answers = requireRecord(record, "answers") as NonNullable<PermissionResponseRequest["answers"]>;
@@ -462,39 +494,26 @@ export function parseStartDebugScenarioRequest(body: unknown): StartDebugScenari
 }
 
 function parseOptionalSessionConfig(record: JsonRecord): Partial<StartSessionRequest & ResumeSessionRequest> {
+  rejectRemovedSessionConfigFields(record);
   const config: Partial<StartSessionRequest & ResumeSessionRequest> = {};
   const model = optionalString(record, "model");
   const optionValues = optionalConfigValues(record, "optionValues");
-  const providerConfig = optionalConfigValues(record, "providerConfig");
   const modeId = optionalString(record, "modeId");
-  const approvalPolicy = optionalApprovalPolicy(record);
-  const sandbox = optionalString(record, "sandbox");
   if (model !== undefined) {
     config.model = model;
   }
   if (optionValues !== undefined) {
     config.optionValues = optionValues;
   }
-  if (typeof record.reasoningId === "string") {
-    config.reasoningId = record.reasoningId;
-  }
-  if (providerConfig !== undefined) {
-    config.providerConfig = providerConfig;
-  }
   if (modeId !== undefined) {
     config.modeId = modeId;
-  }
-  if (approvalPolicy !== undefined) {
-    config.approvalPolicy = approvalPolicy;
-  }
-  if (sandbox !== undefined) {
-    config.sandbox = sandbox;
   }
   return config;
 }
 
 function parseCouncilAgentConfig(value: unknown, index: number): CouncilAgentConfig {
   const record = requireObject(value, `agents[${index}]`);
+  rejectRemovedSessionConfigFields(record);
   const provider = requireProvider(record, "provider");
   if (!COUNCIL_PROVIDERS.has(provider)) {
     throw badRequest("Council agent provider must be codex, claude, or opencode.");
@@ -516,9 +535,6 @@ function parseCouncilAgentConfig(value: unknown, index: number): CouncilAgentCon
   }
   if (modelId !== undefined) {
     agent.modelId = modelId;
-  }
-  if (record.reasoningId === null || typeof record.reasoningId === "string") {
-    agent.reasoningId = record.reasoningId;
   }
   if (optionValues !== undefined) {
     agent.optionValues = optionValues;
@@ -685,17 +701,6 @@ function optionalEnum<const T extends string>(
   return value as T;
 }
 
-function optionalApprovalPolicy(record: JsonRecord): StartSessionRequest["approvalPolicy"] {
-  const value = optionalString(record, "approvalPolicy");
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!APPROVAL_POLICIES.has(value)) {
-    throw badRequest("approvalPolicy is invalid.");
-  }
-  return value as StartSessionRequest["approvalPolicy"];
-}
-
 function optionalConfigValues(record: JsonRecord, key: string): Record<string, SessionConfigValue> | undefined {
   const value = record[key];
   if (value === undefined) {
@@ -713,6 +718,16 @@ function optionalConfigValues(record: JsonRecord, key: string): Record<string, S
     }
   }
   return config as Record<string, SessionConfigValue>;
+}
+
+function rejectRemovedSessionConfigFields(record: JsonRecord): void {
+  for (const key of REMOVED_SESSION_CONFIG_FIELDS) {
+    if (record[key] !== undefined) {
+      throw badRequest(
+        `${key} was removed; pass model options through optionValues and access policy through modeId.`,
+      );
+    }
+  }
 }
 
 function badRequest(message: string): Error {

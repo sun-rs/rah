@@ -52,6 +52,7 @@ export interface OpenCodeActivityState {
   readonly turnRootMessageIdByMessageId: Map<string, string>;
   readonly roleByMessageId: Map<string, OpenCodeMessageRole>;
   readonly ignoredMessageIds: Set<string>;
+  readonly passiveUserMessageIds: Set<string>;
   readonly userStartedTurnByMessageId: Map<string, string>;
   readonly runtimeModelByMessageId: Map<string, ReturnType<typeof openCodeRuntimeModelFromMessage>>;
   readonly partMessageIdByPartId: Map<string, string>;
@@ -163,6 +164,7 @@ export function createOpenCodeActivityState(
     turnRootMessageIdByMessageId: new Map(),
     roleByMessageId: new Map(),
     ignoredMessageIds: new Set(),
+    passiveUserMessageIds: new Set(),
     userStartedTurnByMessageId: new Map(),
     runtimeModelByMessageId: new Map(),
     partMessageIdByPartId: new Map(),
@@ -394,6 +396,10 @@ function rememberMessageInfo(
   state.roleByMessageId.set(info.id, info.role);
   if (info.role === "user") {
     if (!state.currentTurnId && !state.userMessagesStartTurns) {
+      const turnId = `opencode:${info.id}`;
+      state.passiveUserMessageIds.add(info.id);
+      state.turnRootMessageIdByMessageId.set(info.id, info.id);
+      state.turnByMessageId.set(info.id, turnId);
       return [];
     }
     const reuseLiveTurn = state.origin === "live" && state.currentTurnId !== undefined;
@@ -410,7 +416,10 @@ function rememberMessageInfo(
   const parentTurnId = info.parentID ? state.turnByMessageId.get(info.parentID) : undefined;
   const parentRootMessageId = info.parentID ? state.turnRootMessageIdByMessageId.get(info.parentID) : undefined;
   const turnId = parentTurnId ?? state.currentTurnId ?? `opencode:${info.id}`;
-  state.turnRootMessageIdByMessageId.set(info.id, parentRootMessageId ?? info.id);
+  state.turnRootMessageIdByMessageId.set(
+    info.id,
+    parentRootMessageId ?? info.parentID ?? info.id,
+  );
   if (state.currentTurnId === undefined || state.currentTurnId === parentTurnId) {
     state.currentTurnId = turnId;
   }
@@ -715,6 +724,9 @@ function translateOpenCodePart(
           return forgetOpenCodeInternalUserMessage(state, part.messageID);
         }
         if (!state.emitUserMessages) {
+          return [];
+        }
+        if (state.passiveUserMessageIds.has(part.messageID)) {
           return [];
         }
         const submitted = takePendingSubmittedUserMessage(state, text);

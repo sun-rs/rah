@@ -41,7 +41,7 @@ export function projectionSource(
   };
 }
 
-export function fallbackTurnId(args: {
+export function deriveCanonicalTurnId(args: {
   sessionId: string;
   provider: ProviderKind;
   providerTurnId?: string;
@@ -55,7 +55,7 @@ export function fallbackTurnId(args: {
   ]);
 }
 
-export function fallbackItemId(args: {
+export function deriveCanonicalItemId(args: {
   provider: ProviderKind;
   sessionId: string;
   turnId: string;

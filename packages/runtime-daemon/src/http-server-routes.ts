@@ -10,7 +10,6 @@ import type {
   ListProvidersResponse,
   ProviderKind,
   RuntimeIdentityResponse,
-  SessionHistoryDetailMode,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { applyCorsHeaders, validateApiRequest } from "./http-server-cors";
@@ -34,6 +33,7 @@ import {
   parseDetachSessionRequest,
   parseGitFileActionRequest,
   parseGitHunkActionRequest,
+  parseForkSessionRequest,
   parseIndependentTerminalStartRequest,
   parseInterruptSessionRequest,
   parseNativeTuiSurfaceClaimRequest,
@@ -53,8 +53,12 @@ import {
   parseWorkspaceDirectoryRequest,
 } from "./http-server-request-validation";
 import { serveClientApp } from "./http-server-static";
-import { isLocalMachineRemoteAddress } from "./http-server-client-address";
+import {
+  isLocalMachineRemoteAddress,
+  resolveImagePreviewModeForPeer,
+} from "./http-server-client-address";
 import { writeHostClipboard } from "./host-clipboard";
+import { DeviceAuthManager, handleDeviceAuthRequest } from "./device-auth";
 
 const MAX_QUERY_LIMIT = 500;
 
@@ -91,13 +95,11 @@ function parseImagePreviewModeFromRequest(
   url: URL,
 ): "bounded" | "full" {
   const clientHint = url.searchParams.get("imagePreviewClient");
-  if (clientHint === "local") {
-    return "full";
-  }
-  if (clientHint === "remote") {
-    return "bounded";
-  }
-  return isLocalPreviewHostname(hostnameFromHostHeader(req.headers.host)) ? "full" : "bounded";
+  return resolveImagePreviewModeForPeer({
+    hostname: hostnameFromHostHeader(req.headers.host),
+    remoteAddress: req.socket.remoteAddress,
+    ...(clientHint ? { clientHint } : {}),
+  });
 }
 
 function hostnameFromHostHeader(host: string | undefined): string {
@@ -110,31 +112,6 @@ function hostnameFromHostHeader(host: string | undefined): string {
     return end > 0 ? trimmed.slice(1, end) : trimmed;
   }
   return trimmed.split(":")[0] ?? trimmed;
-}
-
-function isLocalPreviewHostname(hostname: string): boolean {
-  if (
-    hostname === "localhost" ||
-    hostname === "::1" ||
-    hostname === "0.0.0.0" ||
-    hostname.endsWith(".local")
-  ) {
-    return true;
-  }
-  if (hostname.startsWith("127.")) {
-    return true;
-  }
-  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = parts as [number, number, number, number];
-  return (
-    a === 10 ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 169 && b === 254)
-  );
 }
 
 export function createPostRoutes(
@@ -195,6 +172,16 @@ export function createPostRoutes(
       pattern: /^\/api\/sessions\/resume$/,
       handler: async (req, res, _match, body) => {
         const result = await engine.resumeSession(parseResumeSessionRequest(body));
+        writeJson(req, res, 200, result);
+      },
+    },
+    {
+      pattern: /^\/api\/sessions\/([^/]+)\/fork$/,
+      handler: async (req, res, match, body) => {
+        const result = await engine.forkSession(
+          match[1]!,
+          parseForkSessionRequest(body),
+        );
         writeJson(req, res, 200, result);
       },
     },
@@ -400,6 +387,20 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/history\/sessions\/archive$/,
+      handler: async (req, res, _match, body) => {
+        const request = parseStoredSessionRemoveRequest(body);
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.archiveStoredSession(request.provider, request.providerSessionId, {
+            storedSessionsMode: parseStoredSessionsModeFromRequest(req),
+          }),
+        );
+      },
+    },
+    {
       pattern: /^\/api\/history\/sessions\/remove$/,
       handler: async (req, res, _match, body) => {
         const request = parseStoredSessionRemoveRequest(body);
@@ -531,8 +532,9 @@ export async function handleHttpRequest(args: {
   req: IncomingMessage;
   res: ServerResponse;
   runtimeIdentity?: RuntimeIdentityResponse | undefined;
+  auth?: DeviceAuthManager | undefined;
 }): Promise<void> {
-  const { engine, postRoutes, req, res, runtimeIdentity } = args;
+  const { engine, postRoutes, req, res, runtimeIdentity, auth } = args;
   try {
     if (!req.url || !req.method) {
       writeText(req, res, 400, "Bad Request");
@@ -560,6 +562,15 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    if (auth && await handleDeviceAuthRequest({ auth, req, res, url })) {
+      return;
+    }
+
+    if (auth && pathname.startsWith("/api/") && !auth.authenticate(req)) {
+      writeJson(req, res, 401, { error: "This device is not trusted by RAH." });
+      return;
+    }
+
     if (req.method === "GET" && pathname === "/api/runtime") {
       if (!runtimeIdentity) {
         writeJson(req, res, 503, { error: "Runtime identity is not ready." });
@@ -571,7 +582,7 @@ export async function handleHttpRequest(args: {
 
     if (req.method === "GET" && pathname === "/api/sessions") {
       const storedSessionsMode = parseStoredSessionsModeFromUrl(url);
-      writeJson(req, res, 200, engine.listSessions({ storedSessionsMode }));
+      writeJson(req, res, 200, await engine.listSessionsForRequest({ storedSessionsMode }));
       return;
     }
 
@@ -635,8 +646,23 @@ export async function handleHttpRequest(args: {
 
     if (req.method === "GET" && pathname === "/api/providers") {
       const forceRefresh = url.searchParams.get("refresh") === "1";
+      const includeHealth = url.searchParams.get("health") !== "0";
+      const requestedProvider = url.searchParams.get("provider");
+      if (
+        requestedProvider !== null &&
+        requestedProvider !== "codex" &&
+        requestedProvider !== "claude" &&
+        requestedProvider !== "opencode"
+      ) {
+        writeJson(req, res, 400, { error: `Unsupported provider: ${requestedProvider}` });
+        return;
+      }
       const response: ListProvidersResponse = {
-        providers: await engine.listProviderDiagnostics({ forceRefresh }),
+        providers: await engine.listProviderDiagnostics({
+          forceRefresh,
+          includeHealth,
+          ...(requestedProvider ? { provider: requestedProvider } : {}),
+        }),
       };
       writeJson(req, res, 200, response);
       return;
@@ -966,7 +992,7 @@ export async function handleHttpRequest(args: {
       return;
     }
 
-    const turnDirectoryMatch = /^\/api\/sessions\/([^/]+)\/history\/turn-directory$/.exec(
+    const turnDirectoryMatch = /^\/api\/sessions\/([^/]+)\/conversation\/directory$/.exec(
       pathname,
     );
     if (req.method === "GET" && turnDirectoryMatch) {
@@ -974,7 +1000,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        await engine.getSessionTurnDirectory(turnDirectoryMatch[1]!),
+        await engine.getSessionConversationDirectory(turnDirectoryMatch[1]!),
       );
       return;
     }
@@ -1056,62 +1082,6 @@ export async function handleHttpRequest(args: {
       );
       if (!detail) {
         writeJson(req, res, 404, { error: "Conversation item detail is not available." });
-        return;
-      }
-      writeJson(req, res, 200, detail);
-      return;
-    }
-
-    const turnHistoryMatch = /^\/api\/sessions\/([^/]+)\/history\/turn$/.exec(pathname);
-    if (req.method === "GET" && turnHistoryMatch) {
-      const turnId = url.searchParams.get("turnId");
-      if (!turnId) {
-        writeJson(req, res, 400, { error: "History turnId is required." });
-        return;
-      }
-      const turn = await engine.getSessionTurnHistory(turnHistoryMatch[1]!, turnId);
-      if (turn.events.length === 0) {
-        writeJson(req, res, 404, { error: "History is not available for this turn." });
-        return;
-      }
-      writeJson(req, res, 200, turn);
-      return;
-    }
-
-    const historyMatch = /^\/api\/sessions\/([^/]+)\/history$/.exec(pathname);
-    if (req.method === "GET" && historyMatch) {
-      const beforeTs = url.searchParams.get("beforeTs") ?? undefined;
-      const cursor = url.searchParams.get("cursor") ?? undefined;
-      const limitRaw = url.searchParams.get("limit");
-      const limit = parseQueryLimit(limitRaw);
-      const detailParam = url.searchParams.get("detail");
-      const detail: SessionHistoryDetailMode =
-        detailParam === "full" ? "full" : detailParam === "chat" ? "chat" : "summary";
-      const options = {
-        ...(beforeTs !== undefined ? { beforeTs } : {}),
-        ...(cursor !== undefined ? { cursor } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-        detail,
-      };
-      writeJson(req, res, 200, engine.getSessionHistoryPage(historyMatch[1]!, options));
-      return;
-    }
-
-    const historyDetailMatch = /^\/api\/sessions\/([^/]+)\/history\/detail$/.exec(pathname);
-    if (req.method === "GET" && historyDetailMatch) {
-      const kind = url.searchParams.get("kind");
-      const itemId = url.searchParams.get("itemId");
-      if (kind !== "tool_call" && kind !== "observation") {
-        writeJson(req, res, 400, { error: "History detail kind must be tool_call or observation." });
-        return;
-      }
-      if (!itemId) {
-        writeJson(req, res, 400, { error: "History detail itemId is required." });
-        return;
-      }
-      const detail = engine.getSessionHistoryItemDetail(historyDetailMatch[1]!, { kind, itemId });
-      if (detail.events.length === 0) {
-        writeJson(req, res, 404, { error: "History detail is not available for this item." });
         return;
       }
       writeJson(req, res, 200, detail);

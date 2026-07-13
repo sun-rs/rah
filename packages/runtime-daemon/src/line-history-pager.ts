@@ -118,6 +118,7 @@ export function createLineFrozenHistoryPageLoader(
   }
 
   return {
+    boundary: args.boundary,
     loadInitialPage: (limit) =>
       buildPage(
         {

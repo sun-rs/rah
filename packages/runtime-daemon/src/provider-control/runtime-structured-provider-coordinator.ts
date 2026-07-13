@@ -5,6 +5,8 @@ import {
 import type {
   DebugScenarioDescriptor,
   DebugReplayScript,
+  ForkSessionRequest,
+  ForkSessionResponse,
   ProviderDiagnostic,
   ProviderKind,
   ProviderModelCatalog,
@@ -17,6 +19,7 @@ import {
   launchSpecForProvider,
   probeProviderDiagnostic,
   type CoreLiveDiagnosticProvider,
+  type ProviderDiagnosticProbeOptions,
 } from "../provider-diagnostics";
 import type {
   ProviderCapabilityView,
@@ -68,7 +71,7 @@ export class RuntimeStructuredProviderCoordinator {
 
   private requireStructuredLifecycleAdapter(
     provider: string,
-    capability: "startSession" | "resumeSession",
+    capability: "startSession" | "resumeSession" | "forkSession",
   ): ProviderCapabilityView<Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>>> {
     const adapter = this.requireStructuredAdapterForProvider(provider);
     if (typeof adapter[capability] !== "function") {
@@ -79,17 +82,30 @@ export class RuntimeStructuredProviderCoordinator {
     >;
   }
 
-  async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
-    const providers: CoreLiveDiagnosticProvider[] = ["codex", "claude", "opencode"];
+  async listProviderDiagnostics(options?: {
+    forceRefresh?: boolean;
+    includeHealth?: boolean;
+    provider?: CoreLiveDiagnosticProvider;
+  }): Promise<ProviderDiagnostic[]> {
+    const providers: CoreLiveDiagnosticProvider[] = options?.provider
+      ? [options.provider]
+      : ["codex", "claude", "opencode"];
+    const diagnosticOptions: ProviderDiagnosticProbeOptions = {};
+    if (options?.forceRefresh !== undefined) {
+      diagnosticOptions.forceRefresh = options.forceRefresh;
+    }
+    if (options?.includeHealth !== undefined) {
+      diagnosticOptions.includeHealth = options.includeHealth;
+    }
     return Promise.all(
       providers.map(async (provider) => {
         const adapter = this.deps.diagnosticAdaptersByProvider.get(provider);
         if (adapter?.getProviderDiagnostic) {
-          return await adapter.getProviderDiagnostic(options);
+          return await adapter.getProviderDiagnostic(diagnosticOptions);
         }
         const launchSpec = await launchSpecForProvider(provider);
         if (launchSpec) {
-          return await probeProviderDiagnostic(provider, launchSpec, options);
+          return await probeProviderDiagnostic(provider, launchSpec, diagnosticOptions);
         }
         return {
           provider,
@@ -175,6 +191,21 @@ export class RuntimeStructuredProviderCoordinator {
         response.session.session.id,
       );
     }
+    return response;
+  }
+
+  async forkSession(
+    parentSessionId: string,
+    provider: ProviderKind,
+    request: ForkSessionRequest,
+  ): Promise<ForkSessionResponse> {
+    this.deps.pruneOrphanSessions();
+    const adapter = this.requireStructuredLifecycleAdapter(provider, "forkSession");
+    const response = await adapter.forkSession(parentSessionId, request);
+    this.deps.rememberStructuredSessionOwner(
+      response.session.session.id,
+      response.session.session.provider,
+    );
     return response;
   }
 

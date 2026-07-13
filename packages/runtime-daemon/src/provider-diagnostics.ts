@@ -21,6 +21,17 @@ type LatestVersionResult = {
   latestVersionError?: string;
 };
 
+export type ProviderDiagnosticProbeOptions = {
+  forceRefresh?: boolean;
+  includeHealth?: boolean;
+};
+
+type InstalledVersionProbeResult = {
+  status: ProviderDiagnostic["status"];
+  installedVersion?: string;
+  detail?: string;
+};
+
 const LATEST_VERSION_CACHE_TTL_MS = 30 * 60 * 1_000;
 const CODEX_DOCTOR_CACHE_TTL_MS = 30 * 1_000;
 const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
@@ -553,26 +564,37 @@ async function getLatestVersionResult(
 export async function probeProviderDiagnostic(
   provider: ProviderKind,
   launchSpec: LaunchSpec,
-  options?: {
-    forceRefresh?: boolean;
-  },
+  options?: ProviderDiagnosticProbeOptions,
 ): Promise<ProviderDiagnostic> {
-  const latest = await getLatestVersionResult(provider, options);
   const launchCommand = launchSpec.argv.join(" ");
+  const [latest, providerHealth, installed] = await Promise.all([
+    getLatestVersionResult(provider, options),
+    provider === "codex" && options?.includeHealth !== false
+      ? getCodexDoctorDiagnostic(launchSpec, options)
+      : Promise.resolve(undefined),
+    probeInstalledProviderVersion(launchSpec),
+  ]);
+
+  return buildProviderDiagnostic({
+    provider,
+    status: installed.status,
+    launchCommand,
+    latest,
+    ...(installed.installedVersion ? { installedVersion: installed.installedVersion } : {}),
+    versionStatus: compareVersions(installed.installedVersion, latest.latestVersion),
+    ...(installed.detail ? { detail: installed.detail } : {}),
+    ...(providerHealth ? { providerHealth } : {}),
+  });
+}
+
+function probeInstalledProviderVersion(
+  launchSpec: LaunchSpec,
+): Promise<InstalledVersionProbeResult> {
   const [command, ...baseArgs] = launchSpec.argv;
-  const providerHealth =
-    provider === "codex"
-      ? await getCodexDoctorDiagnostic(launchSpec, options)
-      : undefined;
   if (!command) {
-    return buildProviderDiagnostic({
-      provider,
+    return Promise.resolve({
       status: "missing_binary",
-      launchCommand,
-      latest,
-      versionStatus: "unknown",
       detail: "No launch command configured.",
-      ...(providerHealth ? { providerHealth } : {}),
     });
   }
 
@@ -591,15 +613,10 @@ export async function probeProviderDiagnostic(
       }
       settled = true;
       child.kill("SIGTERM");
-      resolve(buildProviderDiagnostic({
-        provider,
+      resolve({
         status: "launch_error",
-        launchCommand,
-        latest,
-        versionStatus: "unknown",
         detail: "Timed out while probing provider version.",
-        ...(providerHealth ? { providerHealth } : {}),
-      }));
+      });
     }, 5_000);
 
     child.stdout.on("data", (chunk) => {
@@ -615,15 +632,10 @@ export async function probeProviderDiagnostic(
       }
       settled = true;
       clearTimeout(timeout);
-      resolve(buildProviderDiagnostic({
-        provider,
+      resolve({
         status: error.message.includes("ENOENT") ? "missing_binary" : "launch_error",
-        launchCommand,
-        latest,
-        versionStatus: "unknown",
         detail: error.message,
-        ...(providerHealth ? { providerHealth } : {}),
-      }));
+      });
     });
 
     child.once("close", (code) => {
@@ -636,27 +648,17 @@ export async function probeProviderDiagnostic(
       const stderrText = Buffer.concat(stderr).toString("utf8").trim();
       const installedVersion = extractVersionString(stdoutText || stderrText);
       if (code === 0) {
-        resolve(buildProviderDiagnostic({
-          provider,
+        resolve({
           status: "ready",
-          launchCommand,
-          latest,
           ...(installedVersion ? { installedVersion } : {}),
-          versionStatus: compareVersions(installedVersion, latest.latestVersion),
-          ...(providerHealth ? { providerHealth } : {}),
-        }));
+        });
         return;
       }
-      resolve(buildProviderDiagnostic({
-        provider,
+      resolve({
         status: "launch_error",
-        launchCommand,
-        latest,
         ...(installedVersion ? { installedVersion } : {}),
-        versionStatus: compareVersions(installedVersion, latest.latestVersion),
         detail: stderrText || `Exited with code ${code ?? 0}.`,
-        ...(providerHealth ? { providerHealth } : {}),
-      }));
+      });
     });
   });
 }

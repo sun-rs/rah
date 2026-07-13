@@ -72,30 +72,6 @@ describe("session model option values", () => {
     );
   });
 
-  test("maps legacy reasoningId to the matching model config option", () => {
-    assert.deepEqual(
-      resolveModelOptionValues({
-        catalog: catalog(),
-        model: catalog().models[0]!,
-        reasoningId: "low",
-      }),
-      { model_reasoning_effort: "low" },
-    );
-  });
-
-  test("rejects conflicting legacy reasoning and optionValues", () => {
-    assert.throws(
-      () =>
-        resolveModelOptionValues({
-          catalog: catalog(),
-          model: catalog().models[0]!,
-          optionValues: { model_reasoning_effort: "xhigh" },
-          reasoningId: "low",
-        }),
-      /Conflicting values/,
-    );
-  });
-
   test("fills declared defaults only when requested", () => {
     assert.deepEqual(
       resolveModelOptionValues({
@@ -107,7 +83,7 @@ describe("session model option values", () => {
     );
   });
 
-  test("converts selected scalar values to legacy string form", () => {
+  test("reads selected scalar option values as strings", () => {
     assert.equal(
       optionValueAsString({ model_reasoning_effort: "xhigh" }, "model_reasoning_effort"),
       "xhigh",

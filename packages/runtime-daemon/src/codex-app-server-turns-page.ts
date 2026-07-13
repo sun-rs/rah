@@ -1,4 +1,4 @@
-import type { RahEvent, SessionHistoryPageResponse } from "@rah/runtime-protocol";
+import type { RahEvent, ConversationEvidencePage } from "@rah/runtime-protocol";
 import {
   createCodexAppServerTranslationState,
   translateCodexAppServerThreadSnapshot,
@@ -20,11 +20,68 @@ export interface CodexAppServerItemsPage {
   backwardsCursor?: string | null;
 }
 
+export function reconcileCodexTrailingTurnLiveness(
+  page: CodexAppServerTurnsPage,
+  options: {
+    latestPage: boolean;
+    sourceSettled: boolean;
+    fallbackCompletedAtMs?: number;
+  },
+): CodexAppServerTurnsPage {
+  if (!options.latestPage || page.data.length === 0) {
+    return page;
+  }
+  const trailing = page.data[0];
+  if (!trailing || typeof trailing !== "object" || Array.isArray(trailing)) {
+    return page;
+  }
+  const record = trailing as Record<string, unknown>;
+  if (record.status !== "interrupted") {
+    return page;
+  }
+  const completedAt = record.completedAt ?? record.completed_at;
+  const durationMs = record.durationMs ?? record.duration_ms;
+  if (
+    (typeof completedAt === "number" && Number.isFinite(completedAt)) ||
+    (typeof durationMs === "number" && Number.isFinite(durationMs))
+  ) {
+    return page;
+  }
+
+  const nextTurn: Record<string, unknown> = { ...record };
+  if (!options.sourceSettled) {
+    nextTurn.status = "inProgress";
+  } else if (
+    options.fallbackCompletedAtMs !== undefined &&
+    Number.isFinite(options.fallbackCompletedAtMs)
+  ) {
+    const startedAt =
+      typeof record.startedAt === "number"
+        ? record.startedAt
+        : typeof record.started_at === "number"
+          ? record.started_at
+          : undefined;
+    const completedAtSeconds = Math.max(
+      startedAt ?? 0,
+      options.fallbackCompletedAtMs / 1_000,
+    );
+    nextTurn.completedAt = completedAtSeconds;
+    if (startedAt !== undefined && Number.isFinite(startedAt)) {
+      nextTurn.durationMs = Math.max(0, (completedAtSeconds - startedAt) * 1_000);
+    }
+  }
+  return {
+    ...page,
+    data: [nextTurn, ...page.data.slice(1)],
+  };
+}
+
 export function materializeCodexAppServerTurnsPage(args: {
   sessionId: string;
   providerSessionId: string;
   page: CodexAppServerTurnsPage;
-}): SessionHistoryPageResponse {
+  includeRaw?: boolean;
+}): ConversationEvidencePage {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -63,16 +120,17 @@ export function materializeCodexAppServerTurnsPage(args: {
   }
   const events = services.eventBus
     .list({ sessionIds: [temp.session.id] })
-    .map(
-      (event, index) =>
-        ({
-          ...event,
-          id: `codex-turn-page:${args.providerSessionId}:${index}`,
-          seq: index + 1,
-          sessionId: args.sessionId,
-        }) as RahEvent,
-    );
-  const response: SessionHistoryPageResponse = {
+    .map((event, index) => {
+      const { raw, ...canonicalEvent } = event;
+      return {
+        ...(args.includeRaw ? event : canonicalEvent),
+        id: `codex-turn-page:${args.providerSessionId}:${index}`,
+        seq: index + 1,
+        sessionId: args.sessionId,
+        ...(args.includeRaw && raw !== undefined ? { raw } : {}),
+      } as RahEvent;
+    });
+  const response: ConversationEvidencePage = {
     sessionId: args.sessionId,
     events,
     detailMode: "summary",
@@ -87,7 +145,7 @@ export function materializeCodexAppServerItemDetail(args: {
   providerSessionId: string;
   providerTurnId: string;
   item: unknown;
-}): SessionHistoryPageResponse {
+}): ConversationEvidencePage {
   return materializeCodexAppServerTurnItems({
     sessionId: args.sessionId,
     providerSessionId: args.providerSessionId,
@@ -101,7 +159,7 @@ export function materializeCodexAppServerTurnItems(args: {
   providerSessionId: string;
   providerTurnId: string;
   items: unknown[];
-}): SessionHistoryPageResponse {
+}): ConversationEvidencePage {
   return materializeCodexAppServerTurnsPage({
     sessionId: args.sessionId,
     providerSessionId: args.providerSessionId,
@@ -115,5 +173,6 @@ export function materializeCodexAppServerTurnItems(args: {
         },
       ],
     },
+    includeRaw: true,
   });
 }

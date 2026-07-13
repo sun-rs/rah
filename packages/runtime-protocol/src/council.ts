@@ -30,7 +30,6 @@ export interface CouncilAgentConfig {
   label: string;
   role?: string;
   modelId?: string;
-  reasoningId?: string | null;
   optionValues?: Record<string, SessionConfigValue>;
   modeId?: string;
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import type {
   AttachSessionRequest,
   RahEvent,
-  SessionHistoryPageResponse,
+  ConversationEvidencePage,
   StoredSessionRef,
   TimelineRuntimeModel,
 } from "@rah/runtime-protocol";
@@ -57,7 +57,6 @@ const REHYDRATED_CAPABILITIES = {
   listProviderSessions: true,
   steerInput: false,
   queuedInput: false,
-  renameSession: true,
   actions: {
     info: true,
     stop: false,
@@ -78,7 +77,6 @@ const SYSTEM_SOURCE = {
 const INTERNAL_CLAUDE_EVENT_TYPES = new Set([
   "file-history-snapshot",
   "change",
-  "queue-operation",
 ]);
 
 type ClaudeUsage = {
@@ -516,7 +514,10 @@ function createStoredClaudeIdentity(
   partIndex?: number,
   turnId?: string,
 ): TimelineIdentity {
-  const recordUuid = record.type === "summary" ? record.leafUuid : record.uuid;
+  const recordUuid =
+    record.type === "summary"
+      ? record.leafUuid
+      : record.uuid;
   const turnRecordUuid = turnId?.startsWith("turn:")
     ? turnId.slice("turn:".length)
     : record.type === "user"
@@ -1309,7 +1310,7 @@ export function getClaudeStoredSessionHistoryPage(args: {
   record: ClaudeStoredSessionRecord;
   beforeTs?: string;
   limit?: number;
-}): SessionHistoryPageResponse {
+}): ConversationEvidencePage {
   const limit = args.limit ?? 1000;
   const lines = readFileSync(args.record.filePath, "utf8")
     .split(/\r?\n/)

@@ -16,6 +16,8 @@ import {
 } from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
+  normalizeOpenCodeLiveActivities,
+  primeOpenCodeHistoryMirrorState,
   runtimeDiagnosticsForOpenCodeServer,
   sendInputToOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
@@ -339,6 +341,92 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
   }
 });
 
+test("primeOpenCodeHistoryMirrorState records persisted identity without replaying turns", () => {
+  const liveSession = {
+    providerSessionId: "opencode-history-prime",
+    activityState: createOpenCodeActivityState("opencode-history-prime", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    }),
+    mirroredMessageRevisions: new Map(),
+  } as unknown as LiveOpenCodeSession;
+  primeOpenCodeHistoryMirrorState(liveSession, [
+    {
+      info: {
+        id: "msg-user-prime",
+        sessionID: "opencode-history-prime",
+        role: "user",
+        time: { created: 1 },
+      },
+      parts: [
+        {
+          id: "part-user-prime",
+          sessionID: "opencode-history-prime",
+          messageID: "msg-user-prime",
+          type: "text",
+          text: "old question",
+        },
+      ],
+    },
+    {
+      info: {
+        id: "msg-assistant-prime",
+        sessionID: "opencode-history-prime",
+        role: "assistant",
+        parentID: "msg-user-prime",
+        finish: "stop",
+        time: { created: 2, completed: 3 },
+      },
+      parts: [
+        {
+          id: "part-assistant-prime",
+          sessionID: "opencode-history-prime",
+          messageID: "msg-assistant-prime",
+          type: "text",
+          text: "old answer",
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(liveSession.mirroredMessageRevisions.size, 2);
+  assert.equal(liveSession.activityState.currentTurnId, undefined);
+  assert.equal(
+    liveSession.activityState.turnByMessageId.get("msg-assistant-prime"),
+    "opencode:msg-user-prime",
+  );
+  assert.equal(
+    liveSession.activityState.turnRootMessageIdByMessageId.get("msg-assistant-prime"),
+    "msg-user-prime",
+  );
+});
+
+test("normalizeOpenCodeLiveActivities drops a provider abort error after local cancellation", () => {
+  const liveSession = {
+    activityState: createOpenCodeActivityState("opencode-local-cancel", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    }),
+    locallyCanceledTurnIds: new Set(["local-turn"]),
+    localCancelMirrorSuppressUntilMs: Date.now() + 10_000,
+  } as unknown as LiveOpenCodeSession;
+
+  assert.deepEqual(
+    normalizeOpenCodeLiveActivities(liveSession, [
+      { type: "turn_failed", turnId: "provider-random-turn", error: "Aborted" },
+    ]),
+    [],
+  );
+
+  liveSession.activityState.currentTurnId = "next-turn";
+  assert.deepEqual(
+    normalizeOpenCodeLiveActivities(liveSession, [
+      { type: "turn_failed", turnId: "next-turn", error: "real failure" },
+    ]),
+    [{ type: "turn_failed", turnId: "next-turn", error: "real failure" }],
+  );
+});
+
 test("interruptOpenCodeLiveSession settles the turn when OpenCode accepts abort", async () => {
   const promptRequests: Array<{ method: string; url: string; body: string }> = [];
   const abortRequests: Array<{ method: string; url: string; body: string }> = [];
@@ -436,6 +524,10 @@ test("interruptOpenCodeLiveSession settles the turn when OpenCode accepts abort"
     assert.equal(abortRequests[0]?.method, "POST");
     assert.match(abortRequests[0]?.url ?? "", /\/session\/opencode-stop-1\/abort/);
 
+    // The abort endpoint acknowledges the request before OpenCode publishes
+    // session.status=idle. Queue draining is intentionally gated on that
+    // provider lifecycle boundary so a late idle cannot close the next turn.
+    liveSession.providerReadyForInput = true;
     sendInputToOpenCodeLiveSession({
       services,
       liveSession,

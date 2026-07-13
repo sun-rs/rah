@@ -1,7 +1,7 @@
 import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
-  SessionHistoryPageResponse,
+  ConversationEvidencePage,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type {
@@ -9,6 +9,7 @@ import type {
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
+import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import {
   createClaudeStoredSessionFrozenHistoryPageLoader,
   type ClaudeStoredSessionRecord,
@@ -78,10 +79,10 @@ export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStor
     }
   }
 
-  getSessionHistoryPage(
+  getConversationEvidencePage(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state?.session.providerSessionId) {
       return { sessionId, events: [] };
@@ -129,6 +130,17 @@ export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStor
   refreshStoredSessionsCatalog(): StoredSessionRef[] {
     this.refreshStoredSessionIndex();
     return this.listStoredSessions();
+  }
+
+  hydrateStoredSessionsCatalog(records: readonly StoredSessionCatalogRecord[]): void {
+    this.storedSessionIndex = new Map(
+      records
+        .filter((record) => record.ref.provider === "claude")
+        .map((record) => [
+          record.ref.providerSessionId,
+          { ref: record.ref, filePath: record.storagePath },
+        ] as const),
+    );
   }
 
   listStoredSessionWatchRoots(): string[] {

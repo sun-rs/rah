@@ -22,7 +22,7 @@ export type PendingApproval = {
   resolve: (value: unknown) => void;
   requestId: string;
   itemId: string;
-  approvalProtocol?: "v2" | "legacy";
+  approvalResponseShape?: "action" | "approval";
   questions?: unknown;
   requestedPermissions?: unknown;
 };
@@ -30,6 +30,12 @@ export type PendingApproval = {
 export type LiveCodexSession = {
   sessionId: string;
   threadId: string;
+  /** Ephemeral provider thread that must be unsubscribed when its Side task closes. */
+  ephemeral?: boolean;
+  /** Provider has authoritatively unloaded this ephemeral Side thread. */
+  ephemeralExpired?: boolean;
+  /** Suppresses provider-close notifications caused by an explicit disposal. */
+  disposalInFlight?: boolean;
   cwd: string;
   approvalPolicy: string;
   sandboxMode: string;

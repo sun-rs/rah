@@ -200,8 +200,52 @@ export interface SessionResolvedConfig {
 export interface SessionActionCapabilities {
   info: boolean;
   stop: boolean;
+  archive?: boolean;
   delete: boolean;
   rename: SessionRenameMode;
+}
+
+export type SessionBranchKind = "fork" | "side";
+export type SessionWorkspaceMode = "shared" | "worktree";
+export type SessionPersistence = "persistent" | "ephemeral";
+export type SessionSideLifecycleState =
+  | "ready"
+  | "active"
+  | "completed"
+  | "expired"
+  | "cleanup_failed"
+  | "discarded";
+export type SessionCloseDisposition = "stopped" | "discarded" | "parent_closed";
+
+/**
+ * Provider-native branching features. Missing means the provider has not
+ * declared native branching support; clients must not emulate it by copying a
+ * rendered transcript.
+ */
+export interface SessionBranchCapabilities {
+  sameWorkspace: boolean;
+  worktree: boolean;
+  side: boolean;
+}
+
+/**
+ * Stable parent/child identity for provider-native forks. The relationship is
+ * owned by the runtime session, while Canvas panes are only views over it.
+ */
+export interface SessionRelationship {
+  parentSessionId: string;
+  parentProviderSessionId?: string;
+  forkPointTurnId?: string;
+  kind: SessionBranchKind;
+  workspaceMode: SessionWorkspaceMode;
+  persistence: SessionPersistence;
+  /**
+   * Explicit lifecycle for provider-native ephemeral Side tasks. Forks do not
+   * use this field. `discarded` is normally observed only in the terminal
+   * lifecycle event immediately before the managed session is removed.
+   */
+  sideState?: SessionSideLifecycleState;
+  sideStateDetail?: string;
 }
 
 export interface SessionRuntimeDescriptor {
@@ -254,16 +298,13 @@ export interface SessionCapabilities {
   contextUsage: boolean;
   resumeByProvider: boolean;
   listProviderSessions: boolean;
-  /**
-   * @deprecated Use actions.rename. Kept for compatibility with older clients.
-   */
-  renameSession: boolean;
   actions: SessionActionCapabilities;
   steerInput: boolean;
   queuedInput: boolean;
   modelSwitch: boolean;
   planMode: boolean;
   subagents: boolean;
+  branching?: SessionBranchCapabilities;
 }
 
 /**
@@ -282,8 +323,8 @@ export interface ManagedSession {
   cwd: string;
   rootDir: string;
   /**
-   * @deprecated Use status + phase for user-visible conversation state.
-   * runtimeState remains as a compatibility/source field for adapter internals.
+   * Adapter/runtime execution state. UI conversation state must use status + phase;
+   * runtimeState is retained only for coordination and diagnostics.
    */
   runtimeState: SessionRuntimeState;
   runtime?: SessionRuntimeDescriptor;
@@ -303,6 +344,7 @@ export interface ManagedSession {
   pid?: number;
   title?: string;
   preview?: string;
+  relationship?: SessionRelationship;
   capabilities: SessionCapabilities;
   mode?: SessionModeState;
   model?: SessionModelState;

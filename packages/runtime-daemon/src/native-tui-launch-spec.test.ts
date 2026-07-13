@@ -152,12 +152,54 @@ describe("native TUI launch specs", () => {
 
       const claudeConfig = JSON.parse(
         readFileSync(path.join(configDir, ".claude.json"), "utf8"),
-      ) as { projects?: Record<string, { hasTrustDialogAccepted?: boolean }> };
+      ) as {
+        projects?: Record<string, { hasTrustDialogAccepted?: boolean }>;
+      };
       assert.equal(
         Object.values(claudeConfig.projects ?? {}).some(
           (project) => project.hasTrustDialogAccepted === true,
         ),
         true,
+      );
+      const claudeSettings = JSON.parse(
+        readFileSync(path.join(configDir, "settings.json"), "utf8"),
+      ) as { skipDangerousModePermissionPrompt?: boolean };
+      assert.equal(claudeSettings.skipDangerousModePermissionPrompt, true);
+    } finally {
+      rmSync(fake.dir, { force: true, recursive: true });
+      rmSync(configDir, { force: true, recursive: true });
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  });
+
+  test("does not accept Claude bypass permissions for non-bypass modes", async () => {
+    const fake = fakeBinary("claude");
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-claude-default-"));
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-claude-default-workspace-"));
+    process.env.RAH_CLAUDE_BINARY = fake.path;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      await nativeTuiStartLaunchSpec({
+        provider: "claude",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        modeId: "default",
+      });
+
+      const claudeConfig = JSON.parse(
+        readFileSync(path.join(configDir, ".claude.json"), "utf8"),
+      ) as {
+        projects?: Record<string, { hasTrustDialogAccepted?: boolean }>;
+      };
+      assert.equal(
+        Object.values(claudeConfig.projects ?? {}).some(
+          (project) => project.hasTrustDialogAccepted === true,
+        ),
+        true,
+      );
+      assert.throws(
+        () => readFileSync(path.join(configDir, "settings.json"), "utf8"),
+        /ENOENT/,
       );
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
@@ -180,7 +222,7 @@ describe("native TUI launch specs", () => {
         cwd: workspace,
         liveBackend: "native_tui",
         model: "aaa/wokao",
-        reasoningId: "ultra",
+        optionValues: { model_reasoning_effort: "ultra" },
       });
       assert.deepEqual(codexStart.args, [
         "-c",
@@ -200,7 +242,7 @@ describe("native TUI launch specs", () => {
         cwd: workspace,
         liveBackend: "native_tui",
         model: "claude-does-not-exist",
-        reasoningId: "wokao",
+        optionValues: { effort: "wokao" },
       });
       assert.ok(claudeStart.args.includes("--model"));
       assert.ok(claudeStart.args.includes("claude-does-not-exist"));
@@ -253,7 +295,7 @@ describe("native TUI launch specs", () => {
         cwd: "/workspace/demo",
         liveBackend: "native_tui",
         model: "anthropic/claude-sonnet-4-5",
-        reasoningId: "default",
+        optionValues: { model_reasoning_variant: "default" },
       });
       assert.deepEqual(resume.args, [
         "--model",

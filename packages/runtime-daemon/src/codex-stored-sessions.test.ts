@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -145,6 +145,103 @@ describe("codex stored session discovery", () => {
     assert.equal(records[0]?.archived, false);
     assert.equal(records[0]?.ref.providerState?.archived, undefined);
     assert.equal(records[0]?.ref.preview, "Active copy");
+  });
+
+  test("keeps fork rollout ownership on the first session_meta and invalidates stale cache identity", () => {
+    const parentId = "019e2222-cccc-7ddd-8eee-ffff00001111";
+    const childId = "019f3333-dddd-7eee-8fff-000011112222";
+    const parentCwd = path.join(tmpHome, "parent-workspace");
+    const childCwd = path.join(tmpHome, "child-workspace");
+    const parentPath = writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId: parentId,
+      cwd: parentCwd,
+      timestamp: "2026-06-01T00:00:00.000Z",
+      text: "parent question",
+    });
+    const childDir = path.join(tmpHome, "sessions", "2026", "07", "10");
+    mkdirSync(childDir, { recursive: true });
+    mkdirSync(childCwd, { recursive: true });
+    const childPath = path.join(
+      childDir,
+      `rollout-2026-07-10T00-00-00-${childId}.jsonl`,
+    );
+    writeFileSync(
+      childPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-07-10T00:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: childId,
+            timestamp: "2026-07-10T00:00:00.000Z",
+            cwd: childCwd,
+            source: { subAgent: { thread_spawn: { parent_thread_id: parentId } } },
+          },
+        }),
+        // Fork rollouts can embed the parent's copied transcript, including its
+        // session metadata. This must not replace the child file owner.
+        JSON.stringify({
+          timestamp: "2026-06-01T00:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: parentId,
+            timestamp: "2026-06-01T00:00:00.000Z",
+            cwd: parentCwd,
+            source: "cli",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-07-10T00:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "child question" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const childStats = statSync(childPath);
+    const cacheDir = path.join(process.env.RAH_HOME!, "stored-session-cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(cacheDir, "codex.json"),
+      JSON.stringify({
+        entries: {
+          [childPath]: {
+            ref: {
+              provider: "codex",
+              providerSessionId: parentId,
+              cwd: parentCwd,
+              rootDir: parentCwd,
+              title: "stale parent identity",
+              preview: "stale parent identity",
+              source: "provider_history",
+            },
+            size: childStats.size,
+            mtimeMs: childStats.mtimeMs,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const records = discoverCodexStoredSessions();
+    assert.deepEqual(
+      records.map((record) => record.ref.providerSessionId).sort(),
+      [childId, parentId].sort(),
+    );
+    const child = records.find((record) => record.ref.providerSessionId === childId);
+    assert.equal(child?.rolloutPath, childPath);
+    assert.equal(child?.ref.cwd, childCwd);
+    assert.equal(child?.ref.preview, "child question");
+    assert.equal(
+      records.find((record) => record.ref.providerSessionId === parentId)?.rolloutPath,
+      parentPath,
+    );
   });
 });
 

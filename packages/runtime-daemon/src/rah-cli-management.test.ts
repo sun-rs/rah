@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +41,7 @@ test("rah CLI exposes daemon management without local terminal attach commands",
   });
 
   assert.match(stdout, /rah start/);
+  assert.match(stdout, /rah pair/);
   assert.match(stdout, /rah close <rahSessionId>/);
   assert.doesNotMatch(stdout, /rah attach/);
   assert.doesNotMatch(stdout, /rah <provider>/);
@@ -53,6 +54,51 @@ test("rah CLI exposes daemon management without local terminal attach commands",
       return true;
     },
   );
+});
+
+test("rah pair authenticates with the local management token", async () => {
+  const rahHome = mkdtempSync(path.join(os.tmpdir(), "rah-cli-pair-"));
+  const rootDir = process.cwd();
+  const managementToken = "test-management-token-that-is-long-enough";
+  const authDir = path.join(rahHome, "auth");
+  mkdirSync(authDir, { recursive: true });
+  writeFileSync(path.join(authDir, "management-token"), `${managementToken}\n`);
+  let receivedAuthorization: string | undefined;
+  const server = createServer((req, res) => {
+    if (req.url === "/api/auth/pairing-code" && req.method === "POST") {
+      receivedAuthorization = req.headers.authorization;
+      const body = JSON.stringify({
+        code: "12345678",
+        expiresAt: "2026-07-13T12:00:00.000Z",
+      });
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  try {
+    const port = await listen(server);
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["bin/rah.mjs", "pair", "--daemon-url", `http://127.0.0.1:${port}`],
+      {
+        cwd: rootDir,
+        env: { ...process.env, RAH_HOME: rahHome },
+      },
+    );
+    assert.equal(receivedAuthorization, `Bearer ${managementToken}`);
+    assert.match(stdout, /Pairing code: 12345678/);
+    assert.match(stdout, /Expires: 2026-07-13T12:00:00.000Z/);
+  } finally {
+    await closeServer(server);
+    rmSync(rahHome, { recursive: true, force: true });
+  }
 });
 
 test("rah status trusts daemon runtime identity and writes a structured pid record", async () => {

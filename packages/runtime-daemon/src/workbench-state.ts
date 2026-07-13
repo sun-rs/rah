@@ -150,7 +150,11 @@ function storedSessionActivityTimestamp(session: StoredSessionRef): string {
 }
 
 function isRememberableLiveSession(state: StoredSessionState): boolean {
-  return state.session.provider !== "custom" && !isReadOnlyReplaySession(state);
+  return (
+    state.session.provider !== "custom" &&
+    state.session.relationship?.persistence !== "ephemeral" &&
+    !isReadOnlyReplaySession(state)
+  );
 }
 
 function isSupportedPersistedProvider(provider: unknown): provider is StoredSessionRef["provider"] {

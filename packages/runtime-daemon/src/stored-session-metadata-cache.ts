@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderKind, StoredSessionRef } from "@rah/runtime-protocol";
+import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 
 type StoredSessionMetadataCacheEntry = {
   ref: StoredSessionRef;
@@ -14,12 +15,65 @@ type StoredSessionMetadataCacheFile = {
   entries: Record<string, StoredSessionMetadataCacheEntry>;
 };
 
+type StoredSessionCatalogSnapshotFile = {
+  version: 1;
+  records: StoredSessionCatalogRecord[];
+};
+
 function resolveRahHome(): string {
   return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
 }
 
 function cacheFilePath(provider: ProviderKind): string {
   return path.join(resolveRahHome(), "stored-session-cache", `${provider}.json`);
+}
+
+function catalogSnapshotPath(): string {
+  return path.join(resolveRahHome(), "stored-session-cache", "catalog.json");
+}
+
+function isStoredSessionCatalogRecord(value: unknown): value is StoredSessionCatalogRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Partial<StoredSessionCatalogRecord>;
+  return (
+    typeof record.storagePath === "string" &&
+    Boolean(record.ref) &&
+    typeof record.ref === "object" &&
+    !Array.isArray(record.ref) &&
+    (record.ref.provider === "codex" ||
+      record.ref.provider === "claude" ||
+      record.ref.provider === "opencode") &&
+    typeof record.ref.providerSessionId === "string"
+  );
+}
+
+export function loadStoredSessionCatalogSnapshot(): StoredSessionCatalogRecord[] {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(catalogSnapshotPath(), "utf8"),
+    ) as StoredSessionCatalogSnapshotFile;
+    if (parsed.version !== 1 || !Array.isArray(parsed.records)) {
+      return [];
+    }
+    return parsed.records.filter(isStoredSessionCatalogRecord);
+  } catch {
+    return [];
+  }
+}
+
+export function writeStoredSessionCatalogSnapshot(
+  records: readonly StoredSessionCatalogRecord[],
+): void {
+  const targetPath = catalogSnapshotPath();
+  const temporaryPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  mkdirSync(path.dirname(targetPath), { recursive: true });
+  writeFileSync(
+    temporaryPath,
+    JSON.stringify({ version: 1, records: [...records] } satisfies StoredSessionCatalogSnapshotFile),
+  );
+  renameSync(temporaryPath, targetPath);
 }
 
 export function loadStoredSessionMetadataCache(
@@ -33,6 +87,20 @@ export function loadStoredSessionMetadataCache(
   } catch {
     return new Map();
   }
+}
+
+export function loadStoredSessionCatalogCache(
+  provider: Extract<ProviderKind, "codex" | "claude">,
+): StoredSessionCatalogRecord[] {
+  return [...loadStoredSessionMetadataCache(provider).entries()].map(
+    ([storagePath, entry]) => ({
+      ref: entry.ref,
+      storagePath,
+      ...(provider === "codex"
+        ? { archived: entry.ref.providerState?.archived === true }
+        : {}),
+    }),
+  );
 }
 
 export function writeStoredSessionMetadataCache(
@@ -64,6 +132,19 @@ export function getCachedStoredSessionRef(args: {
     return null;
   }
   return cached.size === args.size && cached.mtimeMs === args.mtimeMs ? cached.ref : null;
+}
+
+export function getCachedStoredSessionHistoryMeta(args: {
+  cache: Map<string, StoredSessionMetadataCacheEntry>;
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+}): StoredSessionRef["historyMeta"] | undefined {
+  const cached = args.cache.get(args.filePath);
+  if (!cached || cached.size !== args.size || cached.mtimeMs !== args.mtimeMs) {
+    return undefined;
+  }
+  return cached.ref.historyMeta;
 }
 
 export function setCachedStoredSessionRef(args: {

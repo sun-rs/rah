@@ -8,7 +8,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { RuntimeEngine } from "./runtime-engine";
 import { createTmuxSessionNameForRahSession, TmuxMuxBackend } from "./tmux-mux-backend";
 
-async function waitFor(predicate: () => void | Promise<void>, timeoutMs = 5_000): Promise<void> {
+const TMUX_INTEGRATION_TIMEOUT_MS = 15_000;
+
+async function waitFor(
+  predicate: () => void | Promise<void>,
+  timeoutMs = TMUX_INTEGRATION_TIMEOUT_MS,
+): Promise<void> {
   const started = Date.now();
   let lastError: unknown;
   while (Date.now() - started < timeoutMs) {
@@ -221,7 +226,7 @@ test("tui_mux startup failures keep the provider error on a failed session", asy
         summary.runtimeDiagnostics?.lastError ?? "",
         /unsupported model claude-wrong-model/,
       );
-    }, 7_000);
+    });
     await waitFor(async () => {
       await assertTmuxSessionGone(muxSessionName);
     });

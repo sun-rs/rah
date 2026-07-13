@@ -43,6 +43,7 @@ export function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): voi
   res.setHeader("vary", "Origin");
   if (typeof originHeader === "string" && originHeader.trim() && isAllowedOrigin(req)) {
     res.setHeader("access-control-allow-origin", originHeader);
+    res.setHeader("access-control-allow-credentials", "true");
   }
   res.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type, x-rah-client");

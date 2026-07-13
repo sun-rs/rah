@@ -85,6 +85,7 @@ export interface MuxRuntime {
     options?: SubscribeMuxPaneOptions,
   ): MuxPaneSubscription;
   writeChars(sessionName: string, paneId: MuxPaneId, text: string): Promise<void>;
+  pasteText(sessionName: string, paneId: MuxPaneId, text: string): Promise<void>;
   writeBytes(sessionName: string, paneId: MuxPaneId, data: string): Promise<void>;
   sendKeys(sessionName: string, paneId: MuxPaneId, keys: string[]): Promise<void>;
   resizePane?(sessionName: string, paneId: MuxPaneId, cols: number, rows: number): Promise<void>;

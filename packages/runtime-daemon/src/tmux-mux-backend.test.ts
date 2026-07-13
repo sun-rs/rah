@@ -243,7 +243,7 @@ test("tmux mux backend maps control bytes to terminal key events", async (t) => 
         [
           "process.stdin.setRawMode?.(true)",
           "process.stdin.resume()",
-          "process.stdout.write('RAW_READY\\n')",
+          "process.stdout.write('\\u001b[?2004hRAW_READY\\n')",
           "process.stdin.on('data', (chunk) => {",
           "  process.stdout.write('RAW_HEX:' + [...chunk].map((byte) => byte.toString(16).padStart(2, '0')).join(' ') + '\\n')",
           "  if (chunk.includes(4)) process.exit(0)",
@@ -271,6 +271,16 @@ test("tmux mux backend maps control bytes to terminal key events", async (t) => 
       return /RAW_HEX:.*1b/.test(dumped) &&
         /RAW_HEX:.*e4 b8 ad/.test(dumped) &&
         /RAW_HEX:.*0d/.test(dumped);
+    });
+
+    await backend.pasteText(sessionName, created.paneId, "pasted 中");
+    await waitFor(async () => {
+      const dumped = await backend.dumpScreen(sessionName, created.paneId, { full: true });
+      return (
+        /RAW_HEX:.*1b 5b 32 30 30 7e/.test(dumped) &&
+        /RAW_HEX:.*70 61 73 74 65 64 20 e4 b8 ad/.test(dumped) &&
+        /RAW_HEX:.*1b 5b 32 30 31 7e/.test(dumped)
+      );
     });
 
     await backend.writeBytes(sessionName, created.paneId, "\u0004");

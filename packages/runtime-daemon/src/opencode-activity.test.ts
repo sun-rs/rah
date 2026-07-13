@@ -110,6 +110,94 @@ describe("translateOpenCodeEvent", () => {
     assert.equal(state.currentTurnId, undefined);
   });
 
+  test("live assistant identity is stable when its user metadata arrives later", () => {
+    const live = createOpenCodeActivityState("session-identity", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    });
+    startOpenCodeTurn(live, "22222222-2222-4222-8222-222222222222");
+    const liveActivities = translateOpenCodeMessage(live, {
+      info: {
+        id: "msg-assistant",
+        sessionID: "session-identity",
+        role: "assistant",
+        parentID: "msg-user",
+        finish: "stop",
+        time: { created: 2, completed: 3 },
+      },
+      parts: [
+        {
+          id: "part-assistant",
+          sessionID: "session-identity",
+          messageID: "msg-assistant",
+          type: "text",
+          text: "stable answer",
+        },
+      ],
+    });
+    const historyActivities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user",
+          sessionID: "session-identity",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user",
+            sessionID: "session-identity",
+            messageID: "msg-user",
+            type: "text",
+            text: "question",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant",
+          sessionID: "session-identity",
+          role: "assistant",
+          parentID: "msg-user",
+          finish: "stop",
+          time: { created: 2, completed: 3 },
+        },
+        parts: [
+          {
+            id: "part-assistant",
+            sessionID: "session-identity",
+            messageID: "msg-assistant",
+            type: "text",
+            text: "stable answer",
+          },
+        ],
+      },
+    ]);
+    const liveAnswer = liveActivities.find(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "assistant_message",
+    );
+    const historyAnswer = historyActivities.find(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "assistant_message",
+    );
+
+    assert.equal(liveAnswer?.type, "timeline_item");
+    assert.equal(historyAnswer?.type, "timeline_item");
+    if (liveAnswer?.type === "timeline_item" && historyAnswer?.type === "timeline_item") {
+      assert.equal(
+        liveAnswer.identity?.canonicalItemId,
+        historyAnswer.identity?.canonicalItemId,
+      );
+      assert.equal(
+        liveAnswer.identity?.canonicalTurnId,
+        historyAnswer.identity?.canonicalTurnId,
+      );
+    }
+  });
+
   test("maps OpenCode aborted assistant messages into canceled turns", () => {
     const state = createOpenCodeActivityState("session-1");
     const busy = translateOpenCodeEvent(state, {

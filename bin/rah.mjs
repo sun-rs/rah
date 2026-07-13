@@ -25,7 +25,7 @@ const execFileAsync = promisify(execFile);
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "0.0.0.0";
-const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "close", "archive"]);
+const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "pair", "close", "archive"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
 const VOLATILE_CODEX_PARENT_ENV_KEYS = new Set([
   "CODEX_CI",
@@ -42,6 +42,7 @@ function printUsage() {
       "  rah stop",
       "  rah restart",
       "  rah logs [--follow]",
+      "  rah pair",
       "  rah close <rahSessionId>",
       "  rah council-mcp --council <councilId> --actor <actorId>",
       "",
@@ -194,6 +195,28 @@ function daemonPort(daemonUrl) {
 
 function resolveRahRuntimeHome() {
   return process.env.RAH_HOME ? resolve(process.env.RAH_HOME) : join(homedir(), ".rah", "runtime-daemon");
+}
+
+function resolveRahAuthHome() {
+  const rahHome = process.env.RAH_HOME ? resolve(process.env.RAH_HOME) : join(homedir(), ".rah");
+  return join(rahHome, "auth");
+}
+
+function readManagementToken() {
+  try {
+    const token = readFileSync(join(resolveRahAuthHome(), "management-token"), "utf8").trim();
+    return token.length >= 32 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function managementHeaders(headers = {}) {
+  const token = readManagementToken();
+  return {
+    ...headers,
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
 }
 
 function managedDaemonPaths(daemonUrl) {
@@ -390,6 +413,7 @@ function runtimeIdentityMatchesThisRah(identity, daemonUrl) {
 async function fetchRuntimeIdentity(daemonUrl) {
   try {
     const response = await fetch(new URL("/api/runtime", daemonUrl).toString(), {
+      headers: managementHeaders(),
       signal: AbortSignal.timeout(1_500),
     });
     if (!response.ok) {
@@ -841,6 +865,13 @@ async function handleManagementCommand(parsed) {
     await showLogs(parsed.daemonUrl, parsed.follow);
     return;
   }
+  if (parsed.command === "pair") {
+    const pairing = await postJson(parsed.daemonUrl, "/api/auth/pairing-code", {});
+    process.stdout.write(
+      [`Pairing code: ${pairing.code}`, `Expires: ${pairing.expiresAt}`].join("\n") + "\n",
+    );
+    return;
+  }
   if (parsed.command === "close" || parsed.command === "archive") {
     await closeRahSession(parsed.daemonUrl, parsed.sessionId);
     process.stdout.write(`[rah] stopped session ${parsed.sessionId}\n`);
@@ -872,8 +903,10 @@ async function postJson(daemonUrl, pathname, body) {
   const response = await fetch(apiUrl(daemonUrl, pathname), {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      "x-rah-client": "web",
+      ...managementHeaders({
+        "content-type": "application/json",
+        "x-rah-client": "web",
+      }),
     },
     body: JSON.stringify(body),
   });

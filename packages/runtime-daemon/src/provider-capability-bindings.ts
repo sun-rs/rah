@@ -20,24 +20,24 @@ export function hasStoredHistoryCapability(
   return (
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).resumeStoredSession ===
       "function" ||
-    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionHistoryPage ===
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getConversationEvidencePage ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
-      .getSessionConversationHistoryPage === "function" ||
+      .getConversationSummaryEvidencePage === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationItemDetail === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationTurnDetail === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
       "function" ||
-    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionTurnDirectory ===
-      "function" ||
-    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionTurnHistory ===
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionConversationDirectory ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessions === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).refreshStoredSessionsCatalog ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessionWatchRoots ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).archiveStoredSession ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).removeStoredSession === "function"
   );
@@ -50,13 +50,13 @@ export function bindStoredHistoryCapability(
     ...(adapter.resumeStoredSession
       ? { resumeStoredSession: adapter.resumeStoredSession.bind(adapter) }
       : {}),
-    ...(adapter.getSessionHistoryPage
-      ? { getSessionHistoryPage: adapter.getSessionHistoryPage.bind(adapter) }
+    ...(adapter.getConversationEvidencePage
+      ? { getConversationEvidencePage: adapter.getConversationEvidencePage.bind(adapter) }
       : {}),
-    ...(adapter.getSessionConversationHistoryPage
+    ...(adapter.getConversationSummaryEvidencePage
       ? {
-          getSessionConversationHistoryPage:
-            adapter.getSessionConversationHistoryPage.bind(adapter),
+          getConversationSummaryEvidencePage:
+            adapter.getConversationSummaryEvidencePage.bind(adapter),
         }
       : {}),
     ...(adapter.getSessionConversationItemDetail
@@ -74,11 +74,8 @@ export function bindStoredHistoryCapability(
     ...(adapter.createFrozenHistoryPageLoader
       ? { createFrozenHistoryPageLoader: adapter.createFrozenHistoryPageLoader.bind(adapter) }
       : {}),
-    ...(adapter.getSessionTurnDirectory
-      ? { getSessionTurnDirectory: adapter.getSessionTurnDirectory.bind(adapter) }
-      : {}),
-    ...(adapter.getSessionTurnHistory
-      ? { getSessionTurnHistory: adapter.getSessionTurnHistory.bind(adapter) }
+    ...(adapter.getSessionConversationDirectory
+      ? { getSessionConversationDirectory: adapter.getSessionConversationDirectory.bind(adapter) }
       : {}),
     ...(adapter.listStoredSessions
       ? { listStoredSessions: adapter.listStoredSessions.bind(adapter) }
@@ -86,8 +83,14 @@ export function bindStoredHistoryCapability(
     ...(adapter.refreshStoredSessionsCatalog
       ? { refreshStoredSessionsCatalog: adapter.refreshStoredSessionsCatalog.bind(adapter) }
       : {}),
+    ...(adapter.hydrateStoredSessionsCatalog
+      ? { hydrateStoredSessionsCatalog: adapter.hydrateStoredSessionsCatalog.bind(adapter) }
+      : {}),
     ...(adapter.listStoredSessionWatchRoots
       ? { listStoredSessionWatchRoots: adapter.listStoredSessionWatchRoots.bind(adapter) }
+      : {}),
+    ...(adapter.archiveStoredSession
+      ? { archiveStoredSession: adapter.archiveStoredSession.bind(adapter) }
       : {}),
     ...(adapter.removeStoredSession
       ? { removeStoredSession: adapter.removeStoredSession.bind(adapter) }
@@ -101,6 +104,7 @@ export function hasStructuredLifecycleCapability(
   return (
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).startSession === "function" ||
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).resumeSession === "function" ||
+    typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).forkSession === "function" ||
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).closeSession === "function" ||
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).destroySession === "function"
   );
@@ -113,6 +117,7 @@ export function bindStructuredLifecycleCapability(
     id: adapter.id,
     ...(adapter.startSession ? { startSession: adapter.startSession.bind(adapter) } : {}),
     ...(adapter.resumeSession ? { resumeSession: adapter.resumeSession.bind(adapter) } : {}),
+    ...(adapter.forkSession ? { forkSession: adapter.forkSession.bind(adapter) } : {}),
     ...(adapter.closeSession ? { closeSession: adapter.closeSession.bind(adapter) } : {}),
     ...(adapter.destroySession ? { destroySession: adapter.destroySession.bind(adapter) } : {}),
   };

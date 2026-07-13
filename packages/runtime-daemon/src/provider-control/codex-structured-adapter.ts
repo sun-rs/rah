@@ -1,5 +1,7 @@
 import type {
   CloseSessionRequest,
+  ForkSessionRequest,
+  ForkSessionResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
   ProviderModelCatalog,
@@ -13,6 +15,7 @@ import type {
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
 import {
+  forkCodexLiveSession,
   loadCodexPlanCollaborationMode,
   pauseActiveCodexThreadGoal,
   respondToCodexLivePermission,
@@ -21,6 +24,11 @@ import {
   type LiveCodexSession,
 } from "./codex-live-client";
 import { createCodexAppServerClient } from "../codex-app-server-client";
+import {
+  bindCodexSubmittedUserMessageToTurn,
+  discardPendingCodexSubmittedUserMessage,
+  recordCodexSubmittedUserMessage,
+} from "../codex-app-server-activity";
 import {
   CodexModelCatalogCache,
   resolveCodexRuntimeCapabilityState,
@@ -47,6 +55,7 @@ import { applyProviderActivity } from "../provider-activity";
 import { timelineRuntimeModel } from "../timeline-runtime-model";
 import { mergeManualProviderModels } from "../manual-provider-models";
 import { publishSessionStateChanged } from "../runtime-session-events";
+import { setSessionSideLifecycleState } from "../session-side-lifecycle";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
@@ -168,11 +177,49 @@ export class CodexAdapter implements ProviderAdapter {
     }
     this.liveSessions.delete(liveSession.sessionId);
     this.clearInterruptFallback(liveSession);
+    // Each live Codex session owns its app-server process. A transport close
+    // is terminal for an ephemeral, pathless Side, and the process must not be
+    // left behind after its RPC channel disappears.
+    void liveSession.client.dispose().catch((disposeError) => {
+      console.warn("[rah] failed to dispose Codex app-server after transport close", {
+        sessionId: liveSession.sessionId,
+        error: disposeError,
+      });
+    });
     const state = this.services.sessionStore.getSession(liveSession.sessionId);
     if (!state) {
       return;
     }
     const detail = error.message || "Codex app-server closed";
+    if (liveSession.ephemeral && !liveSession.disposalInFlight) {
+      liveSession.ephemeralExpired = true;
+      liveSession.queuedInputs.length = 0;
+      liveSession.currentTurnId = null;
+      this.services.sessionStore.patchManagedSession(liveSession.sessionId, {
+        ...(state.session.nativeTui
+          ? {
+              nativeTui: {
+                ...state.session.nativeTui,
+                viewAvailable: false,
+              },
+            }
+          : {}),
+        runtimeDiagnostics: {
+          ...(state.session.runtimeDiagnostics ?? {}),
+          attachState: "failed",
+          lastError: detail,
+        },
+      });
+      this.services.sessionStore.setRuntimeState(liveSession.sessionId, "stopped");
+      setSessionSideLifecycleState(
+        this.services,
+        liveSession.sessionId,
+        "expired",
+        "Codex unloaded this ephemeral Side task. Start a new Side to continue.",
+      );
+      publishSessionStateChanged(this.services, liveSession.sessionId, "stopped");
+      return;
+    }
     this.services.sessionStore.patchManagedSession(liveSession.sessionId, {
       ...(state.session.nativeTui
         ? {
@@ -273,12 +320,14 @@ export class CodexAdapter implements ProviderAdapter {
         CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
       );
     } catch (error) {
+      live.interruptingTurnIds.delete(turnId);
       console.warn("[rah] failed to interrupt Codex turn before session disposal", {
         sessionId: live.sessionId,
         threadId: live.threadId,
         turnId,
         error,
       });
+      throw error;
     }
   }
 
@@ -286,27 +335,40 @@ export class CodexAdapter implements ProviderAdapter {
     if (!live.threadId) {
       return;
     }
-    try {
-      await pauseActiveCodexThreadGoal(
-        live.client,
-        live.threadId,
-        CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
-      );
-    } catch (error) {
-      console.warn("[rah] failed to pause Codex goal before session disposal", {
-        sessionId: live.sessionId,
-        threadId: live.threadId,
-        error,
-      });
-    }
+    await pauseActiveCodexThreadGoal(
+      live.client,
+      live.threadId,
+      CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
+    );
   }
 
   private async prepareLiveSessionForDisposal(live: LiveCodexSession): Promise<void> {
-    await this.interruptLiveTurnBeforeDisposal(live);
-    await this.pauseLiveGoalBeforeDisposal(live);
+    live.disposalInFlight = true;
+    try {
+      if (!live.ephemeralExpired) {
+        await this.interruptLiveTurnBeforeDisposal(live);
+        await this.pauseLiveGoalBeforeDisposal(live);
+        if (live.ephemeral && live.threadId) {
+          await live.client.request(
+            "thread/unsubscribe",
+            { threadId: live.threadId },
+            CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
+          );
+        }
+      }
+    } catch (error) {
+      live.disposalInFlight = false;
+      throw error;
+    }
   }
 
   private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
+    if (live.ephemeralExpired) {
+      return;
+    }
+    if (live.ephemeral) {
+      setSessionSideLifecycleState(this.services, live.sessionId, "active");
+    }
     if (!live.threadId) {
       live.queuedInputs.push(request);
       return;
@@ -323,6 +385,15 @@ export class CodexAdapter implements ProviderAdapter {
     } else {
       delete live.translationState.pendingRuntimeModel;
     }
+    recordCodexSubmittedUserMessage(live.translationState, {
+      text: request.text,
+      ...(request.clientMessageId !== undefined
+        ? { clientMessageId: request.clientMessageId }
+        : {}),
+      ...(request.clientTurnId !== undefined
+        ? { clientTurnId: request.clientTurnId }
+        : {}),
+    });
     live.turnStartInFlight = true;
     void live.client.request(
       "turn/start",
@@ -366,6 +437,9 @@ export class CodexAdapter implements ProviderAdapter {
         );
         delete live.translationState.pendingRuntimeModel;
       }
+      if (typeof turn?.id === "string") {
+        bindCodexSubmittedUserMessageToTurn(live.translationState, turn.id);
+      }
       if (typeof turn?.id === "string" && live.interruptWhenTurnStarts) {
         const turnId = turn.id;
         live.interruptWhenTurnStarts = false;
@@ -388,6 +462,10 @@ export class CodexAdapter implements ProviderAdapter {
         }
       }
     }).catch((error) => {
+      discardPendingCodexSubmittedUserMessage(
+        live.translationState,
+        request.clientMessageId,
+      );
       this.reportAsyncLiveError(
         live.sessionId,
         error instanceof Error ? error.message : String(error),
@@ -404,7 +482,7 @@ export class CodexAdapter implements ProviderAdapter {
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     const rawCachedModelCatalog = this.modelCatalog.getCached();
     const cachedModelCatalog =
-      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+      request.model || request.optionValues !== undefined
         ? mergeManualProviderModels(await this.modelCatalog.listModels())
         : rawCachedModelCatalog
           ? mergeManualProviderModels(rawCachedModelCatalog)
@@ -473,7 +551,7 @@ export class CodexAdapter implements ProviderAdapter {
 
     const rawCachedModelCatalog = this.modelCatalog.getCached();
     const cachedModelCatalog =
-      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+      request.model || request.optionValues !== undefined
         ? mergeManualProviderModels(await this.modelCatalog.listModels())
         : rawCachedModelCatalog
           ? mergeManualProviderModels(rawCachedModelCatalog)
@@ -510,9 +588,40 @@ export class CodexAdapter implements ProviderAdapter {
     });
   }
 
+  async forkSession(
+    parentSessionId: string,
+    request: ForkSessionRequest,
+  ): Promise<ForkSessionResponse> {
+    const parentState = this.services.sessionStore.getSession(parentSessionId);
+    if (!parentState || parentState.session.provider !== "codex") {
+      throw new Error(`Unknown Codex parent session ${parentSessionId}.`);
+    }
+    const parentLive = this.liveSessions.get(parentSessionId);
+    const response = await forkCodexLiveSession({
+      services: this.services,
+      parentSummary: toSessionSummary(parentState),
+      ...(parentLive ? { parentLive } : {}),
+      request,
+      onLiveSessionReady: (liveSession) => {
+        this.registerLiveSession(liveSession);
+      },
+    });
+    return { session: response.summary };
+  }
+
   sendInput(sessionId: string, request: SessionInputRequest): void {
+    const sideState = this.services.sessionStore.getSession(sessionId)?.session.relationship?.sideState;
+    if (sideState === "expired") {
+      throw new Error("This Side task expired in Codex. Start a new Side to continue.");
+    }
+    if (sideState === "cleanup_failed") {
+      throw new Error("This Side task could not be cleaned up. Retry discard before continuing.");
+    }
     const live = this.liveSessions.get(sessionId);
     if (live) {
+      if (live.ephemeralExpired) {
+        throw new Error("This Side task expired in Codex. Start a new Side to continue.");
+      }
       if (!live.threadId || live.currentTurnId || live.turnStartInFlight) {
         live.queuedInputs.push(request);
         return;
@@ -551,17 +660,11 @@ export class CodexAdapter implements ProviderAdapter {
       catalog,
       model,
       optionValues: request.optionValues,
-      reasoningId: request.reasoningId,
       useDefaults: true,
       requireMutable: true,
     });
     const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_effort");
-    const nextReasoningId =
-      optionReasoningId !== undefined
-        ? optionReasoningId
-        : request.reasoningId === null
-          ? null
-          : request.reasoningId?.trim() || model.defaultReasoningId || null;
+    const nextReasoningId = optionReasoningId ?? model.defaultReasoningId ?? null;
     live.modelId = nextModelId;
     live.reasoningId = nextReasoningId;
     live.modelCatalog = catalog;
@@ -675,9 +778,9 @@ export class CodexAdapter implements ProviderAdapter {
     }
     const live = this.liveSessions.get(sessionId);
     if (live) {
+      await this.prepareLiveSessionForDisposal(live);
       this.liveSessions.delete(sessionId);
       this.clearInterruptFallback(live);
-      await this.prepareLiveSessionForDisposal(live);
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
@@ -686,9 +789,9 @@ export class CodexAdapter implements ProviderAdapter {
   async destroySession(sessionId: string): Promise<void> {
     const live = this.liveSessions.get(sessionId);
     if (live) {
+      await this.prepareLiveSessionForDisposal(live);
       this.liveSessions.delete(sessionId);
       this.clearInterruptFallback(live);
-      await this.prepareLiveSessionForDisposal(live);
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
@@ -770,7 +873,7 @@ export class CodexAdapter implements ProviderAdapter {
     void rows;
   }
 
-  async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+  async getProviderDiagnostic(options?: { forceRefresh?: boolean; includeHealth?: boolean }) {
     return probeProviderDiagnostic("codex", await codexLaunchSpec(), options);
   }
 
@@ -780,8 +883,11 @@ export class CodexAdapter implements ProviderAdapter {
     sessions.forEach((live) => this.clearInterruptFallback(live));
     const results = await Promise.allSettled(
       sessions.map(async (live) => {
-        await this.prepareLiveSessionForDisposal(live);
-        await live.client.dispose();
+        try {
+          await this.prepareLiveSessionForDisposal(live);
+        } finally {
+          await live.client.dispose();
+        }
       }),
     );
     results.forEach((result, index) => {

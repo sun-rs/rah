@@ -16,13 +16,10 @@ function clientWithRequest(
   };
 }
 
-test("Codex lightweight resume retries old servers without excludeTurns", async () => {
+test("Codex lightweight resume requires the official excludeTurns path", async () => {
   const requests: unknown[] = [];
   const client = clientWithRequest(async (_method, params) => {
     requests.push(params);
-    if ((params as Record<string, unknown>).excludeTurns === true) {
-      throw new Error("unknown field `excludeTurns`");
-    }
     return { thread: { id: "thread-1" } };
   });
 
@@ -34,8 +31,24 @@ test("Codex lightweight resume retries old servers without excludeTurns", async 
   assert.deepEqual(result, { thread: { id: "thread-1" } });
   assert.deepEqual(requests, [
     { threadId: "thread-1", sandbox: "workspace-write", excludeTurns: true },
-    { threadId: "thread-1", sandbox: "workspace-write" },
   ]);
+});
+
+test("Codex lightweight resume does not retry an unsupported protocol shape", async () => {
+  let requests = 0;
+  const client = clientWithRequest(async () => {
+    requests += 1;
+    throw new Error("unknown field `excludeTurns`");
+  });
+  await assert.rejects(
+    requestCodexThreadResumeWithoutTranscript({
+      client,
+      params: { threadId: "thread-1" },
+      timeoutMs: 1_000,
+    }),
+    /excludeTurns/,
+  );
+  assert.equal(requests, 1);
 });
 
 test("Codex lightweight resume does not mask real resume errors", async () => {

@@ -210,6 +210,38 @@ describe("WorkbenchStateStore", () => {
     await workbench.flush();
   });
 
+  test("does not persist ephemeral Side sessions into stored or recent history", async () => {
+    const workbench = new WorkbenchStateStore();
+    const sessionStore = new SessionStore();
+    const state = sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "thread-side-ephemeral",
+      launchSource: "web",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+      title: "Side task",
+      relationship: {
+        parentSessionId: "parent-runtime-session",
+        parentProviderSessionId: "thread-parent",
+        kind: "side",
+        workspaceMode: "shared",
+        persistence: "ephemeral",
+      },
+    });
+    state.controlLease = {
+      sessionId: state.session.id,
+      holderClientId: "web-user",
+      holderKind: "web",
+    };
+
+    workbench.persistLiveSessions([state]);
+    const snapshot = workbench.snapshot();
+
+    assert.deepEqual(snapshot.sessions, []);
+    assert.deepEqual(snapshot.recentSessions, []);
+    await workbench.flush();
+  });
+
   test("preserves workspace add order across restart", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/zeta");
@@ -750,7 +782,7 @@ describe("WorkbenchStateStore", () => {
     await third.shutdown();
   });
 
-  test("listing sessions prunes orphan running sessions with no attached clients", async () => {
+  test("listing sessions hides orphan running sessions while provider cleanup completes", async () => {
     const rootDir = mkdtempSync(path.join(tmpRoot, "workspace-orphan-"));
     const engine = new RuntimeEngine();
     try {
@@ -767,6 +799,13 @@ describe("WorkbenchStateStore", () => {
 
       const listed = engine.listSessions();
       assert.equal(listed.sessions.length, 0);
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (!engine.sessionStore.getSession(state.session.id)) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
       assert.equal(engine.sessionStore.getSession(state.session.id), undefined);
     } finally {
       await engine.shutdown();

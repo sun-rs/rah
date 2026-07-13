@@ -28,7 +28,6 @@ const DEFAULT_CAPABILITIES: SessionCapabilities = {
   contextUsage: true,
   resumeByProvider: true,
   listProviderSessions: true,
-  renameSession: false,
   actions: {
     info: true,
     stop: true,
@@ -163,6 +162,7 @@ export interface CreateManagedSessionArgs {
   ptyId?: string;
   title?: string;
   preview?: string;
+  relationship?: ManagedSession["relationship"];
   mode?: ManagedSession["mode"];
   model?: ManagedSession["model"];
   config?: SessionResolvedConfig;
@@ -186,6 +186,7 @@ export interface PatchManagedSessionArgs {
   origin?: ManagedSession["origin"];
   title?: string;
   preview?: string;
+  relationship?: ManagedSession["relationship"];
   cwd?: string;
   rootDir?: string;
   nativeTui?: ManagedSession["nativeTui"];
@@ -286,6 +287,9 @@ export class SessionStore {
     }
     if (args.preview !== undefined) {
       session.preview = args.preview;
+    }
+    if (args.relationship !== undefined) {
+      session.relationship = args.relationship;
     }
     if (args.mode !== undefined) {
       session.mode = args.mode;
@@ -530,6 +534,9 @@ export class SessionStore {
     }
     if (patch.preview !== undefined) {
       state.session.preview = patch.preview;
+    }
+    if (patch.relationship !== undefined) {
+      state.session.relationship = patch.relationship;
     }
     if (patch.cwd !== undefined) {
       state.session.cwd = patch.cwd;

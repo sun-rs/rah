@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -19,7 +19,7 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SessionFileResponse,
-  SessionHistoryPageResponse,
+  ConversationEvidencePage,
   SessionInputRequest,
   SetSessionModelRequest,
   SessionSummary,
@@ -127,10 +127,10 @@ class CountingStoredSessionsAdapter implements ProviderAdapter {
     throw new Error("not implemented");
   }
 
-  getSessionHistoryPage?(
+  getConversationEvidencePage?(
     _sessionId: string,
     _options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     throw new Error("not implemented");
   }
 
@@ -244,7 +244,6 @@ class RenameStoredSessionsAdapter extends CountingStoredSessionsAdapter {
       title: "Old live title",
       ...(request.origin ? { origin: request.origin } : {}),
       capabilities: {
-        renameSession: true,
         actions: {
           info: true,
           stop: true,
@@ -360,10 +359,10 @@ class WatchingStoredSessionsAdapter implements ProviderAdapter {
     throw new Error("not implemented");
   }
 
-  getSessionHistoryPage?(
+  getConversationEvidencePage?(
     _sessionId: string,
     _options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     throw new Error("not implemented");
   }
 
@@ -429,7 +428,10 @@ async function waitFor(
   assertion: () => void,
   options?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<void> {
-  const timeoutMs = options?.timeoutMs ?? 2_000;
+  // These integration-style tests wait on real child-process and PTY events.
+  // A loaded host may take several seconds to schedule a newly spawned CLI,
+  // while the event itself remains the authoritative readiness boundary.
+  const timeoutMs = options?.timeoutMs ?? 15_000;
   const intervalMs = options?.intervalMs ?? 50;
   const started = Date.now();
   let lastError: unknown;
@@ -471,7 +473,6 @@ function sessionSummary(sessionId: string, providerSessionId: string): SessionSu
         listProviderSessions: true,
         steerInput: true,
         queuedInput: false,
-        renameSession: false,
         actions: {
           info: true,
           stop: false,
@@ -566,12 +567,15 @@ class MutableControlsAdapter extends CountingStoredSessionsAdapter {
     if (!currentModel) {
       throw new Error("model missing");
     }
+    const reasoning = request.optionValues?.model_reasoning_effort;
     return toSessionSummary(
       this.engine.sessionStore.patchManagedSession(sessionId, {
         model: {
           ...currentModel,
           currentModelId: request.modelId,
-          ...(request.reasoningId !== undefined ? { currentReasoningId: request.reasoningId } : {}),
+          ...(typeof reasoning === "string" || reasoning === null
+            ? { currentReasoningId: reasoning }
+            : {}),
         },
       }),
     );
@@ -748,10 +752,10 @@ class SnapshotPagingAdapter implements ProviderAdapter {
     throw new Error("not implemented");
   }
 
-  getSessionHistoryPage(
+  getConversationEvidencePage(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     const events = this.historyBySessionId.get(sessionId) ?? [];
     const limit = Math.max(1, options?.limit ?? 1000);
     const start = Math.max(0, events.length - limit);
@@ -800,8 +804,8 @@ class FrozenPagingAdapter implements ProviderAdapter {
     string,
     {
       boundary: FrozenHistoryBoundary;
-      initial: SessionHistoryPageResponse;
-      olderByCursor: Map<string, SessionHistoryPageResponse>;
+      initial: ConversationEvidencePage;
+      olderByCursor: Map<string, ConversationEvidencePage>;
     }
   >();
 
@@ -900,10 +904,10 @@ class FrozenPagingAdapter implements ProviderAdapter {
     };
   }
 
-  getSessionHistoryPage?(
+  getConversationEvidencePage?(
     _sessionId: string,
     _options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     throw new Error("materialized fallback should not be used");
   }
 
@@ -990,6 +994,13 @@ describe("RuntimeEngine", () => {
     );
 
     const engine = new RuntimeEngine();
+    assert.equal(
+      engine.listSessions().storedSessions.some(
+        (entry) => entry.provider === "claude" && entry.providerSessionId === "session-1",
+      ),
+      false,
+    );
+    await engine.refreshStoredSessionsCatalog({ provider: "claude" });
     const sessions = engine.listSessions();
     assert.ok(
       sessions.storedSessions.some(
@@ -1016,7 +1027,7 @@ describe("RuntimeEngine", () => {
     assert.equal(resumed.session.session.capabilities.structuredControl, false);
     assert.equal(resumed.session.session.capabilities.liveAttach, false);
 
-    const page = engine.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
+    const page = engine.getConversationEvidencePage(resumed.session.session.id, { limit: 20 });
     assert.ok(
       page.events.some(
         (event) =>
@@ -1735,7 +1746,7 @@ describe("RuntimeEngine", () => {
       preferStoredReplay: true,
     });
 
-    const firstPage = engine.getSessionHistoryPage(resumed.session.session.id, { limit: 2 });
+    const firstPage = engine.getConversationEvidencePage(resumed.session.session.id, { limit: 2 });
     assert.deepEqual(
       firstPage.events.map((event) => {
         if (
@@ -1755,7 +1766,7 @@ describe("RuntimeEngine", () => {
       ...(adapter.historyBySessionId.get("replay-1") ?? []),
     ]);
 
-    const secondPage = engine.getSessionHistoryPage(resumed.session.session.id, {
+    const secondPage = engine.getConversationEvidencePage(resumed.session.session.id, {
       cursor: firstPage.nextCursor,
       limit: 2,
     });
@@ -1807,7 +1818,7 @@ describe("RuntimeEngine", () => {
       },
     });
 
-    const page = engine.getSessionHistoryPage(managed.session.id, { limit: 20 });
+    const page = engine.getConversationEvidencePage(managed.session.id, { limit: 20 });
     assert.deepEqual(
       page.events.map((event) => {
         if (
@@ -1918,6 +1929,43 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
+  test("stored history mutation cannot bypass an open managed session", async () => {
+    const adapter = new CountingStoredSessionsAdapter([
+      {
+        provider: "codex",
+        providerSessionId: "session-open",
+        cwd: workDir,
+        rootDir: workDir,
+        updatedAt: "2025-07-19T22:21:00.000Z",
+        source: "provider_history",
+      },
+    ]);
+    const engine = new RuntimeEngine([adapter]);
+    const managed = engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "session-open",
+      launchSource: "web",
+      cwd: workDir,
+      rootDir: workDir,
+    });
+
+    await assert.rejects(
+      engine.removeStoredSession("codex", "session-open"),
+      new RegExp(`Close session ${managed.session.id}`),
+    );
+    await assert.rejects(
+      engine.archiveStoredSession("codex", "session-open"),
+      new RegExp(`Close session ${managed.session.id}`),
+    );
+    await assert.rejects(
+      engine.removeStoredWorkspaceSessions(workDir),
+      new RegExp(`Close session ${managed.session.id}`),
+    );
+    assert.deepEqual(adapter.removedSessionIds, []);
+
+    await engine.shutdown();
+  });
+
   test("history snapshot transfers from replay to claimed running session", async () => {
     const adapter = new SnapshotPagingAdapter();
     adapter.historyBySessionId.set("replay-1", [
@@ -1938,7 +1986,7 @@ describe("RuntimeEngine", () => {
       providerSessionId: "provider-1",
       preferStoredReplay: true,
     });
-    const firstPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    const firstPage = engine.getConversationEvidencePage(replay.session.session.id, { limit: 2 });
     assert.ok(firstPage.nextCursor);
 
     const live = await engine.resumeSession({
@@ -1948,7 +1996,7 @@ describe("RuntimeEngine", () => {
       historySourceSessionId: replay.session.session.id,
     });
 
-    const olderPage = engine.getSessionHistoryPage(live.session.session.id, {
+    const olderPage = engine.getConversationEvidencePage(live.session.session.id, {
       cursor: firstPage.nextCursor,
       limit: 2,
     });
@@ -1999,7 +2047,7 @@ describe("RuntimeEngine", () => {
       preferStoredReplay: true,
     });
 
-    const firstPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    const firstPage = engine.getConversationEvidencePage(replay.session.session.id, { limit: 2 });
     assert.deepEqual(
       firstPage.events.map((event) =>
         event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
@@ -2010,7 +2058,7 @@ describe("RuntimeEngine", () => {
     );
     assert.equal(firstPage.nextCursor, "older-1");
 
-    const olderPage = engine.getSessionHistoryPage(replay.session.session.id, {
+    const olderPage = engine.getConversationEvidencePage(replay.session.session.id, {
       cursor: "older-1",
       limit: 2,
     });
@@ -2023,7 +2071,7 @@ describe("RuntimeEngine", () => {
       ["older"],
     );
 
-    const olderPageAgain = engine.getSessionHistoryPage(replay.session.session.id, {
+    const olderPageAgain = engine.getConversationEvidencePage(replay.session.session.id, {
       cursor: "older-1",
       limit: 2,
     });
@@ -2063,7 +2111,7 @@ describe("RuntimeEngine", () => {
       providerSessionId: "provider-1",
       preferStoredReplay: true,
     });
-    const firstPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    const firstPage = engine.getConversationEvidencePage(replay.session.session.id, { limit: 2 });
     assert.equal(firstPage.nextCursor, "older-1");
 
     adapter.pagesBySessionId.set("replay-1", {
@@ -2088,7 +2136,7 @@ describe("RuntimeEngine", () => {
       ]),
     });
 
-    const refreshedPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    const refreshedPage = engine.getConversationEvidencePage(replay.session.session.id, { limit: 2 });
     assert.deepEqual(
       refreshedPage.events.map((event) =>
         event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
@@ -2148,7 +2196,7 @@ describe("RuntimeEngine", () => {
       providerSessionId: "provider-1",
       preferStoredReplay: true,
     });
-    const replayPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    const replayPage = engine.getConversationEvidencePage(replay.session.session.id, { limit: 2 });
     assert.equal(replayPage.nextCursor, "older-1");
 
     const live = await engine.resumeSession({
@@ -2157,7 +2205,7 @@ describe("RuntimeEngine", () => {
       preferStoredReplay: false,
       historySourceSessionId: replay.session.session.id,
     });
-    const olderPage = engine.getSessionHistoryPage(live.session.session.id, {
+    const olderPage = engine.getConversationEvidencePage(live.session.session.id, {
       cursor: "older-1",
       limit: 2,
     });
@@ -2345,7 +2393,7 @@ describe("RuntimeEngine", () => {
         assert.match(transcript, /--model\|gpt-native-test/);
         assert.match(transcript, /--dangerously-bypass-approvals-and-sandbox/);
         assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
-      }, { timeoutMs: 5_000 });
+      }, { timeoutMs: 15_000 });
 
       await assert.rejects(
         () => engine.setSessionMode(sessionId, "plan"),
@@ -2376,8 +2424,11 @@ describe("RuntimeEngine", () => {
       const canceledEvents = engine.eventBus
         .list({ sessionIds: [sessionId] })
         .filter((event) => event.type === "turn.canceled");
-      assert.equal(canceledEvents.length, 1);
-      assert.equal(canceledEvents[0]?.turnId, "client-turn-native-1");
+      assert.equal(
+        canceledEvents.length,
+        0,
+        "terminal control must not synthesize provider conversation lifecycle",
+      );
       await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_CLEARED/);
       });
@@ -2459,7 +2510,7 @@ describe("RuntimeEngine", () => {
           summary.runtimeDiagnostics?.lastError ?? "",
           /invalid model claude-wrong-model/,
         );
-      }, { timeoutMs: 5_000 });
+      }, { timeoutMs: 15_000 });
 
       await engine.closeSession(sessionId, { clientId: "web-native-failing-claude" });
       assert.throws(() => engine.getSessionSummary(sessionId), /Unknown session/);
@@ -2523,7 +2574,7 @@ describe("RuntimeEngine", () => {
       assert.equal(started.session.controlLease.holderClientId, "web-user");
       await waitFor(() => {
         assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
-      }, { timeoutMs: 5_000 });
+      }, { timeoutMs: 15_000 });
 
       const detached = engine.detachSession(sessionId, { clientId: "web-native" });
       assert.equal(detached.attachedClients.length, 0);
@@ -2896,7 +2947,7 @@ describe("RuntimeEngine", () => {
         () => {
           assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
         },
-        { timeoutMs: 4_000 },
+        { timeoutMs: 15_000 },
       );
       await engine.closeSession(sessionId, { clientId: "web-native" });
     } finally {
@@ -3536,7 +3587,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("Claude native TUI mirror remains a history mirror instead of owning busy state", async () => {
+  test("Claude native TUI mirror does not let stale history complete the current Web turn", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-claude-stale-"));
     const fakeClaude = path.join(workspace, "fake-claude-stale.js");
@@ -3634,7 +3685,11 @@ describe("RuntimeEngine", () => {
             ),
         );
       });
-      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
+      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
+      assert.equal(
+        engine.getSessionSummary(sessionId).session.nativeTui?.promptState,
+        "agent_busy",
+      );
 
       engine.interruptSession(sessionId, { clientId: "web-native" });
       unsubscribe();
@@ -3660,7 +3715,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("Claude native TUI chat input bypasses hidden queue and clears known draft first", async () => {
+  test("Claude native TUI chat input replaces a known local draft", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-claude-dirty-mirror-"));
     const fakeClaude = path.join(workspace, "fake-claude-dirty-mirror.js");
@@ -3678,7 +3733,7 @@ describe("RuntimeEngine", () => {
         "process.stdout.write(`MOCK_CLAUDE_DIRTY_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
         "process.stdin.setEncoding('utf8');",
         "process.stdin.resume();",
-        "process.stdin.on('data', () => undefined);",
+        "process.stdin.on('data', () => process.stdout.write('>\\r\\n  bypass permissions on\\r\\n'));",
         "setInterval(() => undefined, 1000);",
         "",
       ].join("\n"),
@@ -3711,7 +3766,10 @@ describe("RuntimeEngine", () => {
         }
       });
       await waitFor(() => {
-        assert.match(transcript, /MOCK_CLAUDE_DIRTY_READY/);
+        assert.equal(
+          engine.getSessionSummary(sessionId).session.providerSessionId?.length,
+          36,
+        );
       });
 
       engine.onPtyInput(sessionId, "web-native", "partial local draft");
@@ -3726,8 +3784,9 @@ describe("RuntimeEngine", () => {
       const projectDir = path.join(claudeConfigDir, "projects", projectId);
       const now = new Date().toISOString();
       mkdirSync(projectDir, { recursive: true });
+      const claudeHistoryPath = path.join(projectDir, `${providerSessionId}.jsonl`);
       writeFileSync(
-        path.join(projectDir, `${providerSessionId}.jsonl`),
+        claudeHistoryPath,
         [
           JSON.stringify({
             type: "user",
@@ -3763,7 +3822,173 @@ describe("RuntimeEngine", () => {
       engine.sendInput(sessionId, { clientId: "web-native", text: "sent after draft" });
       await new Promise((resolve) => setTimeout(resolve, 100));
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
       assert.match(transcript, /sent after draft/);
+
+      engine.sendInput(sessionId, {
+        clientId: "web-native",
+        text: "queued after active Claude turn",
+      });
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.doesNotMatch(transcript, /queued after active Claude turn/);
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
+
+      const completedAt = new Date(Date.now() + 10).toISOString();
+      appendFileSync(
+        claudeHistoryPath,
+        [
+          JSON.stringify({
+            type: "user",
+            uuid: "claude-active-user",
+            cwd: workspace,
+            sessionId: providerSessionId,
+            timestamp: completedAt,
+            message: { content: "sent after draft" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "claude-active-assistant",
+            parentUuid: "claude-active-user",
+            cwd: workspace,
+            sessionId: providerSessionId,
+            timestamp: completedAt,
+            message: {
+              stop_reason: "end_turn",
+              content: [{ type: "text", text: "first active answer" }],
+            },
+          }),
+          JSON.stringify({
+            type: "system",
+            subtype: "turn_duration",
+            uuid: "claude-active-duration",
+            parentUuid: "claude-active-assistant",
+            cwd: workspace,
+            sessionId: providerSessionId,
+            timestamp: completedAt,
+            durationMs: 10,
+          }),
+        ].join("\n") + "\n",
+      );
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+        assert.match(transcript, /queued after active Claude turn/);
+      });
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
+
+      unsubscribe();
+      await engine.closeSession(sessionId, { clientId: "web-native" });
+    } finally {
+      if (previousClaudeBinary === undefined) {
+        delete process.env.RAH_CLAUDE_BINARY;
+      } else {
+        process.env.RAH_CLAUDE_BINARY = previousClaudeBinary;
+      }
+      if (previousClaudeConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+      }
+      if (previousMirrorInterval === undefined) {
+        delete process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
+      } else {
+        process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = previousMirrorInterval;
+      }
+      await engine.shutdown();
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  });
+
+  test("Claude late persisted user activity cannot reopen an interrupted turn", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-claude-late-cancel-"));
+    const fakeClaude = path.join(workspace, "fake-claude-late-cancel.js");
+    const previousClaudeBinary = process.env.RAH_CLAUDE_BINARY;
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const previousMirrorInterval = process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
+    process.env.CLAUDE_CONFIG_DIR = path.join(workspace, "claude-config");
+    process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = "25";
+    writeFileSync(
+      fakeClaude,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write('MOCK_CLAUDE_LATE_CANCEL_READY\\r\\n');",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.resume();",
+        "process.stdin.on('data', (chunk) => process.stdout.write(`MOCK_INPUT:${chunk}\\r\\n`));",
+        "setInterval(() => undefined, 1000);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeClaude, 0o755);
+    process.env.RAH_CLAUDE_BINARY = fakeClaude;
+
+    try {
+      const started = await engine.startSession({
+        provider: "claude",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        attach: {
+          client: {
+            id: "web-native",
+            kind: "web",
+            connectionId: "web-native",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const sessionId = started.session.session.id;
+      const providerSessionId = started.session.session.providerSessionId;
+      assert.ok(providerSessionId);
+
+      let transcript = "";
+      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+        if (frame.type === "pty.replay") {
+          transcript += frame.chunks.join("");
+        } else if (frame.type === "pty.output") {
+          transcript += frame.data;
+        }
+      });
+      await waitFor(() => assert.match(transcript, /MOCK_CLAUDE_LATE_CANCEL_READY/));
+
+      const interruptedPrompt = "interrupt before persisted user activity";
+      const recoveryPrompt = "recovery after persisted user activity";
+      engine.sendInput(sessionId, { clientId: "web-native", text: interruptedPrompt });
+      engine.interruptSession(sessionId, { clientId: "web-native" });
+      engine.sendInput(sessionId, { clientId: "web-native", text: recoveryPrompt });
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+
+      const projectId = workspace.replace(/[^a-zA-Z0-9]/g, "-");
+      const projectDir = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", projectId);
+      mkdirSync(projectDir, { recursive: true });
+      const userUuid = "claude-late-cancel-user";
+      writeFileSync(
+        path.join(projectDir, `${providerSessionId}.jsonl`),
+        `${JSON.stringify({
+          type: "user",
+          uuid: userUuid,
+          cwd: workspace,
+          sessionId: providerSessionId,
+          timestamp: new Date().toISOString(),
+          message: { content: interruptedPrompt },
+        })}\n`,
+      );
+
+      await waitFor(() => {
+        assert.ok(
+          engine.eventBus
+            .list({ sessionIds: [sessionId] })
+            .some(
+              (event) =>
+                event.type === "turn.canceled" && event.turnId === `turn:${userUuid}`,
+            ),
+        );
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+        assert.match(transcript, new RegExp(recoveryPrompt));
+      });
 
       unsubscribe();
       await engine.closeSession(sessionId, { clientId: "web-native" });

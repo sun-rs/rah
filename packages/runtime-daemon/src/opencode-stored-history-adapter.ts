@@ -1,7 +1,7 @@
 import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
-  SessionHistoryPageResponse,
+  ConversationEvidencePage,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type {
@@ -9,6 +9,7 @@ import type {
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
+import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import {
   archiveOpenCodeStoredSession,
   createOpenCodeStoredSessionFrozenHistoryPageLoader,
@@ -68,10 +69,10 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
     }
   }
 
-  getSessionHistoryPage(
+  getConversationEvidencePage(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
+  ): ConversationEvidencePage {
     void options?.cursor;
     const record = this.findRecordForRuntimeSession(sessionId);
     if (!record) {
@@ -106,6 +107,17 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
   refreshStoredSessionsCatalog(): StoredSessionRef[] {
     this.refreshStoredSessionIndex();
     return this.listStoredSessions();
+  }
+
+  hydrateStoredSessionsCatalog(records: readonly StoredSessionCatalogRecord[]): void {
+    this.storedSessionIndex = new Map(
+      records
+        .filter((record) => record.ref.provider === "opencode")
+        .map((record) => [
+          record.ref.providerSessionId,
+          { ref: record.ref, databasePath: record.storagePath },
+        ] as const),
+    );
   }
 
   listStoredSessionWatchRoots(): string[] {

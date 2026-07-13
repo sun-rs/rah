@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  decisionFromPermissionActionId,
+  normalizePermissionDecision,
+} from "./api";
 import { validateProviderModelCatalog, validateRahEvent } from "./contract";
 
 const baseCatalog = {
@@ -17,6 +21,14 @@ const baseCatalog = {
     },
   ],
 };
+
+test("permission helpers normalize provider-native decisions at the adapter boundary", () => {
+  assert.equal(normalizePermissionDecision("accept"), "approved");
+  assert.equal(normalizePermissionDecision("acceptForSession"), "approved_for_session");
+  assert.equal(normalizePermissionDecision("decline"), "denied");
+  assert.equal(normalizePermissionDecision("cancel"), "abort");
+  assert.equal(decisionFromPermissionActionId("acceptForSession"), "approved_for_session");
+});
 
 test("provider model catalog accepts canonical mode apply timing", () => {
   const report = validateProviderModelCatalog(baseCatalog);
@@ -140,7 +152,6 @@ function buildSessionCreatedEvent(
           contextUsage: true,
           resumeByProvider: true,
           listProviderSessions: true,
-          renameSession: false,
           actions: {
             info: true,
             stop: true,
@@ -160,6 +171,171 @@ function buildSessionCreatedEvent(
     },
   } as Parameters<typeof validateRahEvent>[0];
 }
+
+test("session events reject runtime and user status disagreement", () => {
+  const issues = validateRahEvent(
+    buildSessionCreatedEvent({ runtimeState: "stopped", status: "running" }),
+  );
+  assert.equal(
+    issues.some((issue) => issue.code === "session.status.runtime_mismatch"),
+    true,
+  );
+});
+
+test("session events reject non-boolean optional archive capability", () => {
+  const event = buildSessionCreatedEvent();
+  const payload = event.payload as {
+    session: { capabilities: { actions: { archive?: unknown } } };
+  };
+  payload.session.capabilities.actions.archive = "yes";
+  const issues = validateRahEvent(event);
+  assert.equal(
+    issues.some((issue) => issue.code === "session.capabilities.actions.archive.invalid"),
+    true,
+  );
+});
+
+test("session events accept canonical native branching and side relationships", () => {
+  const event = buildSessionCreatedEvent({
+    capabilities: {
+      ...((buildSessionCreatedEvent().payload as { session: { capabilities: object } }).session.capabilities),
+      branching: { sameWorkspace: true, worktree: false, side: true },
+    },
+    relationship: {
+      parentSessionId: "session-parent",
+      parentProviderSessionId: "thread-parent",
+      forkPointTurnId: "turn-7",
+      kind: "side",
+      workspaceMode: "shared",
+      persistence: "ephemeral",
+      sideState: "completed",
+    },
+  });
+  const issues = validateRahEvent(event);
+  assert.equal(issues.some((issue) => issue.severity === "error"), false);
+});
+
+test("session events reject invalid branch relationships", () => {
+  const issues = validateRahEvent(
+    buildSessionCreatedEvent({
+      relationship: {
+        parentSessionId: "session-parent",
+        kind: "copy",
+        workspaceMode: "shared",
+        persistence: "temporary",
+      },
+    }),
+  );
+  assert.equal(
+    issues.some((issue) => issue.code === "session.relationship.kind.invalid"),
+    true,
+  );
+  assert.equal(
+    issues.some((issue) => issue.code === "session.relationship.persistence.invalid"),
+    true,
+  );
+});
+
+test("session events reject non-canonical Side and Fork relationship combinations", () => {
+  const sideIssues = validateRahEvent(
+    buildSessionCreatedEvent({
+      relationship: {
+        parentSessionId: "parent-session",
+        kind: "side",
+        workspaceMode: "worktree",
+        persistence: "persistent",
+      },
+    }),
+  );
+  assert.equal(
+    sideIssues.some((issue) => issue.code === "session.relationship.side_workspace.invalid"),
+    true,
+  );
+  assert.equal(
+    sideIssues.some(
+      (issue) => issue.code === "session.relationship.persistence_mismatch.invalid",
+    ),
+    true,
+  );
+
+  const forkIssues = validateRahEvent(
+    buildSessionCreatedEvent({
+      relationship: {
+        parentSessionId: "parent-session",
+        kind: "fork",
+        workspaceMode: "shared",
+        persistence: "ephemeral",
+      },
+    }),
+  );
+  assert.equal(
+    forkIssues.some(
+      (issue) => issue.code === "session.relationship.persistence_mismatch.invalid",
+    ),
+    true,
+  );
+
+  const forkLifecycleIssues = validateRahEvent(
+    buildSessionCreatedEvent({
+      relationship: {
+        parentSessionId: "parent-session",
+        kind: "fork",
+        workspaceMode: "shared",
+        persistence: "persistent",
+        sideState: "completed",
+      },
+    }),
+  );
+  assert.equal(
+    forkLifecycleIssues.some(
+      (issue) => issue.code === "session.relationship.fork_side_state.invalid",
+    ),
+    true,
+  );
+});
+
+test("Side lifecycle and close disposition events enforce canonical states", () => {
+  const base = {
+    id: "evt-side-state",
+    seq: 1,
+    ts: "2026-04-29T00:00:00.000Z",
+    sessionId: "session-side",
+    source: { provider: "system", channel: "system", authority: "authoritative" },
+  } as const;
+  const validStateIssues = validateRahEvent({
+    ...base,
+    type: "session.side.state.changed",
+    payload: { state: "cleanup_failed", detail: "unsubscribe failed" },
+  });
+  assert.equal(validStateIssues.some((issue) => issue.severity === "error"), false);
+
+  const invalidStateIssues = validateRahEvent({
+    ...base,
+    type: "session.side.state.changed",
+    payload: { state: "done" },
+  } as unknown as Parameters<typeof validateRahEvent>[0]);
+  assert.equal(
+    invalidStateIssues.some((issue) => issue.code === "session.side.state.invalid"),
+    true,
+  );
+
+  const validCloseIssues = validateRahEvent({
+    ...base,
+    type: "session.closed",
+    payload: { disposition: "parent_closed" },
+  });
+  assert.equal(validCloseIssues.some((issue) => issue.severity === "error"), false);
+
+  const invalidCloseIssues = validateRahEvent({
+    ...base,
+    type: "session.closed",
+    payload: { disposition: "expired" },
+  } as unknown as Parameters<typeof validateRahEvent>[0]);
+  assert.equal(
+    invalidCloseIssues.some((issue) => issue.code === "session.closed.disposition.invalid"),
+    true,
+  );
+});
 
 test("session events accept canonical runtime diagnostics", () => {
   const issues = validateRahEvent(
@@ -236,70 +412,6 @@ test("provider model catalog rejects non-canonical mode apply timing", () => {
   });
   assert.equal(report.ok, false);
   assert.equal(report.errors[0]?.code, "provider.catalog.mode.apply_timing.invalid");
-});
-
-test("session capability contract warns when legacy rename flag drifts from actions.rename", () => {
-  const issues = validateRahEvent({
-    id: "evt-1",
-    seq: 1,
-    ts: "2026-04-29T00:00:00.000Z",
-    sessionId: "session-1",
-    type: "session.created",
-    source: { provider: "system", channel: "system", authority: "authoritative" },
-    payload: {
-      session: {
-        id: "session-1",
-        provider: "opencode",
-        providerSessionId: "opencode-1",
-        launchSource: "web",
-        cwd: "/tmp/rah",
-        rootDir: "/tmp/rah",
-        status: "running",
-        phase: "ready",
-        runtimeState: "idle",
-        runtime: {
-          kind: "tui_mux_fallback",
-          protocolStability: "tui_stdio",
-          liveSource: "provider_history",
-          tuiRole: "session_owner",
-          structuredLiveEvents: false,
-          tuiContinuity: true,
-        },
-        ptyId: "pty-1",
-        capabilities: {
-          liveAttach: true,
-          structuredTimeline: true,
-          nativeTui: false,
-          rawPtyInput: false,
-          chatMirror: false,
-          structuredControl: true,
-          livePermissions: false,
-          contextUsage: true,
-          resumeByProvider: true,
-          listProviderSessions: true,
-          renameSession: false,
-          actions: {
-            info: true,
-            stop: true,
-            delete: true,
-            rename: "local",
-          },
-          steerInput: true,
-          queuedInput: false,
-          modelSwitch: true,
-          planMode: true,
-          subagents: false,
-        },
-        createdAt: "2026-04-29T00:00:00.000Z",
-        updatedAt: "2026-04-29T00:00:00.000Z",
-      },
-    },
-  });
-  assert.equal(issues.some((issue) => issue.severity === "error"), false);
-  assert.equal(
-    issues.some((issue) => issue.code === "session.capabilities.rename_legacy_mismatch"),
-    true,
-  );
 });
 
 test("native TUI prompt state events use canonical values", () => {

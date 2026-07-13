@@ -9,6 +9,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { isAllowedOrigin } from "./http-server-cors";
+import type { DeviceAuthManager } from "./device-auth";
 
 const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
@@ -152,14 +153,22 @@ function conversationDeltasForEvents(engine: RuntimeEngine, events: readonly Rah
 export function attachWebSocketHandlers(
   server: Server,
   engine: RuntimeEngine,
+  auth?: DeviceAuthManager,
 ): {
-  close(): void;
+  close(): Promise<void>;
 } {
   const wssEvents = new WebSocketServer({ noServer: true });
   const wssPty = new WebSocketServer({ noServer: true });
   const stopHeartbeat = installWebSocketHeartbeat([wssEvents, wssPty]);
+  let closePromise: Promise<void> | undefined;
 
   wssEvents.on("connection", (socket, req) => {
+    const principal = auth?.authenticate(req);
+    const unsubscribeRevocation = principal?.kind === "device"
+      ? auth?.subscribeDeviceRevocation(principal.device.id, () => {
+          socket.close(4001, "device trust revoked");
+        })
+      : undefined;
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const replayFromSeq = url.searchParams.get("replayFromSeq");
     const sendEventFrame = (message: unknown): boolean => sendJsonWithBackpressure(socket, message, {
@@ -227,10 +236,17 @@ export function attachWebSocketHandlers(
 
     socket.on("close", () => {
       unsubscribe();
+      unsubscribeRevocation?.();
     });
   });
 
   wssPty.on("connection", (socket, req) => {
+    const principal = auth?.authenticate(req);
+    const unsubscribeRevocation = principal?.kind === "device"
+      ? auth?.subscribeDeviceRevocation(principal.device.id, () => {
+          socket.close(4001, "device trust revoked");
+        })
+      : undefined;
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const match = /^\/api\/pty\/([^/]+)$/.exec(url.pathname);
     if (!match) {
@@ -362,6 +378,7 @@ export function attachWebSocketHandlers(
     });
 
     socket.on("close", () => {
+      unsubscribeRevocation?.();
       if (pendingOutputTimer) {
         clearTimeout(pendingOutputTimer);
         pendingOutputTimer = null;
@@ -379,9 +396,16 @@ export function attachWebSocketHandlers(
     });
   });
 
-  server.on("upgrade", (req, socket, head) => {
+  const handleUpgrade: Parameters<Server["on"]>[1] = (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname.startsWith("/api/") && !isAllowedOrigin(req)) {
+      socket.destroy();
+      return;
+    }
+    if (url.pathname.startsWith("/api/") && auth && !auth.authenticate(req)) {
+      socket.write(
+        "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+      );
       socket.destroy();
       return;
     }
@@ -398,13 +422,49 @@ export function attachWebSocketHandlers(
       return;
     }
     socket.destroy();
-  });
+  };
+  server.on("upgrade", handleUpgrade);
+
+  const closeWebSocketServer = (webSocketServer: WebSocketServer): Promise<void> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(forceTimer);
+        resolve();
+      };
+      const forceTimer = setTimeout(() => {
+        for (const client of webSocketServer.clients) {
+          client.terminate();
+        }
+        finish();
+      }, 500);
+      forceTimer.unref?.();
+
+      webSocketServer.close(finish);
+      for (const client of webSocketServer.clients) {
+        try {
+          client.close(1001, "RAH daemon is shutting down");
+        } catch {
+          client.terminate();
+        }
+      }
+    });
 
   return {
     close() {
-      stopHeartbeat();
-      wssEvents.close();
-      wssPty.close();
+      if (!closePromise) {
+        server.off("upgrade", handleUpgrade);
+        stopHeartbeat();
+        closePromise = Promise.all([
+          closeWebSocketServer(wssEvents),
+          closeWebSocketServer(wssPty),
+        ]).then(() => undefined);
+      }
+      return closePromise;
     },
   };
 }

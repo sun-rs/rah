@@ -540,3 +540,68 @@ test("frozen history pages reanchor provider-local event ids across cursors", ()
   assert.equal(initialPage.events[0]?.id, olderPage.events[1]?.id);
   assert.notEqual(initialPage.events[0]?.id, olderPage.events[0]?.id);
 });
+
+test("frozen history snapshots reuse an unchanged initial page without translating it again", () => {
+  const store = new HistorySnapshotStore();
+  let revision = "revision-one";
+  let initialLoads = 0;
+  const loadFrozenPage = (): FrozenHistoryPageLoader => {
+    const boundary: FrozenHistoryBoundary = {
+      kind: "frozen",
+      sourceRevision: revision,
+    };
+    return {
+      boundary,
+      loadInitialPage: (limit) => {
+        initialLoads += 1;
+        return {
+          boundary,
+          events: [
+            timelineEvent({
+              id: `${revision}-${limit}`,
+              seq: 1,
+              ts: "2026-05-03T00:00:00.000Z",
+              canonicalItemId: `${revision}-${limit}`,
+              text: `${revision}:${limit}`,
+            }),
+          ],
+        };
+      },
+      loadOlderPage: () => ({ boundary, events: [] }),
+    };
+  };
+
+  const initial = store.getPage({
+    sessionId: "target-session",
+    limit: 20,
+    loadEvents: () => [],
+    loadFrozenPage,
+  });
+  const repeated = store.getPage({
+    sessionId: "target-session",
+    limit: 20,
+    loadEvents: () => [],
+    loadFrozenPage,
+  });
+  assert.equal(initialLoads, 1);
+  assert.equal(repeated, initial);
+
+  const wider = store.getPage({
+    sessionId: "target-session",
+    limit: 30,
+    loadEvents: () => [],
+    loadFrozenPage,
+  });
+  assert.equal(initialLoads, 2);
+  assert.deepEqual(wider.events.map(timelineText), ["revision-one:30"]);
+
+  revision = "revision-two";
+  const refreshed = store.getPage({
+    sessionId: "target-session",
+    limit: 30,
+    loadEvents: () => [],
+    loadFrozenPage,
+  });
+  assert.equal(initialLoads, 3);
+  assert.deepEqual(refreshed.events.map(timelineText), ["revision-two:30"]);
+});

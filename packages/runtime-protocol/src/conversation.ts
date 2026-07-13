@@ -29,6 +29,31 @@ export type ConversationItemStatus =
 
 export type ConversationItemRole = "user" | "process" | "final" | "system";
 
+export type ConversationActivityKind =
+  | "thinking"
+  | "command"
+  | "file_read"
+  | "file_change"
+  | "search"
+  | "web"
+  | "git"
+  | "subagent"
+  | "permission"
+  | "plan"
+  | "automation"
+  | "tool";
+
+export interface ConversationActivitySummary {
+  kind: ConversationActivityKind;
+  totalCount: number;
+  runningCount: number;
+  interruptedCount: number;
+  /** A provider/tool transport failure, not an ordinary non-zero command result. */
+  failureCount: number;
+  /** A completed operation whose result needs review, such as a failing test command. */
+  issueCount: number;
+}
+
 export interface ConversationProjectionSource {
   provider: ProviderKind;
   channel: EventChannel;
@@ -69,6 +94,42 @@ export interface ConversationError {
   detail?: JsonObject;
 }
 
+export type ConversationResourceKind =
+  | "file"
+  | "image"
+  | "url"
+  | "commit"
+  | "pull_request"
+  | "review";
+
+export type ConversationResourceConfidence = "authoritative" | "inferred";
+
+export interface ConversationResourceProjectionBase {
+  /** Stable across history hydration and live replacement for the same locator. */
+  id: string;
+  kind: ConversationResourceKind;
+  label: string;
+  path?: string;
+  url?: string;
+  mimeType?: string;
+  confidence: ConversationResourceConfidence;
+  sourceItemIds: string[];
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+}
+
+export type ConversationOutputActivity = "written" | "updated" | "generated";
+
+export interface ConversationOutputProjection extends ConversationResourceProjectionBase {
+  activity: ConversationOutputActivity;
+}
+
+export type ConversationSourceActivity = "provided" | "read" | "searched" | "fetched";
+
+export interface ConversationSourceProjection extends ConversationResourceProjectionBase {
+  activities: ConversationSourceActivity[];
+}
+
 export interface ConversationTurnProjection {
   id: string;
   provider: ProviderKind;
@@ -80,6 +141,12 @@ export interface ConversationTurnProjection {
   completedAt?: string;
   durationMs?: number;
   items: ConversationItemProjection[];
+  /** Provider-neutral semantic summary of this turn's process activity. */
+  activities: ConversationActivitySummary[];
+  /** Provider-neutral resources produced by this turn. */
+  outputs?: ConversationOutputProjection[];
+  /** Provider-neutral resources consulted or supplied to this turn. */
+  sources?: ConversationSourceProjection[];
   finalAnswerItemId?: string;
   failedItemCount: number;
   /** Whether this turn contains only a lightweight item summary or hydrated items. */

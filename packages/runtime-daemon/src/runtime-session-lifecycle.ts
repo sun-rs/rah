@@ -22,6 +22,10 @@ import { EventBus } from "./event-bus";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
 import { isReadOnlyReplaySession } from "./workbench-directory-utils";
+import {
+  isSideSession,
+  setSessionSideLifecycleState,
+} from "./session-side-lifecycle";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -54,6 +58,66 @@ type RuntimeSessionLifecycleDeps = {
 
 export class RuntimeSessionLifecycle {
   constructor(private readonly deps: RuntimeSessionLifecycleDeps) {}
+
+  private removeConfirmedSession(
+    sessionId: string,
+    request: CloseSessionRequest,
+    disposition: "stopped" | "discarded" | "parent_closed",
+  ): void {
+    if (disposition === "discarded" || disposition === "parent_closed") {
+      setSessionSideLifecycleState(this.deps, sessionId, "discarded");
+    }
+    this.deps.sessionStore.removeSession(sessionId);
+    this.deps.ptyHub.removeSession(sessionId);
+    this.deps.historySnapshots.clear(sessionId);
+    this.deps.removeStructuredSessionOwner(sessionId);
+    this.deps.eventBus.publish({
+      sessionId,
+      type: "session.closed",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: request.clientId,
+        disposition,
+      },
+    });
+  }
+
+  private markSideCleanupFailed(sessionId: string, error: unknown): void {
+    setSessionSideLifecycleState(
+      this.deps,
+      sessionId,
+      "cleanup_failed",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  private async closeEphemeralChildSessions(
+    parentSessionId: string,
+    request: CloseSessionRequest,
+  ): Promise<void> {
+    const children = this.deps.sessionStore.listSessions().filter(
+      (state) =>
+        state.session.relationship?.parentSessionId === parentSessionId &&
+        state.session.relationship.persistence === "ephemeral",
+    );
+    for (const child of children) {
+      try {
+        await this.closeEphemeralChildSessions(child.session.id, request);
+        await this.deps.terminals.closeNativeLocalServerTuiClient(child.session.id);
+        const adapter = this.deps.requireStructuredLifecycleAdapter(child.session.id);
+        if (typeof adapter.destroySession !== "function") {
+          throw new Error(
+            `Provider ${child.session.provider} cannot destroy Side session ${child.session.id}.`,
+          );
+        }
+        await adapter.destroySession(child.session.id);
+      } catch (error) {
+        this.markSideCleanupFailed(child.session.id, error);
+        throw error;
+      }
+      this.removeConfirmedSession(child.session.id, request, "parent_closed");
+    }
+  }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
     const state = this.deps.sessionStore.attachClient({
@@ -207,7 +271,6 @@ export class RuntimeSessionLifecycle {
     return await adapter.setSessionModel(sessionId, {
       modelId: nextModelId,
       ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
-      ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
     });
   }
 
@@ -219,53 +282,32 @@ export class RuntimeSessionLifecycle {
     if (!this.deps.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
       throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
     }
+    await this.closeEphemeralChildSessions(sessionId, request);
     this.deps.rememberSession(state);
     this.deps.refreshRememberedState();
     if (await this.deps.terminals.closeNativeTuiSession(sessionId)) {
-      this.deps.sessionStore.removeSession(sessionId);
-      this.deps.ptyHub.removeSession(sessionId);
-      this.deps.historySnapshots.clear(sessionId);
-      this.deps.removeStructuredSessionOwner(sessionId);
-      this.deps.eventBus.publish({
-        sessionId,
-        type: "session.closed",
-        source: SYSTEM_SOURCE,
-        payload: {
-          clientId: request.clientId,
-        },
-      });
+      this.removeConfirmedSession(sessionId, request, "stopped");
       return;
     }
     if (isReadOnlyReplaySession(state)) {
-      this.deps.sessionStore.removeSession(sessionId);
-      this.deps.ptyHub.removeSession(sessionId);
-      this.deps.historySnapshots.clear(sessionId);
-      this.deps.removeStructuredSessionOwner(sessionId);
-      this.deps.eventBus.publish({
-        sessionId,
-        type: "session.closed",
-        source: SYSTEM_SOURCE,
-        payload: {
-          clientId: request.clientId,
-        },
-      });
+      this.removeConfirmedSession(sessionId, request, "stopped");
       return;
     }
-    await this.deps.terminals.closeNativeLocalServerTuiClient(sessionId);
-    const adapter = this.deps.requireStructuredLifecycleAdapter(sessionId);
-    await adapter.closeSession?.(sessionId, request);
-    this.deps.sessionStore.removeSession(sessionId);
-    this.deps.ptyHub.removeSession(sessionId);
-    this.deps.historySnapshots.clear(sessionId);
-    this.deps.removeStructuredSessionOwner(sessionId);
-    this.deps.eventBus.publish({
+    try {
+      await this.deps.terminals.closeNativeLocalServerTuiClient(sessionId);
+      const adapter = this.deps.requireStructuredLifecycleAdapter(sessionId);
+      await adapter.closeSession?.(sessionId, request);
+    } catch (error) {
+      if (isSideSession(state.session)) {
+        this.markSideCleanupFailed(sessionId, error);
+      }
+      throw error;
+    }
+    this.removeConfirmedSession(
       sessionId,
-      type: "session.closed",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.clientId,
-      },
-    });
+      request,
+      isSideSession(state.session) ? "discarded" : "stopped",
+    );
   }
 
   detachSession(sessionId: string, request: DetachSessionRequest): SessionSummary {

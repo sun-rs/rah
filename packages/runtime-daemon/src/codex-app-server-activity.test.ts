@@ -6,9 +6,11 @@ import {
   createCodexAppServerTranslationState,
   mapCodexPermissionResolution,
   mapCodexQuestionRequestToActivities,
+  recordCodexSubmittedUserMessage,
   translateCodexAppServerNotification,
   translateCodexAppServerThreadSnapshot,
 } from "./codex-app-server-activity";
+import { reconcileCodexTrailingTurnLiveness } from "./codex-app-server-turns-page";
 import { createCodexTimelineIdentity } from "./codex-timeline-identity";
 
 function hasInvalidStreamObservation(items: ReturnType<typeof translateCodexAppServerNotification>): boolean {
@@ -690,7 +692,11 @@ describe("translateCodexAppServerNotification", () => {
       {
         method: "turn/plan/updated",
         params: {
-          plan: [{ step: "Review files", status: "in_progress" }, { step: "Apply patch" }],
+          explanation: "Implement in two passes.",
+          plan: [
+            { step: "Review files", status: "inProgress" },
+            { step: "Apply patch", status: "completed" },
+          ],
         },
       },
       state,
@@ -731,7 +737,15 @@ describe("translateCodexAppServerNotification", () => {
 
     assert.deepEqual(plan[0]?.activity, {
       type: "timeline_item",
-      item: { kind: "plan", text: "- Review files\n- Apply patch" },
+      item: {
+        kind: "plan",
+        text: "- Review files\n- Apply patch",
+        explanation: "Implement in two passes.",
+        steps: [
+          { text: "Review files", status: "in_progress" },
+          { text: "Apply patch", status: "completed" },
+        ],
+      },
     });
     assert.equal(patchStarted[0]?.activity.type, "observation_started");
     assert.equal(patchStarted[1]?.activity.type, "tool_call_started");
@@ -851,6 +865,51 @@ describe("translateCodexAppServerNotification", () => {
         },
       },
     ]);
+  });
+
+  test("projects client input at turn start and absorbs the later native user echo", () => {
+    const state = createCodexAppServerTranslationState();
+    recordCodexSubmittedUserMessage(state, {
+      text: "连续提问",
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+    const started = translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1" } },
+      },
+      state,
+    );
+    const startedUser = started.find(
+      (item) => item.activity.type === "timeline_item",
+    )?.activity;
+    const activities = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-1",
+            content: [{ type: "text", text: "连续提问" }],
+          },
+        },
+      },
+      state,
+    );
+    assert.deepEqual(
+      started.map((item) => item.activity.type),
+      ["turn_started", "timeline_item"],
+    );
+    assert.deepEqual(startedUser?.type === "timeline_item" ? startedUser.item : null, {
+      kind: "user_message",
+      text: "连续提问",
+      messageId: "client-message-1",
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+    assert.deepEqual(activities, []);
   });
 
   test("maps live image user messages without exposing data urls as text", () => {
@@ -1778,6 +1837,79 @@ describe("translateCodexAppServerThreadSnapshot", () => {
         state: "idle",
       },
     ]);
+  });
+
+  test("keeps an unterminated trailing stored turn active while its source is live", () => {
+    const page = {
+      data: [
+        {
+          id: "turn-live",
+          status: "interrupted",
+          startedAt: 100,
+          completedAt: null,
+          durationMs: null,
+          items: [],
+        },
+      ],
+    };
+
+    const reconciled = reconcileCodexTrailingTurnLiveness(page, {
+      latestPage: true,
+      sourceSettled: false,
+      fallbackCompletedAtMs: 106_000,
+    });
+
+    assert.equal((reconciled.data[0] as Record<string, unknown>).status, "inProgress");
+    assert.equal((page.data[0] as Record<string, unknown>).status, "interrupted");
+  });
+
+  test("uses the stable rollout boundary for an unterminated settled turn", () => {
+    const page = {
+      data: [
+        {
+          id: "turn-settled",
+          status: "interrupted",
+          startedAt: 100,
+          completedAt: null,
+          durationMs: null,
+          items: [],
+        },
+      ],
+    };
+
+    const reconciled = reconcileCodexTrailingTurnLiveness(page, {
+      latestPage: true,
+      sourceSettled: true,
+      fallbackCompletedAtMs: 106_000,
+    });
+    const turn = reconciled.data[0] as Record<string, unknown>;
+
+    assert.equal(turn.status, "interrupted");
+    assert.equal(turn.completedAt, 106);
+    assert.equal(turn.durationMs, 6_000);
+  });
+
+  test("preserves explicit native interruption timing", () => {
+    const page = {
+      data: [
+        {
+          id: "turn-explicit",
+          status: "interrupted",
+          startedAt: 100,
+          completedAt: 102,
+          durationMs: 2_000,
+          items: [],
+        },
+      ],
+    };
+
+    assert.equal(
+      reconcileCodexTrailingTurnLiveness(page, {
+        latestPage: true,
+        sourceSettled: false,
+      }),
+      page,
+    );
   });
 });
 

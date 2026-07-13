@@ -320,6 +320,22 @@ export class TmuxMuxBackend implements MuxRuntime {
     await this.exec(["send-keys", "-t", paneId, "-l", text]);
   }
 
+  async pasteText(_sessionName: string, paneId: MuxPaneId, text: string): Promise<void> {
+    if (text.length === 0) {
+      return;
+    }
+    const bufferName = `rah-${randomBytes(8).toString("hex")}`;
+    await this.exec(["set-buffer", "-b", bufferName, text]);
+    try {
+      // `-p` adds bracketed-paste markers when the target application has
+      // enabled them, so a terminal composer consumes the prompt atomically.
+      await this.exec(["paste-buffer", "-p", "-d", "-b", bufferName, "-t", paneId]);
+    } catch (error) {
+      await this.exec(["delete-buffer", "-b", bufferName]).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async writeBytes(sessionName: string, paneId: MuxPaneId, data: string): Promise<void> {
     let literal = "";
     const flushLiteral = async () => {

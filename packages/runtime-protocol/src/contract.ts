@@ -22,9 +22,10 @@ import type {
   ToolFamily,
   WorkbenchObservation,
 } from "./events";
-import type {
-  ConversationPhase,
-  ConversationStatus,
+import {
+  conversationStateFromRuntimeState,
+  type ConversationPhase,
+  type ConversationStatus,
 } from "./conversation-state";
 import type {
   ClientKind,
@@ -73,6 +74,7 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "session.detached": "session",
   "session.closed": "session",
   "session.state.changed": "session",
+  "session.side.state.changed": "session",
   "session.native_tui.prompt_state.changed": "session",
   "session.exited": "session",
   "session.failed": "session",
@@ -630,7 +632,6 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
     "contextUsage",
     "resumeByProvider",
     "listProviderSessions",
-    "renameSession",
     "steerInput",
     "queuedInput",
     "modelSwitch",
@@ -669,6 +670,18 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
       );
     }
   }
+  if (
+    capabilities.actions.archive !== undefined &&
+    typeof capabilities.actions.archive !== "boolean"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.capabilities.actions.archive.invalid",
+      "session capability actions.archive must be boolean when present",
+      `${path}.actions.archive`,
+    );
+  }
   if (!["none", "local", "native"].includes(capabilities.actions.rename as string)) {
     addIssue(
       sink,
@@ -677,16 +690,137 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
       "session capability actions.rename must be none, local, or native",
       `${path}.actions.rename`,
     );
-  } else if (
-    typeof capabilities.renameSession === "boolean" &&
-    capabilities.renameSession !== (capabilities.actions.rename !== "none")
+  }
+  if (capabilities.branching !== undefined) {
+    if (!isRecord(capabilities.branching)) {
+      addIssue(
+        sink,
+        "error",
+        "session.capabilities.branching.invalid",
+        "session branching capabilities must be an object",
+        `${path}.branching`,
+      );
+    } else {
+      for (const field of ["sameWorkspace", "worktree", "side"] as const) {
+        if (typeof capabilities.branching[field] !== "boolean") {
+          addIssue(
+            sink,
+            "error",
+            "session.capabilities.branching.field.invalid",
+            `session branching capability ${field} must be boolean`,
+            `${path}.branching.${field}`,
+          );
+        }
+      }
+    }
+  }
+}
+
+function validateSessionRelationship(relationship: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(relationship)) {
+    addIssue(sink, "error", "session.relationship.invalid", "session relationship must be an object", path);
+    return;
+  }
+  if (!isNonEmptyString(relationship.parentSessionId)) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.parent.invalid",
+      "session relationship parentSessionId must be non-empty",
+      `${path}.parentSessionId`,
+    );
+  }
+  if (!isOptionalString(relationship.parentProviderSessionId)) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.parent_provider.invalid",
+      "session relationship parentProviderSessionId must be a string when present",
+      `${path}.parentProviderSessionId`,
+    );
+  }
+  if (!isOptionalString(relationship.forkPointTurnId)) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.fork_point.invalid",
+      "session relationship forkPointTurnId must be a string when present",
+      `${path}.forkPointTurnId`,
+    );
+  }
+  if (!(["fork", "side"] as const).includes(relationship.kind as "fork" | "side")) {
+    addIssue(sink, "error", "session.relationship.kind.invalid", "session relationship kind is invalid", `${path}.kind`);
+  }
+  if (!(["shared", "worktree"] as const).includes(relationship.workspaceMode as "shared" | "worktree")) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.workspace_mode.invalid",
+      "session relationship workspaceMode is invalid",
+      `${path}.workspaceMode`,
+    );
+  }
+  if (!(["persistent", "ephemeral"] as const).includes(relationship.persistence as "persistent" | "ephemeral")) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.persistence.invalid",
+      "session relationship persistence is invalid",
+      `${path}.persistence`,
+    );
+  }
+  if (relationship.kind === "side" && relationship.workspaceMode !== "shared") {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.side_workspace.invalid",
+      "side relationships must share the parent workspace",
+      `${path}.workspaceMode`,
+    );
+  }
+  if (
+    relationship.sideState !== undefined &&
+    !["ready", "active", "completed", "expired", "cleanup_failed", "discarded"].includes(
+      relationship.sideState as string,
+    )
   ) {
     addIssue(
       sink,
-      "warning",
-      "session.capabilities.rename_legacy_mismatch",
-      "legacy renameSession should match actions.rename support",
-      `${path}.renameSession`,
+      "error",
+      "session.relationship.side_state.invalid",
+      "session relationship sideState is not canonical",
+      `${path}.sideState`,
+    );
+  }
+  if (!isOptionalString(relationship.sideStateDetail)) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.side_state_detail.invalid",
+      "session relationship sideStateDetail must be a string when present",
+      `${path}.sideStateDetail`,
+    );
+  }
+  if (relationship.kind !== "side" && relationship.sideState !== undefined) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.fork_side_state.invalid",
+      "fork relationships cannot carry Side lifecycle state",
+      `${path}.sideState`,
+    );
+  }
+  const expectedPersistence = relationship.kind === "side" ? "ephemeral" : "persistent";
+  if (
+    (relationship.kind === "side" || relationship.kind === "fork") &&
+    relationship.persistence !== expectedPersistence
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.relationship.persistence_mismatch.invalid",
+      `${relationship.kind} relationships must be ${expectedPersistence}`,
+      `${path}.persistence`,
     );
   }
 }
@@ -1951,6 +2085,18 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       "session runtimeState is not canonical",
       `${path}.runtimeState`,
     );
+  } else if (
+    CONVERSATION_STATUSES.has(session.status as ConversationStatus) &&
+    conversationStateFromRuntimeState(session.runtimeState as SessionRuntimeState).status !==
+      session.status
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.status.runtime_mismatch",
+      "session status must agree with adapter runtimeState",
+      `${path}.status`,
+    );
   }
   if (!isNonEmptyString(session.ptyId)) {
     addIssue(
@@ -2090,6 +2236,9 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       "session preview must be a string",
       `${path}.preview`,
     );
+  }
+  if (session.relationship !== undefined) {
+    validateSessionRelationship(session.relationship, sink, `${path}.relationship`);
   }
   if (!isNonEmptyString(session.createdAt) || Number.isNaN(Date.parse(session.createdAt))) {
     addIssue(
@@ -2731,10 +2880,28 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
       if (payload.clientId !== undefined && !isNonEmptyString(payload.clientId)) {
         addIssue(sink, "error", "session.closed.client_id.invalid", "closed clientId must be non-empty", "payload.clientId");
       }
+      if (
+        payload.disposition !== undefined &&
+        !["stopped", "discarded", "parent_closed"].includes(payload.disposition as string)
+      ) {
+        addIssue(sink, "error", "session.closed.disposition.invalid", "closed disposition is not canonical", "payload.disposition");
+      }
       break;
     case "session.state.changed":
       if (!SESSION_RUNTIME_STATES.has(payload.state as SessionRuntimeState)) {
         addIssue(sink, "error", "session.state.invalid", "session state is not canonical", "payload.state");
+      }
+      break;
+    case "session.side.state.changed":
+      if (
+        !["ready", "active", "completed", "expired", "cleanup_failed", "discarded"].includes(
+          payload.state as string,
+        )
+      ) {
+        addIssue(sink, "error", "session.side.state.invalid", "Side lifecycle state is not canonical", "payload.state");
+      }
+      if (payload.detail !== undefined && !isOptionalString(payload.detail)) {
+        addIssue(sink, "error", "session.side.detail.invalid", "Side lifecycle detail must be a string", "payload.detail");
       }
       break;
     case "session.native_tui.prompt_state.changed":

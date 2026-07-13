@@ -10,11 +10,54 @@ import type {
 
 const DEFAULT_MAX_READABLE_FILE_BYTES = 1_000_000;
 const NOTEBOOK_MAX_READABLE_FILE_BYTES = 8_000_000;
+const MAX_INLINE_FULL_IMAGE_BYTES = 16 * 1024 * 1024;
 const LARGE_IMAGE_PREVIEW_EDGE_PX = 1600;
 const MAX_NOTEBOOK_PREVIEW_CELLS = 80;
 const MAX_NOTEBOOK_OUTPUT_CHARS = 2000;
+const MAX_NOTEBOOK_CELL_SOURCE_CHARS = 40_000;
+const MAX_NOTEBOOK_PREVIEW_JSON_BYTES = 5 * 1024 * 1024;
+const NOTEBOOK_PREVIEW_TIMEOUT_MS = 20_000;
 const MAX_WORKSPACE_FILE_SEARCH_RESULTS = 500;
 const WORKSPACE_FILE_SEARCH_TIMEOUT_MS = 10_000;
+const LARGE_NOTEBOOK_PREVIEW_JQ_FILTER = String.raw`
+def text_value:
+  if type == "string" then .
+  elif type == "array" then map(select(type == "string")) | join("")
+  else ""
+  end;
+def output_text:
+  [ .[]? |
+    if (.text? != null) then (.text | text_value)
+    elif (.traceback? != null) then (.traceback | text_value)
+    elif (.data?["text/plain"]? != null) then (.data["text/plain"] | text_value)
+    else empty
+    end
+  ] | join("\n") | .[0:${MAX_NOTEBOOK_OUTPUT_CHARS}];
+def cell_preview:
+  . as $cell
+  | ($cell.outputs // []) as $outputs
+  | ($outputs | output_text) as $summary
+  | {
+      type: ($cell.cell_type // "cell"),
+      source: (($cell.source | text_value) | .[0:${MAX_NOTEBOOK_CELL_SOURCE_CHARS}])
+    }
+    + (if (($cell | has("execution_count")) and
+           ((($cell.execution_count | type) == "number") or $cell.execution_count == null))
+       then { executionCount: $cell.execution_count }
+       else {}
+       end)
+    + (if ($summary | length) > 0 then { outputSummary: $summary } else {} end);
+(.cells // []) as $cells
+| {
+    cells: ($cells[:${MAX_NOTEBOOK_PREVIEW_CELLS}] | map(cell_preview)),
+    truncated: (($cells | length) > ${MAX_NOTEBOOK_PREVIEW_CELLS}),
+    sourceTruncated: any($cells[:${MAX_NOTEBOOK_PREVIEW_CELLS}][];
+      ((.source | text_value) | length) > ${MAX_NOTEBOOK_CELL_SOURCE_CHARS}),
+    language: (.metadata.language_info.name // .metadata.kernelspec.language // ""),
+    omittedOutputs: any($cells[:${MAX_NOTEBOOK_PREVIEW_CELLS}][];
+      ((.outputs // []) | length) > 0 and (((.outputs // []) | output_text | length) == 0))
+  }
+`;
 
 export type ImagePreviewMode = "bounded" | "full";
 export type FilePreviewReadOptions = {
@@ -25,16 +68,26 @@ export type WorkspaceFileData = Omit<SessionFileResponse, "sessionId">;
 async function execFileUtf8(
   command: string,
   args: string[],
-  options?: { cwd?: string },
+  options?: { cwd?: string; maxBuffer?: number; timeout?: number },
 ): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    execFile(command, args, { encoding: "utf8", ...(options?.cwd ? { cwd: options.cwd } : {}) }, (error, stdout) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(stdout);
-    });
+    execFile(
+      command,
+      args,
+      {
+        encoding: "utf8",
+        ...(options?.cwd ? { cwd: options.cwd } : {}),
+        ...(options?.maxBuffer ? { maxBuffer: options.maxBuffer } : {}),
+        ...(options?.timeout ? { timeout: options.timeout } : {}),
+      },
+      (error, stdout) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(stdout);
+      },
+    );
   });
 }
 
@@ -176,58 +229,95 @@ async function readFileDataAtResolvedPathAsync(
   if (!stats.isFile()) {
     throw new Error("Path is not a file.");
   }
-  const buffer = await fs.readFile(filePath);
   const maxReadableBytes = maxReadableFileBytes(filePath);
-  const truncated = buffer.byteLength > maxReadableBytes;
+  const truncated = stats.size > maxReadableBytes;
   const mimeType = resolvePreviewMimeType(filePath);
+
+  if (mimeType?.startsWith("image/")) {
+    return await readImageFileData(filePath, stats.size, {
+      mimeType,
+      truncated,
+      mode: options?.imagePreviewMode ?? "bounded",
+    });
+  }
+
+  const buffer = await readFilePrefixAsync(filePath, stats.size, maxReadableBytes);
   const notebookPreview =
     mimeType === "application/x-ipynb+json"
-      ? parseNotebookPreviewData(buffer.toString("utf8"))
+      ? truncated
+        ? ((await readLargeNotebookPreviewData(filePath)) ??
+          parseNotebookPreviewData(buffer.toString("utf8")))
+        : parseNotebookPreviewData(buffer.toString("utf8"))
       : undefined;
   const contentOverride =
     truncated && notebookPreview ? compactNotebookPreviewContent(notebookPreview) : undefined;
   const contentBuffer = truncated && !contentOverride ? buffer.subarray(0, maxReadableBytes) : buffer;
   const binary = contentOverride ? false : isLikelyBinary(contentBuffer);
-  const imageContent =
-    !contentOverride && binary && mimeType?.startsWith("image/")
-      ? await readImagePreviewContentBase64(filePath, buffer, {
-          mimeType,
-          truncated,
-          mode: options?.imagePreviewMode ?? "bounded",
-        })
-      : undefined;
-  const responseMimeType = imageContent?.mimeType ?? mimeType;
   return {
     path: filePath,
     content: binary ? "" : (contentOverride ?? contentBuffer.toString("utf8")),
     binary,
     sizeBytes: stats.size,
-    ...(responseMimeType ? { mimeType: responseMimeType } : {}),
-    ...(imageContent ? { contentBase64: imageContent.contentBase64 } : {}),
+    ...(mimeType ? { mimeType } : {}),
     ...(truncated ? { truncated: true } : {}),
     ...(notebookPreview ? { notebookPreview } : {}),
   };
 }
 
-async function readImagePreviewContentBase64(
+async function readImageFileData(
   filePath: string,
-  originalBuffer: Buffer,
+  sizeBytes: number,
   options: {
     mimeType: string;
     truncated: boolean;
     mode: ImagePreviewMode;
   },
-): Promise<{ contentBase64: string; mimeType: string } | undefined> {
-  if (!options.truncated || options.mode === "full" || options.mimeType === "image/svg+xml") {
-    return { contentBase64: originalBuffer.toString("base64"), mimeType: options.mimeType };
+): Promise<WorkspaceFileData> {
+  const shouldReadOriginal =
+    !options.truncated ||
+    (options.mode === "full" && sizeBytes <= MAX_INLINE_FULL_IMAGE_BYTES);
+  if (shouldReadOriginal) {
+    const originalBuffer = await readFilePrefixAsync(filePath, sizeBytes, sizeBytes);
+    return {
+      path: filePath,
+      content: "",
+      binary: true,
+      sizeBytes,
+      mimeType: options.mimeType,
+      contentBase64: originalBuffer.toString("base64"),
+      ...(options.truncated ? { truncated: true } : {}),
+    };
   }
 
   const preview = await tryCreateBoundedImagePreview(filePath);
-  if (preview) {
-    return preview;
-  }
+  return {
+    path: filePath,
+    content: "",
+    binary: true,
+    sizeBytes,
+    mimeType: preview?.mimeType ?? options.mimeType,
+    ...(preview ? { contentBase64: preview.contentBase64 } : {}),
+    ...(options.truncated ? { truncated: true } : {}),
+  };
+}
 
-  return { contentBase64: originalBuffer.toString("base64"), mimeType: options.mimeType };
+async function readFilePrefixAsync(
+  filePath: string,
+  sizeBytes: number,
+  maxBytes: number,
+): Promise<Buffer> {
+  const bytesToRead = Math.max(0, Math.min(sizeBytes, maxBytes));
+  if (bytesToRead === 0) {
+    return Buffer.alloc(0);
+  }
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(bytesToRead);
+    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0);
+    return bytesRead === buffer.byteLength ? buffer : buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function tryCreateBoundedImagePreview(
@@ -275,6 +365,68 @@ async function resolveFileLocationPathAsync(
   }
 }
 
+async function readLargeNotebookPreviewData(
+  filePath: string,
+): Promise<NotebookPreviewData | undefined> {
+  try {
+    const output = await execFileUtf8(
+      "jq",
+      ["--compact-output", LARGE_NOTEBOOK_PREVIEW_JQ_FILTER, filePath],
+      {
+        maxBuffer: MAX_NOTEBOOK_PREVIEW_JSON_BYTES,
+        timeout: NOTEBOOK_PREVIEW_TIMEOUT_MS,
+      },
+    );
+    return parseExtractedNotebookPreviewData(output);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseExtractedNotebookPreviewData(content: string): NotebookPreviewData | undefined {
+  try {
+    const parsed = JSON.parse(content) as {
+      cells?: unknown;
+      truncated?: unknown;
+      sourceTruncated?: unknown;
+      language?: unknown;
+      omittedOutputs?: unknown;
+    };
+    if (!Array.isArray(parsed.cells)) {
+      return undefined;
+    }
+    const cells = parsed.cells.slice(0, MAX_NOTEBOOK_PREVIEW_CELLS).map((entry) => {
+      const cell = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+      const executionCount =
+        typeof cell.executionCount === "number" || cell.executionCount === null
+          ? cell.executionCount
+          : undefined;
+      const outputSummary =
+        typeof cell.outputSummary === "string"
+          ? cell.outputSummary.slice(0, MAX_NOTEBOOK_OUTPUT_CHARS)
+          : undefined;
+      return {
+        type: typeof cell.type === "string" ? cell.type : "cell",
+        source:
+          typeof cell.source === "string"
+            ? cell.source.slice(0, MAX_NOTEBOOK_CELL_SOURCE_CHARS)
+            : "",
+        ...(executionCount !== undefined ? { executionCount } : {}),
+        ...(outputSummary ? { outputSummary } : {}),
+      };
+    });
+    const language = normalizeNotebookLanguageName(parsed.language);
+    return {
+      cells,
+      truncated: parsed.truncated === true || parsed.sourceTruncated === true,
+      ...(language ? { language } : {}),
+      ...(parsed.omittedOutputs === true ? { omittedOutputs: true } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function stripFileLocationSuffix(value: string): string | null {
   const match = /^(.*?):\d+(?::\d+)?$/.exec(value);
   return match?.[1] || null;
@@ -302,6 +454,7 @@ function parseNotebookPreviewData(content: string): NotebookPreviewData | undefi
     };
     const rawCells = Array.isArray(parsed.cells) ? parsed.cells : [];
     let omittedOutputs = false;
+    let truncatedCellSource = false;
     const language = resolveNotebookLanguage(parsed.metadata);
     const cells = rawCells.slice(0, MAX_NOTEBOOK_PREVIEW_CELLS).map((cell) => {
       const executionCount =
@@ -312,16 +465,20 @@ function parseNotebookPreviewData(content: string): NotebookPreviewData | undefi
       if (hasNotebookOutputs(cell.outputs) && !outputSummary) {
         omittedOutputs = true;
       }
+      const source = normalizeNotebookText(cell.source);
+      if (source.length > MAX_NOTEBOOK_CELL_SOURCE_CHARS) {
+        truncatedCellSource = true;
+      }
       return {
         type: typeof cell.cell_type === "string" ? cell.cell_type : "cell",
-        source: normalizeNotebookText(cell.source),
+        source: source.slice(0, MAX_NOTEBOOK_CELL_SOURCE_CHARS),
         ...(executionCount !== undefined ? { executionCount } : {}),
         ...(outputSummary ? { outputSummary } : {}),
       };
     });
     return {
       cells,
-      truncated: rawCells.length > cells.length,
+      truncated: rawCells.length > cells.length || truncatedCellSource,
       ...(language ? { language } : {}),
       ...(omittedOutputs ? { omittedOutputs: true } : {}),
     };

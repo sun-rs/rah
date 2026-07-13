@@ -7,6 +7,7 @@ import type { RuntimeIdentityResponse } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { createPostRoutes, handleHttpRequest } from "./http-server-routes";
 import { attachWebSocketHandlers } from "./http-server-websocket";
+import { DeviceAuthManager } from "./device-auth";
 
 export interface RahDaemon {
   host: string;
@@ -71,17 +72,20 @@ export async function startRahDaemon(options?: {
   host?: string;
   port?: number;
   engine?: RuntimeEngine;
+  auth?: DeviceAuthManager | false;
 }): Promise<RahDaemon> {
   const host = options?.host ?? "0.0.0.0";
   const port = options?.port ?? 43111;
   const engine = options?.engine ?? new RuntimeEngine();
+  const auth = options?.auth === false ? undefined : options?.auth ?? new DeviceAuthManager();
   const postRoutes = createPostRoutes(engine);
   let runtimeIdentity: RuntimeIdentityResponse | undefined;
+  let closePromise: Promise<void> | undefined;
 
   const server = createServer(async (req, res) => {
-    await handleHttpRequest({ engine, postRoutes, req, res, runtimeIdentity });
+    await handleHttpRequest({ engine, postRoutes, req, res, runtimeIdentity, auth });
   });
-  const websockets = attachWebSocketHandlers(server, engine);
+  const websockets = attachWebSocketHandlers(server, engine, auth);
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
@@ -93,25 +97,40 @@ export async function startRahDaemon(options?: {
   return {
     host,
     port: actualPort,
-    async close() {
-      try {
-        await engine.shutdown();
-      } catch (error) {
-        console.error("[rah] engine shutdown failed", error);
-      }
-      try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve();
+    close() {
+      if (!closePromise) {
+        closePromise = (async () => {
+          let serverCloseError: Error | undefined;
+          const serverClosed = new Promise<void>((resolve) => {
+            server.close((error) => {
+              serverCloseError = error;
+              resolve();
+            });
           });
-        });
-      } finally {
-        websockets.close();
+
+          let webSocketCloseError: unknown;
+          try {
+            await websockets.close();
+          } catch (error) {
+            webSocketCloseError = error;
+          }
+          await serverClosed;
+
+          try {
+            await engine.shutdown();
+          } catch (error) {
+            console.error("[rah] engine shutdown failed", error);
+          }
+
+          if (serverCloseError || webSocketCloseError) {
+            throw new AggregateError(
+              [serverCloseError, webSocketCloseError].filter((error) => error !== undefined),
+              "RAH transport shutdown failed.",
+            );
+          }
+        })();
       }
+      return closePromise;
     },
   };
 }

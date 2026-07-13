@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
@@ -213,7 +213,7 @@ rl.on('line', (line) => {
         .filter((event) => event.type === "timeline.item.added").length,
       0,
     );
-    const page = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
+    const page = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 20 });
     assert.ok(page.events.some((event) => event.type === "timeline.item.added"));
     assert.ok(page.events.some((event) => event.type === "tool.call.started"));
     assert.ok(page.events.some((event) => event.type === "tool.call.completed"));
@@ -233,7 +233,7 @@ rl.on('line', (line) => {
   test("pages Codex conversation history through official thread/turns/list", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-turn-page-cwd-"));
     const sessionId = "019d9999-turns-7bbb-8ccc-ddddeeeeffff";
-    writeRollout(sessionId, cwd);
+    const rolloutPath = writeRollout(sessionId, cwd);
     const requests: Array<{ method: string; params: unknown }> = [];
     let disposed = false;
     const client: CodexAppServerRpcClient = {
@@ -308,12 +308,13 @@ rl.on('line', (line) => {
       rootDir: cwd,
     });
 
-    const page = await storedHistory.getSessionConversationHistoryPage(managed.session.id, {
+    const page = await storedHistory.getConversationSummaryEvidencePage(managed.session.id, {
       cursor: "native-cursor",
       limit: 12,
     });
     assert.ok(page);
     assert.equal(page.nextCursor, "older-native-turns");
+    assert.ok(page.events.every((event) => event.raw === undefined));
     assert.deepEqual(requests, [
       {
         method: "thread/turns/list",
@@ -326,6 +327,28 @@ rl.on('line', (line) => {
         },
       },
     ]);
+    const repeatedPage = await storedHistory.getConversationSummaryEvidencePage(managed.session.id, {
+      cursor: "native-cursor",
+      limit: 12,
+    });
+    assert.ok(repeatedPage);
+    assert.equal(
+      requests.filter((request) => request.method === "thread/turns/list").length,
+      1,
+    );
+    writeFileSync(rolloutPath, `${JSON.stringify({ type: "event_msg", payload: {} })}\n`, {
+      encoding: "utf8",
+      flag: "a",
+    });
+    const refreshedPage = await storedHistory.getConversationSummaryEvidencePage(managed.session.id, {
+      cursor: "native-cursor",
+      limit: 12,
+    });
+    assert.ok(refreshedPage);
+    assert.equal(
+      requests.filter((request) => request.method === "thread/turns/list").length,
+      2,
+    );
     assert.ok(
       page.events.some(
         (event) =>
@@ -383,6 +406,44 @@ rl.on('line', (line) => {
     });
     await storedHistory.shutdown();
     assert.equal(disposed, true);
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("archives Codex history through the official thread/archive method", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-archive-cwd-"));
+    const sessionId = "019d9999-archive-7bbb-8ccc-ddddeeeeffff";
+    const rolloutPath = writeRollout(sessionId, cwd);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: CodexAppServerRpcClient = {
+      setNotificationHandler() {},
+      setRequestHandler() {},
+      setCloseHandler() {},
+      async request(method, params) {
+        requests.push({ method, params });
+        const archivedDir = path.join(tmpHome, "archived_sessions", "2026", "04", "15");
+        mkdirSync(archivedDir, { recursive: true });
+        renameSync(rolloutPath, path.join(archivedDir, path.basename(rolloutPath)));
+        return {};
+      },
+      notify() {},
+      async dispose() {},
+    };
+    const storedHistory = new CodexStoredHistoryAdapter(
+      {
+        eventBus: new EventBus(),
+        ptyHub: new PtyHub(),
+        sessionStore: new SessionStore(),
+      },
+      async () => client,
+    );
+    const ref = storedHistory.listStoredSessions()[0]!;
+
+    await storedHistory.archiveStoredSession(ref);
+
+    assert.deepEqual(requests, [
+      { method: "thread/archive", params: { threadId: sessionId } },
+    ]);
+    assert.equal(storedHistory.listStoredSessions()[0]?.providerState?.archived, true);
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -465,7 +526,7 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("pauses active Codex goals before claiming a history session live", async () => {
+  test("pauses active Codex goals before resuming a history session live", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-goal-claim-cwd-"));
     const sessionId = "019e3333-bbbb-7ccc-8ddd-eeeeffff0000";
     const methodLog = path.join(tmpHome, "goal-claim-method-log.jsonl");
@@ -664,7 +725,7 @@ rl.on('line', (line) => {
       },
     });
 
-    const page = storedHistory.getSessionHistoryPage(managed.session.id, { limit: 20 });
+    const page = storedHistory.getConversationEvidencePage(managed.session.id, { limit: 20 });
     assert.ok(page.events.some((event) => event.type === "tool.call.started"));
     assert.equal(page.events.some((event) => event.type === "tool.call.failed"), false);
 
@@ -1161,14 +1222,14 @@ rl.on('line', (line) => {
       providerSessionId: sessionId,
     });
 
-    const firstPage = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 3 });
+    const firstPage = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 3 });
     assert.equal(firstPage.sessionId, resumed.session.session.id);
     assert.equal(firstPage.events.length, 3);
     assert.ok(firstPage.nextBeforeTs);
     assert.ok(firstPage.events[0]!.ts <= firstPage.events[1]!.ts);
     assert.ok(firstPage.events[1]!.ts <= firstPage.events[2]!.ts);
 
-    const secondPage = storedHistory.getSessionHistoryPage(resumed.session.session.id, {
+    const secondPage = storedHistory.getConversationEvidencePage(resumed.session.session.id, {
       beforeTs: firstPage.nextBeforeTs,
       limit: 3,
     });
@@ -1297,7 +1358,7 @@ rl.on('line', (line) => {
       providerSessionId: sessionId,
     });
 
-    const page = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 10 });
+    const page = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 10 });
     assert.deepEqual(
       page.events.map((event) => ({
         type: event.type,
@@ -1534,7 +1595,7 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
 
-    const historicalEvents = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 20 }).events;
+    const historicalEvents = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 20 }).events;
     assert.ok(
       historicalEvents.some(
         (event) =>

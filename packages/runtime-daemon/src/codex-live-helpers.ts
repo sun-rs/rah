@@ -23,6 +23,7 @@ import {
   type LiveCodexSession,
 } from "./codex-live-types";
 import { requestCodexThreadResumeWithoutTranscript } from "./codex-app-server-resume";
+import { setSessionSideLifecycleState } from "./session-side-lifecycle";
 
 type BufferedServerRequest = {
   request: JsonRpcRequest;
@@ -335,6 +336,9 @@ function applyCodexLiveTranslatedItems(
     for (const event of events) {
       if (event.type === "turn.started") {
         liveSession.currentTurnId = event.turnId ?? null;
+        if (liveSession.ephemeral && item.origin !== "snapshot") {
+          setSessionSideLifecycleState(services, liveSession.sessionId, "active");
+        }
       } else if (
         event.type === "turn.completed" ||
         event.type === "turn.failed" ||
@@ -348,9 +352,96 @@ function applyCodexLiveTranslatedItems(
           liveSession.currentTurnId = null;
           liveSession.drainQueuedInput?.();
         }
+        if (liveSession.ephemeral && item.origin !== "snapshot") {
+          setSessionSideLifecycleState(
+            services,
+            liveSession.sessionId,
+            event.type === "turn.completed" ? "completed" : "ready",
+          );
+        }
       }
     }
   }
+}
+
+function threadIdFromNotification(notification: JsonRpcNotification): string | null {
+  const params =
+    notification.params && typeof notification.params === "object" && !Array.isArray(notification.params)
+      ? (notification.params as Record<string, unknown>)
+      : null;
+  const thread =
+    params?.thread && typeof params.thread === "object" && !Array.isArray(params.thread)
+      ? (params.thread as Record<string, unknown>)
+      : null;
+  const threadId =
+    typeof params?.threadId === "string"
+      ? params.threadId
+      : typeof params?.thread_id === "string"
+        ? params.thread_id
+        : typeof thread?.id === "string"
+          ? thread.id
+          : null;
+  return threadId?.trim() || null;
+}
+
+function sideExpiryDetail(notification: JsonRpcNotification): string | null {
+  if (notification.method === "thread/closed" || notification.method === "thread/deleted") {
+    return "Codex closed this ephemeral Side task. Start a new Side to continue.";
+  }
+  if (notification.method !== "thread/status/changed") {
+    return null;
+  }
+  const params =
+    notification.params && typeof notification.params === "object" && !Array.isArray(notification.params)
+      ? (notification.params as Record<string, unknown>)
+      : null;
+  const status =
+    params?.status && typeof params.status === "object" && !Array.isArray(params.status)
+      ? (params.status as Record<string, unknown>)
+      : null;
+  return status?.type === "notLoaded"
+    ? "Codex unloaded this ephemeral Side task. Start a new Side to continue."
+    : null;
+}
+
+function expireCodexSideFromNotification(
+  services: RuntimeServices,
+  liveSession: LiveCodexSession,
+  notification: JsonRpcNotification,
+): boolean {
+  if (!liveSession.ephemeral || liveSession.disposalInFlight || liveSession.ephemeralExpired) {
+    return false;
+  }
+  const detail = sideExpiryDetail(notification);
+  if (!detail || threadIdFromNotification(notification) !== liveSession.threadId) {
+    return false;
+  }
+  liveSession.ephemeralExpired = true;
+  liveSession.queuedInputs.length = 0;
+  liveSession.currentTurnId = null;
+  applyProviderActivity(
+    services,
+    liveSession.sessionId,
+    {
+      provider: "codex",
+      channel: "structured_live",
+      authority: "authoritative",
+      raw: notification,
+    },
+    { type: "session_state", state: "stopped" },
+  );
+  setSessionSideLifecycleState(services, liveSession.sessionId, "expired", detail);
+  // The Side is pathless and this app-server process is dedicated to it.
+  // Keep the projected conversation visible, but release the provider process
+  // as soon as the provider confirms that the thread cannot continue.
+  void liveSession.client.dispose().catch((error) => {
+    console.warn("[rah] failed to dispose expired Codex Side app-server", {
+      sessionId: liveSession.sessionId,
+      threadId: liveSession.threadId,
+      error,
+    });
+  });
+  return true;
 }
 
 function threadIdFromThreadStartedNotification(notification: JsonRpcNotification): string | null {
@@ -479,6 +570,9 @@ function handleCodexLiveNotification(
   liveSession: LiveCodexSession,
   notification: JsonRpcNotification,
 ) {
+  if (expireCodexSideFromNotification(services, liveSession, notification)) {
+    return;
+  }
   bindCodexThreadFromNotification(services, liveSession, notification);
   applyCodexLiveTranslatedItems(
     services,
@@ -572,11 +666,11 @@ async function handleCodexLiveRequest(
         resolve,
         requestId,
         itemId,
-        approvalProtocol:
+        approvalResponseShape:
           rpcRequest.method === "execCommandApproval" ||
           rpcRequest.method === "applyPatchApproval"
-            ? "legacy"
-            : "v2",
+            ? "approval"
+            : "action",
         ...(approvalKind === "permissions" ? { requestedPermissions: params.permissions } : {}),
       });
     });
@@ -802,19 +896,19 @@ export function isCodexInternalThreadMetadataText(value: string | null | undefin
 
 export function resolveCodexApprovalDecision(
   response: PermissionResponseRequest,
-  protocol: "v2" | "legacy",
+  responseShape: "action" | "approval",
 ): string {
   if (isPermissionSessionGrant(response)) {
-    return protocol === "legacy" ? "approved_for_session" : "acceptForSession";
+    return responseShape === "approval" ? "approved_for_session" : "acceptForSession";
   }
   if (isPermissionAbort(response)) {
-    return protocol === "legacy" ? "abort" : "cancel";
+    return responseShape === "approval" ? "abort" : "cancel";
   }
   if (isPermissionDenied(response)) {
-    return protocol === "legacy" ? "denied" : "decline";
+    return responseShape === "approval" ? "denied" : "decline";
   }
   if (response.behavior === "allow") {
-    return protocol === "legacy" ? "approved" : "accept";
+    return responseShape === "approval" ? "approved" : "accept";
   }
-  return protocol === "legacy" ? "denied" : "decline";
+  return responseShape === "approval" ? "denied" : "decline";
 }

@@ -56,7 +56,6 @@ export interface NativeTuiLaunchSpec {
 
 type ModelRequest = {
   model?: string;
-  reasoningId?: string | null;
   optionValues?: Record<string, SessionConfigValue>;
 };
 
@@ -81,6 +80,12 @@ function claudeConfigPath(): string {
   return process.env.CLAUDE_CONFIG_DIR
     ? path.join(process.env.CLAUDE_CONFIG_DIR, ".claude.json")
     : path.join(homedir(), ".claude.json");
+}
+
+function claudeSettingsPath(): string {
+  return process.env.CLAUDE_CONFIG_DIR
+    ? path.join(process.env.CLAUDE_CONFIG_DIR, "settings.json")
+    : path.join(homedir(), ".claude", "settings.json");
 }
 
 function normalizeClaudeProjectPath(cwd: string): string {
@@ -108,40 +113,55 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function trustClaudeWorkspace(cwd: string): void {
+function writeJsonObject(filePath: string, value: Record<string, unknown>): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmpPath, filePath);
+}
+
+function prepareClaudeLaunchConfig(cwd: string, modeId: string | undefined): void {
   const configPath = claudeConfigPath();
-  const configDir = path.dirname(configPath);
   const projectPath = normalizeClaudeProjectPath(cwd);
   const config = readJsonObject(configPath);
   const projects = objectValue(config.projects);
   const existingProject = objectValue(projects[projectPath]);
-  if (existingProject.hasTrustDialogAccepted === true) {
-    return;
+  const workspaceTrusted = existingProject.hasTrustDialogAccepted === true;
+  const shouldAcceptBypass = modeId === "bypassPermissions";
+
+  if (!workspaceTrusted) {
+    projects[projectPath] = {
+      allowedTools: [],
+      mcpContextUris: [],
+      mcpServers: {},
+      enabledMcpjsonServers: [],
+      disabledMcpjsonServers: [],
+      ...existingProject,
+      hasTrustDialogAccepted: true,
+      projectOnboardingSeenCount:
+        typeof existingProject.projectOnboardingSeenCount === "number"
+          ? existingProject.projectOnboardingSeenCount
+          : 1,
+      hasCompletedProjectOnboarding:
+        typeof existingProject.hasCompletedProjectOnboarding === "boolean"
+          ? existingProject.hasCompletedProjectOnboarding
+          : true,
+    };
+    config.projects = projects;
+    writeJsonObject(configPath, config);
   }
-
-  projects[projectPath] = {
-    allowedTools: [],
-    mcpContextUris: [],
-    mcpServers: {},
-    enabledMcpjsonServers: [],
-    disabledMcpjsonServers: [],
-    ...existingProject,
-    hasTrustDialogAccepted: true,
-    projectOnboardingSeenCount:
-      typeof existingProject.projectOnboardingSeenCount === "number"
-        ? existingProject.projectOnboardingSeenCount
-        : 1,
-    hasCompletedProjectOnboarding:
-      typeof existingProject.hasCompletedProjectOnboarding === "boolean"
-        ? existingProject.hasCompletedProjectOnboarding
-        : true,
-  };
-  config.projects = projects;
-
-  mkdirSync(configDir, { recursive: true });
-  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmpPath, configPath);
+  if (shouldAcceptBypass) {
+    const settingsPath = claudeSettingsPath();
+    const settings = readJsonObject(settingsPath);
+    if (settings.skipDangerousModePermissionPrompt === true) {
+      return;
+    }
+    // Selecting Bypass Permissions in RAH is the explicit user opt-in that the
+    // Claude TUI otherwise asks for on first launch. Persist it before input is
+    // injected so the first user message cannot confirm the default "exit" row.
+    settings.skipDangerousModePermissionPrompt = true;
+    writeJsonObject(settingsPath, settings);
+  }
 }
 
 function splitLaunchArgv(launch: { argv: string[] }, provider: ProviderKind): {
@@ -227,19 +247,18 @@ function appendClaudeMcpArgs(args: string[], servers: readonly NativeTuiMcpServe
   args.push("--mcp-config", writeClaudeMcpConfig(mcpServers));
 }
 
-function resolveOptionOrReasoning(
+function resolveOptionValue(
   request: ModelRequest,
   optionId: string,
 ): string | null | undefined {
-  return optionString(request.optionValues, optionId) ??
-    (request.reasoningId === undefined ? undefined : request.reasoningId);
+  return optionString(request.optionValues, optionId);
 }
 
 function launchConfigMetadata(
   request: ModelRequest & { modeId?: string },
   optionId: string,
 ): Pick<NativeTuiLaunchSpec, "modeId" | "modelId" | "reasoningId" | "optionValues"> {
-  const reasoningId = resolveOptionOrReasoning(request, optionId);
+  const reasoningId = resolveOptionValue(request, optionId);
   return {
     ...(request.modeId ? { modeId: request.modeId } : {}),
     ...(request.model ? { modelId: request.model } : {}),
@@ -252,7 +271,7 @@ function openCodeLaunchConfigMetadata(
   request: ModelRequest & { modeId?: string },
 ): Pick<NativeTuiLaunchSpec, "modeId" | "modelId" | "reasoningId" | "optionValues"> {
   const reasoningId = normalizeOpenCodeReasoningId(
-    resolveOptionOrReasoning(request, "model_reasoning_variant"),
+    resolveOptionValue(request, "model_reasoning_variant"),
   );
   const optionValues = normalizeOpenCodeOptionValues(request.optionValues);
   return {
@@ -265,14 +284,14 @@ function openCodeLaunchConfigMetadata(
 
 function appendCodexCommonArgs(
   args: string[],
-  request: Pick<StartSessionRequest, "cwd" | "model" | "reasoningId" | "optionValues">,
+  request: Pick<StartSessionRequest, "cwd" | "model" | "optionValues">,
 ): void {
   args.push(...CODEX_TUI_CONFIG_ARGS);
   args.push("--cd", request.cwd);
   if (request.model) {
     args.push("--model", request.model);
   }
-  const effort = resolveOptionOrReasoning(request, "model_reasoning_effort");
+  const effort = resolveOptionValue(request, "model_reasoning_effort");
   if (effort) {
     args.push("-c", `model_reasoning_effort=${configString(effort)}`);
   }
@@ -331,9 +350,7 @@ function appendClaudeArgs(
   if (request.model) {
     args.push("--model", request.model);
   }
-  const effort =
-    optionString(request.optionValues, "effort") ??
-    (request.reasoningId === null ? null : request.reasoningId);
+  const effort = optionString(request.optionValues, "effort");
   if (effort) {
     args.push("--effort", effort);
   }
@@ -367,7 +384,7 @@ async function appendOpenCodeArgs(
     args.push("--model", buildOpenCodeProviderModelId({
       modelId: request.model,
       reasoningId: normalizeOpenCodeReasoningId(
-        resolveOptionOrReasoning(request, "model_reasoning_variant"),
+        resolveOptionValue(request, "model_reasoning_variant"),
       ),
     }));
   }
@@ -416,7 +433,7 @@ export async function nativeTuiStartLaunchSpec(
   if (request.provider === "claude") {
     const providerSessionId = randomUUID();
     const { command, args } = splitLaunchArgv(await claudeLaunchSpec(), "claude");
-    trustClaudeWorkspace(request.cwd);
+    prepareClaudeLaunchConfig(request.cwd, request.modeId);
     appendClaudeMcpArgs(args, request.extraMcpServers);
     appendClaudeArgs(args, request, providerSessionId, "start");
     appendInitialPrompt(args, request.initialPrompt);
@@ -461,7 +478,7 @@ export async function nativeTuiResumeLaunchSpec(
     if (request.model) {
       args.push("--model", request.model);
     }
-    const effort = resolveOptionOrReasoning(request, "model_reasoning_effort");
+    const effort = resolveOptionValue(request, "model_reasoning_effort");
     if (effort) {
       args.push("-c", `model_reasoning_effort=${configString(effort)}`);
     }
@@ -479,7 +496,7 @@ export async function nativeTuiResumeLaunchSpec(
   }
   if (request.provider === "claude") {
     const { command, args } = splitLaunchArgv(await claudeLaunchSpec(), "claude");
-    trustClaudeWorkspace(request.cwd);
+    prepareClaudeLaunchConfig(request.cwd, request.modeId);
     appendClaudeArgs(args, request, request.providerSessionId, "resume");
     return {
       provider: "claude",

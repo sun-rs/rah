@@ -7,15 +7,16 @@ import {
   type MessagePort,
 } from "node:worker_threads";
 import type {
-  SessionTurnDirectoryItem,
-  SessionTurnDirectoryStatus,
+  ConversationTurnDirectoryItem,
+  ConversationTurnDirectoryStatus,
 } from "@rah/runtime-protocol";
 import { scanSelectedJsonlLines } from "./bounded-jsonl-reader.ts";
 
-const CACHE_VERSION = 1;
-const PREVIEW_TEXT_LIMIT = 180;
+const CACHE_VERSION = 2;
+const USER_PREVIEW_TEXT_LIMIT = 96;
+const ASSISTANT_PREVIEW_TEXT_LIMIT = 144;
 
-export type CodexIndexedTurn = SessionTurnDirectoryItem & {
+export type CodexIndexedTurn = ConversationTurnDirectoryItem & {
   startOffset: number;
   endOffset: number;
   hasFinalAnswer: boolean;
@@ -52,15 +53,15 @@ type ParsedLineContext = {
   endOffset: number;
 };
 
-function compactPreviewText(text: string): string {
+function compactPreviewText(text: string, limit: number): string {
   const compact = text
     .replace(/data:image\/[^\s)]+/gi, "[image]")
     .replace(/\s+/g, " ")
     .trim();
-  if (compact.length <= PREVIEW_TEXT_LIMIT) {
+  if (compact.length <= limit) {
     return compact;
   }
-  return `${compact.slice(0, PREVIEW_TEXT_LIMIT - 1).trimEnd()}…`;
+  return `${compact.slice(0, limit - 1).trimEnd()}…`;
 }
 
 function isBootstrapUserMessage(text: string): boolean {
@@ -97,7 +98,7 @@ function messageContentText(payload: Record<string, unknown>): string {
     .join("\n");
 }
 
-function completionStatus(reason: unknown): SessionTurnDirectoryStatus {
+function completionStatus(reason: unknown): ConversationTurnDirectoryStatus {
   return reason === "interrupted" || reason === "user" ? "interrupted" : "failed";
 }
 
@@ -234,7 +235,7 @@ function applyRolloutLine(
           ? latest
           : createFallbackTurn(items, timestamp, context);
         if (!turn.userPreview) {
-          turn.userPreview = compactPreviewText(text) || "Message";
+          turn.userPreview = compactPreviewText(text, USER_PREVIEW_TEXT_LIMIT) || "Message";
         }
         turn.endOffset = context.endOffset;
         return;
@@ -245,7 +246,7 @@ function applyRolloutLine(
         if (!turn || !text) {
           return;
         }
-        const preview = compactPreviewText(text);
+        const preview = compactPreviewText(text, ASSISTANT_PREVIEW_TEXT_LIMIT);
         if (preview) {
           turn.assistantPreview = preview;
           turn.hasFinalAnswer = payload.phase === "final_answer" || turn.hasFinalAnswer;
@@ -261,7 +262,7 @@ function applyRolloutLine(
         const finalText =
           typeof payload.last_agent_message === "string" ? payload.last_agent_message : "";
         if (finalText) {
-          turn.assistantPreview = compactPreviewText(finalText);
+          turn.assistantPreview = compactPreviewText(finalText, ASSISTANT_PREVIEW_TEXT_LIMIT);
           turn.hasFinalAnswer = true;
         }
         turn.status = "completed";
@@ -310,7 +311,7 @@ function applyRolloutLine(
       ? items.at(-1)!
       : createFallbackTurn(items, timestamp, context);
     if (!turn.userPreview) {
-      turn.userPreview = compactPreviewText(text) || "Message";
+      turn.userPreview = compactPreviewText(text, USER_PREVIEW_TEXT_LIMIT) || "Message";
     }
     turn.endOffset = context.endOffset;
     return;
@@ -320,7 +321,7 @@ function applyRolloutLine(
     if (!turn) {
       return;
     }
-    const preview = compactPreviewText(text);
+    const preview = compactPreviewText(text, ASSISTANT_PREVIEW_TEXT_LIMIT);
     if (preview) {
       turn.assistantPreview = preview;
       turn.hasFinalAnswer = payload.phase === "final_answer" || turn.hasFinalAnswer;

@@ -13,6 +13,8 @@ import type {
   SessionLiveBackend,
   SessionConfigOption,
   SessionConfigValue,
+  SessionBranchKind,
+  SessionWorkspaceMode,
   SessionModelDescriptor,
   SessionModelSource,
   SessionModeDescriptor,
@@ -53,6 +55,49 @@ export interface RuntimeIdentityResponse {
   sourceDirty?: boolean;
 }
 
+export interface TrustedDeviceDescriptor {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+export interface DeviceAuthStatusResponse {
+  authenticated: boolean;
+  hasTrustedDevices: boolean;
+  device?: TrustedDeviceDescriptor;
+}
+
+export interface PairDeviceRequest {
+  code: string;
+  name: string;
+}
+
+export interface PairDeviceResponse {
+  authenticated: true;
+  device: TrustedDeviceDescriptor;
+}
+
+export interface PairingCodeResponse {
+  id: string;
+  code: string;
+  expiresAt: string;
+}
+
+export interface PairingCodeStatusResponse {
+  active: boolean;
+}
+
+export interface ListTrustedDevicesResponse {
+  devices: TrustedDeviceDescriptor[];
+  currentDeviceId?: string;
+}
+
+export interface RevokeTrustedDeviceResponse {
+  ok: true;
+  revokedCurrentDevice: boolean;
+}
+
 export interface AttachClientDescriptor {
   id: string;
   kind: ClientKind;
@@ -61,35 +106,30 @@ export interface AttachClientDescriptor {
   rows?: number;
 }
 
-export type ApprovalPolicy = "default" | "on-request" | "never" | "auto_edit" | "yolo";
-
 export type CanonicalPermissionDecision =
   | "approved"
   | "approved_for_session"
   | "denied"
-  | "abort"
-  | "accept"
-  | "decline"
-  | "cancel";
+  | "abort";
 
-export type LegacyPermissionDecision = "acceptForSession";
-
-export type PermissionDecision = CanonicalPermissionDecision | LegacyPermissionDecision;
+export type PermissionDecision = CanonicalPermissionDecision;
 
 export function normalizePermissionDecision(
   decision: string | undefined,
 ): CanonicalPermissionDecision | undefined {
   switch (decision) {
-    case "acceptForSession":
-      return "approved_for_session";
-    case "approved":
-    case "approved_for_session":
-    case "denied":
-    case "abort":
     case "accept":
+    case "approved":
+      return "approved";
+    case "acceptForSession":
+    case "approved_for_session":
+      return "approved_for_session";
     case "decline":
+    case "denied":
+      return "denied";
     case "cancel":
-      return decision;
+    case "abort":
+      return "abort";
     default:
       return undefined;
   }
@@ -115,11 +155,11 @@ export function decisionFromPermissionActionId(
     case "abort":
       return "abort";
     case "accept":
-      return "accept";
+      return "approved";
     case "decline":
-      return "decline";
+      return "denied";
     case "cancel":
-      return "cancel";
+      return "abort";
     default:
       return undefined;
   }
@@ -143,7 +183,7 @@ export function isPermissionDenied(args: {
   const canonical =
     normalizePermissionDecision(args.decision) ??
     decisionFromPermissionActionId(args.selectedActionId);
-  return args.behavior === "deny" || canonical === "denied" || canonical === "decline";
+  return args.behavior === "deny" || canonical === "denied";
 }
 
 export function isPermissionAbort(args: {
@@ -153,7 +193,7 @@ export function isPermissionAbort(args: {
   const canonical =
     normalizePermissionDecision(args.decision) ??
     decisionFromPermissionActionId(args.selectedActionId);
-  return canonical === "abort" || canonical === "cancel";
+  return canonical === "abort";
 }
 
 export interface StartSessionRequest {
@@ -168,27 +208,7 @@ export interface StartSessionRequest {
    * SessionConfigOption ids. Unknown keys are invalid.
    */
   optionValues?: Record<string, SessionConfigValue>;
-  /**
-   * @deprecated Use optionValues. Kept as a compatibility alias for the first
-   * model reasoning/thinking/variant option exposed by the provider catalog.
-   */
-  reasoningId?: string;
-  /**
-   * @deprecated Compatibility escape hatch for provider/API callers. Web clients
-   * should pass modeId/model/optionValues and let the adapter translate them.
-   */
-  providerConfig?: Record<string, SessionConfigValue>;
   modeId?: string;
-  /**
-   * @deprecated Compatibility field. Provider permission policy belongs behind
-   * adapter-owned modeId translation.
-   */
-  approvalPolicy?: ApprovalPolicy;
-  /**
-   * @deprecated Compatibility field. Provider sandbox policy belongs behind
-   * adapter-owned modeId translation.
-   */
-  sandbox?: string;
   command?: string;
   args?: string[];
   initialPrompt?: string;
@@ -215,30 +235,27 @@ export interface ResumeSessionRequest {
    * SessionConfigOption ids. Unknown keys are invalid.
    */
   optionValues?: Record<string, SessionConfigValue>;
-  /**
-   * @deprecated Use optionValues. Kept as a compatibility alias for the first
-   * model reasoning/thinking/variant option exposed by the provider catalog.
-   */
-  reasoningId?: string | null;
-  /**
-   * @deprecated Compatibility escape hatch for provider/API callers. Web clients
-   * should pass modeId/model/optionValues and let the adapter translate them.
-   */
-  providerConfig?: Record<string, SessionConfigValue>;
   modeId?: string;
-  /**
-   * @deprecated Compatibility field. Provider permission policy belongs behind
-   * adapter-owned modeId translation.
-   */
-  approvalPolicy?: ApprovalPolicy;
-  /**
-   * @deprecated Compatibility field. Provider sandbox policy belongs behind
-   * adapter-owned modeId translation.
-   */
-  sandbox?: string;
   preferStoredReplay?: boolean;
   historyReplay?: "include" | "skip";
   historySourceSessionId?: string;
+  attach?: {
+    client: AttachClientDescriptor;
+    mode: AttachMode;
+    claimControl?: boolean;
+  };
+}
+
+export interface ForkSessionRequest {
+  /**
+   * Stable client-generated id for this branch operation. Reusing the id must
+   * return the original result instead of creating another provider thread.
+   */
+  operationId: string;
+  kind: SessionBranchKind;
+  workspaceMode: SessionWorkspaceMode;
+  /** Fork through this completed provider turn, inclusive. */
+  lastTurnId?: string;
   attach?: {
     client: AttachClientDescriptor;
     mode: AttachMode;
@@ -296,11 +313,6 @@ export interface SetSessionModelRequest {
    * SessionConfigOption ids. Unknown keys are invalid.
    */
   optionValues?: Record<string, SessionConfigValue>;
-  /**
-   * @deprecated Use optionValues. Kept as a compatibility alias for the first
-   * model reasoning/thinking/variant option exposed by the provider catalog.
-   */
-  reasoningId?: string | null;
 }
 
 export interface SetSessionConfigRequest {
@@ -326,6 +338,8 @@ export interface StoredSessionRemoveRequest {
   provider: ProviderKind;
   providerSessionId: string;
 }
+
+export type StoredSessionArchiveRequest = StoredSessionRemoveRequest;
 
 export interface WorkspaceDirectoryResponse {
   path: string;
@@ -398,6 +412,10 @@ export interface StartSessionResponse {
 }
 
 export interface ResumeSessionResponse {
+  session: SessionSummary;
+}
+
+export interface ForkSessionResponse {
   session: SessionSummary;
 }
 
@@ -515,24 +533,24 @@ export interface SessionFileSearchResponse {
   files: SessionFileSearchItem[];
 }
 
-export type SessionHistoryDetailMode = "full" | "summary" | "chat";
+export type ConversationEvidenceDetailMode = "full" | "summary" | "chat";
 
-export interface SessionHistoryPageResponse {
+export interface ConversationEvidencePage {
   sessionId: string;
   events: RahEvent[];
   nextCursor?: string;
   nextBeforeTs?: string;
-  detailMode?: SessionHistoryDetailMode;
+  detailMode?: ConversationEvidenceDetailMode;
   approximateBytes?: number;
 }
 
-export type SessionTurnDirectoryStatus =
+export type ConversationTurnDirectoryStatus =
   | "in_progress"
   | "completed"
   | "interrupted"
   | "failed";
 
-export interface SessionTurnDirectoryItem {
+export interface ConversationTurnDirectoryItem {
   id: string;
   ordinal: number;
   userPreview: string;
@@ -540,32 +558,19 @@ export interface SessionTurnDirectoryItem {
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
-  status: SessionTurnDirectoryStatus;
+  status: ConversationTurnDirectoryStatus;
 }
 
-export interface SessionTurnDirectoryResponse {
+export interface ConversationTurnDirectoryResponse {
   sessionId: string;
   revision: string;
-  items: SessionTurnDirectoryItem[];
+  items: ConversationTurnDirectoryItem[];
   complete: boolean;
   sourceBytes?: number;
   generatedAt: string;
 }
 
-export interface SessionTurnHistoryResponse {
-  sessionId: string;
-  turnId: string;
-  events: RahEvent[];
-}
-
-export type SessionHistoryItemDetailKind = "tool_call" | "observation";
-
-export interface SessionHistoryItemDetailResponse {
-  sessionId: string;
-  kind: SessionHistoryItemDetailKind;
-  itemId: string;
-  events: RahEvent[];
-}
+export type ConversationItemDetailKind = "tool_call" | "observation";
 
 export interface EventSubscriptionRequest {
   sessionIds?: string[];

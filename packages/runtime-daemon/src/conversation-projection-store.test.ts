@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ConversationProjection } from "@rah/runtime-protocol";
+import {
+  createCodexRolloutTranslationState,
+  translateCodexRolloutLine,
+} from "./codex-rollout-activity";
 import { ConversationProjectionStore } from "./conversation-projection-store";
 import { conversationEventBelongsToLiveProjection } from "./conversation-live-policy";
 import { EventBus } from "./event-bus";
+import { applyProviderActivity } from "./provider-activity";
+import { PtyHub } from "./pty-hub";
+import { SessionStore } from "./session-store";
 
 const source = {
   provider: "codex" as const,
@@ -130,6 +137,107 @@ test("resident conversation store emits bounded item deltas and preserves trimme
   store.close();
 });
 
+test("Codex persisted mirror emits canonical item deltas for the active turn", () => {
+  const eventBus = new EventBus();
+  const sessionStore = new SessionStore();
+  const services = { eventBus, sessionStore, ptyHub: new PtyHub() };
+  const sessionId = sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "thread-1",
+    launchSource: "web",
+    cwd: "/workspace/demo",
+    rootDir: "/workspace/demo",
+    title: "Codex mirror",
+  }).session.id;
+  const store = new ConversationProjectionStore(eventBus, {
+    eventFilter: (event) => event.source.channel === "structured_persisted",
+  });
+  const meta = {
+    provider: "codex" as const,
+    channel: "structured_persisted" as const,
+    authority: "authoritative" as const,
+  };
+  const translationState = createCodexRolloutTranslationState({
+    providerSessionId: "thread-1",
+  });
+
+  applyProviderActivity(services, sessionId, meta, {
+    type: "turn_started",
+    turnId: "turn-1",
+  });
+  translateCodexRolloutLine(
+    {
+      timestamp: "2026-07-11T00:00:00.000Z",
+      type: "event_msg",
+      payload: { type: "task_started", turn_id: "turn-1" },
+    },
+    translationState,
+  );
+  const records = [
+    {
+      timestamp: "2026-07-11T00:00:01.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Inspect the repository" }],
+      },
+    },
+    {
+      timestamp: "2026-07-11T00:00:02.000Z",
+      type: "event_msg",
+      payload: {
+        type: "agent_message",
+        message: "Checking the implementation.",
+        phase: "commentary",
+      },
+    },
+    {
+      timestamp: "2026-07-11T00:00:03.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Inspection complete." }],
+        phase: "final_answer",
+      },
+    },
+  ];
+  const itemEvents = records.flatMap((record) =>
+    translateCodexRolloutLine(record, translationState).flatMap((item) =>
+      applyProviderActivity(services, sessionId, {
+        ...meta,
+        ...(item.ts ? { ts: item.ts } : {}),
+      }, item.activity),
+    ),
+  );
+  applyProviderActivity(services, sessionId, meta, {
+    type: "turn_completed",
+    turnId: "turn-1",
+  });
+
+  assert.equal(itemEvents.length, 3);
+  assert.deepEqual(itemEvents.map((event) => event.turnId), ["turn-1", "turn-1", "turn-1"]);
+  for (const event of itemEvents) {
+    assert.equal(store.deltaForSourceSeq(event.seq)?.upsertTurns[0]?.upsertItems.length, 1);
+  }
+  const turn = store.snapshot(sessionId).turns[0];
+  assert.equal(turn?.status, "completed");
+  assert.deepEqual(
+    turn?.items.map((item) =>
+      item.content.kind === "timeline" && "text" in item.content.item
+        ? item.content.item.text
+        : "",
+    ),
+    ["Inspect the repository", "Checking the implementation.", "Inspection complete."],
+  );
+  assert.equal(
+    turn?.items.find((item) => item.id === turn.finalAnswerItemId)?.role,
+    "final",
+  );
+  store.close();
+});
+
 test("history cache expansion does not advance the live delta revision", () => {
   const eventBus = new EventBus();
   const store = new ConversationProjectionStore(eventBus);
@@ -153,6 +261,7 @@ test("history cache expansion does not advance the live delta revision", () => {
         statusAuthority: "native",
         items: [],
         failedItemCount: 0,
+        activities: [],
         revision: 1,
       },
     ],
@@ -229,6 +338,7 @@ test("resident live projection overlays a history baseline without storing the b
         ],
         finalAnswerItemId: "final-1",
         failedItemCount: 0,
+        activities: [],
         revision: 1,
       },
     ],
@@ -296,6 +406,7 @@ test("resident live lifecycle overrides a stale terminal history snapshot", () =
         error: { message: "stale interruption" },
         items: [],
         failedItemCount: 0,
+        activities: [],
         revision: 10_000,
       },
     ],
@@ -325,6 +436,7 @@ test("resident overlay appends only turns after the latest history overlap", () 
     statusAuthority: "native" as const,
     items: [],
     failedItemCount: 0,
+    activities: [],
     revision: 1,
   });
   store.mergeProjection(
@@ -365,6 +477,7 @@ test("resident store bounds settled turns without dropping an active turn", () =
       statusAuthority: "native" as const,
       items: [],
       failedItemCount: 0,
+      activities: [],
       revision: 1,
     },
     {
@@ -375,6 +488,7 @@ test("resident store bounds settled turns without dropping an active turn", () =
       statusAuthority: "native" as const,
       items: [],
       failedItemCount: 0,
+      activities: [],
       revision: 1,
     },
     {
@@ -385,6 +499,7 @@ test("resident store bounds settled turns without dropping an active turn", () =
       statusAuthority: "native" as const,
       items: [],
       failedItemCount: 0,
+      activities: [],
       revision: 1,
     },
   ];
@@ -454,6 +569,7 @@ test("explicit commentary stays process content when live and history items merg
         ],
         finalAnswerItemId: "message-2",
         failedItemCount: 0,
+        activities: [],
         revision: 3,
       },
     ],

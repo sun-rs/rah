@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import type { SessionTurnDirectoryResponse } from "@rah/runtime-protocol";
+import type { ConversationTurnDirectoryResponse } from "@rah/runtime-protocol";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 import type { CodexTurnDirectorySnapshot } from "./codex-turn-directory-worker";
 
@@ -59,7 +59,7 @@ export class CodexTurnDirectoryStore {
   async getDirectory(
     sessionId: string,
     record: CodexStoredSessionRecord,
-  ): Promise<SessionTurnDirectoryResponse> {
+  ): Promise<ConversationTurnDirectoryResponse> {
     const snapshot = await this.getSnapshot(record);
     const sourceIsCurrent = snapshotStatKey(snapshot) === statKey(record.rolloutPath);
     return {

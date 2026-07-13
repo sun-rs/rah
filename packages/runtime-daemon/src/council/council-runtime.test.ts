@@ -66,7 +66,6 @@ class FakeManagedSessionRunner {
                 contextUsage: true,
                 resumeByProvider: true,
                 listProviderSessions: true,
-                renameSession: false,
                 actions: {
                   info: true,
                   stop: true,
@@ -164,7 +163,7 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
           label: "Codex Lead",
           role: "Lead implementation and propose concrete changes.",
           modelId: "gpt-5.5",
-          reasoningId: "xhigh",
+          optionValues: { model_reasoning_effort: "xhigh" },
           modeId: "never/danger-full-access",
         },
         {
@@ -206,7 +205,7 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     });
     assert.equal(managed.started[0]!.cwd, root);
     assert.equal(managed.started[0]!.model, "gpt-5.5");
-    assert.equal(managed.started[0]!.reasoningId, "xhigh");
+    assert.deepEqual(managed.started[0]!.optionValues, { model_reasoning_effort: "xhigh" });
     assert.equal(managed.started[0]!.modeId, "never/danger-full-access");
     assert.equal(managed.started[0]!.attach?.client.id, `rah-council:${response.council.id}:${codexId}`);
     assert.equal(managed.started[0]!.attach?.claimControl, true);
@@ -329,8 +328,7 @@ test("CouncilRuntime can append an agent to an already running council", async (
         label: "OpenCode Reviewer",
         role: "Review the current plan.",
         modelId: "deepseek/deepseek-v4-pro",
-        reasoningId: "high",
-        optionValues: { reasoning_effort: "high" },
+        optionValues: { model_reasoning_variant: "high" },
       },
     });
 
@@ -340,8 +338,7 @@ test("CouncilRuntime can append an agent to an already running council", async (
     assert.equal(managed.started.length, 2);
     assert.equal(managed.started[1]!.provider, "opencode");
     assert.equal(managed.started[1]!.model, "deepseek/deepseek-v4-pro");
-    assert.equal(managed.started[1]!.reasoningId, "high");
-    assert.deepEqual(managed.started[1]!.optionValues, { reasoning_effort: "high" });
+    assert.deepEqual(managed.started[1]!.optionValues, { model_reasoning_variant: "high" });
     assert.match(managed.inputs.at(-1)?.request.text ?? "", /OpenCode Reviewer/);
     assert.equal(
       added.council.messages.some((message) =>

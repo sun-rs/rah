@@ -121,21 +121,78 @@ test("pages OpenCode stored history through a frozen loader", { skip: !hasSqlite
     const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
     assert.ok(record);
 
+    const secondTurnAt = Date.parse("2026-04-26T16:00:10.000Z");
+    execFileSync("sqlite3", [
+      record.databasePath,
+      `
+        insert into message (id, session_id, time_created, time_updated, data) values
+          ('msg_user_2', 'ses_active', ${secondTurnAt}, ${secondTurnAt}, ${sqlJson({
+            role: "user",
+            time: { created: secondTurnAt },
+          })}),
+          ('msg_assistant_2', 'ses_active', ${secondTurnAt + 100}, ${secondTurnAt + 200}, ${sqlJson({
+            role: "assistant",
+            parentID: "msg_user_2",
+            providerID: "test",
+            modelID: "test-model",
+            finish: "stop",
+            time: { created: secondTurnAt + 100, completed: secondTurnAt + 200 },
+          })});
+        insert into part (id, message_id, session_id, time_created, time_updated, data) values
+          ('prt_user_2', 'msg_user_2', 'ses_active', ${secondTurnAt + 1}, ${secondTurnAt + 1}, ${sqlJson({
+            type: "text",
+            text: "Second question",
+          })}),
+          ('prt_reasoning_2', 'msg_assistant_2', 'ses_active', ${secondTurnAt + 101}, ${secondTurnAt + 101}, ${sqlJson({
+            type: "reasoning",
+            text: "Second thinking",
+          })}),
+          ('prt_assistant_2', 'msg_assistant_2', 'ses_active', ${secondTurnAt + 102}, ${secondTurnAt + 200}, ${sqlJson({
+            type: "text",
+            text: "Second answer",
+          })});
+      `,
+    ]);
+
     const loader = createOpenCodeStoredSessionFrozenHistoryPageLoader({
       sessionId: "runtime-session",
       record,
     });
     const first = loader.loadInitialPage(3);
-    assert.equal(first.events.length, 3);
     assert.ok(first.nextCursor);
+    assert.deepEqual(
+      first.events.flatMap((event) =>
+        event.type === "timeline.item.added" &&
+        (event.payload.item.kind === "user_message" ||
+          event.payload.item.kind === "assistant_message")
+          ? [event.payload.item.text]
+          : [],
+      ),
+      ["Second question", "Second answer"],
+    );
 
     const older = loader.loadOlderPage(first.nextCursor, 3, first.boundary);
     const timelineItems = older.events
       .filter((event) => event.type === "timeline.item.added")
       .map((event) => event.payload.item);
-    assert.deepEqual(timelineItems, [
-      { kind: "user_message", text: "Hello", messageId: "msg_user" },
-    ]);
+    assert.deepEqual(
+      timelineItems.filter(
+        (item) => item.kind === "user_message" || item.kind === "assistant_message",
+      ),
+      [
+        { kind: "user_message", text: "Hello", messageId: "msg_user" },
+        {
+          kind: "assistant_message",
+          text: "Assistant answer",
+          messageId: "msg_assistant",
+          runtimeModel: {
+            modelId: "test/test-model",
+            source: "native",
+          },
+        },
+      ],
+    );
+    assert.equal(older.nextCursor, undefined);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

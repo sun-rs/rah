@@ -6,7 +6,7 @@ import type {
   AttachSessionRequest,
   ManagedSession,
   RahEvent,
-  SessionHistoryPageResponse,
+  ConversationEvidencePage,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
@@ -61,7 +61,6 @@ const REHYDRATED_CAPABILITIES = {
   listProviderSessions: true,
   steerInput: false,
   queuedInput: false,
-  renameSession: false,
   actions: {
     info: true,
     stop: false,
@@ -364,7 +363,7 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
   record: OpenCodeStoredSessionRecord;
   beforeTs?: string;
   limit?: number;
-}): SessionHistoryPageResponse {
+}): ConversationEvidencePage {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -383,10 +382,30 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
     capabilities: REHYDRATED_CAPABILITIES,
   });
   const messageLimit = Math.min(Math.max((params.limit ?? 1000) * 4, 100), 10_000);
-  const messages = loadOpenCodeStoredMessages(params.record, {
+  let fetchLimit = Math.min(messageLimit + 1, 10_000);
+  let fetchedMessages = loadOpenCodeStoredMessages(params.record, {
     ...(params.beforeTs ? { beforeTs: params.beforeTs } : {}),
-    limit: messageLimit,
+    limit: fetchLimit,
   });
+  // A tool-heavy turn can contain many assistant messages after its user root.
+  // Grow the local SQLite window until that semantic boundary is present. This
+  // work stays on the daemon; the browser still receives a bounded turn page.
+  while (
+    fetchedMessages.length === fetchLimit &&
+    !fetchedMessages.some((message) => message.info.role === "user") &&
+    fetchLimit < 10_000
+  ) {
+    fetchLimit = Math.min(fetchLimit * 2, 10_000);
+    fetchedMessages = loadOpenCodeStoredMessages(params.record, {
+      ...(params.beforeTs ? { beforeTs: params.beforeTs } : {}),
+      limit: fetchLimit,
+    });
+  }
+  const hasEarlierMessages = fetchedMessages.length > messageLimit;
+  const boundedMessages = fetchedMessages.slice(-messageLimit);
+  const firstUserIndex = boundedMessages.findIndex((message) => message.info.role === "user");
+  const messages = firstUserIndex > 0 ? boundedMessages.slice(firstUserIndex) : boundedMessages;
+  const droppedLeadingContinuation = firstUserIndex > 0;
   const historyState = createOpenCodeActivityState(
     messages[0]?.info.sessionID ?? params.record.ref.providerSessionId,
     { origin: "history" },
@@ -434,12 +453,20 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
     }))
     .sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
   const limit = Math.max(1, params.limit ?? 1000);
-  const start = Math.max(0, all.length - limit);
+  const naiveStart = Math.max(0, all.length - limit);
+  const firstIncludedTurnId = all
+    .slice(naiveStart)
+    .find((event) => event.turnId !== undefined)?.turnId;
+  const semanticStart = firstIncludedTurnId
+    ? all.findIndex((event) => event.turnId === firstIncludedTurnId)
+    : naiveStart;
+  const start = semanticStart >= 0 ? Math.min(naiveStart, semanticStart) : naiveStart;
   const events = all.slice(start);
+  const hasOlder = start > 0 || hasEarlierMessages || droppedLeadingContinuation;
   return {
     sessionId: params.sessionId,
     events,
-    ...(start > 0 && events[0] ? { nextBeforeTs: events[0].ts } : {}),
+    ...(hasOlder && events[0] ? { nextBeforeTs: events[0].ts } : {}),
   };
 }
 
@@ -467,6 +494,7 @@ export function createOpenCodeStoredSessionFrozenHistoryPageLoader(args: {
   };
 
   return {
+    boundary,
     loadInitialPage: (limit) => pageAt(undefined, limit),
     loadOlderPage: (cursor, limit, frozenBoundary) => {
       if (frozenBoundary.sourceRevision !== boundary.sourceRevision) {

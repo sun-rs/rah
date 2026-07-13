@@ -58,7 +58,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     const modelCatalog =
-      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+      request.model || request.optionValues !== undefined
         ? mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: request.cwd }))
         : mergeManualProviderModels(
             this.modelCatalog.getCached({ cwd: request.cwd }) ?? buildOpenCodeFallbackModelCatalog(),
@@ -116,7 +116,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       const resumeCwd = request.cwd ?? record?.ref.cwd ?? record?.ref.rootDir ?? process.cwd();
       const rawCachedModelCatalog = this.modelCatalog.getCached({ cwd: resumeCwd });
       const cachedModelCatalog =
-        request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+        request.model || request.optionValues !== undefined
           ? mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: resumeCwd }))
           : rawCachedModelCatalog
             ? mergeManualProviderModels(rawCachedModelCatalog)
@@ -131,8 +131,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         ...(request.modeId ? { modeId: request.modeId } : {}),
         ...(request.model ? { model: request.model } : {}),
         ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
-        ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
-        ...(request.providerConfig ? { providerConfig: request.providerConfig } : {}),
+        ...(request.historyReplay !== undefined ? { historyReplay: request.historyReplay } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
       });
       this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
@@ -158,25 +157,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const catalog = mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: live.cwd }));
     const model = catalog.models.find((entry) => entry.id === request.modelId);
     const requestedOptionValues = normalizeOpenCodeOptionValues(request.optionValues);
-    const requestedReasoningId = normalizeOpenCodeReasoningId(request.reasoningId);
     const optionValues = model
       ? resolveModelOptionValues({
           catalog,
           model,
           optionValues: requestedOptionValues,
-          reasoningId: requestedReasoningId,
           useDefaults: true,
           requireMutable: true,
         })
       : requestedOptionValues ?? {};
     const normalizedOptionValues = normalizeOpenCodeOptionValues(optionValues) ?? {};
     const optionReasoningId = optionValueAsString(normalizedOptionValues, "model_reasoning_variant");
-    const reasoningId =
-      optionReasoningId !== undefined
-        ? optionReasoningId
-        : requestedReasoningId !== undefined
-          ? requestedReasoningId
-          : model?.defaultReasoningId ?? null;
+    const reasoningId = optionReasoningId ?? model?.defaultReasoningId ?? null;
     live.model = request.modelId;
     live.reasoningId = reasoningId;
     const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
@@ -283,7 +275,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     // OpenCode running sessions are structured API sessions, not PTY-backed sessions.
   }
 
-  async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+  async getProviderDiagnostic(options?: { forceRefresh?: boolean; includeHealth?: boolean }) {
     return await probeProviderDiagnostic("opencode", await opencodeLaunchSpec(), options);
   }
 

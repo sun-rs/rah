@@ -121,7 +121,6 @@ export class DebugEngine {
       cwd: request.cwd,
       rootDir: sanitizeRootDir(request.cwd),
       capabilities: {
-        renameSession: false,
         actions: {
           info: true,
           stop: true,
@@ -259,7 +258,6 @@ export class DebugEngine {
       cwd,
       rootDir: stored?.rootDir ?? sanitizeRootDir(cwd),
       capabilities: {
-        renameSession: false,
         actions: {
           info: true,
           stop: true,
@@ -772,7 +770,6 @@ export class DebugEngine {
       rootDir: scenario.rootDir,
       title: scenario.title,
       capabilities: {
-        renameSession: false,
         actions: {
           info: true,
           stop: true,

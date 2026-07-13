@@ -81,7 +81,6 @@ import {
   TmuxCommandError,
   TmuxMuxBackend,
 } from "./tmux-mux-backend";
-import { reconcileTurnLifecycleActivity } from "./timeline-reconciler";
 import type { MuxPaneSubscription, MuxRuntime } from "./mux-runtime";
 
 type RuntimeTerminalCoordinatorDeps = {
@@ -107,6 +106,7 @@ type TuiMuxSessionState = {
   subscriptionRestartTimer?: ReturnType<typeof setTimeout>;
   exitPollMisses?: number;
   exitPollTimer?: ReturnType<typeof setInterval>;
+  exitPollInFlight?: Promise<void>;
   dumpTimer?: ReturnType<typeof setTimeout>;
   dumpInFlight?: boolean;
   dumpPending?: boolean;
@@ -143,6 +143,35 @@ function registerSubmittedNativeTuiInput(
   native.submittedInputs = submittedInputs.slice(-50);
 }
 
+function markLatestSubmittedNativeTuiInputInterrupted(
+  native: NativeTuiSessionState,
+  clientId: string,
+): void {
+  const inputs = native.submittedInputs;
+  const injectedAtMs = native.lastInjectedInputAtMs;
+  if (!inputs || injectedAtMs === undefined) {
+    return;
+  }
+  for (let index = inputs.length - 1; index >= 0; index -= 1) {
+    const input = inputs[index];
+    const submittedAtMs = input ? Date.parse(input.submittedAt) : Number.NaN;
+    if (
+      input &&
+      input.clientId === clientId &&
+      input.interruptedAt === undefined &&
+      Number.isFinite(submittedAtMs) &&
+      Math.abs(submittedAtMs - injectedAtMs) <= 1_000
+    ) {
+      input.interruptedAt = new Date().toISOString();
+      return;
+    }
+  }
+}
+
+function hasPendingInterruptedNativeTuiInput(native: NativeTuiSessionState): boolean {
+  return native.submittedInputs?.some((input) => input.interruptedAt !== undefined) === true;
+}
+
 function remainingRecentInjectedInputMs(native: NativeTuiSessionState): number {
   if (native.lastInjectedInputAtMs === undefined) {
     return 0;
@@ -164,9 +193,9 @@ function initialTuiMuxPromptState(provider: ProviderKind): NativeTuiPromptState 
   // TUI mux sessions need a sizing/attach surface before the provider prompt is
   // reliable. Queue initial Web chat input until the viewport observer sees a
   // real prompt marker.
-  // Claude Code can accept input while a turn is running and manages its own
-  // queue inside the native TUI. RAH must not use prompt state as an
-  // authoritative send gate for Claude mux sessions.
+  // Claude is ready for the first Web submission immediately after launch.
+  // Subsequent submissions are gated by its structured transcript lifecycle,
+  // not by prompt text painted during a terminal redraw.
   return provider === "claude"
     ? "prompt_clean"
     : provider === "codex" || provider === "opencode"
@@ -244,7 +273,9 @@ const NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS = 5_000;
 const OPENCODE_SECOND_INTERRUPT_DELAY_MS = 120;
 const NATIVE_TUI_CLEAR_PROMPT_DATA = "\u0015\u000b";
 const NATIVE_TUI_SUBMIT_DELAY_MS = 250;
+const CLAUDE_TUI_TEXT_SETTLE_MS = 1_000;
 const TUI_MUX_CLEAR_PROMPT_SETTLE_MS = 250;
+const CLAUDE_TUI_MUX_SUBMIT_SETTLE_MS = 1_000;
 const NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT = 12_000;
 const NATIVE_TUI_EXIT_ERROR_MAX_LENGTH = 320;
 const NATIVE_TUI_EXIT_ERROR_PATTERN =
@@ -261,48 +292,21 @@ function nativeTuiSubmitDataForProvider(provider: ProviderKind): string {
   return "\r";
 }
 
-function nativeTuiSubmitCountForProvider(provider: ProviderKind): number {
-  // Claude Code can keep long Web-injected prompts in its multiline composer
-  // after the first Enter. A second Enter submits the draft; while an ordinary
-  // short prompt is already running, the second Enter is harmless.
-  return provider === "claude" ? 2 : 1;
+function nativeTuiSubmitCountForProvider(_provider: ProviderKind): number {
+  // Chat text reaches tmux through one bracketed-paste transaction. Submit it
+  // exactly once: a second Enter can land after Claude has accepted the paste
+  // and restore or resubmit part of the previous multiline draft.
+  return 1;
 }
 
-function isClaudeNativeTuiPassthrough(native: NativeTuiSessionState): boolean {
-  return native.provider === "claude";
-}
-
-function usesBestEffortEscNativeTuiInterrupt(native: NativeTuiSessionState): boolean {
-  return native.provider === "claude";
-}
-
-function syntheticNativeTuiInterruptTurnId(sessionId: string): string {
-  return `native-tui:${sessionId}:interrupt:${Date.now().toString(36)}`;
-}
-
-function latestSubmittedNativeTuiClientTurnId(native: NativeTuiSessionState): string | undefined {
-  const inputs = native.submittedInputs;
-  if (!inputs || inputs.length === 0) {
-    return undefined;
-  }
-  for (let index = inputs.length - 1; index >= 0; index--) {
-    const clientTurnId = inputs[index]?.clientTurnId;
-    if (clientTurnId) {
-      return clientTurnId;
-    }
-  }
-  return undefined;
-}
-
-function nativeTuiInterruptTurnId(
-  native: NativeTuiSessionState,
-  activeTurnId: string | undefined,
-): string {
-  return (
-    activeTurnId ??
-    latestSubmittedNativeTuiClientTurnId(native) ??
-    syntheticNativeTuiInterruptTurnId(native.sessionId)
-  );
+function nativeTuiSubmitDelayForProvider(provider: ProviderKind, submitIndex: number): number {
+  // Claude Code briefly classifies a fast burst of terminal text as a paste.
+  // Enter sent inside that window can remain in the multiline composer instead
+  // of submitting it. Only the first Enter needs to wait for the pasted draft
+  // to settle; the second is the provider-specific submit confirmation.
+  return provider === "claude" && submitIndex === 0
+    ? CLAUDE_TUI_TEXT_SETTLE_MS
+    : NATIVE_TUI_SUBMIT_DELAY_MS;
 }
 
 function isIdleNativeTuiInterruptRequest(
@@ -887,10 +891,8 @@ export class RuntimeTerminalCoordinator {
     options?: { clientMessageId?: string; clientTurnId?: string },
   ): void {
     this.claimWebControl(native.sessionId, clientId);
-    this.cancelNativeTuiPromptClear(native);
     const clearPromptBeforeSubmit =
       native.clearPromptBeforeNextInput === true ||
-      isClaudeNativeTuiPassthrough(native) ||
       native.promptTracker.draftText.length > 0;
     native.promptTracker.draftText = "";
     native.lastInjectedInputAtMs = Date.now();
@@ -901,9 +903,7 @@ export class RuntimeTerminalCoordinator {
       ...(options?.clientMessageId !== undefined ? { clientMessageId: options.clientMessageId } : {}),
       ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
     });
-    if (!isClaudeNativeTuiPassthrough(native)) {
-      this.updateNativeTuiPromptState(native.sessionId, "agent_busy");
-    }
+    this.updateNativeTuiPromptState(native.sessionId, "agent_busy");
     // Drain already persisted mirror events after the new input watermark is
     // established, so stale persisted completions cannot briefly clear Stop.
     this.mirrorRuntime.mirrorSession(native.sessionId);
@@ -920,7 +920,7 @@ export class RuntimeTerminalCoordinator {
     if (tmux) {
       void this.withTuiMuxActionSurface(tmux, async () => {
         if (options?.clearPromptBeforeSubmit) {
-          await this.sendTuiMuxClearPrompt(tmux);
+          await this.sendTuiMuxClearPrompt(tmux, native.provider);
           // tmux action send-keys returns after enqueueing synthesized keys,
           // not necessarily after the target TUI has consumed them. Give the
           // clear sequence a short deterministic settle window so the next
@@ -931,6 +931,12 @@ export class RuntimeTerminalCoordinator {
         for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
           await new Promise((resolve) => setTimeout(resolve, NATIVE_TUI_SUBMIT_DELAY_MS));
           await this.writeTuiMuxInput(tmux, nativeTuiSubmitDataForProvider(native.provider));
+        }
+        if (native.provider === "claude") {
+          // tmux confirms that bytes entered its pane queue, not that Claude
+          // consumed the final Enter. Keep a following Esc in this same action
+          // queue until the submit key has reached the provider.
+          await new Promise((resolve) => setTimeout(resolve, CLAUDE_TUI_MUX_SUBMIT_SETTLE_MS));
         }
       })
         .then(
@@ -945,26 +951,34 @@ export class RuntimeTerminalCoordinator {
     } else {
       const prefix = options?.clearPromptBeforeSubmit ? NATIVE_TUI_CLEAR_PROMPT_DATA : "";
       native.process.write(`${prefix}${text}`);
-      const submitOnce = (remaining: number) => {
+      const submitCount = nativeTuiSubmitCountForProvider(native.provider);
+      const submitOnce = (submitIndex: number) => {
         const current = this.nativeTuiSessions.get(native.sessionId);
         if (current === native) {
           current.process.write(nativeTuiSubmitDataForProvider(current.provider));
         }
-        if (remaining > 1) {
-          const nextTimer = setTimeout(() => submitOnce(remaining - 1), NATIVE_TUI_SUBMIT_DELAY_MS);
+        if (submitIndex + 1 < submitCount) {
+          const nextTimer = setTimeout(
+            () => submitOnce(submitIndex + 1),
+            nativeTuiSubmitDelayForProvider(native.provider, submitIndex + 1),
+          );
           nextTimer.unref?.();
         }
       };
       const timer = setTimeout(
-        () => submitOnce(nativeTuiSubmitCountForProvider(native.provider)),
-        NATIVE_TUI_SUBMIT_DELAY_MS,
+        () => submitOnce(0),
+        nativeTuiSubmitDelayForProvider(native.provider, 0),
       );
       timer.unref?.();
     }
   }
 
   private shouldQueueNativeTuiChatInput(native: NativeTuiSessionState): boolean {
-    if (isClaudeNativeTuiPassthrough(native)) {
+    // A Web chat submission intentionally replaces a known local Claude draft.
+    // Once a turn is running, however, Claude's terminal composer is not a
+    // reliable queue: keep later submissions in RAH until the structured
+    // transcript reports the current turn's final/terminal event.
+    if (native.provider === "claude" && native.promptState === "prompt_dirty") {
       return false;
     }
     return (
@@ -1003,16 +1017,6 @@ export class RuntimeTerminalCoordinator {
       this.claimWebControl(sessionId, clientId);
       const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
       if (native) {
-        if (usesBestEffortEscNativeTuiInterrupt(native)) {
-          cancelNativeTuiQueuedInputsForClient(native, clientId);
-          native.promptTracker.draftText = "";
-          delete native.lastInjectedInputAtMs;
-          native.clearPromptBeforeNextInput = true;
-          this.sendTuiMuxInterrupt(tmux, native.provider);
-          this.scheduleBestEffortEscNativeTuiPromptClear(native);
-          this.updateNativeTuiPromptState(sessionId, "prompt_clean");
-          return true;
-        }
         if (native.stopPending) {
           return true;
         }
@@ -1020,12 +1024,12 @@ export class RuntimeTerminalCoordinator {
         if (isIdleNativeTuiInterruptRequest(native, currentState, activeTurnId)) {
           return true;
         }
+        markLatestSubmittedNativeTuiInputInterrupted(native, clientId);
         cancelNativeTuiQueuedInputsForClient(native, clientId);
         native.promptTracker.draftText = "";
         delete native.lastInjectedInputAtMs;
         native.clearPromptBeforeNextInput = true;
         native.stopPending = true;
-        native.stopTurnId = nativeTuiInterruptTurnId(native, activeTurnId);
         this.scheduleNativeTuiInterruptConfirmation(native);
         if (currentState?.session.runtimeState !== "running") {
           this.deps.sessionStore.setRuntimeState(sessionId, "running");
@@ -1051,16 +1055,6 @@ export class RuntimeTerminalCoordinator {
     }
     this.claimWebControl(sessionId, clientId);
     const queuedInputCount = native.queuedInputs.length;
-    if (usesBestEffortEscNativeTuiInterrupt(native)) {
-      cancelNativeTuiQueuedInputsForClient(native, clientId);
-      this.writeNativeTuiInterrupt(native);
-      native.promptTracker.draftText = "";
-      delete native.lastInjectedInputAtMs;
-      native.clearPromptBeforeNextInput = true;
-      this.scheduleBestEffortEscNativeTuiPromptClear(native);
-      this.updateNativeTuiPromptState(sessionId, "prompt_clean");
-      return true;
-    }
     if (native.stopPending) {
       return true;
     }
@@ -1069,13 +1063,13 @@ export class RuntimeTerminalCoordinator {
     if (isIdleNativeTuiInterruptRequest(native, currentState, activeTurnId)) {
       return true;
     }
+    markLatestSubmittedNativeTuiInputInterrupted(native, clientId);
     cancelNativeTuiQueuedInputsForClient(native, clientId);
     this.writeNativeTuiInterrupt(native);
     native.promptTracker.draftText = "";
     delete native.lastInjectedInputAtMs;
     native.clearPromptBeforeNextInput = true;
     native.stopPending = true;
-    native.stopTurnId = nativeTuiInterruptTurnId(native, activeTurnId);
     this.scheduleNativeTuiInterruptConfirmation(native);
     if (queuedInputCount !== native.queuedInputs.length) {
       this.updateNativeTuiPromptState(sessionId, native.promptState);
@@ -1120,46 +1114,13 @@ export class RuntimeTerminalCoordinator {
     const tmux = this.tuiMuxSessions.get(native.sessionId);
     if (tmux) {
       void this.withTuiMuxActionSurface(tmux, async () => {
-        await this.sendTuiMuxClearPrompt(tmux);
+        await this.sendTuiMuxClearPrompt(tmux, native.provider);
       }).catch((error) => {
         this.handleTuiMuxInputFailure(tmux, error);
       });
       return;
     }
     native.process.write(NATIVE_TUI_CLEAR_PROMPT_DATA);
-  }
-
-  private scheduleBestEffortEscNativeTuiPromptClear(native: NativeTuiSessionState): void {
-    this.cancelNativeTuiPromptClear(native);
-    const scheduledAtMs = Date.now();
-    native.promptClearScheduledAtMs = scheduledAtMs;
-    native.promptClearTimer = setTimeout(() => {
-      const current = this.nativeTuiSessions.get(native.sessionId);
-      if (current !== native) {
-        return;
-      }
-      delete current.promptClearTimer;
-      delete current.promptClearScheduledAtMs;
-      if (!usesBestEffortEscNativeTuiInterrupt(current)) {
-        return;
-      }
-      if (
-        current.lastInjectedInputAtMs !== undefined &&
-        current.lastInjectedInputAtMs >= scheduledAtMs
-      ) {
-        return;
-      }
-      this.clearNativeTuiPromptInput(current);
-    }, NATIVE_TUI_SUBMIT_DELAY_MS);
-    native.promptClearTimer.unref?.();
-  }
-
-  private cancelNativeTuiPromptClear(native: NativeTuiSessionState): void {
-    if (native.promptClearTimer) {
-      clearTimeout(native.promptClearTimer);
-      delete native.promptClearTimer;
-    }
-    delete native.promptClearScheduledAtMs;
   }
 
   private sendTuiMuxInterrupt(tmux: TuiMuxSessionState, provider: ProviderKind): void {
@@ -1193,9 +1154,19 @@ export class RuntimeTerminalCoordinator {
     });
   }
 
-  private async sendTuiMuxClearPrompt(tmux: TuiMuxSessionState): Promise<void> {
+  private async sendTuiMuxClearPrompt(
+    tmux: TuiMuxSessionState,
+    provider: ProviderKind,
+  ): Promise<void> {
     // tmux action write can inject control bytes as literal composer text in
     // raw-mode TUIs. send-keys asks tmux to synthesize terminal key events.
+    if (provider === "claude") {
+      // Claude's multiline composer restores an interrupted draft. Its
+      // readline-style Ctrl-U/Ctrl-K bindings only affect the current visual
+      // line, while Ctrl-C clears the complete draft without closing the TUI.
+      await tmux.muxRuntime.sendKeys(tmux.muxSessionName, tmux.paneId, ["Ctrl c"]);
+      return;
+    }
     await tmux.muxRuntime.sendKeys(tmux.muxSessionName, tmux.paneId, [
       "Ctrl a",
       "Ctrl k",
@@ -1226,36 +1197,18 @@ export class RuntimeTerminalCoordinator {
     }
     const sessionId = native.sessionId;
     const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
-    const turnId = native.stopTurnId ?? activeTurnId;
     if (native.stopTimer) {
       clearTimeout(native.stopTimer);
       delete native.stopTimer;
     }
     delete native.stopPending;
-    delete native.stopTurnId;
     native.lastInterruptCompletedAtMs = Date.now();
+    // The provider owns canonical conversation lifecycle. Drain its persisted
+    // event before completing terminal-control state; never synthesize a second
+    // turn.canceled event from prompt heuristics.
+    this.mirrorRuntime.mirrorSession(sessionId);
     if (activeTurnId) {
       this.deps.sessionStore.setActiveTurn(sessionId, undefined);
-    }
-    if (!turnId) {
-      return;
-    }
-    const reconciled = reconcileTurnLifecycleActivity(this.deps, sessionId, {
-      type: "turn_canceled",
-      turnId,
-      reason: "interrupted",
-    });
-    if (reconciled !== null) {
-      this.deps.eventBus.publish({
-        sessionId,
-        type: "turn.canceled",
-        source: SYSTEM_SOURCE,
-        payload: {
-          reason: reconciled.activity.reason,
-          ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
-        },
-        turnId: reconciled.activity.turnId,
-      });
     }
   }
 
@@ -1331,13 +1284,11 @@ export class RuntimeTerminalCoordinator {
       source: SYSTEM_SOURCE,
       payload: { promptState, queuedInputCount: native.queuedInputs.length },
     });
-    const nextRuntimeState = isClaudeNativeTuiPassthrough(native)
-      ? "idle"
-      : native.stopPending || native.queuedInputs.length > 0
+    const nextRuntimeState = native.stopPending || native.queuedInputs.length > 0
+      ? "running"
+      : promptState === "agent_busy"
         ? "running"
-        : promptState === "agent_busy"
-          ? "running"
-          : "idle";
+        : "idle";
     if (existingState.session.runtimeState !== nextRuntimeState) {
       this.deps.sessionStore.setRuntimeState(sessionId, nextRuntimeState);
       publishSessionStateChanged(this.deps, sessionId, nextRuntimeState);
@@ -1345,7 +1296,8 @@ export class RuntimeTerminalCoordinator {
     if (
       promptState !== "prompt_clean" ||
       native.promptTracker.draftText.length > 0 ||
-      native.queuedInputs.length === 0
+      native.queuedInputs.length === 0 ||
+      hasPendingInterruptedNativeTuiInput(native)
     ) {
       return;
     }
@@ -1774,6 +1726,7 @@ export class RuntimeTerminalCoordinator {
     publishSessionCreatedAndStarted(this.deps, sessionId);
 
     let terminal: PtySessionRuntimeEntry;
+    let startupOutputTail = "";
     try {
       terminal = this.ptySessions.create({
         id: sessionId,
@@ -1785,7 +1738,13 @@ export class RuntimeTerminalCoordinator {
         ...(args.launch.env ? { env: args.launch.env } : {}),
         onData: (terminalId, data) => {
           this.deps.ptyHub.appendOutput(terminalId, data);
-          this.observeNativeTuiOutput(terminalId, data);
+          if (this.nativeTuiSessions.has(terminalId)) {
+            this.observeNativeTuiOutput(terminalId, data);
+          } else {
+            startupOutputTail = `${startupOutputTail}${data}`.slice(
+              -NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT,
+            );
+          }
           this.scheduleNativeTuiMirrorWake(terminalId);
         },
         onExit: (terminalId, exitArgs) => {
@@ -1843,6 +1802,9 @@ export class RuntimeTerminalCoordinator {
       ...(providerSessionId ? { providerSessionId } : {}),
     });
     this.nativeTuiSessionIds.add(sessionId);
+    if (startupOutputTail) {
+      this.observeNativeTuiOutput(sessionId, startupOutputTail);
+    }
     this.startNativeTuiBindingProbe(sessionId);
     this.mirrorRuntime.startSessionMirror(sessionId);
 
@@ -2228,12 +2190,7 @@ export class RuntimeTerminalCoordinator {
     if (!text) {
       return;
     }
-    // Use the same pane-targeted byte channel as submit/interrupt. tmux's
-    // write-chars is convenient for interactive attach surfaces, but it has
-    // proven less deterministic for chat-driven injection into multiple hidden
-    // panes. Plain UTF-8 bytes preserve text exactly and avoid focus-sensitive
-    // character synthesis.
-    await tmux.muxRuntime.writeBytes(tmux.muxSessionName, tmux.paneId, text);
+    await tmux.muxRuntime.pasteText(tmux.muxSessionName, tmux.paneId, text);
   }
 
   private async withTuiMuxActionSurface<T>(
@@ -2294,6 +2251,23 @@ export class RuntimeTerminalCoordinator {
     if (!tmux) {
       return;
     }
+    if (tmux.exitPollInFlight) {
+      await tmux.exitPollInFlight;
+      return;
+    }
+    const poll = this.pollTuiMuxExitNow(tmux);
+    tmux.exitPollInFlight = poll;
+    try {
+      await poll;
+    } finally {
+      if (tmux.exitPollInFlight === poll) {
+        delete tmux.exitPollInFlight;
+      }
+    }
+  }
+
+  private async pollTuiMuxExitNow(tmux: TuiMuxSessionState): Promise<void> {
+    const sessionId = tmux.sessionId;
     const panes = await tmux.muxRuntime.listPanes(tmux.muxSessionName).catch((error) => {
       if (isMuxSessionMissingError(error)) {
         return null;
@@ -2323,9 +2297,28 @@ export class RuntimeTerminalCoordinator {
         return;
       }
     }
+    if (pane) {
+      const finalScreen = await tmux.muxRuntime
+        .dumpScreen(tmux.muxSessionName, tmux.paneId, { ansi: true })
+        .catch(() => "");
+      if (finalScreen && this.isCurrentTuiMuxSession(tmux)) {
+        this.observeNativeTuiOutput(sessionId, finalScreen);
+      }
+    }
+    if (!this.isCurrentTuiMuxSession(tmux)) {
+      return;
+    }
     const native = this.nativeTuiSessions.get(sessionId);
     const expectedClose = this.closingNativeTuiSessionIds.has(sessionId);
-    const exitError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
+    const outputError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
+    const exitError = expectedClose
+      ? undefined
+      : outputError ??
+        (pane?.exitStatus !== null && pane?.exitStatus !== undefined && pane.exitStatus !== 0
+          ? `Native TUI process exited with code ${pane.exitStatus}.`
+          : !pane
+            ? "Native TUI process exited unexpectedly."
+            : undefined);
     this.clearTuiMuxRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     if (!exitError) {
@@ -2453,7 +2446,15 @@ export class RuntimeTerminalCoordinator {
       nativeTuiProviderRuntimeSession(native),
       native.recentOutputTail,
     );
-    if (observation.promptClean && native.promptTracker.draftText.length === 0) {
+    const promptMarkerCanCompleteBusyState =
+      native.provider !== "claude" ||
+      native.promptState !== "agent_busy" ||
+      native.stopPending === true;
+    if (
+      observation.promptClean &&
+      promptMarkerCanCompleteBusyState &&
+      native.promptTracker.draftText.length === 0
+    ) {
       native.promptTracker.draftText = "";
       this.updateNativeTuiPromptState(sessionId, "prompt_clean");
     }

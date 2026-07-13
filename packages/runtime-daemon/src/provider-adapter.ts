@@ -9,6 +9,8 @@ import type {
   GitHunkActionRequest,
   GitHunkActionResponse,
   GitStatusResponse,
+  ForkSessionRequest,
+  ForkSessionResponse,
   InterruptSessionRequest,
   ProviderDiagnostic,
   PermissionResponseRequest,
@@ -17,9 +19,8 @@ import type {
   ResumeSessionResponse,
   SetSessionModelRequest,
   SessionFileResponse,
-  SessionHistoryPageResponse,
-  SessionTurnDirectoryResponse,
-  SessionTurnHistoryResponse,
+  ConversationEvidencePage,
+  ConversationTurnDirectoryResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
@@ -28,6 +29,7 @@ import type {
   WorkspaceSnapshotResponse,
   ManagedSession,
 } from "@rah/runtime-protocol";
+import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import type { EventBus } from "./event-bus";
 import type { FrozenHistoryPageLoader } from "./history-snapshots";
 import type { PtyHub } from "./pty-hub";
@@ -62,6 +64,10 @@ export interface ProviderStructuredLifecycleAdapter {
    */
   startSession?(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
   resumeSession?(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;
+  forkSession?(
+    parentSessionId: string,
+    request: ForkSessionRequest,
+  ): ForkSessionResponse | Promise<ForkSessionResponse>;
   closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;
   destroySession?(sessionId: string): Promise<void> | void;
 }
@@ -143,39 +149,38 @@ export interface ProviderStoredHistoryAdapter {
   resumeStoredSession?(
     request: ResumeSessionRequest,
   ): ResumeSessionResponse | Promise<ResumeSessionResponse>;
-  getSessionHistoryPage?(
+  getConversationEvidencePage?(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse;
-  getSessionConversationHistoryPage?(
+  ): ConversationEvidencePage;
+  getConversationSummaryEvidencePage?(
     sessionId: string,
     options?: { cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
+  ): ConversationEvidencePage | undefined | Promise<ConversationEvidencePage | undefined>;
   getSessionConversationItemDetail?(
     sessionId: string,
     options: { providerTurnId: string; providerItemId: string },
-  ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
+  ): ConversationEvidencePage | undefined | Promise<ConversationEvidencePage | undefined>;
   getSessionConversationTurnDetail?(
     sessionId: string,
     options: { providerTurnId: string },
-  ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
+  ): ConversationEvidencePage | undefined | Promise<ConversationEvidencePage | undefined>;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
-  getSessionTurnDirectory?(
+  getSessionConversationDirectory?(
     sessionId: string,
-  ): SessionTurnDirectoryResponse | Promise<SessionTurnDirectoryResponse>;
-  getSessionTurnHistory?(
-    sessionId: string,
-    turnId: string,
-  ): SessionTurnHistoryResponse | Promise<SessionTurnHistoryResponse>;
+  ): ConversationTurnDirectoryResponse | Promise<ConversationTurnDirectoryResponse>;
   listStoredSessions?(): StoredSessionRef[];
   refreshStoredSessionsCatalog?(): StoredSessionRef[];
+  hydrateStoredSessionsCatalog?(records: readonly StoredSessionCatalogRecord[]): void;
   listStoredSessionWatchRoots?(): string[];
+  archiveStoredSession?(session: StoredSessionRef): Promise<void> | void;
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
 }
 
 export interface ProviderDiagnosticAdapter {
   getProviderDiagnostic?(options?: {
     forceRefresh?: boolean;
+    includeHealth?: boolean;
   }): Promise<ProviderDiagnostic> | ProviderDiagnostic;
 }
 
