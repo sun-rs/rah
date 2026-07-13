@@ -113,7 +113,7 @@ node bin/rah.mjs restart --no-open
 http://127.0.0.1:43111/
 ```
 
-现在 `43111` 已经是统一入口。daemon 当前监听 `0.0.0.0`，所以同一局域网里的手机/平板也可以通过 Mac 的局域网 IP 访问，前提是防火墙和网络允许。
+现在 `43111` 已经是统一入口。daemon 当前监听 `0.0.0.0`，所以同一局域网里的手机/平板也可以通过 Mac 的局域网 IP 访问，前提是防火墙和网络允许。本机通过 `127.0.0.1` / `localhost` 直连无需配对；局域网、Tailscale 和代理入口的浏览器仍必须完成设备配对，首次访问在 Mac 执行 `node bin/rah.mjs pair` 生成单次配对码。设计边界见 [设备认证与配对边界](./device-authentication.zh-CN.md)。
 
 - 前端静态资源
 - HTTP API
@@ -174,7 +174,7 @@ RAH 现在应当把测试分成三层理解：
 
 这些测试依赖真实 provider CLI 和对应账号环境：
 
-- `npm run test:smoke:history-claim`
+- `npm run test:smoke:history-resume`
 - `npm run test:smoke:tool-flow`
 - `npm run test:smoke:claude-flow`
 - `npm run test:smoke:claude-browser`
@@ -428,7 +428,7 @@ RAH 当前 `main` 按 1.0.0 里程碑边界维护：
 - 不替 provider TUI 复刻所有 `/command` 和私有菜单。
 - 不用 ANSI/TUI screen 反推 structured Chat。
 - 不保证任意机器只要安装 CLI 就能通过真实 provider smoke；真实 smoke 依赖账号、额度、网络和 provider 版本。
-- 不提供对外公网级认证模型；当前定位仍是本机/局域网个人工作台。
+- 不把 RAH 定位为多租户公网服务；当前设备配对只服务个人工作台的本机、局域网和私有 tailnet 入口。
 
 ## 9. 下一步维护重点
 

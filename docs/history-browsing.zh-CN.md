@@ -1,230 +1,146 @@
-# 历史浏览与分页边界
+# Conversation 历史浏览与分页边界
 
-本文锁定 RAH 历史浏览的加载模型，避免后续把“历史回放”“live session”“provider 原始存储”混在一起。
+复核日期：2026-07-13
 
-当前 core provider：
+## 1. 唯一读取模型
 
-- Codex
-- Claude
-- OpenCode
-
-其它模型家族通过 OpenCode/API provider 承载，不维护独立历史解析器。
-
-## 1. 前端加载模型
-
-RAH 把“live 同步”和“旧历史分页”拆成两条不同路径，不能混用：
+历史与 live 使用同一个 `ConversationTurnProjection`。区别只在数据到达方式：
 
 ```text
-live/new/current -> provider event/client push -> silent latest-tail sync fallback
-read-only history/up-scroll -> load older page -> prepend -> keep scroll anchor
+live       -> resident projection + WS deltas
+history    -> canonical tail page + older cursor pages
+resume     -> displayed history + resident live overlay
 ```
 
-前端页大小：
+不存在浏览器 flat-event history fallback。
 
-- `HISTORY_PAGE_LIMIT = 60`
+## 2. 首屏
 
-### 1.1 新建 live session
-
-新建 live session 的首要数据源是当前 provider runtime：
-
-- Codex/OpenCode：native local-server event/client push。
-- Claude：tmux/TUI fallback + provider transcript mirror。
-
-新建 live session 不应触发可见的 older-history 加载，也不应在顶部显示 `Loading older history`。创建时 feed 可以为空，然后由 optimistic user message、provider live event、provider transcript mirror 逐步填充。
-
-如果兼容路径需要在拿到 `providerSessionId` 后做一次 backfill，只能走 `refreshLatestHistory`，并且必须是静默 latest-tail sync：不设置 `history.phase = "loading"`，不展示 loading 文案，不阻塞 live event。
-
-### 1.2 选中已有 live session
-
-用户从左侧 live list、Sessions 弹窗、Canvas pane 选中一个已经存在的 live session 时，应触发一次静默 latest-tail sync：
-
-- 调用 `ensureSessionHistoryLoaded`。
-- 对非 read-only replay，`ensureSessionHistoryLoaded` 必须路由到 `refreshLatestHistory`。
-- `refreshLatestHistory` 读取 provider 当前最近 tail，并通过 `mergeLatestHistoryPage` 与现有 feed 合并。
-- 这一步用于补齐用户离开页面、浏览器 reload、PWA 切后台期间错过的已提交消息。
-
-这不是 older-history paging，因此不能改变滚动锚点语义，也不能显示 `Loading older history`。
-
-### 1.3 正在观察当前 Chat
-
-当用户停留在某个 Chat 页面时，最新消息应该由 live source 主动进入 UI：
-
-- Codex/OpenCode 优先使用 native local-server 的结构化 event/client push。
-- Claude fallback 优先使用 provider transcript mirror。
-- `refreshLatestHistory` 只是恢复性兜底，用于 focus/reload/network gap 后把 provider 文件或 DB 中已经落盘的 tail 补回来。
-
-硬约束：
-
-- live/native-mirror event 不能被 history bootstrap 挡住。
-- history 正在加载时可以推迟 older-page 合并，但不能隐藏已经到达的 live reply。
-- latest-tail sync 只能 merge/upsert，不能把已有 live feed 整体替换成另一套顺序。
-
-### 1.4 只读历史与向上翻页
-
-只有以下场景才是 older-history paging：
-
-- 打开一个 read-only replay 历史 session 的首次历史页。
-- 用户在 Chat 中向上滚动接近顶部。
-- 当前内容不足一屏时，自动继续加载更早历史直到填满或没有下一页。
-
-older-history paging 使用 `loadOlderHistory`：
-
-- 没有 cursor 时后端返回当前 frozen snapshot 的最近 tail。
-- 有 `nextCursor` 或 `nextBeforeTs` 时加载更老一页。
-- 页面 prepend 到当前 feed 前面。
-- prepend 前记录 visible anchor，插入后修正 `scrollTop`，保持阅读位置。
-- 这条路径可以设置 `history.phase = "loading"`，也只有这条路径可以显示 `Loading older history`。
-
-### 1.5 合并规则
-
-前端合并规则：
-
-- latest-tail 使用 `mergeLatestHistoryPage`，语义是“补当前尾部缺失消息”。
-- older page 使用 `prependHistoryPage`，语义是“向前扩展历史窗口”。
-- 优先通过 `TimelineIdentity.canonicalItemId` upsert，避免 live/bootstrap event 与 history replay 重复显示。
-- 没有 `canonicalItemId` 的旧事件才退回到 `messageId`、turnId、text/time window 等兼容性去重。
-- `origin` 不参与 canonical key；连续两次相同文本的真实消息不能因为 text hash 被合并。
-
-### 1.6 正文窗口与 Turn Directory
-
-长历史使用两个互不替代的数据层：
+打开 running 或 stopped session 时先用 session metadata 构建 workbench shell，再读取最近
+canonical turns：
 
 ```text
-Chat body      -> 最近正文 tail + older page，控制 React feed 和网络正文体积
-Turn Directory -> 全文件轻量索引，只保存 turn 边界、状态、时间和短摘要
+GET /api/sessions/:sessionId/conversation/turns?limit=20
 ```
 
-打开 Chat 时正文 tail 先进入可用状态，Turn Directory 在后台加载，不能阻塞首屏。当前 Codex 实现由 worker thread 顺序扫描 rollout JSONL：
+规则：
 
-- 只解析 user/assistant、turn lifecycle 和 rollback 行；大 tool output 行不会 `JSON.parse`。
-- 每个 turn 记录 provider turn id、byte range、状态、时间和 bounded preview。
-- 索引持久化在 RAH runtime cache；同一 inode 追加时从 `scannedBytes` 增量追平，替换、截断或同大小改写时重建。
-- 扫描期间 rollout 继续增长时，缓存只能绑定 worker 实际看到的 source revision，不能把旧快照冒充最新文件。
-- HTTP 大 JSON 在客户端支持时使用 gzip，降低远程/PWA 目录传输体积。
+- 请求期间保留 shell，不白屏、不跳 New。
+- 新建 live session 可使用 `liveOnly=true`，不触发 provider 历史扫描。
+- summary page 不携带大工具输出。
+- 出错时显示 Retry，不切换原始 events renderer。
 
-Turn Navigator 可以立即显示完整目录。点击尚未进入正文窗口的 turn 时，只按其 byte range 调用 target-turn API；后端只翻译该 turn 的 message/reasoning 正文，合并到现有 projection 后再精确滚动。点击刻度不触发全历史正文 materialize，也不加载工具详情。
+## 3. 向上分页
 
-Codex 是第一阶段支持 provider。其他 provider 没有 Turn Directory adapter 时继续使用当前已加载正文派生目录，不影响既有 history paging。
+`nextCursor` 存在时，Chat 接近顶部自动请求更早 turns：
 
-## 2. Timeline Identity
+```text
+GET /api/sessions/:sessionId/conversation/turns?cursor=...&limit=20
+```
 
-硬约束：
+prepend 前记录可见 canonical row anchor；合并后通过 virtual layout 投影新的 `scrollTop`，再做
+像素校准。加载过程不能要求用户先下滚再上滚来“重新触发”。
 
-- 同一个 provider item 无论来自 live 还是 history，必须生成同一个 `canonicalItemId`。
-- 两个真实不同的 item 即使文本完全一样，也必须有不同 `canonicalItemId`。
-- `origin`、`sourceCursor`、`contentHash` 都是证据或 metadata，不参与主 key。
-- adapter 必须把 provider 原生 message id、文件行/byte offset、SQLite row id、turn ordinal/part index 映射成 `turnKey + itemKey`。
-- 无法证明稳定时宁可不生成 identity，也不能用全文 hash 冒充主身份。
+cursor 是 opaque：
 
-当前 provider identity 策略：
+- 客户端不解析。
+- provider 文件增长不能改变已打开 snapshot 的旧页边界。
+- provider 重复返回同一 cursor 时 daemon 停止目录扫描，避免死循环。
 
-| Provider | 主身份来源 | 说明 |
+## 4. Detail hydration
+
+summary turn 只保留 user、final、lifecycle 和 compact process metadata。用户展开 Worked 时：
+
+```text
+GET /api/sessions/:sessionId/conversation/turns/:turnId/detail
+```
+
+单个工具卡展开时：
+
+```text
+GET /api/sessions/:sessionId/conversation/items/:itemId/detail
+```
+
+请求携带 opaque `providerTurnId/providerItemId`。full detail 合并后不得被后续 summary page 或
+live delta 降级。
+
+## 5. Turn Directory
+
+长历史目录独立于正文窗口：
+
+```text
+GET /api/sessions/:sessionId/conversation/directory
+```
+
+目录只返回：
+
+- turn id 与 ordinal
+- user/final bounded preview
+- status 与时间
+- source revision
+
+desktop 浏览器显示完整 navigator；PWA 禁用该 navigator，避免下载大目录。点击未加载 turn 时
+只 hydrate 该 turn，不顺序下载此前所有正文。
+
+## 6. Live overlay
+
+历史 page 请求可能等待 provider I/O。daemon 必须在返回前读取最新 resident snapshot，并一次性
+完成 overlay：
+
+- HTTP turns 与 `liveRevision` 来自同一状态。
+- 同一 canonical id 以 live lifecycle 覆盖落后的 persisted snapshot。
+- live 只能追加历史重叠点之后的 turn。
+- resident store 不吸收 HTTP 历史 baseline。
+
+## 7. Resume
+
+Resume 不清空已展示的 history：
+
+1. 当前 projection 保持可见。
+2. 按钮原地进入 Resuming。
+3. daemon 返回 live runtime id 后，按 provider session identity 迁移 projection。
+4. canonical delta 接管后继续追加。
+
+如果同一 provider session 已运行，使用已有 live projection，不重复 resume。
+
+## 8. Provider evidence
+
+| Provider | 主要证据 | 分页策略 |
 | --- | --- | --- |
-| Codex | `providerSessionId + turnId + per-turn itemIndex` | app-server live 与 rollout history 都可从 turn 上下文派生同序 item index；origin 不进 key。 |
-| Claude | `sessionId + record uuid` | Claude transcript / SDK assistant 消息有稳定 uuid；用户 live 输入无 provider uuid 时不强行猜。 |
-| OpenCode | `sessionId + messageId + partId` | OpenCode SQLite / ACP 都有 message/part 结构，reasoning 与 assistant text 分 part 区分。 |
+| Codex | app-server turn/item page；adapter 内的 bounded rollout evidence | native cursor 或 frozen persisted cursor |
+| Claude | JSONL transcript | timestamp/frozen cursor |
+| OpenCode | server/SQLite message-part | provider cursor 或 frozen timestamp cursor |
 
-## 3. API 契约
+这些证据只在 daemon 内转换为 `ConversationEvidencePage`，随后进入 projector。浏览器不可直接读取。
 
-前端通过：
+## 9. 性能边界
 
-```text
-GET /api/sessions/:sessionId/history?limit=60
-GET /api/sessions/:sessionId/history?cursor=...&limit=60
-GET /api/sessions/:sessionId/history?beforeTs=...&limit=60
-GET /api/sessions/:sessionId/history/detail?kind=tool_call&itemId=...
-GET /api/sessions/:sessionId/history/detail?kind=observation&itemId=...
-GET /api/sessions/:sessionId/history/turn-directory
-GET /api/sessions/:sessionId/history/turn?turnId=...
-```
+- stored-session catalog 与 Conversation 正文是两条数据面。daemon 启动只读取
+  `~/.rah/runtime-daemon/stored-session-cache/catalog.json` 的原子快照来构建有界 Recent，
+  不在主事件循环扫描 Codex JSONL、Claude transcript 或 OpenCode SQLite。
+- 启动后的权威校准、5 分钟周期校准和 All catalog 请求都在隔离子进程中执行；单个 provider
+  失败只保留该 provider 的 last-good 快照，不阻断另外两个 provider，也不阻塞 Chat/WS。
+- Stop 成功是当前 runtime 已知事实：session 必须立即以 stopped/provider-history 记录进入 Recent，
+  随后的子进程扫描只负责补齐 storage path、行数和 provider archive metadata。
+- 删除、归档和按 workspace 批量删除在执行前等待权威 catalog；普通启动、Resume、Chat 浏览和
+  Recent 请求不得隐式等待完整 catalog。
+- resident settled turns 默认有界。
+- raw auxiliary feed 默认 900 条触发压缩，目标约 650 条。
+- directory preview 有长度上限。
+- tool output 只按需读取。
+- Codex 官方 `thread/turns/list` page 使用内存 LRU 和原子写入的持久化 cache；同一 rollout revision、cursor、limit 与 summary 模式必须复用同一 page，不重复扫描大 JSONL。
+- Codex page cache identity 包含 rollout 的 `dev`、`ino`、`size`、`mtime`。文件替换或增长会自然进入新 revision，旧 revision 只服务已经冻结的浏览 snapshot，不能污染新页。
+- summary page 必须移除 provider event 的大 `raw` payload，只保留 canonical message、lifecycle 和 compact process metadata；展开 turn/item detail 时才读取完整 raw evidence。
+- HTTP 大 JSON 支持 gzip。
+- `approximateBytes` 用于诊断弱网 payload，不参与 UI 语义。
 
-后端返回：
+## 10. 回归检查
 
-- `events`
-- `nextCursor`
-- `nextBeforeTs`
-- `detailMode`
-- `approximateBytes`
-
-语义：
-
-- 没有 `cursor/beforeTs`：返回当前 frozen snapshot 的最近 tail。
-- 有 `nextCursor`：下一次优先用 cursor。
-- 只有 `nextBeforeTs`：provider 使用 timestamp 边界加载更老内容。
-- 没有 `nextCursor` 且没有 `nextBeforeTs`：已经到达最早历史。
-- `history` 默认返回 `detailMode = summary`，用于 Chat 首屏和 older-page 浏览；summary 事件必须剥离 provider `raw`、大 `toolCall.detail`、大 `toolCall.input/result`、大 `observation.detail`。
-- summary 中的 `ToolCall` / `WorkbenchObservation` 可以带 `detailAvailable` 和 `detailSizeBytes`。用户展开工具卡片时，前端再调用 `/history/detail` 拉取该 tool / observation 的完整 cached events，并合并回当前 projection。
-- `/history?detail=full` 只保留给调试或内部验证；普通 Chat UI 不应使用 full history 首屏。
-- `/history/turn-directory` 返回轻量全 turn 索引与 source revision，不返回正文 events。
-- `/history/turn` 只返回指定 turn 的正文 events；未知或已 rollback 的 turn 返回 404。
-
-## 4. 后端 Snapshot 模型
-
-`RuntimeEngine.getSessionHistoryPage` 不直接把 provider 原始历史暴露给前端，而是通过 `HistorySnapshotStore`：
-
-- 首次请求创建 snapshot。
-- 如果 provider 提供 frozen loader，则使用 provider-owned frozen paging。
-- 如果 provider 没有 frozen loader，则 materialize 当前 events 后用 offset cursor 分页。
-- 后续 cursor 在同一 snapshot 内解析，避免文件增长时分页漂移。
-- Snapshot cache 保存 full events；HTTP history 响应在返回前投影成 summary。这样首屏 payload 足够小，但 `/history/detail` 仍能从 cache 中找回完整工具输出。
-
-frozen snapshot 的目标：
-
-- 打开时冻结。
-- 上滚翻页不漂。
-- claim/resume 后 live 新内容不污染当前历史浏览。
-
-## 5. Provider 历史来源
-
-| Provider | 历史存储 | 首屏 tail | older page |
-| --- | --- | --- | --- |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` / `~/.codex/archived_sessions/**/rollout-*.jsonl` | 从 rollout 尾部窗口读取并翻译；后台建立 Turn Directory | line cursor + safe boundary；目录点击可按 byte range 读取单 turn |
-| Claude | `~/.claude/projects/**/*.jsonl` | 从 transcript 尾部窗口读取并翻译 | line cursor + user boundary + semantic recent window |
-| OpenCode | OpenCode SQLite message store | 按 message time 读取最近窗口并翻译 | `beforeTs` cursor |
-
-RAH 不再创建或扫描 provider-specific 独立 home。Codex / Claude 历史发现只读取 provider 原生 home；旧隔离目录数据需要先迁移回原生目录，才会继续出现在 RAH 历史里。
-
-## 6. 正文 Tail First 与目录 Full Index
-
-历史 session 通常很长。直接全量加载会造成：
-
-- daemon 首次 materialize 成本高。
-- Web store 和 React feed 过大。
-- iOS / iPad 打开长历史明显卡顿。
-- live projection 与 history replay 更容易重复或错序。
-
-正文 tail first 更符合真实使用：
-
-- 打开时先看最近上下文。
-- 需要追溯时再向上翻。
-- Provider 原始文件增长时也能通过 frozen snapshot 稳定翻页。
-
-但正文 tail first 不等于导航也只能看到 tail。Turn Directory 对全文件做轻量索引，使用户能立即理解完整会话结构并直接定位任意 turn；只有真正点击后才把目标正文加入 feed。这是 RAH 对 Codex Desktop“完整导航与正文按需绘制”思路的本地存储实现，而不是重新全量 materialize Chat。
-
-## 7. Read-only Replay 与 Resume
-
-打开历史 session 默认是 read-only replay：
-
-- 可浏览。
-- 不可直接输入。
-- 不算 live。
-- 不算 provider 写手。
-- 从 Chats / Recent / All 打开历史时，前端应在同一 UI 批次内关闭弹窗并选中 read-only projection；不应先让主 workbench 在弹窗背后切换、下一帧再关闭弹窗，否则会表现成整页闪烁。
-
-点击 Resume 后：
-
-- daemon 使用对应 provider resume spec 拉起 live provider session；TUI 仍是可选辅助视图。
-- 当前 provider history 可以作为 live session 初始上下文或 replay 来源。
-- 如果已有 frozen snapshot，runtime 可以 transfer，避免 resume 前后历史抖动。
-
-## 8. 回归检查
-
-每次修改 history loader / markdown filter / feed virtualization 后，至少检查：
-
-- Codex 长历史能从 tail 上滚到第一条用户消息。
-- Claude / OpenCode 历史首屏不是 assistant-only 截断。
-- 上滚加载 older page 后当前阅读位置不跳。
-- iOS Safari / PWA 上能继续触发 older page。
-- 被中断的 tool 不永久显示 Running。
-- `<turn_aborted>` 等内部上下文不会作为 assistant 正文显示。
-- Markdown 列表、代码块、分段在 core provider 中都保持结构。
+- 连续相同用户文本仍是两个 turns。
+- user/process/final 顺序在 live、刷新和 history 中一致。
+- interrupt 位于所属 user 之后。
+- 向上分页不重复、不跳阅读位置、不产生大片空白。
+- 点击早期目录项可加载并定位。
+- Resume 不重复下载已展示历史。
+- PWA 不请求完整目录。
+- 新建首条用户消息立即由 optimistic item 显示，canonical user 到达后原位接管。

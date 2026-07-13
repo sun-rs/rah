@@ -35,9 +35,9 @@ Cloudflare Tunnel 作为备选：
 - 不适合作为本机私人工具的默认方案，尤其在大陆网络环境下 Cloudflare 访问存在不确定性。
 - 如果使用 Cloudflare Tunnel，必须配置 Cloudflare Access 或同等级鉴权；不能把 RAH 裸露到公网。
 
-## 3. 当前本机实践
+## 3. 推荐实践
 
-当前实践是使用 Tailscale Serve，把 tailnet 内的 `43111` 转发到 Mac 本机的 `localhost:43111`。
+推荐使用 Tailscale Serve 的 HTTPS 反向代理，把固定的 tailnet HTTPS hostname 转发到 Mac 本机的 `127.0.0.1:43111`。这同时解决稳定入口、传输加密和 RAH device cookie 的 `Secure` 属性。
 
 检查当前 Serve 配置：
 
@@ -46,40 +46,21 @@ tailscale serve status
 tailscale serve status --json
 ```
 
-本机当前有效配置形态：
-
-```json
-{
-  "TCP": {
-    "43111": {
-      "TCPForward": "localhost:43111"
-    }
-  }
-}
-```
-
 这意味着：
 
-- iPhone/iPad 在同一 tailnet 内访问 `http://<mac-magicdns-name>:43111/`。
-- 或访问 `http://<mac-tailscale-ip>:43111/`。
-- Tailscale 只把 tailnet 侧的 `43111` 转发到本机 loopback 服务。
+- iPhone/iPad 在同一 tailnet 内访问 `https://<mac-magicdns-name>/`。
+- Tailscale 终止 TLS，再把 HTTP 与 WebSocket 同源转发到本机 loopback 服务。
 - 不需要让 RAH 自己理解 Tailscale，也不需要 provider runtime 绑定公网地址。
+- 固定 hostname 也是固定的 device cookie 域，避免在 LAN IP、Tailscale IP 和 MagicDNS 之间反复配对。
 
 本机验证命令：
 
 ```bash
 curl -fsS http://127.0.0.1:43111/ | head
-curl -fsS http://<mac-tailscale-ip>:43111/ | head
-curl -fsS http://<mac-magicdns-name>:43111/ | head
+curl -fsS https://<mac-magicdns-name>/ | head
 ```
 
-当前机器曾验证：
-
-- `tailscale status --json` 显示 Tailscale `BackendState` 为 `Running`。
-- MagicDNS 已启用。
-- iPhone peer 在线。
-- `tailscale serve status --json` 显示 `43111 -> localhost:43111`。
-- Mac 本机通过 Tailscale IP 和 MagicDNS 都能访问到 RAH 首页。
+首次从该 hostname 打开 RAH 后，执行 `rah pair` 完成设备配对。设备认证边界见 [设备认证与配对边界](./device-authentication.zh-CN.md)。
 
 不要把真实 tailnet 域名、Tailscale node key、用户邮箱或 auth key 写入仓库。
 
@@ -105,25 +86,13 @@ tailscale ip -6
 tailscale status
 ```
 
-暴露 RAH 给 tailnet：
+以 HTTPS 暴露 RAH 给 tailnet：
 
 ```bash
-tailscale serve --bg --tcp 43111 localhost:43111
+tailscale serve --bg http://127.0.0.1:43111
 ```
 
-不同 Tailscale CLI 版本的 `serve` 语法可能略有差异。以当前机器的 `tailscale serve --help` 为准。关键目标是让 `tailscale serve status --json` 出现：
-
-```json
-"TCPForward": "localhost:43111"
-```
-
-如果只是暴露一个普通 HTTP 服务，新版 Tailscale 也支持简写：
-
-```bash
-tailscale serve --bg 43111
-```
-
-但对 RAH 这类本地 WebSocket/HTTP 混合服务，明确 TCP forward 更容易理解和排障。
+不同 Tailscale CLI 版本的 `serve` 语法可能略有差异，以本机 `tailscale serve --help` 为准。当前目标是 HTTPS Serve，而不是 `--tcp 43111` 的裸 HTTP 入口。Tailscale 的 HTTP reverse proxy 支持 RAH 所需的 WebSocket upgrade。
 
 清空 Serve 配置：
 
@@ -180,10 +149,10 @@ RAH 本身不应该要求关闭 Surge。
 
 ## 6. 局域网与外网是否能用同一个地址
 
-可以优先使用 Tailscale 地址或 MagicDNS 作为统一入口：
+优先使用 Tailscale HTTPS hostname 作为统一入口：
 
 ```text
-http://<mac-magicdns-name>:43111/
+https://<mac-magicdns-name>/
 ```
 
 同一局域网内，如果 Tailscale 能建立 peer-to-peer direct path，底层会走局域网或近路径；离开局域网后会自动切到可用路径或 DERP relay。用户层 URL 不变。
@@ -199,7 +168,7 @@ http://<mac-lan-ip>:43111/
 - 家里：LAN IP
 - 外面：Tailscale IP/MagicDNS
 
-为了 PWA 和书签稳定，推荐统一使用 Tailscale MagicDNS。即使在家里，也让 Tailscale 负责选择直连或 relay。
+为了 PWA、书签和设备认证 cookie 稳定，推荐始终使用同一个 Tailscale HTTPS hostname。即使在家里，也让 Tailscale 负责选择直连或 relay。
 
 ## 7. 与 SSH tunnel / mosh 的区别
 
@@ -277,14 +246,13 @@ tailscale serve status --json
 - Backend 是否 Running。
 - Mac 是否有 Tailscale IP。
 - iPhone/iPad peer 是否 Online。
-- Serve 是否有 `43111 -> localhost:43111`。
+- Serve 是否把 HTTPS hostname 代理到 `http://127.0.0.1:43111`。
 - netcheck 里 UDP 是否可用；不可用时延迟可能更高。
 
 ### 9.3 从 Mac 自测 tailnet 入口
 
 ```bash
-curl -fsS http://<mac-tailscale-ip>:43111/ | head
-curl -fsS http://<mac-magicdns-name>:43111/ | head
+curl -fsS https://<mac-magicdns-name>/ | head
 ```
 
 如果 Mac 自己能访问，而 iOS 不能访问，优先看：
@@ -299,22 +267,23 @@ curl -fsS http://<mac-magicdns-name>:43111/ | head
 推荐 URL：
 
 ```text
-http://<mac-magicdns-name>:43111/
+https://<mac-magicdns-name>/
 ```
 
-备选：
+诊断时可以临时测试裸 TCP/LAN 入口：
 
 ```text
 http://<mac-tailscale-ip>:43111/
 ```
 
-如果 MagicDNS 不工作但 IP 工作，问题在 DNS/MagicDNS。可以先用 IP 保持使用，再排查 Tailscale DNS。
+如果 hostname 不工作但 IP 工作，问题在 Serve、证书或 MagicDNS。IP 与 hostname 是不同 cookie 域，临时切换后需要重新配对，不应作为日常双入口使用。
 
 ## 10. 安全边界
 
 - 默认只使用 Tailscale Serve，不使用 Funnel。
 - 只暴露明确端口，不做“所有本机端口通配公开”。
 - 不把 RAH 直接绑定到公网 IP。
+- 每个浏览器仍必须通过 RAH 设备配对；tailnet 成员身份不自动授予 RAH 操作权限。
 - 不在文档、commit、issue 中记录真实 auth key、node key、API key、Cloudflare token。
 - 如果将来做公网入口，必须先有认证、审计和最小权限策略。
 

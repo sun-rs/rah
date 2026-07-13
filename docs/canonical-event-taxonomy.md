@@ -1,6 +1,6 @@
 # RAH Canonical Event Taxonomy
 
-Status: current event-ledger contract; Conversation V2 read model is defined separately
+Status: current event-ledger contract; Conversation read model is defined separately
 
 Date: 2026-07-10
 
@@ -8,7 +8,7 @@ Date: 2026-07-10
 
 `RahEvent` is RAH's append-only transport and evidence contract. Provider adapters translate native live or persisted evidence into these event families so Web/PWA clients do not parse provider payloads directly.
 
-It is intentionally not the final conversation view model. Turn grouping, process/final separation, duration, and activity summaries belong to the daemon-owned Conversation V2 projection.
+It is intentionally not the final conversation view model. Turn grouping, process/final separation, duration, and activity summaries belong to the daemon-owned Conversation projection.
 
 ## Event Families
 
@@ -36,19 +36,20 @@ It is intentionally not the final conversation view model. Turn grouping, proces
 - `structured_live + authoritative`: provider server lifecycle/result facts.
 - `structured_persisted + authoritative`: provider-owned persisted facts.
 - `derived`: lossless or strongly grounded canonical translation.
-- `heuristic`: compatibility fallback when provider semantics are absent.
+- `heuristic`: explicitly low-confidence evidence derivation when native semantics are absent;
+  it never selects an alternate client protocol or renderer.
 - `pty`: terminal display only, never a structured Chat parser source.
 
 Unknown provider evidence is retained as diagnostics when it can affect correctness. Internal maintenance noise should be normalized in the adapter rather than surfaced as ordinary chat.
 
-## Separation From Conversation V2
+## Separation From Conversation
 
 The event ledger answers: "What evidence arrived, in what order?"
 
-The Conversation V2 projection answers: "What is the current canonical thread/turn/item state, and how should a client page it?"
+The Conversation projection answers: "What is the current canonical thread/turn/item state, and how should a client page it?"
 
 See:
 
-- [Conversation V2 Architecture](./conversation-v2-architecture.zh-CN.md)
-- [Conversation V2 Gap Analysis](./conversation-v2-gap-analysis.zh-CN.md)
+- [Conversation Architecture](./conversation-architecture.zh-CN.md)
+- [Conversation Gap Analysis](./conversation-architecture-audit.zh-CN.md)
 - [Codex App Server Protocol Map](./codex-app-server-protocol-map.zh-CN.md)

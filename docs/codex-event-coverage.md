@@ -34,11 +34,11 @@ rules:
 - `thread/start` only sends current app-server params. RAH no longer sends legacy
   `experimentalRawEvents`, `persistExtendedHistory`, or `name`; requested titles are applied with
   `thread/name/set` after the thread id is returned.
-- `thread/resume` sends the current experimental `excludeTurns: true` capability so claiming a large
+- `thread/resume` sends the current experimental `excludeTurns: true` capability so resuming a large
   thread does not rebuild and return its complete transcript. External-thread mirror subscription
   follows the same rule. Servers that explicitly reject this field are retried once with the legacy
   resume shape; unrelated resume errors are not hidden or retried.
-- Conversation V2 history first attempts `thread/turns/list` with `itemsView: summary` and preserves
+- Conversation history first attempts `thread/turns/list` with `itemsView: summary` and preserves
   the provider cursor. Unsupported or older app-server versions fall back to RAH's rollout pager.
 - Codex `sessions` and `archived_sessions` are both scanned. Entries under `archived_sessions` are
   marked as `StoredSessionRef.providerState.archived`.

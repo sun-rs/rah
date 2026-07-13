@@ -6,8 +6,8 @@
 
 - [当前系统设计总览](./current-system-design.zh-CN.md)
 - [项目总览](./project-overview.zh-CN.md)
-- [Conversation V2 架构](./conversation-v2-architecture.zh-CN.md)
-- [Conversation V2 差距分析](./conversation-v2-gap-analysis.zh-CN.md)
+- [Conversation 架构](./conversation-architecture.zh-CN.md)
+- [Conversation 架构收口审计](./conversation-architecture-audit.zh-CN.md)
 - [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
 - [RAH 1.0 里程碑说明](./1.0-notes.zh-CN.md)
@@ -16,6 +16,8 @@
 - [Session Controls 重构设计](./session-controls-refactor-design.zh-CN.md)
 - [Scrollbar UI 协议](./ui-scrollbar-protocol.zh-CN.md)
 - [远程访问：Tailscale、Cloudflare 与 Surge 共存](./remote-access-tailscale-cloudflare.zh-CN.md)
+- [设备认证与配对边界](./device-authentication.zh-CN.md)
+- [Fork 与 Side 生命周期协议](./fork-side-lifecycle.zh-CN.md)
 - [Council MCP Session Projection](./council-mcp-projection.zh-CN.md)
 
 ## 2. Provider 与能力边界

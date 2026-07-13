@@ -1,112 +1,110 @@
 # client-web store ownership
 
-这份文档只描述 `packages/client-web` 的状态 ownership 边界。
-
-目标不是把文件越拆越碎，而是把**不同职责的状态迁移**固定到清楚的模块里，避免以后再把逻辑重新塞回 `useSessionStore.ts`。
+复核日期：2026-07-13
 
 ## 原则
 
-1. `useSessionStore.ts` 只做 orchestration shell
-- 暴露 Zustand state 和 actions
-- 组合模块能力
-- 保持对外 API 稳定
+`useSessionStore.ts` 是 Zustand orchestration shell，不拥有具体状态迁移。Conversation、transport、
+workspace、session lifecycle 和 catalog 各自只有一个 owner。
 
-2. 具体状态迁移必须归属到明确模块
-- 不在 store 壳里直接展开一大段流程
-- 不把 provider/workspace/history/transport 混成一团
-
-3. 新逻辑优先放到已有 ownership 模块
-- 如果是 transport 相关，进 `session-store-transport.ts` 或 `session-store-sync.ts`
-- 如果是 projection/event 应用，进 `session-store-projections.ts`
-- 如果是 history paging/bootstrap，进 `session-store-history*.ts`
-- 如果是 workspace/session catalog，进 `session-store-workspace.ts`
-- 如果是 session lifecycle/command/startup，进对应 `session-store-session-*.ts`
-
-4. 只有在没有现成 owner 时，才新增模块
-- 新模块应该按职责切
-- 不按“为了拆文件而拆文件”切
-
-## 当前 ownership
+## 模块
 
 ### `useSessionStore.ts`
-- Zustand state shape
-- 对外 action surface
-- 模块组合和少量 bridge
 
-### `session-store-bootstrap.ts`
-- client id
-- init one-shot gate
-- last history selection restore
-- 基础错误文本
+- 暴露 state/action surface。
+- 组合 owner 模块。
+- 不实现分页、projection merge 或 workspace reconciliation。
 
-### `session-store-sync.ts`
-- event stream sync
-- replay gap recovery
-- transport reconnect orchestration
+### `session-store-conversation.ts`
 
-### `session-store-transport.ts`
-- events socket 生命周期
-- reconnect timer
-- discovery refresh timer
+- canonical baseline。
+- older cursor paging。
+- WS delta revision 合并。
+- turn/item detail hydration。
+- gap recovery。
+
+这是 Chat 正文加载状态的唯一 owner。
+
+### `session-store-conversation-directory.ts`
+
+- directory 请求与缓存。
+- 指定 turn hydration。
+- directory revision。
+
+### `session-store-pending-events.ts`
+
+- session summary 尚未创建时暂存先到达的 WS events。
+- session 出现后按 seq 回放。
+- session close 或 transport gap 时清理。
+
+它不拥有 history 状态，也不决定是否延迟 live event。
 
 ### `session-store-projections.ts`
-- event -> projection 应用
-- unread 计算
-- sessions response merge / replace
-- projection summary update / provider-session adopt
 
-### `session-store-workspace.ts`
-- workspace path normalization
-- hidden/reveal rules
-- workspace selection reconciliation
-- stored/live session workspace 归属判断
+- raw auxiliary event projection。
+- sessions response merge/replace。
+- unread 事件归属。
+- provider-session projection adopt。
 
-### `session-store-history.ts`
-- authoritative history prepend
-- history replay -> projection
-- history selection 持久化同步
+不得从 auxiliary feed 重建 Conversation 历史。
 
-### `session-store-history-bootstrap.ts`
-- pending/deferred history bootstrap buffers
-- bootstrap defer rules
+### `session-store-sync.ts`
 
-### `session-store-history-paging.ts`
-- ensure history loaded
-- load older history
-
-### `session-store-history-selection-sync.ts`
-- history selection subscription bridge
+- WebSocket transport sync。
+- replay gap recovery orchestration。
+- foreground catch-up。
 
 ### `session-store-session-lifecycle.ts`
-- start/resume/attach/claim/close 这类状态变更模板
 
-### `session-store-session-commands.ts`
-- attach / close / control / interrupt / send / permission respond
+- start/resume/attach/claim/close 的 projection 模板。
+- read-only placeholder 与 live projection 身份迁移。
 
 ### `session-store-session-startup.ts`
-- start session
-- start scenario
-- activate history
-- resume stored session
-- claim history session
 
-## 以后不要做的事
+- start scenario/session。
+- activate stored session。
+- Resume/attach/claim 决策。
 
-1. 不要在 `useSessionStore.ts` 里直接写长篇 transport 逻辑
-2. 不要在 `useSessionStore.ts` 里直接写完整 history paging 逻辑
-3. 不要在 `useSessionStore.ts` 里直接展开 workspace reconciliation
-4. 不要把新的 session command/startup 分支直接塞回 store 壳
-5. 不要为了图省事把 selector/contract 再塞进 store
+### `session-store-session-commands.ts`
 
-## 判断标准
+- input、interrupt、control、permission、rename、mode/model command。
 
-新增一段逻辑前，先问：
+### `session-store-workspace.ts`
 
-- 这是 transport、projection、workspace、history、还是 session lifecycle？
-- 这个状态迁移已经有 owner 吗？
-- 如果有，改 owner，不改壳
-- 如果没有，再新增一个小模块
+- workspace path 归一化。
+- hidden/reveal 与选择 reconciliation。
+- stored/live session 的 workspace 归属。
 
-一句话：
+### `session-store-bootstrap.ts`
 
-**`useSessionStore.ts` 应该是薄壳；真正拥有状态迁移的，是对应 ownership 模块。**
+- client/connection id。
+- initial load one-shot gate。
+- 最近历史选择恢复。
+
+## Chats catalog 边界
+
+Chats catalog 与左侧 running workspace state 是两套不同投影，不能互相覆盖：
+
+- 启动和普通刷新只请求有界 Recent，当前上限为 15 条 stored session。
+- Recent 的启动 baseline 来自 daemon 的 last-good catalog snapshot；后台权威扫描完成后只通过
+  revision delta 修正，不允许前端自行重建或轮询 provider 存储。
+- All 只有用户首次打开 All tab 时才加载完整 catalog；未打开 All 不得提前传输数百 KB metadata。
+- All 已加载后，新增、停止、重命名、删除等变化按 catalog revision delta 合并，不能每次点击 tab 都全量重拉。
+- `session.discovery` WebSocket event 可以更新有界 Recent，使刚停止或新发现的 session 立即出现；它不能借机填充或改写尚未加载的 All。
+- Recent delta 合并必须保持上限和确定排序；All 的 workspace 展开状态只由 Chats 用户操作拥有，过滤器不能自动展开 workspace。
+- All catalog 只服务 Chats。它不得新增、删除或重排左侧 workspace；左侧只由 running/revealed workspace owner 更新。
+
+## 禁止事项
+
+- 不新增 `history` 与 `conversation` 两套 loading state。
+- 不在 `useSessionStore.ts` 内写分页 reducer。
+- 不允许 UI 在 canonical error 后读取 raw history。
+- 不用文本相等推断 turn/final/process。
+- 不为 Canvas 建独立 Session store 或 renderer。
+- 不让 Chats All catalog 污染左侧 live workspace state。
+- 不在启动、Resume 或普通 session 浏览时隐式加载 Chats All catalog。
+
+## 判断方式
+
+新增代码前先判断：它属于 canonical Conversation、transport、auxiliary projection、workspace、
+lifecycle 还是 command。已有 owner 就修改 owner；没有 owner 才新增模块。

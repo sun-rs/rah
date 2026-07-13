@@ -17,6 +17,7 @@ These checks should pass in any normal development or release environment:
 
 ```bash
 npm run typecheck
+npm run test:auth
 npm run test:web
 npm run test:runtime
 npm run build:web
@@ -42,7 +43,7 @@ Do **not** treat “binary exists” as proof that the provider is usable.
 These validate the workbench behavior rather than a single provider:
 
 ```bash
-npm run test:smoke:history-claim
+npm run test:smoke:history-resume
 npm run test:smoke:tool-flow
 ```
 
@@ -60,7 +61,7 @@ Run when Codex adapter, Codex UI, or shared replay/running semantics changed.
 Current practical validation:
 
 - `npm run test:runtime`
-- `npm run test:smoke:history-claim`
+- `npm run test:smoke:history-resume`
 - `npm run test:smoke:tool-flow`
 
 If you have a dedicated Codex-enabled release machine, use it here.
@@ -123,6 +124,7 @@ Suggested command flow:
 npm run typecheck
 npm run test:web
 npm run test:runtime
+npm run test:smoke:stored-catalog-browser
 npm run build:web
 ```
 
@@ -145,6 +147,9 @@ Before release, verify these manually on:
 
 ### 4.1 Workbench shell
 
+- an unpaired browser sees the device pairing screen instead of workbench data
+- a paired browser remains trusted after reload
+- revoking the current device returns it to the pairing screen and closes live sockets
 - app loads on `43111`
 - left sidebar opens and closes correctly
 - `Session History` dialog opens correctly
@@ -155,6 +160,8 @@ Before release, verify these manually on:
 - opening history opens read-only replay
 - `Resume` upgrades the replay in place
 - old history is not replayed again after resume
+- initial bootstrap requests only bounded Recent metadata; opening All performs one authoritative catalog fetch, while clean reopen uses the stored revision/delta path
+- a large stopped session opens from a bounded turn page instead of transferring the raw provider transcript
 - new turns are not duplicated
 - `Stop` / `Close` really moves the running session to stopped without deleting provider history
 - user-visible lifecycle copy uses `Running` / `Stopped`; `Live` / `Archive` only appears for provider technical names or stored-history archive/trash semantics

@@ -52,7 +52,9 @@
 | `NEW-SESSION-001` | 新会话 | 首屏不显示 older-history loading，第一问只出现一次 |
 | `REFRESH-LIVE-001` | 刷新恢复 | 刷新后 transcript 不重复、Stop 不残留 |
 | `HISTORY-PAGING-001` | 历史分页 | 向上加载 older page 不跳滚动锚，不重复 live tail |
-| `HISTORY-CLAIM-001` | history claim | replay 转 live 不重排、不重复 |
+| `HISTORY-CATALOG-001` | Chats 目录增量 | 启动只取有界 Recent；首次打开 All 取一次权威目录；干净重开不再全量下载 |
+| `HISTORY-BOUNDED-001` | 超大历史首屏 | 首屏只下载有界 turn 页，不下载完整 provider transcript；PWA 不加载桌面 turn 导航目录 |
+| `HISTORY-RESUME-001` | history resume | replay 转 live 不重排、不重复 |
 | `CODEX-EVENT-001` | Codex 非 chat event | `thread/goal/cleared` 等不变成吓人的红色 chat Event |
 | `CLAUDE-ABORT-CONTEXT-001` | Claude aborted context | `<turn_aborted>` 不进入可见消息正文 |
 | `CLAUDE-TMUX-001` | Claude tmux | Chat/TUI/local terminal surface 切换互斥且可恢复 |
@@ -91,7 +93,7 @@ npm run test:regression:e2e-browser
 - `REAL-INTERRUPT-RECOVERY-001`
 - `REAL-INTERRUPT-MULTI-TURN-001`
 - `REAL-HISTORY-REPLAY-001`
-- `REAL-HISTORY-CLAIM-001`
+- `REAL-HISTORY-RESUME-001`
 - `REAL-SECOND-TURN-001`
 
 Claude 使用 tmux/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 provider-server Stop/interrupt case：
@@ -101,7 +103,7 @@ Claude 使用 tmux/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 pr
 - `REAL-CLAUDE-ESC-BEST-EFFORT-001`
 - `REAL-CLAUDE-NO-SYNTHETIC-INTERRUPT-001`
 - `REAL-CLAUDE-HISTORY-REPLAY-001`
-- `REAL-CLAUDE-HISTORY-CLAIM-001`
+- `REAL-CLAUDE-HISTORY-RESUME-001`
 - `REAL-CLAUDE-SECOND-TURN-001`
 
 旧的 deterministic fake browser smoke 仍然有价值，但只能作为开发期保护和快速定位工具，不能用于“可交付给人类测试”的结论。
@@ -118,7 +120,7 @@ Claude 使用 tmux/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 pr
 | `REAL-INTERRUPT-RECOVERY-001` | real-provider covered |
 | `REAL-INTERRUPT-MULTI-TURN-001` | real-provider covered |
 | `REAL-HISTORY-REPLAY-001` | real-provider covered |
-| `REAL-HISTORY-CLAIM-001` | real-provider covered |
+| `REAL-HISTORY-RESUME-001` | real-provider covered |
 | `REAL-SECOND-TURN-001` | real-provider covered |
 | `REAL-CLAUDE-*` | Claude tmux passthrough covered |
 
@@ -140,6 +142,7 @@ runtime/TUI gate：
 ```bash
 npm run test:runtime
 npm run test:tmux-tui-auto
+npm run test:smoke:stored-catalog-browser
 npm run test:regression:e2e-browser
 npm run test:smoke:native-browser
 ```
@@ -176,6 +179,7 @@ npm run test:smoke:opencode-browser
 7. Archive 后 live session 从侧栏消失。
 8. 截图保存到 `test-results/browser-e2e/...`，失败时必须能复盘。
 9. 测试结束后的 workspace/provider-state 清理只移入废纸篓/回收站，不直接永久删除。
+10. `npm run test:smoke:stored-catalog-browser` 必须走真实设备配对页，并记录 Recent、All、turn page 与删除 delta 的响应大小；不得通过测试专用认证旁路。
 
 ## 新 bug 进入流程
 

@@ -45,6 +45,7 @@ packages/
 - 开发前端：`http://127.0.0.1:43112/`
 - daemon 默认端口：`43111`
 - daemon 当前有意监听 `0.0.0.0`，用于支持手机/平板在同一局域网访问；是否能访问还取决于宿主机防火墙和网络环境。
+- daemon 的 HTTP API、事件 WebSocket 与 PTY WebSocket 共用设备认证边界；本机直连 `127.0.0.1` / `localhost` 无需配对，局域网、Tailscale 和代理入口仍必须通过 `rah pair` 配对。端口可达不代表可以远程操作 RAH，详见 [设备认证与配对边界](./device-authentication.zh-CN.md)。
 - 离开局域网后的推荐访问方式是 Tailscale Serve / MagicDNS；方案边界和 Surge 共存经验见 [远程访问：Tailscale、Cloudflare 与 Surge 共存](./remote-access-tailscale-cloudflare.zh-CN.md)。
 
 ## 3. Runtime 分层
@@ -88,6 +89,8 @@ Timeline identity 的硬约束：
 - stored history catalog
 - history snapshot paging
 
+HTTP 数据面有明确边界：static serving 只能读取构建产物目录；任意 host path 只能通过受设备认证保护的 file preview route 读取，并在磁盘读取、转换输出和响应大小三层限流。不能把 daemon 变成通用静态文件服务器。
+
 关键对象：
 
 - `RuntimeEngine`
@@ -123,7 +126,7 @@ Timeline identity 的硬约束：
 - 桌面宽容器的 ChatThread 提供按用户轮次派生的 `Turn Navigator`。每个刻度代表一条用户消息及其后续 assistant 处理过程/最终回答；Codex 后台 `Turn Directory` 可以提供尚未载入正文的完整 turn 列表，点击未加载刻度只请求对应 byte range。可见状态和已加载 turn 的定位只使用当前虚拟布局，不扫描整页 DOM。窄 pane 和 coarse-pointer 设备不展示该控件。
 - mode/model/config 的 provider 差异必须由 adapter 通过 `ProviderModelCatalog`、`SessionModeState`、`ManagedSession.model/config/modelProfile` 暴露，前端不能把 mode 翻译成 provider-native 启动参数。
 - 图片粘贴是 composer 能力：前端把剪贴板图片保存为 data image URL 附加到 outgoing text；provider adapter 负责把它映射到 provider 可接受的 image input。Chat feed 中只展示“Image xN”标识，不把 base64 展开成正文。
-- 回复中的本地文件链接不作为普通 HTTP 链接跳转，而是进入 Inspector file preview。Host file preview 不受当前 workspace scope 限制；workspace/session Inspector 文件树仍保持 workspace boundary。图片 preview 按访问面分级：`localhost` / LAN private IP / `.local` 访问返回原图 data；远程访问返回 bounded preview data，后端优先用系统图像能力生成缩略图，不能把“大图”作为正常不可预览状态暴露给用户。
+- 回复中的本地文件链接不作为普通 HTTP 链接跳转，而是进入 Inspector file preview。Host file preview 不受当前 workspace scope 限制；workspace/session Inspector 文件树仍保持 workspace boundary。普通文本在磁盘读取阶段即执行有界 prefix read。图片 preview 按访问面分级：`localhost` / LAN private IP / `.local` 在 16 MiB inline 安全上限内可以返回原图；更大的本地图以及 Tailscale/公网访问只返回 bounded preview data，后端优先用系统图像能力生成缩略图，且远程请求不能通过 query 参数升级为原图。大 Notebook 通过有 timeout、cell/source/output 上限的隔离提取器生成预览，并丢弃图片输出；不能把“大图/大 Notebook”作为正常不可预览状态暴露给用户。
 - `ProviderLogo` 和 `CouncilLogo` 是标题栏、sidebar、Chats row、Canvas toolbar 的唯一图标入口。Session provider 标题图标默认是 card/pill；Council 标题图标也必须使用同样的 card/pill 外壳，小型 badge/button 再显式使用 `bare` 变体。左侧 sidebar 的 Council 图标使用黑色 glyph；其他 Council 图标默认使用橙色 glyph，并保持与同位置 provider 图标同规格。
 
 ### 3.4 Conversation State 顶层协议
@@ -150,7 +153,7 @@ Session 和 Council 共享同一套用户可见生命周期协议，协议入口
 
 协议落地规则：
 
-- `ManagedSession.status/phase` 是新协议字段；旧 `runtimeState` 只保留为 adapter 兼容字段，写入时必须同步映射到 `status/phase`。
+- `ManagedSession.status/phase` 是唯一用户状态；`runtimeState` 只保留为 adapter/runtime 协调与诊断源，写入时必须同步映射到 `status/phase`，前端不得用它兜底决定页面状态。
 - `Council.status` 只允许 `running/stopped`，启动、失败、结束都进入 `phase`。旧 council 文件中的 `starting/running/idle/stopped/failed` 会在加载时迁移。
 - `SessionActionCapabilities.actions.stop` 表示这个 running session 能否被 RAH 停止；runtime feature 使用 `stopLifecycle`。不要再新增 `archive` 作为运行体生命周期字段。
 - 前端 selector、sidebar、history dialog、Canvas pane、session info、Councils browser 都只用 `status/phase` 做用户可见判断。
@@ -185,6 +188,31 @@ Canvas pane 的持久化语义是固定槽位模型：
 - Pane 橡皮擦、Clear all、删除对应对象，以及在 pane 内显式 Stop session/Council 会清除该 pane 绑定。
 - Clear all 必须清掉全部 4 个 pane，而不是只清掉当前布局下可见的 pane。
 - 在 pane 内 Stop running session/Council 后回到 `Empty pane`；历史仍可从 Chats 再次打开，Stop 不删除 provider 历史。
+
+#### Fork / Side 工作面
+
+Fork 和 Side 共享 provider-native 分支协议，但不是同一种产品对象：
+
+- Fork 是持久化的新 session。它继承父 session 到指定 turn 的 provider 上下文，拥有独立 provider/session identity，出现在 Chats，并在创建后成为当前选中对象。父 session Stop/Close 不删除 Fork。
+- Side 是父 session 内的临时协作面。它同样拥有独立 provider thread，但带 `kind: "side"`、`workspaceMode: "shared"`、`persistence: "ephemeral"` 关系；它不进入 Chats、Recent、左侧 workspace session 列表或持久化 workbench history。
+- Side 使用 `ready -> active -> completed` 的可复用 turn 状态机；Completed 只是本轮结束，父 session Ready 或 Side turn 完成都不会自动关闭 Side。
+- provider 明确报告同一 Side thread `notLoaded/closed/deleted`，或承载 pathless Side 的专属 app-server 通道终止时，Side 进入 `expired`，保留可见诊断并提供 New Side，而不是伪装成 Completed 或自动恢复旧 Side。
+- 关闭父 session 时必须递归关闭所有 ephemeral Side descendants；显式关闭 Side 与级联关闭都先执行 interrupt、goal pause、unsubscribe 和 app-server 回收。失败时 Side 进入 `cleanup_failed`，父任务保持打开且整个操作可重试。
+- Parent Stop/Delete/Archive 都服从同一清理前置条件；history mutation API 拒绝直接处理仍有 managed session 的 provider identity。删除或关闭父 session 不能级联删除持久化 Fork。
+- Provider 未声明 native branching capability 时，前端隐藏对应操作。RAH 不通过复制 transcript、拼 prompt 或创建无关系 session 来兜底模拟。
+- 当前只支持 same-workspace Fork。Worktree Fork 在 Git worktree 生命周期完整实现前保持不可用。
+
+完整状态、close disposition、Codex 30 分钟无订阅卸载机制与失败恢复协议见
+[Fork 与 Side 生命周期协议](./fork-side-lifecycle.zh-CN.md)。
+
+展示协议：
+
+- 普通 session 页面和 Canvas 最大化 pane 提供完整 Side dock。
+- 桌面宽屏默认把 Side 按列向右展开，可切换为纵向 stack；布局选择属于父 session 的 UI 偏好，不改变 provider relationship。
+- 低于桌面宽度时只展示一个活动表面，通过 `Main` / `Side N` 标签切换，避免多列压缩 Chat。
+- 普通紧凑 Canvas pane 不直接嵌入多列 Side，只显示 Side 数量；最大化后进入完整 Side dock。
+- Side 的 Chat、composer、标题栏与普通 session 复用同一对象页面组件；Canvas 只负责承载，不维护另一套会话逻辑。
+- Completed 保持可继续使用；Expired 显示 New Side；Cleanup failed 保留错误和 discard 重试入口。前端只消费 `session.side.state.changed`，不从气泡或通用 phase 猜测 Side 生命周期。
 
 ## 4. Session 类型
 
@@ -274,7 +302,7 @@ Native local server 与 tmux attach 的目标是：
 - transcript 主要来自 provider history 文件/数据库，不从屏幕画面解析主内容。
 - terminal 画面是用户体验 surface，不是 canonical data source。
 - Codex/OpenCode Chat composer 走 provider structured control，不通过键盘注入普通 turn。
-- Claude fallback Chat composer 是 TUI 文本注入桥；如果 TUI prompt dirty，应排队或阻止注入，避免污染用户正在 TUI 里编辑的草稿。
+- Claude fallback Chat composer 是 TUI 文本注入桥：使用 bracketed-paste + 单次 Enter；显式 Web Send 会先清掉 prompt dirty 草稿，agent busy 时后续输入进入每 session FIFO。
 - Stop/Close 必须关闭 provider native server session 或 Claude 对应 tmux session，避免孤儿 runtime。
 
 当前不承诺：
@@ -293,7 +321,7 @@ RAH 对“一退全退”的设计目标是：正常退出时尽量在事前同�
 - RAH 启动且带有 `RAH_NATIVE_SERVER_OWNER=rah` 标记的 Codex/OpenCode native local server 进程。
 - `~/.rah/council/councils.json` 中 Council/agent 的持久化运行状态。
 
-正常退出路径是 `SIGINT` / `SIGTERM` -> `daemon.close()` -> `RuntimeEngine.shutdown()`。daemon 入口在收到信号后最多等待 30 秒再强制退出；`rah stop` 最多等待 35 秒再 `SIGKILL`，给 provider close、tmux kill、状态落盘留出时间。
+正常退出路径是 `SIGINT` / `SIGTERM` -> `daemon.close()` -> `RuntimeEngine.shutdown()`。`daemon.close()` 先停止 HTTP listener 接受新连接，移除 upgrade handler，并向 event/PTY WebSocket client 发送 `1001` shutdown；500 ms 内未完成 close handshake 的 socket 会被 terminate。随后等待现有 HTTP 请求 drain，再进入 runtime 清理。这个顺序避免 `server.close()` 反过来等待仍由自己持有的 WebSocket，导致每次正常退出都撞到 watchdog。daemon 入口在收到信号后最多等待 30 秒再强制退出；`rah stop` 最多等待 35 秒再 `SIGKILL`，给 provider close、tmux kill、状态落盘留出时间。
 
 `RuntimeEngine.shutdown()` 的顺序是：
 
@@ -309,6 +337,8 @@ Council runtime 退出时先把仍处于 active/running 的 council 持久化为
 
 Terminal runtime 退出时会并行关闭当前进程内管理的 tmux session，然后扫描并清理未被当前 daemon 管理的 `rah-*` tmux session。Codex/OpenCode native local server 启动时会注入 `RAH_NATIVE_SERVER_OWNER=rah`、`RAH_NATIVE_SERVER_PROVIDER=codex|opencode`、`RAH_NATIVE_SERVER_DAEMON_PID=<pid>`，因此 orphan janitor 只清理 RAH 明确拥有的 provider server，不会按进程名误杀用户自己启动的 Codex/OpenCode。
 
+tmux/TUI mux 的意外退出与显式关闭必须区分：退出轮询串行执行，并在清理 runtime 前抓取 dead pane 的最后屏幕。非零退出码、可识别的 provider 错误或 pane 意外消失都会把 session 保留为 `failed`，供 Chat 与 diagnostics 展示；只有显式关闭或确认的正常退出才允许移除运行体。这样快速启动失败不会因为订阅与轮询竞态而从界面静默消失。
+
 崩溃、断电、`SIGKILL` 不能执行退出钩子，所以不可能只靠 shutdown 做绝对保证。下一次 daemon 启动时会先恢复仍可重新接管的 `tui_mux` running session，然后运行 startup orphan janitor：
 
 - 清理仍带 RAH native server 标记的 Codex/OpenCode 孤儿进程。
@@ -319,41 +349,55 @@ Terminal runtime 退出时会并行关闭当前进程内管理的 tmux session�
 
 ## 7. 历史浏览与同步边界
 
-RAH 明确区分两件事：
+RAH 只有一套 Conversation 同步协议：
 
-- `refreshLatestHistory`：静默同步当前 session 的最新 tail，用于 live Chat 补齐 focus/reload/PWA 切后台期间错过的消息。
-- `loadOlderHistory`：加载更早历史页，用于 read-only replay 首屏和用户向上翻旧历史。
+- `ensureConversationLoaded`：读取 canonical tail baseline；首屏默认 20 turns。
+- `loadOlderConversation`：使用 opaque `nextCursor` 加载更早 turns。
+- WebSocket `conversationDeltas`：补充 baseline 之后的 live 变化。
+- replay gap：只在 delta 无法连续应用时重新读取一次 canonical baseline。
 
-新建 running session 不应触发可见的 older-history 加载，也不应在 Chat 顶部显示 `Loading older history`。创建后 feed 可以先为空，再由 optimistic user message、Codex/OpenCode native server event、Claude transcript mirror 或静默 latest-tail sync 填充。
+新建 running session 先使用 resident live projection，不读取完整 provider 历史。optimistic user
+item 会立即显示，随后由 daemon 的 canonical delta 接管。Codex/OpenCode 由 provider server 事件推进；
+Claude 由 daemon 内的 transcript mirror 推进。浏览器不再设置 1.5 秒 history tail 轮询，也不直接读取
+JSONL、rollout 或 SQLite。
 
-选中已有 running session 时可以触发一次静默 latest-tail sync，但它不是历史翻页：
+只有 read-only replay 或用户向上滚动接近顶部时，才进入 older-turn paging：
 
-- 不设置 `history.phase = "loading"`。
-- 不显示 `Loading older history`。
-- 不改变 scroll anchor 语义。
-- 只能 merge/upsert 当前 tail，不能把 live feed 重新排序成另一套历史窗口。
+1. 客户端请求 20 个 canonical turns。
+2. 新页面 prepend 到同一个 `ConversationSyncState.turns`。
+3. scroll anchor 保持当前阅读位置。
+4. 内容不足一屏时可以继续请求更早 cursor，直到填满或没有下一页。
 
-只有 read-only replay 或用户向上滚动接近顶部时，才进入 older-history paging：
-
-1. 当前前端页大小为 `250` 个 RAH events。
-2. 前端用 `nextCursor` 或 `nextBeforeTs` 拉更早一页。
-3. 新页面 prepend 到 feed 前面，并通过 scroll anchor 保持当前阅读位置。
-4. 如果内容不足一屏，前端会继续自动加载更早历史直到填满或没有下一页。
-
-后端由 `HistorySnapshotStore` 冻结一次浏览快照：
+后端 `HistorySnapshotStore` 只冻结 provider evidence 边界，再由 projector 生成 canonical page：
 
 - 首屏冻结 provider 历史 revision。
 - 后续 cursor 只能在同一个 frozen snapshot 内翻页。
-- claim/resume 后不会把新 live 内容污染进当前历史快照。
+- Resume 保留已展示 turns，并以 resident live projection 覆盖重叠 turn 的 lifecycle。
 
 硬约束：
 
-- live/native-mirror event 不能被 history bootstrap 挡住。
-- Codex/OpenCode Chat 的当前回复优先来自 native local-server event/client push，不依赖 rollout/SQLite 全量回读。
-- Claude fallback Chat 的当前回复优先来自 provider transcript mirror，不从 ANSI 屏幕解析主内容。
+- live/native-mirror event 不能被 baseline 加载挡住。
+- Codex/OpenCode Chat 的当前回复来自 native local-server event/client push，不依赖 rollout/SQLite 全量回读。
+- Claude Chat 的当前回复来自 daemon transcript mirror，不从 ANSI 屏幕解析主内容。
 - provider history 文件/DB 是 backfill 和 read-only history 的依据，不是新 live turn 的唯一实时来源。
 
 各 provider 的底层分页实现和前端函数边界见 [历史浏览与分页边界](./history-browsing.zh-CN.md)。
+
+### Stored-session catalog 生命周期
+
+Catalog 只保存用于 Chats/Resume 定位的轻量 metadata 与 provider-owned storage path，不保存
+Conversation 正文。生产 daemon 的目录发现必须遵循：
+
+1. 启动同步读取 last-good 原子快照，立即提供最多 15 条 Recent。
+2. 启动后异步、周期性以及 All 请求所需的全量发现都在隔离子进程运行，不能阻塞 daemon
+   event loop。
+3. Codex、Claude、OpenCode 分 provider 返回；一个 provider 扫描失败时保留其旧快照，其他
+   provider 正常更新。
+4. Stop 成功后先由 runtime 立即发布 stopped session upsert，再由目录进程校准磁盘事实。
+5. 删除/归档前读取权威目录；删除成功同步更新内存 revision 和原子快照。
+
+因此 Recent 的“快”不以牺牲一致性为代价，All 的“准”也不能成为启动、Resume 或 Chat 首屏的
+串行依赖。
 
 ## 8. Stop / Close 语义
 
@@ -522,7 +566,7 @@ npm run test:smoke:native-browser-webkit
 改 session/control/history/provider 行为时，至少检查：
 
 - Web new / Web resume / Canvas new 是否按 provider runtime 进入 Codex/OpenCode native local server 或 Claude tmux/TUI mux fallback。
-- Codex/OpenCode Chat 输入是否走 provider structured control；Claude fallback Chat 输入是否只在 TUI prompt clean 时注入，prompt dirty / agent busy 时必须阻止误注入。
+- Codex/OpenCode Chat 输入是否走 provider structured control；Claude fallback Chat 是否以 bracketed-paste 原子提交、在 prompt dirty 时先清草稿、在 agent busy 时按 FIFO 延后注入。
 - Web/PWA/Canvas 新建或 resume 后，session 是否及时出现在左侧 running 列表。
 - Web 接管是否能 single-writer 发送、结束、恢复 idle。
 - Stop/Close 是否能关闭对应 running 执行体。

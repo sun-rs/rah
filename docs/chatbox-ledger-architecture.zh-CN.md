@@ -48,7 +48,7 @@ Transcript row 是可出现在 chatbox 里的内容：
 - 首选 `canonicalItemId`
 - 次选 provider `messageId/partId/toolCallId`
 - Web optimistic user message 使用 `clientMessageId`
-- 无身份内容只能作为 legacy fallback，不能成为主路径
+- 无身份内容只能保留为低置信度证据，不能成为 canonical identity 或另一条 UI 路径
 
 ### Anchored Notice
 

@@ -33,7 +33,9 @@ The workbench is served through the daemon itself. The stable local entry is:
 - `http://127.0.0.1:43111/`
 
 The daemon intentionally listens on `0.0.0.0` so phones/tablets on the LAN can reach the same
-workbench when the host firewall/network allows it.
+workbench when the host firewall/network allows it. Direct loopback access does not require pairing.
+Browsers using LAN, Tailscale, or proxy URLs must be paired as trusted devices; reaching the port is
+not sufficient to operate RAH remotely.
 
 The Vite server remains a development-only entry:
 
@@ -59,6 +61,15 @@ daemon, starts a new daemon from this checkout, and leaves the workbench at:
 ```text
 http://127.0.0.1:43111/
 ```
+
+On the first visit from a LAN, Tailscale, or proxy URL, generate a one-time pairing code on the Mac:
+
+```bash
+node bin/rah.mjs pair
+```
+
+Enter that code in the browser. Trusted browsers remain paired until revoked in Settings > Devices.
+See [`docs/device-authentication.zh-CN.md`](docs/device-authentication.zh-CN.md).
 
 If only backend code changed and the web bundle does not need rebuilding:
 
@@ -96,6 +107,7 @@ Useful daemon commands:
 
 ```bash
 node bin/rah.mjs status
+node bin/rah.mjs pair
 node bin/rah.mjs logs --follow
 node bin/rah.mjs stop
 ```
@@ -127,7 +139,7 @@ npm run test:smoke:native-codex-browser
 npm run test:smoke:native-provider-browser
 npm run test:smoke:native-browser
 npm run test:smoke:native-browser-webkit
-npm run test:smoke:history-claim
+npm run test:smoke:history-resume
 npm run test:smoke:tool-flow
 npm run test:smoke:claude-flow
 npm run test:smoke:claude-browser
@@ -163,7 +175,7 @@ RAH now uses four test tiers:
   - `native-codex-browser`
   - `native-provider-browser`
   - `native-browser-webkit`
-  - `history-claim`
+  - `history-resume`
   - `tool-flow`
   - `codex-browser`
   - `claude-flow`
