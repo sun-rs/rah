@@ -69,11 +69,12 @@ REAL_BROWSER_CASE_IDS = [
     "REAL-INTERRUPT-RECOVERY-001",
     "REAL-INTERRUPT-MULTI-TURN-001",
     "REAL-HISTORY-REPLAY-001",
-    "REAL-HISTORY-CLAIM-001",
+    "REAL-HISTORY-RESUME-001",
     "REAL-SECOND-TURN-001",
 ]
 
 SCREENSHOTS: list[str] = []
+INTERRUPT_NOTICE_PREFIX = "Interrupted after "
 
 
 def artifact_dir(provider: str) -> pathlib.Path:
@@ -211,7 +212,7 @@ def gather_matching_user_events(socket_messages: list[Any], token: str) -> tuple
 def gather_assistant_events_for_turn(socket_messages: list[Any], turn_id: str | None) -> int:
     if turn_id is None:
         return 0
-    count = 0
+    unique_keys: set[str] = set()
     for batch in socket_messages:
         events = batch.get("events") if isinstance(batch, dict) else None
         if not isinstance(events, list):
@@ -226,8 +227,15 @@ def gather_assistant_events_for_turn(socket_messages: list[Any], turn_id: str | 
                 continue
             item = payload.get("item")
             if isinstance(item, dict) and item.get("kind") == "assistant_message":
-                count += 1
-    return count
+                identity = payload.get("identity")
+                identity = identity if isinstance(identity, dict) else {}
+                canonical_item_id = identity.get("canonicalItemId")
+                unique_keys.add(
+                    f"canonical:{canonical_item_id}"
+                    if isinstance(canonical_item_id, str)
+                    else f"event:{event.get('id')}"
+                )
+    return len(unique_keys)
 
 
 def gather_tool_names_for_turn(socket_messages: list[Any], turn_id: str | None) -> list[str]:
@@ -253,6 +261,140 @@ def gather_tool_names_for_turn(socket_messages: list[Any], turn_id: str | None) 
             if isinstance(name, str):
                 names.append(name)
     return sorted(set(names))
+
+
+def summarize_conversation_events(socket_messages: list[Any]) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for batch in socket_messages:
+        events = batch.get("events") if isinstance(batch, dict) else None
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_type = event.get("type")
+            if event_type not in {
+                "timeline.item.added",
+                "turn.started",
+                "turn.completed",
+                "turn.canceled",
+                "turn.failed",
+            }:
+                continue
+            payload = event.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            item = payload.get("item")
+            item = item if isinstance(item, dict) else {}
+            identity = payload.get("identity")
+            identity = identity if isinstance(identity, dict) else {}
+            text = item.get("text")
+            summary.append(
+                {
+                    "type": event_type,
+                    "turnId": event.get("turnId"),
+                    "kind": item.get("kind"),
+                    "text": text[:240] if isinstance(text, str) else None,
+                    "canonicalItemId": identity.get("canonicalItemId"),
+                    "source": payload.get("source"),
+                    "error": payload.get("error"),
+                    "reason": payload.get("reason"),
+                }
+            )
+    return summary[-160:]
+
+
+def summarize_conversation_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    turns = snapshot.get("turns")
+    if not isinstance(turns, list):
+        return summary
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        users: list[str] = []
+        assistants: list[str] = []
+        items = turn.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, dict) or content.get("kind") != "timeline":
+                    continue
+                timeline = content.get("item")
+                if not isinstance(timeline, dict):
+                    continue
+                text = timeline.get("text")
+                if not isinstance(text, str):
+                    continue
+                if timeline.get("kind") == "user_message":
+                    users.append(text[:240])
+                elif timeline.get("kind") == "assistant_message":
+                    assistants.append(text[:240])
+        summary.append(
+            {
+                "id": turn.get("id"),
+                "providerTurnId": turn.get("providerTurnId"),
+                "status": turn.get("status"),
+                "users": users,
+                "assistants": assistants,
+            }
+        )
+    return summary
+
+
+def assert_canonical_turn_sequence(
+    snapshot: dict[str, Any],
+    expected: list[tuple[str, str]],
+) -> None:
+    turns = snapshot.get("turns")
+    if not isinstance(turns, list):
+        raise AssertionError("Conversation snapshot did not contain turns.")
+
+    cursor = -1
+    for expected_user, expected_status in expected:
+        matching_indexes: list[int] = []
+        for index, turn in enumerate(turns):
+            if not isinstance(turn, dict):
+                continue
+            items = turn.get("items")
+            if not isinstance(items, list):
+                continue
+            user_texts: list[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, dict) or content.get("kind") != "timeline":
+                    continue
+                timeline = content.get("item")
+                if (
+                    isinstance(timeline, dict)
+                    and timeline.get("kind") == "user_message"
+                    and isinstance(timeline.get("text"), str)
+                ):
+                    user_texts.append(timeline["text"])
+            if user_texts.count(expected_user) == 1:
+                matching_indexes.append(index)
+        if len(matching_indexes) != 1:
+            raise AssertionError(
+                f"Expected exactly one canonical turn for {expected_user!r}; "
+                f"matching indexes={matching_indexes}."
+            )
+        index = matching_indexes[0]
+        if index <= cursor:
+            raise AssertionError(
+                f"Canonical turn order regressed for {expected_user!r}: "
+                f"index={index}, previous={cursor}."
+            )
+        turn = turns[index]
+        assert isinstance(turn, dict)
+        if turn.get("status") != expected_status:
+            raise AssertionError(
+                f"Canonical turn for {expected_user!r} has status {turn.get('status')!r}; "
+                f"expected {expected_status!r}."
+            )
+        cursor = index
 
 
 def wait_for_session_match(
@@ -426,16 +568,21 @@ def interrupt_prompt(config: ProviderSmokeConfig, marker: str) -> str:
 
 def recovery_prompt(config: ProviderSmokeConfig, marker: str) -> str:
     return (
-        "Reply immediately with exactly this marker and no extra text: "
+        "The previous interrupted instruction is canceled and must not be resumed. "
+        "Do not run its tool call. Reply immediately with exactly this marker and no extra text: "
         f"{marker}"
     )
 
 
 def assert_interrupt_notice_count(body: str, expected: int) -> None:
-    count = count_text(body, "Conversation interrupted")
+    count = count_text(body, INTERRUPT_NOTICE_PREFIX)
     if count != expected:
         raise AssertionError(
             f"Expected exactly {expected} interrupt notice(s), saw {count}. Body tail: {body[-1600:]}"
+        )
+    if "Failed after " in body:
+        raise AssertionError(
+            f"An interrupted turn must not also render as failed. Body tail: {body[-1600:]}"
         )
 
 
@@ -552,17 +699,6 @@ def assert_no_chat_noise(body: str) -> None:
             raise AssertionError(f"Unexpected chat noise: {needle}")
 
 
-def assert_text_order(body: str, *needles: str) -> None:
-    cursor = -1
-    for needle in needles:
-        index = body.find(needle, cursor + 1)
-        if index < 0:
-            raise AssertionError(
-                f"Expected {needle!r} after offset {cursor}; body tail: {body[-1600:]}"
-            )
-        cursor = index
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("provider", choices=sorted(CONFIGS))
@@ -585,12 +721,16 @@ def main() -> int:
     recovery_marker = f"{config.second_marker_prefix}-RECOVERY-{token}"
     interrupt2_marker = f"{config.first_marker_prefix}-INTERRUPT2-{token}"
     recovery2_marker = f"{config.second_marker_prefix}-RECOVERY2-{token}"
+    rapid1_marker = f"{config.first_marker_prefix}-RAPID1-{token}"
+    rapid2_marker = f"{config.second_marker_prefix}-RAPID2-{token}"
     first_text = first_prompt(config, first_marker)
     second_text = second_prompt(config, second_marker)
     interrupt_text = interrupt_prompt(config, interrupt_marker)
     recovery_text = recovery_prompt(config, recovery_marker)
     interrupt2_text = interrupt_prompt(config, interrupt2_marker)
     recovery2_text = recovery_prompt(config, recovery2_marker)
+    rapid1_text = recovery_prompt(config, rapid1_marker)
+    rapid2_text = recovery_prompt(config, rapid2_marker)
 
     request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
     request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
@@ -599,6 +739,13 @@ def main() -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 960})
+        api_request_urls: list[str] = []
+        page.on(
+            "request",
+            lambda next_request: api_request_urls.append(next_request.url)
+            if "/api/" in next_request.url
+            else None,
+        )
         page.add_init_script(
             """
             (() => {
@@ -687,8 +834,8 @@ def main() -> int:
                 provider_session_id,
             )
 
-            page.locator('button[aria-label="Sessions"]:visible').first.click()
-            page.get_by_role("button", name="Recent", exact=True).click()
+            page.locator('button[aria-label="Chats"]:visible').first.click()
+            page.get_by_role("tab", name="Recent", exact=True).click()
             page.locator(
                 f'button[data-provider-session-id="{provider_session_id}"]:visible'
             ).first.click()
@@ -709,9 +856,10 @@ def main() -> int:
             assert_no_chat_noise(body_after_replay)
             save_screenshot(page, screenshots_dir, f"{config.provider}-real-history-replay")
 
-            claim_button = page.get_by_role("button", name="Claim control", exact=True)
+            claim_button = page.get_by_role("button", name="Resume", exact=True)
             expect(claim_button).to_be_visible(timeout=30_000)
             expect(claim_button).to_be_enabled(timeout=30_000)
+            resume_request_start = len(api_request_urls)
             with page.expect_response(
                 lambda response: response.url.endswith("/api/sessions/resume"),
                 timeout=30_000,
@@ -726,6 +874,16 @@ def main() -> int:
                 )
             composer = page.locator("textarea:visible").last
             expect(composer).to_be_visible(timeout=90_000)
+            resume_history_requests = [
+                url
+                for url in api_request_urls[resume_request_start:]
+                if "/conversation/turns" in url
+            ]
+            if resume_history_requests:
+                raise AssertionError(
+                    f"{config.provider} Resume reloaded an already-visible Conversation page: "
+                    f"{resume_history_requests}"
+                )
 
             resumed = wait_for_session_match(
                 base_url,
@@ -873,8 +1031,53 @@ def main() -> int:
             if not config.expect_exact_assistant_marker:
                 assert_visible_once(body_after_recovery2, recovery2_text, f"{config.provider} second recovery user prompt")
                 wait_for_assistant_event_for_prompt(page, recovery2_text, timeout_s=90)
+
+            rapid_flow: dict[str, Any] | None = None
+            if config.provider == "opencode":
+                send_chat_message(page, rapid1_text)
+                expect(stop_button(page)).to_be_visible(timeout=60_000)
+                send_chat_message(page, rapid2_text)
+                rapid1_user_count, rapid1_turn_id, rapid1_assistant_count = (
+                    wait_for_assistant_event_for_prompt(page, rapid1_text, timeout_s=180)
+                )
+                rapid2_user_count, rapid2_turn_id, rapid2_assistant_count = (
+                    wait_for_assistant_event_for_prompt(page, rapid2_text, timeout_s=180)
+                )
+                wait_for_idle_with_auto_permissions(
+                    page,
+                    base_url,
+                    resumed_session_id,
+                    timeout_s=180,
+                )
+                rapid_body = chat_text(page)
+                assert_visible_once(rapid_body, rapid1_text, "OpenCode rapid first user prompt")
+                assert_visible_once(rapid_body, rapid2_text, "OpenCode rapid second user prompt")
+                if rapid1_turn_id == rapid2_turn_id:
+                    raise AssertionError("Rapid OpenCode prompts were assigned to the same canonical turn.")
+                if (rapid1_user_count, rapid1_assistant_count) != (1, 1):
+                    raise AssertionError(
+                        "Rapid OpenCode first turn was not unique: "
+                        f"user={rapid1_user_count} assistant={rapid1_assistant_count}."
+                    )
+                if (rapid2_user_count, rapid2_assistant_count) != (1, 1):
+                    raise AssertionError(
+                        "Rapid OpenCode second turn was not unique: "
+                        f"user={rapid2_user_count} assistant={rapid2_assistant_count}."
+                    )
+                rapid_flow = {
+                    "firstTurnId": rapid1_turn_id,
+                    "secondTurnId": rapid2_turn_id,
+                    "firstUserCount": rapid1_user_count,
+                    "firstAssistantCount": rapid1_assistant_count,
+                    "secondUserCount": rapid2_user_count,
+                    "secondAssistantCount": rapid2_assistant_count,
+                }
             save_screenshot(page, screenshots_dir, f"{config.provider}-real-claim-response")
             socket_messages = page.evaluate("window.__rahSocketMessages")
+            canonical_snapshot = request_json(
+                base_url,
+                f"/api/sessions/{resumed_session_id}/conversation/turns?limit=100",
+            )
             second_user_count, second_turn_id = gather_matching_user_events(socket_messages, second_text)
             second_assistant_count = gather_assistant_events_for_turn(socket_messages, second_turn_id)
             second_tool_names = gather_tool_names_for_turn(socket_messages, second_turn_id)
@@ -918,45 +1121,38 @@ def main() -> int:
                     "toolNames": second_tool_names,
                     "permissionCount": len(second_permission_ids),
                     "oldTurnVisibleCountAfterClaim": old_turn_count_after,
+                    "historyReloadRequestCount": len(resume_history_requests),
                 },
                 "gammaContent": gamma_content,
+                "canonicalTurns": summarize_conversation_snapshot(canonical_snapshot),
                 "interruptFlow": {
                     "interruptMarkerVisibleCount": count_text(body_after_recovery2, interrupt_marker),
                     "interrupt2MarkerVisibleCount": count_text(body_after_recovery2, interrupt2_marker),
-                    "interruptNoticeCount": count_text(body_after_recovery2, "Conversation interrupted"),
+                    "interruptNoticeCount": count_text(body_after_recovery2, INTERRUPT_NOTICE_PREFIX),
                     "recoveryMarkerVisibleCount": count_text(body_after_recovery2, recovery_marker),
                     "recovery2MarkerVisibleCount": count_text(body_after_recovery2, recovery2_marker),
                 },
+                **({"rapidFlow": rapid_flow} if rapid_flow is not None else {}),
             }
             print(json.dumps(result, ensure_ascii=False, indent=2))
 
             assert_no_environment_leak(body_after_recovery2)
             assert_no_chat_noise(body_after_recovery2)
-            if config.expect_exact_assistant_marker:
-                assert_text_order(
-                    body_after_recovery2,
-                    second_text,
-                    second_marker,
-                    interrupt_text,
-                    "Conversation interrupted",
-                    recovery_text,
-                    recovery_marker,
-                    interrupt2_text,
-                    "Conversation interrupted",
-                    recovery2_text,
-                    recovery2_marker,
+            expected_turns = [
+                (second_text, "completed"),
+                (interrupt_text, "interrupted"),
+                (recovery_text, "completed"),
+                (interrupt2_text, "interrupted"),
+                (recovery2_text, "completed"),
+            ]
+            if config.provider == "opencode":
+                expected_turns.extend(
+                    [
+                        (rapid1_text, "completed"),
+                        (rapid2_text, "completed"),
+                    ]
                 )
-            else:
-                assert_text_order(
-                    body_after_recovery2,
-                    second_text,
-                    interrupt_text,
-                    "Conversation interrupted",
-                    recovery_text,
-                    interrupt2_text,
-                    "Conversation interrupted",
-                    recovery2_text,
-                )
+            assert_canonical_turn_sequence(canonical_snapshot, expected_turns)
             if second_assistant_count < 1:
                 raise AssertionError(f"Expected at least one assistant event for the claimed {config.provider} turn.")
             if config.require_tool_event and len(second_tool_names) < 1:
@@ -974,7 +1170,7 @@ def main() -> int:
                     file=sys.stderr,
                 )
             if old_turn_count_after > old_turn_count_before:
-                raise AssertionError(f"Claiming {config.provider} history replayed older history into the UI.")
+                raise AssertionError(f"Resuming {config.provider} history replayed older history into the UI.")
 
             return 0
         except (AssertionError, PlaywrightTimeoutError) as exc:
@@ -983,6 +1179,14 @@ def main() -> int:
                 body = page.locator("body").inner_text()
                 visible_chat = chat_text(page)
                 socket_messages = page.evaluate("window.__rahSocketMessages")
+                conversation_snapshot = (
+                    request_json(
+                        base_url,
+                        f"/api/sessions/{resumed_session_id}/conversation/turns?limit=100",
+                    )
+                    if resumed_session_id
+                    else {}
+                )
                 print(
                     json.dumps(
                         {
@@ -991,6 +1195,10 @@ def main() -> int:
                             "bodySnippet": body[-1600:],
                             "chatSnippet": visible_chat[-1600:],
                             "socketMessageCount": len(socket_messages),
+                            "conversationEvents": summarize_conversation_events(socket_messages),
+                            "conversationSnapshot": summarize_conversation_snapshot(
+                                conversation_snapshot
+                            ),
                         },
                         ensure_ascii=False,
                         indent=2,

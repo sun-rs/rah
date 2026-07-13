@@ -20,8 +20,9 @@ REAL_BROWSER_CASE_IDS = [
     "REAL-CLAUDE-ESC-BEST-EFFORT-001",
     "REAL-CLAUDE-NO-SYNTHETIC-INTERRUPT-001",
     "REAL-CLAUDE-HISTORY-REPLAY-001",
-    "REAL-CLAUDE-HISTORY-CLAIM-001",
+    "REAL-CLAUDE-HISTORY-RESUME-001",
     "REAL-CLAUDE-SECOND-TURN-001",
+    "REAL-CLAUDE-RAPID-QUEUE-001",
 ]
 
 
@@ -241,7 +242,7 @@ def wait_for_history_text_count(base_url: str, session_id: str, text: str, minim
     started = time.time()
     last = ""
     while time.time() - started < timeout_s:
-        history = request_json(base_url, f"/api/sessions/{session_id}/history?limit=200")
+        history = request_json(base_url, f"/api/sessions/{session_id}/conversation/turns?limit=100")
         last = json.dumps(history, ensure_ascii=False)
         if count_text(last, text) >= minimum:
             return last
@@ -313,7 +314,7 @@ def wait_for_chat_text_count_with_permissions(
 
 
 def gather_matching_user_events(socket_messages: list[Any], token: str) -> tuple[int, str | None]:
-    count = 0
+    unique_keys: set[str] = set()
     turn_id = None
     for batch in socket_messages:
         events = batch.get("events") if isinstance(batch, dict) else None
@@ -330,10 +331,54 @@ def gather_matching_user_events(socket_messages: list[Any], token: str) -> tuple
                 continue
             text = item.get("text")
             if isinstance(text, str) and token in text:
-                count += 1
+                identity = payload.get("identity")
+                identity = identity if isinstance(identity, dict) else {}
+                canonical_item_id = identity.get("canonicalItemId")
+                unique_keys.add(
+                    f"canonical:{canonical_item_id}"
+                    if isinstance(canonical_item_id, str)
+                    else f"event:{event.get('id')}"
+                )
                 if isinstance(event.get("turnId"), str):
                     turn_id = event["turnId"]
-    return count, turn_id
+    return len(unique_keys), turn_id
+
+
+def gather_matching_assistant_events(
+    socket_messages: list[Any], turn_id: str | None, token: str
+) -> int:
+    if turn_id is None:
+        return 0
+    unique_keys: set[str] = set()
+    for batch in socket_messages:
+        events = batch.get("events") if isinstance(batch, dict) else None
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if (
+                not isinstance(event, dict)
+                or event.get("turnId") != turn_id
+                or event.get("type") != "timeline.item.added"
+            ):
+                continue
+            payload = event.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            item = payload.get("item")
+            if (
+                not isinstance(item, dict)
+                or item.get("kind") != "assistant_message"
+                or token not in str(item.get("text", ""))
+            ):
+                continue
+            identity = payload.get("identity")
+            identity = identity if isinstance(identity, dict) else {}
+            canonical_item_id = identity.get("canonicalItemId")
+            unique_keys.add(
+                f"canonical:{canonical_item_id}"
+                if isinstance(canonical_item_id, str)
+                else f"event:{event.get('id')}"
+            )
+    return len(unique_keys)
 
 
 def wait_for_idle_with_auto_permissions(
@@ -400,6 +445,8 @@ def main() -> int:
     recovery_marker = f"CLAUDE-BROWSER-RECOVERY-{token}"
     interrupt2_marker = f"CLAUDE-BROWSER-INTERRUPT2-{token}"
     recovery2_marker = f"CLAUDE-BROWSER-RECOVERY2-{token}"
+    rapid1_marker = f"CLAUDE-BROWSER-RAPID1-{token}"
+    rapid2_marker = f"CLAUDE-BROWSER-RAPID2-{token}"
     first_prompt = (
         "Do not use tools. "
         f"Reply with exactly this marker and no extra text: {first_marker}"
@@ -414,7 +461,8 @@ def main() -> int:
         "This turn is part of a real browser interruption test."
     )
     recovery_prompt = (
-        "Do not use tools. "
+        "The previous interrupted instruction is canceled and must not be resumed. "
+        "Do not use its tool call. "
         f"Reply immediately with exactly this marker and no extra text: {recovery_marker}"
     )
     interrupt2_prompt = (
@@ -423,8 +471,17 @@ def main() -> int:
         "This turn is part of a real browser second interruption test."
     )
     recovery2_prompt = (
-        "Do not use tools. "
+        "The previous interrupted instruction is canceled and must not be resumed. "
+        "Do not use its tool call. "
         f"Reply immediately with exactly this marker and no extra text: {recovery2_marker}"
+    )
+    rapid1_prompt = (
+        "Do not use tools. "
+        f"Reply with exactly this marker and no extra text: {rapid1_marker}"
+    )
+    rapid2_prompt = (
+        "Do not use tools. This is the next queued user turn. "
+        f"Reply with exactly this marker and no extra text: {rapid2_marker}"
     )
 
     request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
@@ -433,6 +490,13 @@ def main() -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 960})
+        api_request_urls: list[str] = []
+        page.on(
+            "request",
+            lambda next_request: api_request_urls.append(next_request.url)
+            if "/api/" in next_request.url
+            else None,
+        )
         page.add_init_script(
             """
             (() => {
@@ -474,7 +538,7 @@ def main() -> int:
                     "provider": "claude",
                     "cwd": str(workspace),
                     "liveBackend": "tui_mux",
-                    "approvalPolicy": "never",
+                    "modeId": "bypassPermissions",
                     "attach": {
                         "client": {
                             "id": client_id,
@@ -519,8 +583,8 @@ def main() -> int:
             if not recent or not stored:
                 raise AssertionError("Claude session did not appear in Recent/Stored after close.")
 
-            page.locator('button[aria-label="Sessions"]:visible').first.click()
-            page.get_by_role("button", name="Recent", exact=True).click()
+            page.locator('button[aria-label="Chats"]:visible').first.click()
+            page.get_by_role("tab", name="Recent", exact=True).click()
             page.locator(
                 f'button[data-provider-session-id="{provider_session_id}"]:visible'
             ).first.click()
@@ -538,9 +602,32 @@ def main() -> int:
             if count_text(body_after_replay, first_marker) < 1:
                 raise AssertionError("Claude history replay did not show the first turn marker in the UI.")
 
-            page.get_by_role("button", name="Claim control").click()
+            resume_request_start = len(api_request_urls)
+            page.get_by_role("button", name="Resume").click()
             composer = page.locator("textarea:visible").last
             expect(composer).to_be_visible(timeout=90_000)
+            resume_history_requests = [
+                url
+                for url in api_request_urls[resume_request_start:]
+                if "/conversation/turns" in url
+            ]
+            replay_history_path = f"/api/sessions/{replay_session_id}/conversation/turns"
+            replay_hydration_requests = [
+                url for url in api_request_urls if replay_history_path in url
+            ]
+            live_hydration_requests = [
+                url for url in resume_history_requests if replay_history_path not in url
+            ]
+            if len(live_hydration_requests) > 1:
+                raise AssertionError(
+                    "Claude Resume requested its new live canonical baseline more than once: "
+                    f"{live_hydration_requests}"
+                )
+            if len(replay_hydration_requests) > 1:
+                raise AssertionError(
+                    "Claude history replay requested the same canonical page more than once: "
+                    f"{replay_hydration_requests}"
+                )
 
             resumed = wait_for_session_match(
                 base_url,
@@ -550,8 +637,18 @@ def main() -> int:
                 timeout_s=90,
             )
             resumed_session_id = resumed["session"]["id"]
+            if any(
+                f"/api/sessions/{resumed_session_id}/conversation/turns" not in url
+                for url in live_hydration_requests
+            ):
+                raise AssertionError(
+                    "Claude Resume hydrated an unrelated session: "
+                    f"{live_hydration_requests}"
+                )
 
             old_turn_count_before = count_text(chat_text(page), first_marker)
+            if old_turn_count_before < 1:
+                raise AssertionError("Claude Resume hid the already-visible history turn.")
 
             composer.fill(second_prompt)
             page.keyboard.press("Enter")
@@ -655,8 +752,58 @@ def main() -> int:
                     f"Expected Claude second recovery marker in exactly one user prompt and one assistant answer; "
                     f"count={count_text(body_after_recovery2, recovery2_marker)}."
                 )
+
+            send_chat_message(page, rapid1_prompt)
+            send_chat_message(page, rapid2_prompt)
+            body_after_rapid, rapid_permission_ids = wait_for_chat_text_count_with_permissions(
+                page,
+                base_url,
+                resumed_session_id,
+                rapid2_marker,
+                2,
+                timeout_s=240,
+            )
+            if count_text(body_after_rapid, rapid1_marker) != 2:
+                raise AssertionError(
+                    f"Expected one Claude rapid first prompt and answer; "
+                    f"count={count_text(body_after_rapid, rapid1_marker)}."
+                )
+            if count_text(body_after_rapid, rapid2_marker) != 2:
+                raise AssertionError(
+                    f"Expected one Claude rapid second prompt and answer; "
+                    f"count={count_text(body_after_rapid, rapid2_marker)}."
+                )
             socket_messages = page.evaluate("window.__rahSocketMessages")
             second_user_count, _turn_id = gather_matching_user_events(socket_messages, second_prompt)
+            if second_user_count != 1:
+                raise AssertionError(
+                    f"Expected one canonical Claude user item for the second turn; "
+                    f"count={second_user_count}."
+                )
+            rapid1_user_count, rapid1_turn_id = gather_matching_user_events(
+                socket_messages, rapid1_prompt
+            )
+            rapid2_user_count, rapid2_turn_id = gather_matching_user_events(
+                socket_messages, rapid2_prompt
+            )
+            rapid1_assistant_count = gather_matching_assistant_events(
+                socket_messages, rapid1_turn_id, rapid1_marker
+            )
+            rapid2_assistant_count = gather_matching_assistant_events(
+                socket_messages, rapid2_turn_id, rapid2_marker
+            )
+            if rapid1_turn_id == rapid2_turn_id:
+                raise AssertionError("Rapid Claude prompts were assigned to the same canonical turn.")
+            if (rapid1_user_count, rapid1_assistant_count) != (1, 1):
+                raise AssertionError(
+                    "Rapid Claude first turn was not unique: "
+                    f"user={rapid1_user_count} assistant={rapid1_assistant_count}."
+                )
+            if (rapid2_user_count, rapid2_assistant_count) != (1, 1):
+                raise AssertionError(
+                    "Rapid Claude second turn was not unique: "
+                    f"user={rapid2_user_count} assistant={rapid2_assistant_count}."
+                )
             old_turn_count_after = count_text(body_after_second, first_marker)
 
             result = {
@@ -686,9 +833,13 @@ def main() -> int:
                 "claimFlow": {
                     "matchingUserEventCount": second_user_count,
                     "oldTurnVisibleCountAfterClaim": old_turn_count_after,
+                    "historyReloadRequestCount": 0,
+                    "historyHydrationRequestCount": len(replay_hydration_requests),
+                    "liveHydrationRequestCount": len(live_hydration_requests),
                     "permissionCount": len(second_permission_ids)
                     + len(recovery_permission_ids)
-                    + len(recovery2_permission_ids),
+                    + len(recovery2_permission_ids)
+                    + len(rapid_permission_ids),
                 },
                 "firstMarker": first_marker,
                 "secondMarker": second_marker,
@@ -698,6 +849,14 @@ def main() -> int:
                     "syntheticInterruptNoticeCount": count_text(body_after_recovery2, "Conversation interrupted"),
                     "recoveryMarkerVisibleCount": count_text(body_after_recovery2, recovery_marker),
                     "recovery2MarkerVisibleCount": count_text(body_after_recovery2, recovery2_marker),
+                },
+                "rapidFlow": {
+                    "firstTurnId": rapid1_turn_id,
+                    "secondTurnId": rapid2_turn_id,
+                    "firstUserCount": rapid1_user_count,
+                    "firstAssistantCount": rapid1_assistant_count,
+                    "secondUserCount": rapid2_user_count,
+                    "secondAssistantCount": rapid2_assistant_count,
                 },
             }
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -744,6 +903,15 @@ def main() -> int:
                             "error": str(exc),
                             "bodySnippet": body[-2200:],
                             "chatSnippet": visible_chat[-2200:],
+                            "replaySessionId": replay_session_id,
+                            "resumedSessionId": resumed_session_id,
+                            "apiConversationRequests": [
+                                url for url in api_request_urls if "/conversation/turns" in url
+                            ],
+                            "liveSessions": [
+                                item.get("session", {})
+                                for item in request_json(base_url, "/api/sessions").get("sessions", [])
+                            ],
                             "socketMessageCount": len(socket_messages),
                             "canceledEvents": canceled_events,
                         },

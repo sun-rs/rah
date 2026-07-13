@@ -30,20 +30,21 @@ type ProviderResult = {
   completedTurns: number;
   interruptedTurns: number;
   toolItems: number;
+  queuedTurns: number;
   statusAuthorities: string[];
   historyBytes: number;
 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const baseUrl = (process.env.RAH_CONVERSATION_V2_BASE_URL ?? "http://127.0.0.1:43111").replace(/\/$/, "");
-const timeoutMs = Number(process.env.RAH_CONVERSATION_V2_TIMEOUT_MS ?? 90_000);
-const keepHistory = process.env.RAH_CONVERSATION_V2_KEEP_HISTORY === "1";
+const baseUrl = (process.env.RAH_CONVERSATION_BASE_URL ?? "http://127.0.0.1:43111").replace(/\/$/, "");
+const timeoutMs = Number(process.env.RAH_CONVERSATION_TIMEOUT_MS ?? 90_000);
+const keepHistory = process.env.RAH_CONVERSATION_KEEP_HISTORY === "1";
 const runId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
-const clientId = `conversation-v2-conformance-${runId}`;
+const clientId = `conversation-conformance-${runId}`;
 
 function selectedProviders(): Provider[] {
-  const requested = (process.env.RAH_CONVERSATION_V2_PROVIDERS ?? "codex,opencode,claude")
+  const requested = (process.env.RAH_CONVERSATION_PROVIDERS ?? "codex,opencode,claude")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
@@ -149,6 +150,13 @@ function findTurnByFinal(
   return page.turns.find((turn) => finalText(turn)?.trim() === expected);
 }
 
+function findTurnByFinalContaining(
+  page: ConversationTurnsPageResponse,
+  expected: string,
+): ConversationTurnProjection | undefined {
+  return page.turns.find((turn) => finalText(turn)?.includes(expected));
+}
+
 function findTurnByUserText(
   page: ConversationTurnsPageResponse,
   expectedFragment: string,
@@ -162,6 +170,136 @@ function findTurnByUserText(
 
 function isToolItem(item: ConversationItemProjection): boolean {
   return item.content.kind === "tool" || item.content.kind === "observation";
+}
+
+function userText(item: ConversationItemProjection): string | null {
+  return item.role === "user" ? itemText(item) : null;
+}
+
+function assertTurnProcessOrder(
+  provider: Provider,
+  label: string,
+  turn: ConversationTurnProjection,
+  options: { requireFinal: boolean; requireProcess: boolean },
+): void {
+  const userIndex = turn.items.findIndex((item) => userText(item) !== null);
+  const processIndex = turn.items.findIndex((item) => item.role === "process");
+  const finalIndex = turn.items.findIndex((item) => item.role === "final");
+  if (userIndex < 0) {
+    throw new Error(`${provider} ${label} has no canonical user item.`);
+  }
+  if (options.requireProcess && processIndex < 0) {
+    throw new Error(`${provider} ${label} has no canonical process item.`);
+  }
+  if (processIndex >= 0 && processIndex <= userIndex) {
+    throw new Error(`${provider} ${label} placed process information before its user question.`);
+  }
+  if (options.requireFinal && finalIndex < 0) {
+    throw new Error(`${provider} ${label} has no canonical final item.`);
+  }
+  if (finalIndex >= 0 && finalIndex <= userIndex) {
+    throw new Error(`${provider} ${label} placed its final answer before the user question.`);
+  }
+  if (processIndex >= 0 && finalIndex >= 0 && processIndex >= finalIndex) {
+    throw new Error(`${provider} ${label} placed working information after its final answer.`);
+  }
+}
+
+async function assertQueuedTurnOrder(args: {
+  provider: Provider;
+  sessionId: string;
+  firstUserMarker: string;
+  firstFinalMarker: string;
+  secondUserMarker: string;
+  secondFinalMarker: string;
+}): Promise<void> {
+  const page = await conversationPage(args.sessionId);
+  const first = findTurnByFinal(page, args.firstFinalMarker);
+  const second = findTurnByFinal(page, args.secondFinalMarker);
+  if (!first || !second) {
+    throw new Error(`${args.provider} queued probe is missing a completed canonical turn.`);
+  }
+  if (first.id === second.id) {
+    throw new Error(`${args.provider} merged two queued questions into one canonical turn.`);
+  }
+  const firstIndex = page.turns.findIndex((turn) => turn.id === first.id);
+  const secondIndex = page.turns.findIndex((turn) => turn.id === second.id);
+  if (firstIndex < 0 || secondIndex <= firstIndex) {
+    throw new Error(`${args.provider} reversed the two queued canonical turns.`);
+  }
+  const allUserTexts = page.turns.flatMap((turn) => turn.items.map(userText)).filter(Boolean);
+  for (const marker of [args.firstUserMarker, args.secondUserMarker]) {
+    const count = allUserTexts.filter((text) => text?.includes(marker)).length;
+    if (count !== 1) {
+      throw new Error(`${args.provider} rendered queued user marker '${marker}' ${count} times.`);
+    }
+  }
+  for (const marker of [args.firstFinalMarker, args.secondFinalMarker]) {
+    const count = page.turns.filter((turn) => finalText(turn)?.trim() === marker).length;
+    if (count !== 1) {
+      throw new Error(`${args.provider} rendered queued final marker '${marker}' ${count} times.`);
+    }
+  }
+  const detailedFirst = await detailedTurn(args.sessionId, first);
+  assertTurnProcessOrder(args.provider, "queued first turn", detailedFirst, {
+    requireFinal: true,
+    requireProcess: true,
+  });
+  assertTurnProcessOrder(args.provider, "queued second turn", second, {
+    requireFinal: true,
+    requireProcess: false,
+  });
+}
+
+async function assertClaudeConsecutiveInputOrder(args: {
+  sessionId: string;
+  firstUserMarker: string;
+  firstFinalMarker: string;
+  secondUserMarker: string;
+  secondFinalMarker: string;
+}): Promise<1 | 2> {
+  const page = await conversationPage(args.sessionId);
+  const first = findTurnByUserText(page, args.firstUserMarker);
+  const second = findTurnByUserText(page, args.secondUserMarker);
+  if (!first || !second) {
+    throw new Error("claude did not preserve both consecutive user inputs in the canonical transcript.");
+  }
+  const allUserTexts = page.turns.flatMap((turn) => turn.items.map(userText)).filter(Boolean);
+  for (const marker of [args.firstUserMarker, args.secondUserMarker]) {
+    const count = allUserTexts.filter((text) => text?.includes(marker)).length;
+    if (count !== 1) {
+      throw new Error(`claude rendered consecutive user marker '${marker}' ${count} times.`);
+    }
+  }
+  if (first.id !== second.id) {
+    await assertQueuedTurnOrder({ provider: "claude", ...args });
+    return 2;
+  }
+
+  const detailed = await detailedTurn(args.sessionId, first);
+  const firstUserIndex = detailed.items.findIndex((item) => userText(item)?.includes(args.firstUserMarker));
+  const secondUserIndex = detailed.items.findIndex((item) => userText(item)?.includes(args.secondUserMarker));
+  const processIndex = detailed.items.findIndex((item) => item.role === "process");
+  const finalIndex = detailed.items.findIndex(
+    (item) => item.role === "final" && itemText(item)?.includes(args.secondFinalMarker),
+  );
+  if (
+    firstUserIndex < 0 ||
+    secondUserIndex <= firstUserIndex ||
+    processIndex <= secondUserIndex ||
+    finalIndex <= processIndex
+  ) {
+    throw new Error(
+      `claude steering order is invalid: user1=${firstUserIndex} user2=${secondUserIndex} process=${processIndex} final=${finalIndex}.`,
+    );
+  }
+  const supersededFinalCount = page.turns.filter(
+    (turn) => finalText(turn)?.trim() === args.firstFinalMarker,
+  ).length;
+  if (supersededFinalCount !== 0) {
+    throw new Error("claude emitted a superseded first final after accepting a queued command.");
+  }
+  return 1;
 }
 
 async function conversationPage(sessionId: string): Promise<ConversationTurnsPageResponse> {
@@ -204,6 +342,17 @@ async function waitForFinal(sessionId: string, expected: string): Promise<Conver
   return waitFor(`final answer '${expected}'`, async () => {
     const page = await conversationPage(sessionId);
     const turn = findTurnByFinal(page, expected);
+    return turn?.status === "completed" ? turn : null;
+  });
+}
+
+async function waitForFinalContaining(
+  sessionId: string,
+  expected: string,
+): Promise<ConversationTurnProjection> {
+  return waitFor(`final answer containing '${expected}'`, async () => {
+    const page = await conversationPage(sessionId);
+    const turn = findTurnByFinalContaining(page, expected);
     return turn?.status === "completed" ? turn : null;
   });
 }
@@ -271,6 +420,7 @@ async function runProvider(provider: Provider): Promise<ProviderResult> {
   let resumedRuntimeId = "";
   let replayRuntimeId = "";
   let observedToolItems = 0;
+  let queuedTurnCount = 0;
   try {
     const started = await requestJson<SessionResponse>("/api/sessions/start", {
       method: "POST",
@@ -309,6 +459,49 @@ async function runProvider(provider: Provider): Promise<ProviderResult> {
     if (observedToolItems === 0) {
       throw new Error(`${provider} completed the tool probe without a canonical tool/observation item.`);
     }
+    assertTurnProcessOrder(provider, "tool turn", hydratedToolTurn, {
+      requireFinal: true,
+      requireProcess: true,
+    });
+
+    const queuedFirstUserMarker = `${prefix}_QUEUE_USER_1`;
+    const queuedFirstFinalMarker = `${prefix}_QUEUE_FINAL_1`;
+    const queuedSecondUserMarker = `${prefix}_QUEUE_USER_2`;
+    const queuedSecondFinalMarker = `${prefix}_QUEUE_FINAL_2`;
+    await sendInput(
+      firstRuntimeId,
+      `Use your shell tool to run \`sleep 3\` once. Do not modify files. This question is ${queuedFirstUserMarker}. Then reply with exactly ${queuedFirstFinalMarker}.`,
+      "queue-1",
+    );
+    await sendInput(
+      firstRuntimeId,
+      `Do not use tools or modify files. This queued question is ${queuedSecondUserMarker}. Reply with exactly ${queuedSecondFinalMarker}.`,
+      "queue-2",
+    );
+    if (provider === "claude") {
+      await waitForFinalContaining(firstRuntimeId, queuedSecondFinalMarker);
+      queuedTurnCount = await assertClaudeConsecutiveInputOrder({
+        sessionId: firstRuntimeId,
+        firstUserMarker: queuedFirstUserMarker,
+        firstFinalMarker: queuedFirstFinalMarker,
+        secondUserMarker: queuedSecondUserMarker,
+        secondFinalMarker: queuedSecondFinalMarker,
+      });
+    } else {
+      await Promise.all([
+        waitForFinal(firstRuntimeId, queuedFirstFinalMarker),
+        waitForFinal(firstRuntimeId, queuedSecondFinalMarker),
+      ]);
+      await assertQueuedTurnOrder({
+        provider,
+        sessionId: firstRuntimeId,
+        firstUserMarker: queuedFirstUserMarker,
+        firstFinalMarker: queuedFirstFinalMarker,
+        secondUserMarker: queuedSecondUserMarker,
+        secondFinalMarker: queuedSecondFinalMarker,
+      });
+      queuedTurnCount = 2;
+    }
 
     await closeSession(firstRuntimeId);
     managedSessionIds.delete(firstRuntimeId);
@@ -341,6 +534,18 @@ async function runProvider(provider: Provider): Promise<ProviderResult> {
     if (interrupted.status !== "interrupted") {
       throw new Error(`${provider} interrupt ended as '${interrupted.status}', expected 'interrupted'.`);
     }
+    const danglingInterruptedItems = interrupted.items.filter(
+      (item) => item.status === "pending" || item.status === "running",
+    );
+    if (danglingInterruptedItems.length > 0) {
+      throw new Error(
+        `${provider} interrupt left ${danglingInterruptedItems.length} canonical item(s) open.`,
+      );
+    }
+    assertTurnProcessOrder(provider, "interrupted turn", interrupted, {
+      requireFinal: false,
+      requireProcess: true,
+    });
 
     const recoveryMarker = `${prefix}_RECOVERY_OK`;
     await sendInput(
@@ -369,8 +574,21 @@ async function runProvider(provider: Provider): Promise<ProviderResult> {
 
     const replayPage = await waitFor(`${provider} replay projection`, async () => {
       const page = await conversationPage(replayRuntimeId);
-      const required = [firstMarker, toolMarker, resumedMarker, recoveryMarker];
-      return required.every((marker) => findTurnByFinal(page, marker)) ? page : null;
+      const required = [
+        firstMarker,
+        toolMarker,
+        ...(provider === "claude" ? [] : [queuedFirstFinalMarker]),
+        queuedSecondFinalMarker,
+        resumedMarker,
+        recoveryMarker,
+      ];
+      return required.every((marker) =>
+        provider === "claude"
+          ? findTurnByFinalContaining(page, marker)
+          : findTurnByFinal(page, marker),
+      )
+        ? page
+        : null;
     });
     const emptyTurns = replayPage.turns.filter((turn) => turn.items.length === 0);
     if (emptyTurns.length > 0) {
@@ -379,6 +597,24 @@ async function runProvider(provider: Provider): Promise<ProviderResult> {
     const interruptedTurns = replayPage.turns.filter((turn) => turn.status === "interrupted");
     if (interruptedTurns.length === 0) {
       throw new Error(`${provider} replay did not preserve the interrupted turn.`);
+    }
+    const danglingReplayItems = replayPage.turns
+      .filter((turn) => turn.status !== "in_progress")
+      .flatMap((turn) => turn.items)
+      .filter((item) => item.status === "pending" || item.status === "running");
+    if (danglingReplayItems.length > 0) {
+      throw new Error(
+        `${provider} replay contains ${danglingReplayItems.length} open item(s) in terminal turns.`,
+      );
+    }
+    if (provider === "claude") {
+      queuedTurnCount = await assertClaudeConsecutiveInputOrder({
+        sessionId: replayRuntimeId,
+        firstUserMarker: queuedFirstUserMarker,
+        firstFinalMarker: queuedFirstFinalMarker,
+        secondUserMarker: queuedSecondUserMarker,
+        secondFinalMarker: queuedSecondFinalMarker,
+      });
     }
 
     return {
@@ -390,6 +626,7 @@ async function runProvider(provider: Provider): Promise<ProviderResult> {
       completedTurns: replayPage.turns.filter((turn) => turn.status === "completed").length,
       interruptedTurns: interruptedTurns.length,
       toolItems: observedToolItems,
+      queuedTurns: queuedTurnCount,
       statusAuthorities: [...new Set(replayPage.turns.map((turn) => turn.statusAuthority))],
       historyBytes: stored.historyMeta?.bytes ?? 0,
     };
@@ -415,7 +652,7 @@ async function main(): Promise<void> {
   await requestJson("/api/runtime");
   const results: ProviderResult[] = [];
   for (const provider of selectedProviders()) {
-    process.stderr.write(`[conversation-v2] testing ${provider}\n`);
+    process.stderr.write(`[conversation] testing ${provider}\n`);
     results.push(await runProvider(provider));
   }
   process.stdout.write(`${JSON.stringify({ ok: true, runId, baseUrl, results }, null, 2)}\n`);

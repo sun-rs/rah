@@ -26,7 +26,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/client-web/src/types.test.ts",
-      "packages/client-web/src/session-store-history.test.ts",
+      "packages/client-web/src/conversation.test.ts",
       "scripts/native_provider_browser_smoke.py",
       "scripts/native_codex_browser_smoke.py",
     ],
@@ -61,7 +61,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/client-web/src/types.test.ts",
-      "packages/client-web/src/session-store-history.test.ts",
+      "packages/client-web/src/conversation.test.ts",
     ],
   },
   {
@@ -245,14 +245,14 @@ const cases: RegressionCase[] = [
     ],
   },
   {
-    id: "REAL-CLAUDE-HISTORY-CLAIM-001",
+    id: "REAL-CLAUDE-HISTORY-RESUME-001",
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude history claim resumes into TUI mux live mode without duplicating old turns",
+    title: "Real Claude history resume resumes into TUI mux live mode without duplicating old turns",
     acceptance: [
       "Read-only Claude replay can be claimed into a live TUI mux session.",
-      "Claiming does not increase the visible count of the old first-turn marker.",
+      "Resuming does not increase the visible count of the old first-turn marker.",
       "The claimed live session accepts a new browser turn.",
     ],
     evidence: [
@@ -363,7 +363,7 @@ const cases: RegressionCase[] = [
     evidence: [
       "scripts/provider_browser_smoke.py",
       "packages/client-web/src/types.test.ts",
-      "packages/client-web/src/session-store-history.test.ts",
+      "packages/client-web/src/conversation.test.ts",
     ],
   },
   {
@@ -382,14 +382,14 @@ const cases: RegressionCase[] = [
     ],
   },
   {
-    id: "REAL-HISTORY-CLAIM-001",
+    id: "REAL-HISTORY-RESUME-001",
     severity: "P0",
     providers: ["codex", "opencode"],
     automation: ["real_provider"],
-    title: "Real provider history claim resumes into a live session without duplicating older turns",
+    title: "Real provider history resume resumes into a live session without duplicating older turns",
     acceptance: [
       "Read-only replay can be claimed into a live session.",
-      "Claiming does not increase the visible count of the old first-turn marker.",
+      "Resuming does not increase the visible count of the old first-turn marker.",
       "The claimed live session accepts a new browser turn.",
     ],
     evidence: [
@@ -439,24 +439,24 @@ const cases: RegressionCase[] = [
       "Older page merge does not duplicate already-rendered live or latest history items.",
     ],
     evidence: [
-      "packages/client-web/src/session-store-history.test.ts",
+      "packages/client-web/src/session-store-conversation-directory.test.ts",
       "docs/history-browsing.zh-CN.md",
-      "scripts/history_claim_smoke.py",
+      "scripts/history_resume_smoke.py",
     ],
   },
   {
-    id: "HISTORY-CLAIM-001",
+    id: "HISTORY-RESUME-001",
     severity: "P0",
     providers: ["codex", "claude", "opencode"],
     automation: ["unit", "fake_browser"],
-    title: "Claiming history transfers replay to live without reordering or title regression",
+    title: "Resuming history transfers replay to live without reordering or title regression",
     acceptance: [
       "Read-only replay remains browse-only until claim.",
       "Claimed live session keeps existing replay transcript order.",
       "Provider title/name remains aligned with provider-native history metadata.",
     ],
     evidence: [
-      "scripts/history_claim_smoke.py",
+      "scripts/history_resume_smoke.py",
       "packages/runtime-daemon/src/history-snapshots.test.ts",
     ],
   },

@@ -33,7 +33,7 @@ CASE_IDS = [
     "NEW-SESSION-001",
     "REFRESH-LIVE-001",
     "HISTORY-PAGING-001",
-    "HISTORY-CLAIM-001",
+    "HISTORY-RESUME-001",
     "CODEX-EVENT-001",
     "TUI-SURFACE-001",
     "TUI-EXIT-001",
@@ -138,9 +138,21 @@ def live_session_ids(base_url: str) -> set[str]:
 
 
 def open_live_session(page, session_id: str) -> None:
-    page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-    page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+    page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+    page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
     page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(timeout=30_000)
+
+
+def open_filtered_history_session(page, provider_session_id: str) -> None:
+    session_button = page.locator(
+        f'button[data-provider-session-id="{provider_session_id}"]:visible',
+    ).first
+    if session_button.count() == 0:
+        chats_dialog = page.get_by_role("dialog").filter(has_text="Chats")
+        group = chats_dialog.locator("section > button").first
+        expect(group).to_be_visible(timeout=30_000)
+        group.click(timeout=10_000)
+    session_button.click(timeout=30_000)
 
 
 def free_port() -> int:
@@ -158,11 +170,56 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "#!/usr/bin/env node",
                 "const fs = require('node:fs');",
                 "const path = require('node:path');",
+                "const readline = require('node:readline');",
                 "const baseProviderSessionId = process.env.MOCK_CODEX_SESSION_ID;",
                 "const codexHome = process.env.CODEX_HOME;",
                 "if (!baseProviderSessionId || !codexHome) process.exit(2);",
+                "if (process.argv.includes('app-server')) {",
+                "  const rl = readline.createInterface({ input: process.stdin });",
+                "  const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');",
+                "  const findRollout = (root, sessionId) => {",
+                "    if (!fs.existsSync(root)) return null;",
+                "    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {",
+                "      const candidate = path.join(root, entry.name);",
+                "      if (entry.isDirectory()) {",
+                "        const nested = findRollout(candidate, sessionId);",
+                "        if (nested) return nested;",
+                "      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(sessionId)) {",
+                "        return candidate;",
+                "      }",
+                "    }",
+                "    return null;",
+                "  };",
+                "  rl.on('line', (line) => {",
+                "    const message = JSON.parse(line);",
+                "    if (message.id === undefined) return;",
+                "    if (message.method === 'initialize') {",
+                "      send({ id: message.id, result: {} });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'model/list') {",
+                "      send({ id: message.id, result: { data: [], nextCursor: null } });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'thread/archive') {",
+                "      const sessionId = message.params && message.params.threadId;",
+                "      const sessionsRoot = path.join(codexHome, 'sessions');",
+                "      const source = findRollout(sessionsRoot, sessionId);",
+                "      if (!source) {",
+                "        send({ id: message.id, error: { code: -32000, message: `thread not found: ${sessionId}` } });",
+                "        return;",
+                "      }",
+                "      const target = path.join(codexHome, 'archived_sessions', path.relative(sessionsRoot, source));",
+                "      fs.mkdirSync(path.dirname(target), { recursive: true });",
+                "      fs.renameSync(source, target);",
+                "      send({ id: message.id, result: { thread: { id: sessionId } } });",
+                "      return;",
+                "    }",
+                "    send({ id: message.id, error: { code: -32601, message: `method not found: ${message.method}` } });",
+                "  });",
+                "} else {",
                 "const resumeIndex = process.argv.indexOf('resume');",
-                "const providerSessionId = resumeIndex >= 0 && process.argv[resumeIndex + 1] ? process.argv[resumeIndex + 1] : `${baseProviderSessionId}-${process.pid}`;",
+                "const providerSessionId = resumeIndex >= 0 && process.argv[resumeIndex + 1] ? process.argv[resumeIndex + 1] : baseProviderSessionId;",
                 "const rolloutPath = path.join(codexHome, 'sessions', `rollout-native-browser-${providerSessionId}.jsonl`);",
                 "fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });",
                 "function append(row) { fs.appendFileSync(rolloutPath, JSON.stringify(row) + '\\n'); }",
@@ -183,7 +240,7 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "let pendingStopTurnId = null;",
                 "function handleInterrupt() {",
                 "  if (pendingStopTurnId) {",
-                "    append({ timestamp: timestamp(1), type: 'event_msg', payload: { type: 'task_complete', turn_id: pendingStopTurnId } });",
+                "    append({ timestamp: timestamp(1), type: 'event_msg', payload: { type: 'turn_aborted', turn_id: pendingStopTurnId, reason: 'interrupted' } });",
                 "    pendingStopTurnId = null;",
                 "  }",
                 "  process.stdout.write('RAH_NATIVE_CODEX_BROWSER_INTERRUPTED\\r\\n');",
@@ -219,14 +276,15 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "      pendingStopTurnId = turnId;",
                 "      continue;",
                 "    }",
-                "    append({ timestamp: timestamp(3), type: 'event_msg', payload: { type: 'agent_message', message: answer } });",
-                "    append({ timestamp: timestamp(4), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer }] } });",
+                "    append({ timestamp: timestamp(3), type: 'event_msg', payload: { type: 'agent_message', message: answer, phase: 'commentary' } });",
+                "    append({ timestamp: timestamp(4), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer }], phase: 'final_answer' } });",
                 "    append({ timestamp: timestamp(5), type: 'event_msg', payload: { type: 'task_complete', turn_id: turnId } });",
                 "    process.stdout.write(`RAH_NATIVE_CODEX_BROWSER_ANSWER:${answer}\\r\\n`);",
                 "    process.stdout.write('› ');",
                 "  }",
                 "});",
                 "setInterval(() => undefined, 1000);",
+                "}",
                 "",
             ]
         ),
@@ -285,7 +343,11 @@ def write_long_codex_history(
                 {
                     "timestamp": ts(event_index + 2),
                     "type": "event_msg",
-                    "payload": {"type": "agent_message", "message": assistant_text},
+                    "payload": {
+                        "type": "agent_message",
+                        "message": assistant_text,
+                        "phase": "commentary",
+                    },
                 },
                 {
                     "timestamp": ts(event_index + 3),
@@ -294,6 +356,7 @@ def write_long_codex_history(
                         "type": "message",
                         "role": "assistant",
                         "content": [{"type": "output_text", "text": assistant_text}],
+                        "phase": "final_answer",
                     },
                 },
                 {
@@ -315,7 +378,12 @@ def start_daemon(env: dict[str, str], port: int) -> subprocess.Popen[str]:
     proc = subprocess.Popen(
         ["node", "--import", "tsx", "packages/runtime-daemon/src/main.ts"],
         cwd=ROOT_DIR,
-        env={**os.environ, **env, "RAH_PORT": str(port)},
+        env={
+            **os.environ,
+            **env,
+            "RAH_HOST": "127.0.0.1",
+            "RAH_PORT": str(port),
+        },
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -343,8 +411,10 @@ def wait_for_session_provider_id(
 ) -> str:
     started = time.time()
     last_provider_session_id: str | None = None
+    last_summary: dict[str, Any] | None = None
     while time.time() - started < 15:
         summary = request_json(base_url, f"/api/sessions/{session_id}")["session"]
+        last_summary = summary
         value = summary["session"].get("providerSessionId")
         last_provider_session_id = str(value) if value else None
         if last_provider_session_id and (
@@ -353,7 +423,12 @@ def wait_for_session_provider_id(
             return last_provider_session_id
         time.sleep(0.2)
     if provider_session_id is None:
-        raise AssertionError("native Codex providerSessionId did not bind")
+        pty_stats = request_json(base_url, "/api/pty/stats")
+        raise AssertionError(
+            "native Codex providerSessionId did not bind; "
+            f"last_summary={json.dumps(last_summary, ensure_ascii=False)}; "
+            f"pty_stats={json.dumps(pty_stats, ensure_ascii=False)}"
+        )
     raise AssertionError(
         f"native Codex providerSessionId did not bind to {provider_session_id!r}; "
         f"last={last_provider_session_id!r}"
@@ -488,6 +563,86 @@ def wait_for_stored_history_ref(
     )
 
 
+def wait_for_stored_history_archived(
+    base_url: str,
+    provider_session_id: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_response: dict[str, Any] = {}
+    last_matches: list[dict[str, Any]] = []
+    while time.time() - started < timeout_s:
+        response = request_json(base_url, "/api/sessions?storedSessions=all")
+        last_response = response
+        candidates = [
+            *response.get("storedSessions", []),
+            *response.get("recentSessions", []),
+        ]
+        last_matches = [
+            {"section": section, "entry": entry}
+            for section in ("storedSessions", "recentSessions")
+            for entry in response.get(section, [])
+            if entry.get("provider") == "codex"
+            and str(entry.get("providerSessionId")) == provider_session_id
+        ]
+        last_matches.extend(
+            {
+                "section": "sessions",
+                "entry": entry,
+            }
+            for entry in response.get("sessions", [])
+            if entry.get("session", {}).get("provider") == "codex"
+            and str(entry.get("session", {}).get("providerSessionId")) == provider_session_id
+        )
+        target = next(
+            (
+                entry
+                for entry in candidates
+                if entry.get("provider") == "codex"
+                and str(entry.get("providerSessionId")) == provider_session_id
+            ),
+            None,
+        )
+        if target and target.get("providerState", {}).get("archived") is True:
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"Codex provider history {provider_session_id!r} did not become archived; "
+        f"matches={json.dumps(last_matches, ensure_ascii=False)}; "
+        f"stored={len(last_response.get('storedSessions', []))}; "
+        f"recent={len(last_response.get('recentSessions', []))}; "
+        f"live={len(last_response.get('sessions', []))}"
+    )
+
+
+def wait_for_archived_rollout(
+    codex_home: pathlib.Path,
+    provider_session_id: str,
+    timeout_s: int = 20,
+) -> pathlib.Path:
+    active_root = codex_home / "sessions"
+    archived_root = codex_home / "archived_sessions"
+    started = time.time()
+    while time.time() - started < timeout_s:
+        archived = [
+            path
+            for path in archived_root.rglob("*.jsonl")
+            if provider_session_id in path.name
+        ] if archived_root.exists() else []
+        active = [
+            path
+            for path in active_root.rglob("*.jsonl")
+            if provider_session_id in path.name
+        ] if active_root.exists() else []
+        if len(archived) == 1 and not active:
+            return archived[0]
+        time.sleep(0.2)
+    raise AssertionError(
+        f"Codex rollout {provider_session_id!r} was not moved into archived_sessions; "
+        f"active={[str(path) for path in active]}; archived={[str(path) for path in archived]}"
+    )
+
+
 def exercise_codex_tui_exit(
     page,
     base_url: str,
@@ -523,6 +678,7 @@ def exercise_codex_archive(
     page,
     base_url: str,
     workspace: pathlib.Path,
+    codex_home: pathlib.Path,
     artifact_dir: pathlib.Path,
 ) -> None:
     session_id, provider_session_id = start_codex_browser_session(
@@ -539,16 +695,34 @@ def exercise_codex_archive(
         expect(panel).to_be_visible(timeout=10_000)
         wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
         page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
-        page.locator('button[title="Archive this live session"]:visible').first.click(timeout=30_000)
-        page.get_by_role("dialog").filter(has_text="Archive session?").get_by_role(
+        page.get_by_role("button", name="Stop session", exact=True).click(timeout=30_000)
+        page.get_by_role("dialog").filter(has_text="Stop session?").get_by_role(
             "button",
-            name="Archive",
+            name="Stop",
             exact=True,
         ).click(timeout=30_000)
         wait_for_session_absent(base_url, session_id)
         wait_for_live_session_absent(base_url, session_id)
         assert_session_not_in_pty_stats(base_url, session_id)
         wait_for_stored_history_ref(base_url, provider_session_id)
+
+        page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+        page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
+        page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
+        open_filtered_history_session(page, provider_session_id)
+        page.get_by_role("button", name="Session actions", exact=True).click(timeout=30_000)
+        page.get_by_role("button", name="Archive session", exact=True).click(timeout=30_000)
+        wait_for_archived_rollout(codex_home, provider_session_id)
+        wait_for_stored_history_archived(base_url, provider_session_id)
+        page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+        page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
+        page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
+        expect(
+            page.locator(
+                f'button[data-provider-session-id="{provider_session_id}"]:visible',
+            )
+        ).to_have_count(0, timeout=10_000)
+        expect(page.get_by_text("No matching results", exact=True)).to_be_visible(timeout=10_000)
         save_browser_screenshot(page, artifact_dir, "codex-archive-live-cleanup-history-retained")
     finally:
         close_session_quietly(base_url, session_id)
@@ -561,12 +735,10 @@ def exercise_codex_history_paging(
     artifact_dir: pathlib.Path,
 ) -> None:
     page.reload(wait_until="domcontentloaded")
-    page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-    page.get_by_role("button", name="All", exact=True).click(timeout=30_000)
+    page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+    page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
     page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
-    page.locator(
-        f'button[data-provider-session-id="{provider_session_id}"]:visible',
-    ).first.click(timeout=30_000)
+    open_filtered_history_session(page, provider_session_id)
     chat_button = page.get_by_role("button", name="Chat", exact=True)
     if chat_button.count() > 0:
         chat_button.click(timeout=30_000)
@@ -630,12 +802,10 @@ def exercise_missing_cwd_history(
         raise AssertionError(f"missing cwd fixture unexpectedly exists: {missing_workspace}")
 
     page.reload(wait_until="domcontentloaded")
-    page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-    page.get_by_role("button", name="All", exact=True).click(timeout=30_000)
+    page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+    page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
     page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
-    page.locator(
-        f'button[data-provider-session-id="{provider_session_id}"]:visible',
-    ).first.click(timeout=30_000)
+    open_filtered_history_session(page, provider_session_id)
     chat_button = page.get_by_role("button", name="Chat", exact=True)
     if chat_button.count() > 0:
         chat_button.click(timeout=30_000)
@@ -645,7 +815,7 @@ def exercise_missing_cwd_history(
     )
     expect(page.get_by_role("dialog").filter(has_text="Workspace is missing")).to_have_count(0)
 
-    page.get_by_role("button", name="Claim control", exact=True).last.click(timeout=30_000)
+    page.get_by_role("button", name="Resume", exact=True).last.click(timeout=30_000)
     dialog = page.get_by_role("dialog").filter(has_text="Workspace is missing")
     expect(dialog).to_be_visible(timeout=10_000)
     expect(dialog.get_by_text("Create this workspace before starting the session?")).to_be_visible(
@@ -659,7 +829,7 @@ def exercise_missing_cwd_history(
     expect(dialog).to_be_hidden(timeout=10_000)
     if missing_workspace.exists():
         raise AssertionError(f"claim-cancel created missing cwd unexpectedly: {missing_workspace}")
-    save_browser_screenshot(page, artifact_dir, "codex-missing-cwd-history-claim-prompt")
+    save_browser_screenshot(page, artifact_dir, "codex-missing-cwd-history-resume-prompt")
 
 
 def wait_for_terminal_text(panel, needle: str, timeout_s: int = 15) -> None:
@@ -774,29 +944,44 @@ def wait_for_terminal_text_count(panel, needle: str, minimum: int, timeout_s: in
     )
 
 
+def wait_for_conversation_delta_text(
+    page,
+    batches: list[dict[str, Any]],
+    text: str,
+    timeout_s: int = 10,
+) -> None:
+    started = time.time()
+    while time.time() - started < timeout_s:
+        if any(text in json.dumps(batch.get("conversationDeltas", [])) for batch in batches):
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"event websocket did not deliver a Conversation delta containing {text!r}; "
+        f"recent_batches={json.dumps(batches[-20:], ensure_ascii=False)}"
+    )
+
+
 def count_session_history_timeline_text(
     base_url: str,
     session_id: str,
     kind: str,
     text: str,
 ) -> tuple[int, list[dict[str, Any]]]:
-    page = request_json(base_url, f"/api/sessions/{session_id}/history?limit=120")
+    page = request_json(base_url, f"/api/sessions/{session_id}/conversation/turns?limit=100")
     matches: list[dict[str, Any]] = []
-    for event in page.get("events", []):
-        if (
-            event.get("type") == "timeline.item.added"
-            and event.get("payload", {}).get("item", {}).get("kind") == kind
-            and event.get("payload", {}).get("item", {}).get("text") == text
-        ):
-            matches.append(
-                {
-                    "id": event.get("id"),
-                    "ts": event.get("ts"),
-                    "turnId": event.get("turnId"),
-                    "identity": event.get("payload", {}).get("identity"),
-                    "source": event.get("source"),
-                }
-            )
+    for turn in page.get("turns", []):
+        for item in turn.get("items", []):
+            content = item.get("content", {})
+            timeline = content.get("item", {}) if content.get("kind") == "timeline" else {}
+            if timeline.get("kind") == kind and timeline.get("text") == text:
+                matches.append(
+                    {
+                        "id": item.get("id"),
+                        "turnId": turn.get("id"),
+                        "providerTurnId": turn.get("providerTurnId"),
+                        "source": item.get("source"),
+                    }
+                )
     return len(matches), matches
 
 
@@ -817,6 +1002,36 @@ def wait_for_session_history_timeline_text(
         time.sleep(0.2)
     raise AssertionError(
         f"session history did not contain {kind} text {text!r}; matches={last_matches}"
+    )
+
+
+def wait_for_conversation_turn_status(
+    base_url: str,
+    session_id: str,
+    user_text: str,
+    expected_status: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_page: dict[str, Any] = {}
+    while time.time() - started < timeout_s:
+        last_page = request_json(
+            base_url,
+            f"/api/sessions/{session_id}/conversation/turns?limit=100",
+        )
+        for turn in last_page.get("turns", []):
+            has_user_text = any(
+                item.get("content", {}).get("kind") == "timeline"
+                and item.get("content", {}).get("item", {}).get("kind") == "user_message"
+                and item.get("content", {}).get("item", {}).get("text") == user_text
+                for item in turn.get("items", [])
+            )
+            if has_user_text and turn.get("status") == expected_status:
+                return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"conversation turn for {user_text!r} did not become {expected_status!r}; "
+        f"conversation={json.dumps(last_page, ensure_ascii=False)}"
     )
 
 
@@ -1016,6 +1231,7 @@ def main() -> int:
                 "RAH_HOME": str(rah_home),
                 "CODEX_HOME": str(codex_home),
                 "RAH_CODEX_BINARY": str(fake_codex),
+                "RAH_CODEX_APP_SERVER_TRANSPORT": "stdio",
                 "MOCK_CODEX_SESSION_ID": provider_session_id,
             },
             port,
@@ -1050,10 +1266,41 @@ def main() -> int:
         with sync_playwright() as playwright:
             browser = launch_browser(playwright)
             page = browser.new_page(viewport={"width": 1440, "height": 960})
+            conversation_batches: list[dict[str, Any]] = []
+
+            def capture_websocket(websocket) -> None:
+                def capture_frame(payload) -> None:
+                    try:
+                        batch = json.loads(payload)
+                    except (TypeError, json.JSONDecodeError):
+                        return
+                    if isinstance(batch, dict) and isinstance(batch.get("conversationDeltas"), list):
+                        conversation_batches.append(batch)
+
+                websocket.on("framereceived", capture_frame)
+
+            page.on("websocket", capture_websocket)
             page.goto(base_url, wait_until="domcontentloaded")
             page.reload(wait_until="domcontentloaded")
-            page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-            page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+            browser_connection_id = page.evaluate(
+                "() => window.sessionStorage.getItem('rah.web-connection-id')"
+            )
+            if not browser_connection_id:
+                raise AssertionError("browser did not establish a RAH web connection id")
+            request_json(
+                base_url,
+                f"/api/sessions/{session_id}/control/claim",
+                {
+                    "client": {
+                        "id": "web-user",
+                        "kind": "web",
+                        "connectionId": browser_connection_id,
+                    }
+                },
+            )
+            page.reload(wait_until="domcontentloaded")
+            page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+            page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
             page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(timeout=30_000)
 
             page.get_by_role("button", name="TUI", exact=True).click()
@@ -1064,18 +1311,39 @@ def main() -> int:
             canvas = page.locator(".terminal-canvas").last
             canvas.click()
             page.keyboard.type(prompt)
-            canvas.click()
-            page.wait_for_timeout(200)
             page.keyboard.press("Enter")
             try:
-                wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{prompt}", timeout_s=3)
-            except AssertionError:
-                page.keyboard.press("Control+M")
                 wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{prompt}")
+            except AssertionError as error:
+                terminal_id = session_native_terminal_id(base_url, session_id)
+                summary = request_json(base_url, f"/api/sessions/{session_id}")["session"]
+                surface = request_json(base_url, f"/api/sessions/{terminal_id}/tui-surface")
+                raise AssertionError(
+                    f"{error}; summary={json.dumps(summary, ensure_ascii=False)}; "
+                    f"surface={json.dumps(surface, ensure_ascii=False)}"
+                ) from error
 
+            wait_for_session_history_timeline_text(
+                base_url,
+                session_id,
+                "assistant_message",
+                expected_answer,
+            )
+            wait_for_conversation_delta_text(page, conversation_batches, prompt)
+            wait_for_conversation_delta_text(page, conversation_batches, expected_answer)
             page.get_by_role("button", name="Chat", exact=True).click()
             expect(page.get_by_text(expected_answer, exact=True)).to_be_visible(timeout=15_000)
-            assert_page_text_order(page, prompt, expected_answer)
+            try:
+                assert_page_text_order(page, prompt, expected_answer)
+            except AssertionError as error:
+                conversation = request_json(
+                    base_url,
+                    f"/api/sessions/{session_id}/conversation/turns?limit=100",
+                )
+                raise AssertionError(
+                    f"{error}; conversation={json.dumps(conversation, ensure_ascii=False)}; "
+                    f"deltas={json.dumps(conversation_batches[-12:], ensure_ascii=False)}"
+                ) from error
             assert_page_text_absent(page, "Unhandled provider event")
             assert_page_text_absent(page, "Loading older history")
             expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
@@ -1105,6 +1373,13 @@ def main() -> int:
             expect(panel).to_be_visible(timeout=10_000)
             wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{chat_prompt}")
             save_browser_screenshot(page, artifact_dir, "codex-web-tui-after-reactivate")
+            wait_for_session_history_timeline_text(
+                base_url,
+                session_id,
+                "assistant_message",
+                expected_chat_answer,
+            )
+            wait_for_conversation_delta_text(page, conversation_batches, expected_chat_answer)
             page.get_by_role("button", name="Chat", exact=True).click()
             expect(page.get_by_text(expected_chat_answer, exact=True)).to_be_visible(timeout=15_000)
             assert_page_text_order(page, chat_prompt, expected_chat_answer)
@@ -1139,6 +1414,20 @@ def main() -> int:
             wait_for_terminal_text(panel, expected_queued_answer)
             wait_for_terminal_text(panel, blocked_chat_prompt_two)
             wait_for_terminal_text(panel, expected_queued_answer_two)
+            wait_for_session_history_timeline_text(
+                base_url,
+                session_id,
+                "assistant_message",
+                expected_queued_answer,
+            )
+            wait_for_session_history_timeline_text(
+                base_url,
+                session_id,
+                "assistant_message",
+                expected_queued_answer_two,
+            )
+            wait_for_conversation_delta_text(page, conversation_batches, expected_queued_answer)
+            wait_for_conversation_delta_text(page, conversation_batches, expected_queued_answer_two)
             assert_session_idle(base_url, session_id)
             page.get_by_role("button", name="Chat", exact=True).click()
             expect(page.get_by_text(expected_queued_answer, exact=True)).to_be_visible(timeout=20_000)
@@ -1171,8 +1460,12 @@ def main() -> int:
             wait_for_chat_user_message_occurrences(page, stop_prompt, 1)
             page.get_by_role("button", name="TUI", exact=True).click()
             wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{stop_prompt}")
+            stop_interrupted_count = count_terminal_text(
+                panel,
+                "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
+            )
             page.get_by_role("button", name="Chat", exact=True).click()
-            interrupted_notice_count = page_text_occurrences(page, "Conversation interrupted")
+            interrupted_notice_count = page_text_occurrences(page, "Interrupted after")
             with page.expect_response(
                 lambda response: response.url.endswith(f"/api/sessions/{session_id}/interrupt"),
                 timeout=15_000,
@@ -1190,21 +1483,31 @@ def main() -> int:
                     f"{interrupt_response.text()}"
                 )
             page.get_by_role("button", name="TUI", exact=True).click()
-            wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED")
+            wait_for_terminal_text_count(
+                panel,
+                "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
+                stop_interrupted_count + 1,
+            )
             assert_session_idle(base_url, session_id)
+            wait_for_conversation_turn_status(
+                base_url,
+                session_id,
+                stop_prompt,
+                "interrupted",
+            )
             wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
             page.get_by_role("button", name="Chat", exact=True).click()
             wait_for_page_text_occurrences(
                 page,
-                "Conversation interrupted",
+                "Interrupted after",
                 interrupted_notice_count + 1,
             )
-            assert_page_text_order(page, stop_prompt, "Conversation interrupted")
+            assert_page_text_order(page, stop_prompt, "Interrupted after")
             expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
 
             page.reload(wait_until="domcontentloaded")
-            page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-            page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+            page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+            page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
             page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(timeout=30_000)
             page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
             panel = page.locator(".terminal-panel").last
@@ -1333,7 +1636,9 @@ def main() -> int:
                 "RAH_NATIVE_CODEX_BROWSER_RESIZE:",
                 resize_count_before_layout + 1,
             )
-            page.locator('button[title="Hide canvas"]').click(timeout=10_000)
+            page.get_by_role("button", name="Close canvas view", exact=True).click(
+                timeout=10_000
+            )
 
             mobile_assertions: list[str] = []
             if browser_supports_mobile_context():
@@ -1347,12 +1652,16 @@ def main() -> int:
                 mobile_page.locator('button[aria-label="Open sidebar"]:visible').first.click(
                     timeout=30_000
                 )
-                mobile_page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-                mobile_page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+                mobile_page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+                mobile_page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
                 mobile_page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(
                     timeout=30_000
                 )
-                mobile_page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+                mobile_page.get_by_role(
+                    "button",
+                    name="Show native TUI",
+                    exact=True,
+                ).click(timeout=30_000)
                 mobile_panel = mobile_page.locator(".terminal-panel").last
                 expect(mobile_panel).to_be_visible(timeout=10_000)
                 mobile_bridge = mobile_page.locator('[data-testid="terminal-ios-input-bridge"]').last
@@ -1560,8 +1869,8 @@ def main() -> int:
             resume_session_id = resumed["session"]["id"]
             session_id = resume_session_id
             page.reload(wait_until="domcontentloaded")
-            page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-            page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+            page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+            page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
             page.locator(f'button[data-session-id="{resume_session_id}"]:visible').first.click(timeout=30_000)
             page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
             expect(page.get_by_text(expected_answer, exact=True)).to_be_visible(timeout=20_000)
@@ -1595,7 +1904,7 @@ def main() -> int:
                 artifact_dir,
             )
             exercise_codex_tui_exit(page, base_url, workspace, artifact_dir)
-            exercise_codex_archive(page, base_url, workspace, artifact_dir)
+            exercise_codex_archive(page, base_url, workspace, codex_home, artifact_dir)
 
             browser.close()
 
@@ -1631,7 +1940,7 @@ def main() -> int:
                         "Foreground recovery catches up native TUI and Chat mirror without reselection",
                         "Web resume opens Codex history without duplicating existing assistant messages",
                         "Stored Codex history loads the latest page first and preserves scroll anchor when older pages prepend",
-                        "Missing-cwd history browsing does not prompt until Claim control",
+                        "Missing-cwd history browsing does not prompt until Resume",
                         "Explicit native_tui browser flow stays separate from the Web native_local_server default",
                         "Settings Status shows PTY terminal replay health for native TUI sessions",
                         "Settings Status refresh shows PTY terminal replay deltas",
@@ -1648,6 +1957,31 @@ def main() -> int:
         )
         return 0
     except Exception as exc:
+        debug_rollouts: list[dict[str, str]] = []
+        for index, rollout_path in enumerate(sorted(codex_home.rglob("*.jsonl"))):
+            debug_path = artifact_dir / f"debug-rollout-{index}.jsonl"
+            try:
+                debug_path.write_bytes(rollout_path.read_bytes())
+                debug_rollouts.append(
+                    {
+                        "source": str(rollout_path.relative_to(codex_home)),
+                        "artifact": str(debug_path),
+                    }
+                )
+            except OSError:
+                pass
+        codex_cache_matches: list[dict[str, Any]] = []
+        try:
+            cache = json.loads(
+                (rah_home / "stored-session-cache" / "codex.json").read_text(encoding="utf-8")
+            )
+            codex_cache_matches = [
+                {"path": path, **entry}
+                for path, entry in cache.get("entries", {}).items()
+                if entry.get("ref", {}).get("providerSessionId") == provider_session_id
+            ]
+        except (OSError, ValueError):
+            pass
         print(
             json.dumps(
                 {
@@ -1659,6 +1993,8 @@ def main() -> int:
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),
                     "screenshots": SCREENSHOTS,
+                    "debugRollouts": debug_rollouts,
+                    "codexCacheMatches": codex_cache_matches,
                 },
                 ensure_ascii=False,
                 indent=2,

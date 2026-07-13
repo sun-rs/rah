@@ -195,7 +195,7 @@ async function main() {
       body: JSON.stringify({
         provider: "claude",
         cwd: workdir,
-        approvalPolicy: "never",
+        modeId: "bypassPermissions",
         attach: {
           client: { id: clientId, kind: "web", connectionId: clientId },
           mode: "interactive",
@@ -262,20 +262,25 @@ async function main() {
       throw new Error("Claude replay session should be read-only.");
     }
 
-    const history = await requestJson(`/api/sessions/${replaySessionId}/history?limit=1000`) as {
-      events: Array<{ type: string; payload: Record<string, unknown> }>;
+    const history = await requestJson(`/api/sessions/${replaySessionId}/conversation/turns?limit=100`) as {
+      turns: Array<{
+        items: Array<{
+          content: {
+            kind: string;
+            item?: { kind?: string; text?: string };
+            toolCall?: { providerToolName?: string };
+          };
+        }>;
+      }>;
     };
-    const assistantTexts = history.events
-      .filter(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          (event.payload.item as { kind?: string }).kind === "assistant_message",
-      )
-      .map((event) => (event.payload.item as { text?: string }).text)
+    const items = history.turns.flatMap((turn) => turn.items);
+    const assistantTexts = items
+      .filter((item) => item.content.kind === "timeline" && item.content.item?.kind === "assistant_message")
+      .map((item) => item.content.item?.text)
       .filter((value): value is string => typeof value === "string");
-    const toolNames = history.events
-      .filter((event) => event.type === "tool.call.completed")
-      .map((event) => (event.payload.toolCall as { providerToolName?: string }).providerToolName)
+    const toolNames = items
+      .filter((item) => item.content.kind === "tool")
+      .map((item) => item.content.toolCall?.providerToolName)
       .filter((value): value is string => typeof value === "string");
     if (!assistantTexts.some((text) => text.includes("DONE-1"))) {
       throw new Error("Claude replay history did not include the final assistant answer.");

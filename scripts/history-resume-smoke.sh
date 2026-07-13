@@ -20,9 +20,9 @@ PY
     return
   fi
 
-  echo "Python Playwright runtime not found. Install Playwright for python or adjust scripts/history-claim-smoke.sh." >&2
+  echo "Python Playwright runtime not found. Install Playwright for python or adjust scripts/history-resume-smoke.sh." >&2
   exit 1
 }
 
 PYTHON_BIN="$(choose_python)"
-exec "$PYTHON_BIN" "$ROOT_DIR/scripts/history_claim_smoke.py"
+exec "$PYTHON_BIN" "$ROOT_DIR/scripts/history_resume_smoke.py"

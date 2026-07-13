@@ -235,7 +235,7 @@ def main() -> int:
             body_before_claim = page.locator("body").inner_text()
             history_before_count = count_text(body_before_claim, new_token)
 
-            page.get_by_role("button", name="Claim control").click()
+            page.get_by_role("button", name="Resume").click()
             composer = page.locator("textarea:visible").last
             expect(composer).to_be_visible(timeout=90_000)
             page.wait_for_timeout(2500)
@@ -282,13 +282,13 @@ def main() -> int:
             if len(new_tool_ids) < 1:
                 raise AssertionError("New session flow did not surface any tool calls.")
             if result["historyClaimFlow"]["oldTurnCountAfterClaim"] > result["historyClaimFlow"]["oldTurnCountBeforeClaim"]:
-                raise AssertionError("History claim replayed older visible history.")
+                raise AssertionError("History resume replayed older visible history.")
             if result["historyClaimFlow"]["matchingUserEventCount"] != 1:
-                raise AssertionError("History claim flow emitted duplicate live user_message events.")
+                raise AssertionError("History resume flow emitted duplicate live user_message events.")
             if result["historyClaimFlow"]["userBubbleCount"] != 1:
-                raise AssertionError("History claim flow rendered duplicate user prompt bubbles.")
+                raise AssertionError("History resume flow rendered duplicate user prompt bubbles.")
             if len(history_tool_ids) < 1:
-                raise AssertionError("History claim flow did not surface any tool calls.")
+                raise AssertionError("History resume flow did not surface any tool calls.")
 
             return 0
         except (AssertionError, PlaywrightTimeoutError) as exc:

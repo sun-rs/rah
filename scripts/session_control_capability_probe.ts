@@ -894,7 +894,6 @@ async function startSession(args: {
         ...(liveBackend ? { liveBackend } : {}),
         title: args.title,
         ...(args.model ? { model: args.model } : {}),
-        ...(args.reasoning !== undefined ? { reasoningId: args.reasoning } : {}),
         ...(optionValues ? { optionValues } : {}),
         ...(args.modeId ? { modeId: args.modeId } : {}),
         ...(args.initialPrompt ? { initialPrompt: args.initialPrompt } : {}),
@@ -971,7 +970,6 @@ async function setSessionModel(
       method: "POST",
       body: {
         modelId: args.model,
-        reasoningId: args.reasoning,
         optionValues: { [args.optionKey]: args.reasoning },
       },
     },

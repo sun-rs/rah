@@ -49,7 +49,7 @@ def cleanup_live_sessions(base_url: str) -> None:
         client_id = (
             session.get("controlLease", {}).get("holderClientId")
             or attached_client_id
-            or "web-claim-smoke"
+            or "web-resume-smoke"
         )
         try:
             request_json(
@@ -89,7 +89,7 @@ def main() -> int:
     )
     codex_provider_session_id = recent_codex_provider_session_id or stored_codex_provider_session_id
     if not isinstance(codex_provider_session_id, str) or not codex_provider_session_id:
-        print("No recent Codex history session available for history-claim smoke.", file=sys.stderr)
+        print("No recent Codex history session available for history-resume smoke.", file=sys.stderr)
         return 1
     codex_history_ref = next(
         (
@@ -114,7 +114,7 @@ def main() -> int:
             None,
         )
 
-    prompt = f"RAH-CLAIM-SMOKE-{int(time.time())}"
+    prompt = f"RAH-RESUME-SMOKE-{int(time.time())}"
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -159,7 +159,7 @@ def main() -> int:
             if expected_history_snippet:
                 expect(page.get_by_text(expected_history_snippet).first).to_be_visible(timeout=30_000)
 
-            page.get_by_role("button", name="Claim control").click()
+            page.get_by_role("button", name="Resume").click()
             composer = page.locator("textarea:visible").last
             expect(composer).to_be_visible(timeout=90_000)
 
