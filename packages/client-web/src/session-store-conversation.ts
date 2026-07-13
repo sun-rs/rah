@@ -7,26 +7,31 @@ import type {
   ConversationTurnProjection,
   ConversationTurnsPageResponse,
 } from "@rah/runtime-protocol";
+import { summarizeConversationActivities } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
-  initialConversationV2SyncState,
-  type ConversationV2SyncState,
+  mergeConversationOutputs,
+  mergeConversationSources,
+} from "./conversation-resources";
+import {
+  initialConversationSyncState,
+  type ConversationSyncState,
   type SessionProjection,
 } from "./types";
 
-type ConversationV2State = {
+type ConversationState = {
   projections: Map<string, SessionProjection>;
 };
 
-type ConversationV2SetState = (
+type ConversationSetState = (
   partial:
-    | Partial<ConversationV2State>
-    | ((state: ConversationV2State) => Partial<ConversationV2State> | ConversationV2State),
+    | Partial<ConversationState>
+    | ((state: ConversationState) => Partial<ConversationState> | ConversationState),
 ) => void;
 
-type ConversationV2Deps = {
-  get: () => ConversationV2State;
-  set: ConversationV2SetState;
+type ConversationDeps = {
+  get: () => ConversationState;
+  set: ConversationSetState;
   readTurns?: typeof api.readSessionConversationTurns;
   readItemDetail?: typeof api.readSessionConversationItemDetail;
   readTurnDetail?: typeof api.readSessionConversationTurnDetail;
@@ -36,16 +41,21 @@ const MAX_PENDING_DELTAS = 256;
 const turnDetailRequests = new Map<string, Promise<boolean>>();
 const conversationPageRequests = new Map<string, Promise<boolean>>();
 
-export async function loadPreferredConversationHistory(args: {
-  conversationV2Enabled: boolean;
-  loadConversationV2: () => Promise<boolean>;
-  loadLegacy: () => Promise<void>;
-}): Promise<"conversation_v2" | "legacy"> {
-  if (args.conversationV2Enabled && await args.loadConversationV2()) {
-    return "conversation_v2";
-  }
-  await args.loadLegacy();
-  return "legacy";
+function normalizeConversationTurn(
+  turn: ConversationTurnProjection,
+): ConversationTurnProjection {
+  const items = Array.isArray(turn.items) ? turn.items : [];
+  return {
+    ...turn,
+    items,
+    activities: Array.isArray(turn.activities)
+      ? turn.activities
+      : summarizeConversationActivities(items),
+    failedItemCount:
+      typeof turn.failedItemCount === "number"
+        ? turn.failedItemCount
+        : items.filter((item) => item.status === "failed").length,
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -53,10 +63,10 @@ function errorMessage(error: unknown): string {
 }
 
 function replaceProjectionState(
-  state: ConversationV2State,
+  state: ConversationState,
   sessionId: string,
-  update: (current: ConversationV2SyncState) => ConversationV2SyncState,
-): Partial<ConversationV2State> | ConversationV2State {
+  update: (current: ConversationSyncState) => ConversationSyncState,
+): Partial<ConversationState> | ConversationState {
   const projection = state.projections.get(sessionId);
   if (!projection) {
     return state;
@@ -64,7 +74,7 @@ function replaceProjectionState(
   const next = new Map(state.projections);
   next.set(sessionId, {
     ...projection,
-    conversationV2: update(projection.conversationV2 ?? initialConversationV2SyncState()),
+    conversation: update(projection.conversation ?? initialConversationSyncState()),
   });
   return { projections: next };
 }
@@ -126,11 +136,117 @@ function mergeProcessItem(
   return incoming;
 }
 
+function sameConversationItemIdentity(
+  left: ConversationItemProjection,
+  right: ConversationItemProjection,
+): boolean {
+  return (
+    left.id === right.id ||
+    Boolean(
+      left.providerItemId &&
+        right.providerItemId &&
+        left.providerItemId === right.providerItemId,
+    )
+  );
+}
+
+function lastFinalItem(
+  items: readonly ConversationItemProjection[],
+): ConversationItemProjection | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.role === "final") {
+      return items[index];
+    }
+  }
+  return undefined;
+}
+
+function mergeFullTurnWithSummary(
+  current: ConversationTurnProjection,
+  incoming: ConversationTurnProjection,
+): ConversationTurnProjection {
+  const consumedIncoming = new Set<ConversationItemProjection>();
+  const items = current.items.map((currentItem) => {
+    const match = incoming.items.find(
+      (incomingItem) =>
+        incomingItem.role === currentItem.role &&
+        sameConversationItemIdentity(currentItem, incomingItem),
+    );
+    if (!match) {
+      return currentItem;
+    }
+    consumedIncoming.add(match);
+    if (currentItem.role === "process") {
+      return mergeProcessItem(currentItem, match);
+    }
+    return {
+      ...match,
+      id: currentItem.id,
+      turnId: currentItem.turnId,
+      ...(currentItem.providerItemId
+        ? { providerItemId: currentItem.providerItemId }
+        : {}),
+      revision: Math.max(currentItem.revision, match.revision),
+    };
+  });
+
+  const identityCollidesWithCurrent = (incomingItem: ConversationItemProjection): boolean =>
+    current.items.some(
+      (currentItem) =>
+        currentItem.role !== incomingItem.role &&
+        sameConversationItemIdentity(currentItem, incomingItem),
+    );
+  const unmatched = incoming.items.filter(
+    (item) => !consumedIncoming.has(item) && !identityCollidesWithCurrent(item),
+  );
+  const newLeading = unmatched.filter(
+    (item) =>
+      item.role !== "process" &&
+      item.role !== "final" &&
+      (item.role !== "user" || !items.some((currentItem) => currentItem.role === "user")),
+  );
+  const newProcess = unmatched.filter((item) => item.role === "process");
+  const newFinal = items.some((item) => item.role === "final")
+    ? []
+    : unmatched.filter((item) => item.role === "final");
+  const firstProcessIndex = items.findIndex((item) => item.role === "process");
+  if (newLeading.length > 0) {
+    items.splice(firstProcessIndex >= 0 ? firstProcessIndex : 0, 0, ...newLeading);
+  }
+  const firstFinalIndex = items.findIndex((item) => item.role === "final");
+  if (newProcess.length > 0) {
+    items.splice(firstFinalIndex >= 0 ? firstFinalIndex : items.length, 0, ...newProcess);
+  }
+  items.push(...newFinal);
+
+  const final = lastFinalItem(items);
+  const outputs = mergeConversationOutputs(current.outputs, incoming.outputs);
+  const sources = mergeConversationSources(current.sources, incoming.sources);
+  const merged: ConversationTurnProjection = {
+    ...incoming,
+    items,
+    ...(outputs.length > 0 ? { outputs } : {}),
+    ...(sources.length > 0 ? { sources } : {}),
+    itemsView: "full",
+    failedItemCount: items.filter((item) => item.status === "failed").length,
+    activities: summarizeConversationActivities(items),
+    revision: Math.max(current.revision, incoming.revision),
+  };
+  if (final) {
+    merged.finalAnswerItemId = final.id;
+  } else {
+    delete merged.finalAnswerItemId;
+  }
+  return merged;
+}
+
 function mergeTurnWithoutDetailDowngrade(
   current: ConversationTurnProjection,
   incoming: ConversationTurnProjection,
 ): ConversationTurnProjection {
-  const preserveFullProcess = current.itemsView === "full" && incoming.itemsView !== "full";
+  if (current.itemsView === "full" && incoming.itemsView !== "full") {
+    return mergeFullTurnWithSummary(current, incoming);
+  }
   const currentProcessById = new Map(
     current.items.filter((item) => item.role === "process").map((item) => [item.id, item]),
   );
@@ -149,55 +265,23 @@ function mergeTurnWithoutDetailDowngrade(
     }
     return mergeProcessItem(detailed, item);
   });
-  if (!preserveFullProcess) {
-    const processById = new Map(process.map((item) => [item.id, item]));
-    const processByProviderId = new Map(
-      process
-        .filter((item) => item.providerItemId)
-        .map((item) => [item.providerItemId!, item]),
-    );
-    return {
-      ...incoming,
-      items: incoming.items.map((item) =>
-        item.role === "process"
-          ? processById.get(item.id) ??
-            (item.providerItemId ? processByProviderId.get(item.providerItemId) : undefined) ??
-            item
-          : item,
-      ),
-      revision: Math.max(current.revision, incoming.revision),
-    };
-  }
-  const representedIds = new Set(process.map((item) => item.id));
-  const representedProviderIds = new Set(
+  const processById = new Map(process.map((item) => [item.id, item]));
+  const processByProviderId = new Map(
     process
-      .map((item) => item.providerItemId)
-      .filter((value): value is string => Boolean(value)),
+      .filter((item) => item.providerItemId)
+      .map((item) => [item.providerItemId!, item]),
   );
-  process.push(
-    ...current.items.filter(
-      (item) =>
-        item.role === "process" &&
-        !representedIds.has(item.id) &&
-        !(item.providerItemId && representedProviderIds.has(item.providerItemId)),
-    ),
-  );
-  const items = [
-    ...incoming.items.filter((item) => item.role !== "process" && item.role !== "final"),
-    ...process,
-    ...incoming.items.filter((item) => item.role === "final"),
-  ];
-  return {
+  return normalizeConversationTurn({
     ...incoming,
-    items,
-    itemsView: "full",
-    failedItemCount: Math.max(
-      current.failedItemCount,
-      incoming.failedItemCount,
-      items.filter((item) => item.status === "failed").length,
+    items: incoming.items.map((item) =>
+      item.role === "process"
+        ? processById.get(item.id) ??
+          (item.providerItemId ? processByProviderId.get(item.providerItemId) : undefined) ??
+          item
+        : item,
     ),
     revision: Math.max(current.revision, incoming.revision),
-  };
+  });
 }
 
 function mergeNewerTurns(
@@ -236,10 +320,10 @@ function applyTurnDelta(
   if (turnIndex < 0) {
     return [
       ...turns,
-      {
+      normalizeConversationTurn({
         ...delta.turn,
         items: delta.upsertItems.filter((item) => !removedItemIds.has(item.id)),
-      },
+      }),
     ];
   }
 
@@ -319,9 +403,9 @@ function applyPendingDeltas(
 }
 
 function appendPendingDelta(
-  current: ConversationV2SyncState,
+  current: ConversationSyncState,
   delta: ConversationProjectionDelta,
-): ConversationV2SyncState {
+): ConversationSyncState {
   const pendingDeltas = normalizePendingDeltas([...current.pendingDeltas, delta]);
   return {
     ...current,
@@ -336,9 +420,9 @@ function appendPendingDelta(
 }
 
 function applyDeltaToConversation(
-  current: ConversationV2SyncState,
+  current: ConversationSyncState,
   delta: ConversationProjectionDelta,
-): ConversationV2SyncState {
+): ConversationSyncState {
   if (current.daemonRevision === null || current.phase !== "ready") {
     return appendPendingDelta(current, delta);
   }
@@ -365,28 +449,28 @@ function applyDeltaToConversation(
   };
 }
 
-export function applyConversationV2DeltasToProjectionMap(
+export function applyConversationDeltasToProjectionMap(
   current: Map<string, SessionProjection>,
   deltas: readonly ConversationProjectionDelta[],
 ): Map<string, SessionProjection> {
   let next: Map<string, SessionProjection> | null = null;
   for (const delta of deltas) {
     const projection = (next ?? current).get(delta.sessionId);
-    if (!projection?.conversationV2) {
+    if (!projection?.conversation) {
       continue;
     }
-    const conversationV2 = applyDeltaToConversation(projection.conversationV2, delta);
-    if (conversationV2 === projection.conversationV2) {
+    const conversation = applyDeltaToConversation(projection.conversation, delta);
+    if (conversation === projection.conversation) {
       continue;
     }
     next ??= new Map(current);
-    next.set(delta.sessionId, { ...projection, conversationV2 });
+    next.set(delta.sessionId, { ...projection, conversation });
   }
   return next ?? current;
 }
 
 async function performLoadTurns(
-  deps: ConversationV2Deps,
+  deps: ConversationDeps,
   sessionId: string,
   mode: "initial" | "refresh" | "older",
   options: { liveOnly?: boolean } = {},
@@ -395,7 +479,7 @@ async function performLoadTurns(
   if (!projection) {
     return false;
   }
-  const current = projection.conversationV2 ?? initialConversationV2SyncState();
+  const current = projection.conversation ?? initialConversationSyncState();
   if (
     mode === "initial" &&
     current.phase === "ready" &&
@@ -423,12 +507,13 @@ async function performLoadTurns(
     });
     deps.set((state) =>
       replaceProjectionState(state, sessionId, (value) => {
+        const responseTurns = response.turns.map(normalizeConversationTurn);
         const pageTurns =
           mode === "initial"
-            ? response.turns
+            ? responseTurns
             : mode === "older"
-              ? mergeOlderTurns(value.turns, response.turns)
-              : mergeNewerTurns(value.turns, response.turns);
+              ? mergeOlderTurns(value.turns, responseTurns)
+              : mergeNewerTurns(value.turns, responseTurns);
         const responseLiveRevision = response.liveRevision ?? response.revision;
         const baselineRevision =
           mode === "older"
@@ -485,7 +570,7 @@ async function performLoadTurns(
 }
 
 function loadTurns(
-  deps: ConversationV2Deps,
+  deps: ConversationDeps,
   sessionId: string,
   mode: "initial" | "refresh" | "older",
   options: { liveOnly?: boolean } = {},
@@ -504,29 +589,29 @@ function loadTurns(
   return tracked;
 }
 
-export function ensureConversationV2LoadedCommand(
-  deps: ConversationV2Deps,
+export function ensureConversationLoadedCommand(
+  deps: ConversationDeps,
   sessionId: string,
 ): Promise<boolean> {
   return loadTurns(deps, sessionId, "initial");
 }
 
-export function initializeLiveConversationV2Command(
-  deps: ConversationV2Deps,
+export function initializeLiveConversationCommand(
+  deps: ConversationDeps,
   sessionId: string,
 ): Promise<boolean> {
   return loadTurns(deps, sessionId, "initial", { liveOnly: true });
 }
 
-export function refreshConversationV2Command(
-  deps: ConversationV2Deps,
+export function refreshConversationCommand(
+  deps: ConversationDeps,
   sessionId: string,
 ): Promise<boolean> {
   return loadTurns(deps, sessionId, "refresh");
 }
 
-export function loadOlderConversationV2Command(
-  deps: ConversationV2Deps,
+export function loadOlderConversationCommand(
+  deps: ConversationDeps,
   sessionId: string,
 ): Promise<boolean> {
   return loadTurns(deps, sessionId, "older");
@@ -536,7 +621,7 @@ function findItemAddress(
   projection: SessionProjection,
   itemId: string,
 ): { itemId: string; turnId: string; providerTurnId: string; providerItemId: string } | null {
-  for (const turn of projection.conversationV2?.turns ?? []) {
+  for (const turn of projection.conversation?.turns ?? []) {
     const item = turn.items.find((candidate) => {
       if (candidate.id === itemId) {
         return true;
@@ -559,31 +644,10 @@ function findItemAddress(
   return null;
 }
 
-export function conversationV2LegacyDetailId(
-  projection: SessionProjection,
-  kind: "tool_call" | "observation",
-  itemId: string,
-): string {
-  for (const turn of projection.conversationV2?.turns ?? []) {
-    for (const item of turn.items) {
-      if (item.id !== itemId) {
-        continue;
-      }
-      if (kind === "tool_call" && item.content.kind === "tool") {
-        return item.content.toolCall.id;
-      }
-      if (kind === "observation" && item.content.kind === "observation") {
-        return item.content.observation.id;
-      }
-    }
-  }
-  return itemId;
-}
-
 function applyItemDetail(
-  current: ConversationV2SyncState,
+  current: ConversationSyncState,
   response: ConversationItemDetailResponse,
-): ConversationV2SyncState {
+): ConversationSyncState {
   return {
     ...current,
     turns: current.turns.map((turn) =>
@@ -604,8 +668,8 @@ function applyItemDetail(
   };
 }
 
-export async function loadConversationV2ItemDetailCommand(
-  deps: ConversationV2Deps,
+export async function loadConversationItemDetailCommand(
+  deps: ConversationDeps,
   sessionId: string,
   itemId: string,
 ): Promise<boolean> {
@@ -646,58 +710,86 @@ export async function loadConversationV2ItemDetailCommand(
 }
 
 function applyTurnDetail(
-  current: ConversationV2SyncState,
+  current: ConversationSyncState,
   response: ConversationTurnDetailResponse,
-): ConversationV2SyncState {
+): ConversationSyncState {
+  const applyToTurn = (
+    turn: ConversationTurnProjection,
+  ): ConversationTurnProjection => {
+    const existingProcessById = new Map(
+      turn.items.filter((item) => item.role === "process").map((item) => [item.id, item]),
+    );
+    const existingProcessByProviderId = new Map(
+      turn.items
+        .filter((item) => item.role === "process" && item.providerItemId)
+        .map((item) => [item.providerItemId!, item]),
+    );
+    const hydratedProcess = response.turn.items
+      .filter((item) => item.role === "process")
+      .map((item) => {
+        const existing =
+          existingProcessById.get(item.id) ??
+          (item.providerItemId
+            ? existingProcessByProviderId.get(item.providerItemId)
+            : undefined);
+        return existing ? mergeProcessItem(item, existing) : item;
+      });
+    const detailedItems = response.turn.items;
+    const identityIsRepresentedByDetail = (item: ConversationItemProjection): boolean =>
+      detailedItems.some((detailed) => sameConversationItemIdentity(item, detailed));
+    const liveOnlyProcess = turn.items.filter(
+      (item) => item.role === "process" && !identityIsRepresentedByDetail(item),
+    );
+    const detailedLeading = detailedItems.filter(
+      (item) => item.role !== "process" && item.role !== "final",
+    );
+    const detailedFinal = detailedItems.filter((item) => item.role === "final");
+    const leading = detailedLeading.length > 0
+      ? detailedLeading
+      : turn.items.filter((item) => item.role !== "process" && item.role !== "final");
+    const final = detailedFinal.length > 0
+      ? detailedFinal
+      : turn.items.filter((item) => item.role === "final");
+    const items = [...leading, ...hydratedProcess, ...liveOnlyProcess, ...final];
+    const finalItem = lastFinalItem(items);
+    const outputs = mergeConversationOutputs(turn.outputs, response.turn.outputs);
+    const sources = mergeConversationSources(turn.sources, response.turn.sources);
+    const hydrated: ConversationTurnProjection = {
+      ...turn,
+      items,
+      ...(outputs.length > 0 ? { outputs } : {}),
+      ...(sources.length > 0 ? { sources } : {}),
+      itemsView: "full",
+      failedItemCount: items.filter((item) => item.status === "failed").length,
+      activities: summarizeConversationActivities(items),
+      revision: Math.max(turn.revision, response.turn.revision) + 1,
+    };
+    if (finalItem) {
+      hydrated.finalAnswerItemId = finalItem.id;
+    } else {
+      delete hydrated.finalAnswerItemId;
+    }
+    return hydrated;
+  };
+
+  const matchingIndex = current.turns.findIndex(
+    (turn) =>
+      turn.id === response.turnId ||
+      Boolean(
+        turn.providerTurnId &&
+          response.turn.providerTurnId &&
+          turn.providerTurnId === response.turn.providerTurnId,
+      ),
+  );
+  const turns = matchingIndex >= 0
+    ? current.turns.map((turn, index) => index === matchingIndex ? applyToTurn(turn) : turn)
+    : [...current.turns, normalizeConversationTurn(response.turn)].sort((left, right) => {
+        const byStartedAt = (left.startedAt ?? "").localeCompare(right.startedAt ?? "");
+        return byStartedAt || left.id.localeCompare(right.id);
+      });
   return {
     ...current,
-    turns: current.turns.map((turn) => {
-      if (turn.id !== response.turnId) {
-        return turn;
-      }
-      const existingProcessById = new Map(
-        turn.items.filter((item) => item.role === "process").map((item) => [item.id, item]),
-      );
-      const existingProcessByProviderId = new Map(
-        turn.items
-          .filter((item) => item.role === "process" && item.providerItemId)
-          .map((item) => [item.providerItemId!, item]),
-      );
-      const hydratedProcess = response.turn.items
-        .filter((item) => item.role === "process")
-        .map((item) => {
-          const existing =
-            existingProcessById.get(item.id) ??
-            (item.providerItemId
-              ? existingProcessByProviderId.get(item.providerItemId)
-              : undefined);
-          return existing ? mergeProcessItem(item, existing) : item;
-        });
-      const hydratedIds = new Set(hydratedProcess.map((item) => item.id));
-      const hydratedProviderIds = new Set(
-        hydratedProcess
-          .map((item) => item.providerItemId)
-          .filter((value): value is string => Boolean(value)),
-      );
-      const liveOnlyProcess = turn.items.filter(
-        (item) =>
-          item.role === "process" &&
-          !hydratedIds.has(item.id) &&
-          !(item.providerItemId && hydratedProviderIds.has(item.providerItemId)),
-      );
-      const leading = turn.items.filter(
-        (item) => item.role !== "process" && item.role !== "final",
-      );
-      const final = turn.items.filter((item) => item.role === "final");
-      const items = [...leading, ...hydratedProcess, ...liveOnlyProcess, ...final];
-      return {
-        ...turn,
-        items,
-        itemsView: "full",
-        failedItemCount: items.filter((item) => item.status === "failed").length,
-        revision: Math.max(turn.revision, response.turn.revision) + 1,
-      };
-    }),
+    turns,
     revision: current.revision + 1,
     approximateBytes:
       (current.approximateBytes ?? 0) + (response.approximateBytes ?? 0),
@@ -705,8 +797,61 @@ function applyTurnDetail(
   };
 }
 
-export async function loadConversationV2TurnDetailCommand(
-  deps: ConversationV2Deps,
+export async function hydrateConversationTurnByProviderIdCommand(
+  deps: ConversationDeps,
+  sessionId: string,
+  providerTurnId: string,
+): Promise<boolean> {
+  const projection = deps.get().projections.get(sessionId);
+  if (!projection?.conversation) {
+    return false;
+  }
+  const existing = projection.conversation.turns.find(
+    (turn) => turn.id === providerTurnId || turn.providerTurnId === providerTurnId,
+  );
+  if (existing?.itemsView === "full") {
+    return true;
+  }
+  const turnId = existing?.id ?? providerTurnId;
+  const key = `${sessionId}\0${turnId}`;
+  const active = turnDetailRequests.get(key);
+  if (active) {
+    return active;
+  }
+  const request = (async () => {
+    try {
+      const response = await (deps.readTurnDetail ?? api.readSessionConversationTurnDetail)(
+        sessionId,
+        { turnId, providerTurnId },
+      );
+      if (
+        response.sessionId !== sessionId ||
+        response.turnId !== turnId ||
+        response.turn.id !== turnId ||
+        response.turn.providerTurnId !== providerTurnId
+      ) {
+        return false;
+      }
+      deps.set((state) =>
+        replaceProjectionState(state, sessionId, (current) =>
+          applyTurnDetail(current, response),
+        ),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  })().finally(() => {
+    if (turnDetailRequests.get(key) === request) {
+      turnDetailRequests.delete(key);
+    }
+  });
+  turnDetailRequests.set(key, request);
+  return request;
+}
+
+export async function loadConversationTurnDetailCommand(
+  deps: ConversationDeps,
   sessionId: string,
   turnId: string,
 ): Promise<boolean> {
@@ -717,7 +862,7 @@ export async function loadConversationV2TurnDetailCommand(
   }
   const request = (async () => {
     const projection = deps.get().projections.get(sessionId);
-    const turn = projection?.conversationV2?.turns.find((candidate) => candidate.id === turnId);
+    const turn = projection?.conversation?.turns.find((candidate) => candidate.id === turnId);
     if (!turn?.providerTurnId || turn.itemsView !== "summary") {
       return false;
     }

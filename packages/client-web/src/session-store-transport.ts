@@ -86,8 +86,8 @@ export function connectSessionStoreTransport(
         reconnectAttempt = 0;
         nextCallbacks.onOpen();
       },
-      onClose: () => {
-        const shouldReconnect = !suppressNextSocketCloseReconnect;
+      onClose: (event) => {
+        const shouldReconnect = event.code !== 4001 && !suppressNextSocketCloseReconnect;
         suppressNextSocketCloseReconnect = false;
         if (eventsSocket === socket) {
           eventsSocket = null;

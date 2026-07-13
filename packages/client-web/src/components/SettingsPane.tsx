@@ -7,7 +7,7 @@ import type {
   PtySessionStats,
   TuiMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Cpu, Info, ListRestart, LoaderCircle, MessageSquareText, Palette, Plus, RefreshCw, TerminalSquare, Waypoints, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Cpu, Info, ListRestart, LoaderCircle, MessageSquareText, Palette, Plus, RefreshCw, ShieldCheck, TerminalSquare, Waypoints, XCircle } from "lucide-react";
 import {
   addManualProviderModel,
   closeTuiMuxSession,
@@ -37,12 +37,14 @@ import { useChatPreferences } from "../hooks/useChatPreferences";
 import { useBrowserNotificationSettings } from "../browser-notifications";
 import type { ProviderChoice } from "./ProviderSelector";
 import { useSessionStore } from "../useSessionStore";
+import { TrustedDevicesSettings } from "./TrustedDevicesSettings";
 
-type SettingsTab = "chat" | "models" | "status" | "appearance" | "version" | "about";
+type SettingsTab = "chat" | "models" | "devices" | "status" | "appearance" | "version" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "models", label: "Models", icon: Cpu },
+  { id: "devices", label: "Devices", icon: ShieldCheck },
   { id: "status", label: "Status", icon: Activity },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "version", label: "Version", icon: Waypoints },
@@ -211,6 +213,10 @@ export function SettingsPane() {
   const [providerDiagnosticsError, setProviderDiagnosticsError] = useState<string | null>(null);
   const [providerDiagnosticsLoading, setProviderDiagnosticsLoading] = useState(false);
   const [providerDiagnosticsLoaded, setProviderDiagnosticsLoaded] = useState(false);
+  const [providerDiagnosticsLoadingByProvider, setProviderDiagnosticsLoadingByProvider] =
+    useState<Partial<Record<ProviderChoice, boolean>>>({});
+  const [providerDiagnosticsErrors, setProviderDiagnosticsErrors] =
+    useState<Partial<Record<ProviderChoice, string>>>({});
   const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
   const [runtimeDiagnosticsLoading, setRuntimeDiagnosticsLoading] = useState(false);
   const [runtimeDiagnosticsLoaded, setRuntimeDiagnosticsLoaded] = useState(false);
@@ -223,8 +229,8 @@ export function SettingsPane() {
   const mountedRef = useRef(true);
   const modelRefreshResetTimersRef = useRef<Partial<Record<ProviderChoice, number>>>({});
 
-  const sortedProviderDiagnostics = useMemo(
-    () => [...providerDiagnostics].sort((left, right) => left.provider.localeCompare(right.provider)),
+  const providerDiagnosticsByProvider = useMemo(
+    () => new Map(providerDiagnostics.map((diagnostic) => [diagnostic.provider, diagnostic])),
     [providerDiagnostics],
   );
   const sortedNativeTuiDiagnostics = useMemo(
@@ -475,20 +481,59 @@ export function SettingsPane() {
   async function loadVersionDiagnostics(forceRefresh = false, signal?: AbortSignal) {
     setProviderDiagnosticsLoading(true);
     setProviderDiagnosticsError(null);
+    setProviderDiagnosticsErrors({});
+    setProviderDiagnosticsLoadingByProvider({ codex: true, claude: true, opencode: true });
     try {
-      const providers = await listProviders({
-        forceRefresh,
-        ...(signal ? { signal } : {}),
-      });
-      setProviderDiagnostics(providers);
-      setProviderDiagnosticsLoaded(true);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      const results = await Promise.allSettled(
+        MODEL_PROVIDERS.map(async (provider) => {
+          try {
+            const diagnostics = await listProviders({
+              provider,
+              forceRefresh,
+              includeHealth: false,
+              ...(signal ? { signal } : {}),
+            });
+            const diagnostic = diagnostics.find((entry) => entry.provider === provider);
+            if (!diagnostic) {
+              throw new Error(`${providerLabel(provider)} did not return version information.`);
+            }
+            if (!mountedRef.current || signal?.aborted) {
+              return;
+            }
+            setProviderDiagnostics((current) => [
+              ...current.filter((entry) => entry.provider !== provider),
+              diagnostic,
+            ]);
+          } catch (error) {
+            if (!(error instanceof DOMException && error.name === "AbortError") && mountedRef.current) {
+              setProviderDiagnosticsErrors((current) => ({
+                ...current,
+                [provider]: errorMessage(error, `Failed to load ${providerLabel(provider)} version.`),
+              }));
+            }
+            throw error;
+          } finally {
+            if (mountedRef.current) {
+              setProviderDiagnosticsLoadingByProvider((current) => ({
+                ...current,
+                [provider]: false,
+              }));
+            }
+          }
+        }),
+      );
+      if (!mountedRef.current || signal?.aborted) {
         return;
       }
-      setProviderDiagnosticsError(errorMessage(error, "Failed to load provider versions."));
+      const failedCount = results.filter((result) => result.status === "rejected").length;
+      if (failedCount === MODEL_PROVIDERS.length) {
+        setProviderDiagnosticsError("Failed to load provider versions.");
+      }
+      setProviderDiagnosticsLoaded(true);
     } finally {
-      setProviderDiagnosticsLoading(false);
+      if (mountedRef.current) {
+        setProviderDiagnosticsLoading(false);
+      }
     }
   }
 
@@ -779,7 +824,7 @@ export function SettingsPane() {
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
       <div className="shrink-0 border-b border-[var(--app-border)] p-2 md:w-48 md:border-b-0 md:border-r md:p-3">
-        <div className="grid grid-cols-2 gap-1 sm:grid-cols-6 md:grid-cols-1">
+        <div className="grid grid-cols-2 gap-1 sm:grid-cols-7 md:grid-cols-1">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const selected = activeTab === tab.id;
@@ -967,6 +1012,8 @@ export function SettingsPane() {
               {MODEL_PROVIDERS.map((provider) => renderModelProviderCard(provider))}
             </div>
           </div>
+        ) : activeTab === "devices" ? (
+          <TrustedDevicesSettings />
         ) : activeTab === "version" || activeTab === "status" ? (
           <div className="space-y-5">
             <div className="flex items-start justify-between gap-4">
@@ -1007,16 +1054,45 @@ export function SettingsPane() {
               </div>
             ) : null}
 
-            {activeDiagnosticsLoading && !activeDiagnosticsLoaded ? (
+            {activeTab === "status" && activeDiagnosticsLoading && !activeDiagnosticsLoaded ? (
               <div className="flex h-40 items-center justify-center text-xs text-[var(--app-hint)]">
                 <LoaderCircle size={16} className="mr-2 animate-spin" />
-                {activeTab === "version" ? "Checking local and official versions…" : "Checking runtime status…"}
+                Checking runtime status…
               </div>
             ) : (
               <div className="space-y-3">
                 {activeTab === "version" ? (
                   <>
-                    {sortedProviderDiagnostics.map((diagnostic) => (
+                    {MODEL_PROVIDERS.map((provider) => {
+                      const diagnostic = providerDiagnosticsByProvider.get(provider);
+                      const loading = providerDiagnosticsLoadingByProvider[provider] === true;
+                      const providerError = providerDiagnosticsErrors[provider];
+                      if (!diagnostic) {
+                        return (
+                          <div
+                            key={provider}
+                            className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5"
+                          >
+                            <div className="flex items-center gap-3">
+                              <ProviderLogo provider={provider} className="h-6 w-6 shrink-0" />
+                              <span className="min-w-0 flex-1 text-sm font-medium text-[var(--app-fg)]">
+                                {providerLabel(provider)}
+                              </span>
+                              {loading ? (
+                                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--app-hint)]">
+                                  <LoaderCircle size={13} className="animate-spin" />
+                                  Checking…
+                                </span>
+                              ) : (
+                                <span className="text-xs text-[var(--app-danger)]">
+                                  {providerError ?? "Unavailable"}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
                       <div
                         key={diagnostic.provider}
                         className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5"
@@ -1028,6 +1104,7 @@ export function SettingsPane() {
                               <span className="min-w-0 text-sm font-medium text-[var(--app-fg)]">
                                 {providerLabel(diagnostic.provider)}
                               </span>
+                              {loading ? <LoaderCircle size={13} className="animate-spin text-[var(--app-hint)]" /> : null}
                               <span
                                 className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
                                   diagnostic.versionStatus === "update_available"
@@ -1085,8 +1162,14 @@ export function SettingsPane() {
                             Latest version check failed: {diagnostic.latestVersionError}
                           </div>
                         ) : null}
+                        {providerError ? (
+                          <div className="mt-3 text-xs text-[var(--app-danger)] break-words [overflow-wrap:anywhere]">
+                            Refresh failed: {providerError}
+                          </div>
+                        ) : null}
                       </div>
-                    ))}
+                      );
+                    })}
                   </>
                 ) : (
                   <>

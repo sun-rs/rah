@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { initialHistorySyncState, type FeedEntry, type SessionProjection } from "./types";
+import { type FeedEntry, type SessionProjection } from "./types";
 import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
@@ -47,7 +47,6 @@ function projection(summary: SessionSummary, feed: FeedEntry[] = []): SessionPro
     feed,
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
 
@@ -452,6 +451,8 @@ describe("workbench selectors", () => {
       rootDir: "/workspace/one",
     });
     stopped.session.liveBackend = "native_tui";
+    stopped.session.status = "stopped";
+    stopped.session.phase = "ended";
     stopped.session.runtimeState = "stopped";
     stopped.session.capabilities = {
       ...stopped.session.capabilities,
@@ -516,14 +517,14 @@ describe("workbench selectors", () => {
     const resumeFallback = derivePrimaryPaneState({
       selectedSummary: null,
 	      pendingSessionTransition: {
-	        kind: "claim_history",
+	        kind: "resume_history",
 	        provider: "codex",
 	        providerSessionId: "thread-1",
 	        title: "Resuming history",
 	      },
     });
     assert.equal(resumeFallback.kind, "opening");
-    assert.equal(resumeFallback.openingSession?.kind, "claim_history");
+    assert.equal(resumeFallback.openingSession?.kind, "resume_history");
 
     assert.equal(
       derivePrimaryPaneState({
@@ -531,6 +532,52 @@ describe("workbench selectors", () => {
         pendingSessionTransition: null,
       }).kind,
       "empty",
+    );
+  });
+
+  test("keeps ephemeral Side sessions out of primary navigation", () => {
+    const clientId = "client-1";
+    const parent = controlledSummary({
+      id: "parent",
+      clientId,
+      rootDir: "/workspace/one",
+    });
+    const side = controlledSummary({
+      id: "side-1",
+      clientId,
+      rootDir: "/workspace/one",
+    });
+    side.session.relationship = {
+      parentSessionId: parent.session.id,
+      parentProviderSessionId: parent.session.providerSessionId,
+      kind: "side",
+      workspaceMode: "shared",
+      persistence: "ephemeral",
+    };
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [parent.session.id, projection(parent)],
+        [side.session.id, projection(side)],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/one"],
+      storedSessions: [],
+      workspaceDir: "/workspace/one",
+      workspaceSortMode: "created",
+    });
+
+    assert.deepEqual(
+      collections.sessionEntries.map((entry) => entry.summary.session.id),
+      ["parent"],
+    );
+    assert.deepEqual(
+      collections.runningSessionEntries.map((entry) => entry.summary.session.id),
+      ["parent"],
+    );
+    assert.deepEqual(
+      collections.sideSessionEntries.map((entry) => entry.summary.session.id),
+      ["side-1"],
     );
   });
 });

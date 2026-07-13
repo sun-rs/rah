@@ -13,8 +13,8 @@ import type {
   ConversationTurnProjection,
   PermissionResponseRequest,
   ProviderKind,
-  SessionHistoryItemDetailKind,
-  SessionTurnDirectoryItem,
+  ConversationItemDetailKind,
+  ConversationTurnDirectoryItem,
   TimelineItem,
 } from "@rah/runtime-protocol";
 import {
@@ -34,6 +34,8 @@ import { AssistantMessage } from "./AssistantMessage";
 import { AssistantProcessGroup } from "./AssistantProcessGroup";
 import { AssistantTurnHeader } from "./AssistantTurnHeader";
 import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
+import { TaskSummaryDock } from "./TaskSummaryDock";
+import { ConversationOutputsCard } from "./ConversationOutputsCard";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
 import { ObservationCard } from "./ObservationCard";
@@ -43,9 +45,7 @@ import { Reasoning } from "./Reasoning";
 import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
-import { copyableAssistantMessageKeys } from "./assistant-copy-actions";
 import {
-  buildAssistantProcessRows,
   type ChatDisplayRow,
 } from "./assistant-process-groups";
 import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
@@ -54,18 +54,28 @@ import {
   visibleConversationTurnKeys,
   type ConversationTurnNavigationItem,
 } from "./conversation-turn-navigation";
-import { resolveLatestReplyStartTarget } from "./latest-reply-navigation";
+import {
+  advanceLatestReplyAutoNavigationState,
+  createLatestReplyAutoNavigationState,
+  latestNavigableAssistantReplyKey,
+  latestVisibleUserMessageKey,
+  resolveLatestReplyStartTarget,
+  type LatestReplyAutoNavigationState,
+} from "./latest-reply-navigation";
 import {
   buildVirtualFeedLayout,
   estimateFeedEntryHeight,
+  projectVirtualAnchorScrollTop,
   resolveVirtualFeedWindow,
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
 import { visibleFeedEntries } from "./chat-feed-filtering";
+import { latestCurrentPlan, withoutInlinePlans } from "./current-plan";
+import { usePwaDisplayMode } from "../../hooks/usePwaDisplayMode";
 import {
-  conversationV2DisplayRows,
-  conversationV2FinalAssistantKeys,
-} from "../../conversation-v2-feed";
+  conversationDisplayRows,
+  conversationFinalAssistantKeys,
+} from "../../conversation-feed";
 
 const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
@@ -92,12 +102,18 @@ function chatDisplayRowGapPx(
   if (row.kind === "assistant_process_group" && nextRow?.kind === "feed_entry") {
     return 14;
   }
+  if (row.kind === "feed_entry" && nextRow?.kind === "turn_outputs") {
+    return 10;
+  }
   return VIRTUAL_FEED_ROW_GAP_PX;
 }
 
 function estimateChatDisplayRowHeight(row: ChatDisplayRow): number {
   if (row.kind === "assistant_process_group") {
     return row.completed ? 44 : 180;
+  }
+  if (row.kind === "turn_outputs") {
+    return 54 + Math.min(row.outputs.length, 4) * 58;
   }
   return estimateFeedEntryHeight(row.entry);
 }
@@ -290,8 +306,8 @@ function renderEntry(
   canRespondToPermission: boolean | undefined,
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void,
   onOpenLocalFile: ((path: string) => void) | undefined,
-  onLoadHistoryItemDetail:
-    | ((kind: SessionHistoryItemDetailKind, itemId: string) => Promise<void> | void)
+  onLoadConversationItemDetail:
+    | ((kind: ConversationItemDetailKind, itemId: string) => Promise<void> | void)
     | undefined,
   copyableAssistantKeys: ReadonlySet<string>,
 ) {
@@ -308,10 +324,10 @@ function renderEntry(
           toolCall={entry.toolCall}
           status={entry.status}
           {...(entry.error !== undefined ? { error: entry.error } : {})}
-          {...(onLoadHistoryItemDetail
+          {...(onLoadConversationItemDetail
             ? {
                 onLoadDetail: () =>
-                  onLoadHistoryItemDetail("tool_call", entry.toolCall.id),
+                  onLoadConversationItemDetail("tool_call", entry.toolCall.id),
               }
             : {})}
         />
@@ -331,10 +347,10 @@ function renderEntry(
           observation={entry.observation}
           status={entry.status}
           {...(entry.error !== undefined ? { error: entry.error } : {})}
-          {...(onLoadHistoryItemDetail
+          {...(onLoadConversationItemDetail
             ? {
                 onLoadDetail: () =>
-                  onLoadHistoryItemDetail("observation", entry.observation.id),
+                  onLoadConversationItemDetail("observation", entry.observation.id),
               }
             : {})}
         />
@@ -414,20 +430,22 @@ function MeasuredFeedEntry(props: {
 export const ChatThread = memo(function ChatThread(props: {
   sessionId: string;
   feed: FeedEntry[];
-  conversationTurns?: readonly ConversationTurnProjection[];
+  conversationTurns: readonly ConversationTurnProjection[];
   hideToolCalls?: boolean;
   hideOpenCodeReasoning?: boolean;
   showModelInfo?: boolean;
   provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
   historyLoading?: boolean;
+  historyError?: string | null;
   generationActive?: boolean;
   onLoadOlderHistory?: () => void | Promise<void>;
-  turnDirectory?: readonly SessionTurnDirectoryItem[] | undefined;
+  onRetryHistory?: () => void | Promise<void>;
+  turnDirectory?: readonly ConversationTurnDirectoryItem[] | undefined;
   onEnsureTurnDirectory?: (() => void | Promise<void>) | undefined;
   onLoadTurnHistory?: ((turnId: string) => void | Promise<void>) | undefined;
-  onLoadHistoryItemDetail?: (
-    kind: SessionHistoryItemDetailKind,
+  onLoadConversationItemDetail?: (
+    kind: ConversationItemDetailKind,
     itemId: string,
   ) => Promise<void> | void;
   onLoadConversationTurnDetail?: (turnId: string) => Promise<void> | void;
@@ -467,12 +485,17 @@ export const ChatThread = memo(function ChatThread(props: {
   const measuredHeightsRafRef = useRef<number | null>(null);
   const topHistoryLoadRafRef = useRef<number | null>(null);
   const latestReplyStartTargetRef = useRef<ReturnType<typeof resolveLatestReplyStartTarget>>(null);
-  const previousGenerationActiveRef = useRef(Boolean(props.generationActive));
-  const autoLatestReplyRafRef = useRef<number | null>(null);
   const turnNavigationRafRef = useRef<number | null>(null);
   const pendingTurnNavigationIdRef = useRef<string | null>(null);
   const ensureTurnDirectoryRef = useRef(props.onEnsureTurnDirectory);
-  const pendingAutoLatestReplyScrollRef = useRef(false);
+  const latestReplyAutoNavigationRef = useRef<LatestReplyAutoNavigationState>({
+    latestUserKey: null,
+    latestReplyKey: null,
+    generationActive: Boolean(props.generationActive),
+    armed: Boolean(props.generationActive),
+    pendingReplyKey: null,
+  });
+  const consumePendingAutoLatestReplyScrollRef = useRef<() => boolean>(() => true);
   const autoNavigatedLatestReplyKeysRef = useRef(new Set<string>());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
@@ -484,7 +507,8 @@ export const ChatThread = memo(function ChatThread(props: {
   const [loadingProcessTurnIds, setLoadingProcessTurnIds] = useState(
     () => new Set<string>(),
   );
-  const entries = useMemo(
+  const isPwaDisplayMode = usePwaDisplayMode();
+  const visibleEntriesWithPlans = useMemo(
     () =>
       visibleFeedEntries(
         props.feed,
@@ -499,28 +523,56 @@ export const ChatThread = memo(function ChatThread(props: {
       props.provider,
     ],
   );
+  const activeVisibleEntriesWithPlans = useMemo(
+    () =>
+      visibleFeedEntries(
+        props.feed,
+        false,
+        props.hideOpenCodeReasoning ?? false,
+        props.provider,
+      ),
+    [props.feed, props.hideOpenCodeReasoning, props.provider],
+  );
+  const currentPlan = useMemo(
+    () => latestCurrentPlan(visibleEntriesWithPlans),
+    [visibleEntriesWithPlans],
+  );
+  const currentPlanTurn = useMemo(
+    () =>
+      currentPlan?.turnId
+        ? props.conversationTurns.find(
+            (turn) => turn.id === currentPlan.turnId || turn.providerTurnId === currentPlan.turnId,
+          )
+        : undefined,
+    [currentPlan, props.conversationTurns],
+  );
+  const entries = useMemo(
+    () => withoutInlinePlans(visibleEntriesWithPlans),
+    [visibleEntriesWithPlans],
+  );
+  const activeEntries = useMemo(
+    () => withoutInlinePlans(activeVisibleEntriesWithPlans),
+    [activeVisibleEntriesWithPlans],
+  );
   const assistantTurnHeaders = useMemo(
     () => buildAssistantTurnHeaders(entries),
     [entries],
   );
   const copyableAssistantKeys = useMemo(
-    () =>
-      props.conversationTurns
-        ? conversationV2FinalAssistantKeys(props.conversationTurns)
-        : copyableAssistantMessageKeys(entries, {
-            generationActive: props.generationActive ?? false,
-          }),
-    [entries, props.conversationTurns, props.generationActive],
+    () => conversationFinalAssistantKeys(props.conversationTurns),
+    [props.conversationTurns],
+  );
+  const latestVisibleUserKey = useMemo(
+    () => latestVisibleUserMessageKey(entries),
+    [entries],
+  );
+  const latestNavigableReplyKey = useMemo(
+    () => latestNavigableAssistantReplyKey(entries, copyableAssistantKeys),
+    [copyableAssistantKeys, entries],
   );
   const displayRows = useMemo(
-    () =>
-      props.conversationTurns
-        ? conversationV2DisplayRows(props.conversationTurns, entries)
-        : buildAssistantProcessRows(entries, {
-            finalAssistantKeys: copyableAssistantKeys,
-            generationActive: props.generationActive ?? false,
-          }),
-    [copyableAssistantKeys, entries, props.conversationTurns, props.generationActive],
+    () => conversationDisplayRows(props.conversationTurns, entries, activeEntries),
+    [activeEntries, entries, props.conversationTurns],
   );
   const virtualLayout = useMemo(
     () =>
@@ -534,12 +586,15 @@ export const ChatThread = memo(function ChatThread(props: {
   );
   const turnNavigationItems = useMemo(
     () =>
-      buildConversationTurnNavigationItems(
-        entries,
-        virtualLayout,
-        props.turnDirectory ?? [],
-      ),
-    [entries, props.turnDirectory, virtualLayout],
+      isPwaDisplayMode
+        ? []
+        : buildConversationTurnNavigationItems(
+            entries,
+            virtualLayout,
+            props.turnDirectory ?? [],
+            props.conversationTurns,
+          ),
+    [entries, isPwaDisplayMode, props.conversationTurns, props.turnDirectory, virtualLayout],
   );
   const activeTurnNavigationKeys = useMemo(
     () =>
@@ -553,12 +608,26 @@ export const ChatThread = memo(function ChatThread(props: {
   );
   const shouldVirtualize =
     displayRows.length > 140 && viewport.height > 0 && !textSelectionDragActive;
+  const virtualScrollTop = useMemo(() => {
+    const anchor = prependAnchorRef.current;
+    if (!anchor?.entryKey || anchor.offsetTop === null) {
+      return viewport.scrollTop;
+    }
+    return (
+      projectVirtualAnchorScrollTop({
+        layout: virtualLayout,
+        entryKey: anchor.entryKey,
+        viewportOffset: anchor.offsetTop,
+        contentTopOffset: viewport.contentTopOffset,
+      }) ?? viewport.scrollTop
+    );
+  }, [virtualLayout, viewport.contentTopOffset, viewport.scrollTop]);
   const virtualWindow = useMemo(
     () =>
       shouldVirtualize
         ? resolveVirtualFeedWindow({
             layout: virtualLayout,
-            scrollTop: viewport.scrollTop,
+            scrollTop: virtualScrollTop,
             viewportHeight: viewport.height,
           })
         : {
@@ -567,7 +636,7 @@ export const ChatThread = memo(function ChatThread(props: {
             topSpacerHeight: 0,
             bottomSpacerHeight: 0,
           },
-    [displayRows.length, shouldVirtualize, virtualLayout, viewport.height, viewport.scrollTop],
+    [displayRows.length, shouldVirtualize, virtualLayout, viewport.height, virtualScrollTop],
   );
   const visibleRowsWindow = displayRows.slice(virtualWindow.startIndex, virtualWindow.endIndex);
   const latestReplyStartTarget = useMemo(
@@ -589,8 +658,10 @@ export const ChatThread = memo(function ChatThread(props: {
   }, [props.onEnsureTurnDirectory]);
 
   useEffect(() => {
-    void ensureTurnDirectoryRef.current?.();
-  }, [props.sessionId]);
+    if (!isPwaDisplayMode) {
+      void ensureTurnDirectoryRef.current?.();
+    }
+  }, [isPwaDisplayMode, props.sessionId]);
 
   useEffect(() => {
     latestReplyStartTargetRef.current = latestReplyStartTarget;
@@ -819,16 +890,15 @@ export const ChatThread = memo(function ChatThread(props: {
       cancelAnimationFrame(topHistoryLoadRafRef.current);
       topHistoryLoadRafRef.current = null;
     }
-    if (autoLatestReplyRafRef.current !== null) {
-      cancelAnimationFrame(autoLatestReplyRafRef.current);
-      autoLatestReplyRafRef.current = null;
-    }
     if (turnNavigationRafRef.current !== null) {
       cancelAnimationFrame(turnNavigationRafRef.current);
       turnNavigationRafRef.current = null;
     }
-    pendingAutoLatestReplyScrollRef.current = false;
-    previousGenerationActiveRef.current = Boolean(props.generationActive);
+    latestReplyAutoNavigationRef.current = createLatestReplyAutoNavigationState({
+      latestUserKey: latestVisibleUserKey,
+      latestReplyKey: latestNavigableReplyKey,
+      generationActive: Boolean(props.generationActive),
+    });
     autoNavigatedLatestReplyKeysRef.current = new Set();
     pendingTurnNavigationIdRef.current = null;
     setMeasuredHeightsVersion(0);
@@ -855,17 +925,13 @@ export const ChatThread = memo(function ChatThread(props: {
         cancelAnimationFrame(topHistoryLoadRafRef.current);
         topHistoryLoadRafRef.current = null;
       }
-      if (autoLatestReplyRafRef.current !== null) {
-        cancelAnimationFrame(autoLatestReplyRafRef.current);
-        autoLatestReplyRafRef.current = null;
-      }
       if (turnNavigationRafRef.current !== null) {
         cancelAnimationFrame(turnNavigationRafRef.current);
         turnNavigationRafRef.current = null;
       }
       textSelectionListenerCleanupRef.current?.();
       textSelectionListenerCleanupRef.current = null;
-      pendingAutoLatestReplyScrollRef.current = false;
+      latestReplyAutoNavigationRef.current.pendingReplyKey = null;
     };
   }, []);
 
@@ -1067,11 +1133,13 @@ export const ChatThread = memo(function ChatThread(props: {
         return;
       }
       restoreBottomAfterForeground();
+      requestAnimationFrame(() => consumePendingAutoLatestReplyScrollRef.current());
     };
 
     const handleForeground = () => {
       if (!isDocumentHidden()) {
         restoreBottomAfterForeground();
+        requestAnimationFrame(() => consumePendingAutoLatestReplyScrollRef.current());
       }
     };
 
@@ -1308,24 +1376,27 @@ export const ChatThread = memo(function ChatThread(props: {
   };
 
   const consumePendingAutoLatestReplyScroll = useCallback(() => {
-    if (!pendingAutoLatestReplyScrollRef.current) {
+    const pendingReplyKey = latestReplyAutoNavigationRef.current.pendingReplyKey;
+    if (!pendingReplyKey) {
       return true;
     }
+    if (isDocumentHidden()) {
+      return false;
+    }
     if (
-      isDocumentHidden() ||
       userDetachedFromBottomRef.current ||
       (!stickToBottomRef.current &&
         !returnToBottomOnVisibleRef.current &&
         !sessionSwitchBottomLockRef.current)
     ) {
-      pendingAutoLatestReplyScrollRef.current = false;
+      latestReplyAutoNavigationRef.current.pendingReplyKey = null;
       return true;
     }
     const target = latestReplyStartTargetRef.current;
-    if (!target) {
+    if (!target || target.entryKey !== pendingReplyKey) {
       return false;
     }
-    pendingAutoLatestReplyScrollRef.current = false;
+    latestReplyAutoNavigationRef.current.pendingReplyKey = null;
     if (autoNavigatedLatestReplyKeysRef.current.has(target.entryKey)) {
       return true;
     }
@@ -1334,43 +1405,26 @@ export const ChatThread = memo(function ChatThread(props: {
     return true;
   }, [scrollToLatestReplyStart]);
 
+  consumePendingAutoLatestReplyScrollRef.current = consumePendingAutoLatestReplyScroll;
+
   useEffect(() => {
-    const wasActive = previousGenerationActiveRef.current;
-    const isActive = Boolean(props.generationActive);
-    previousGenerationActiveRef.current = isActive;
-    if (!wasActive || isActive) {
+    const previous = latestReplyAutoNavigationRef.current;
+    const next = advanceLatestReplyAutoNavigationState(previous, {
+      latestUserKey: latestVisibleUserKey,
+      latestReplyKey: latestNavigableReplyKey,
+      generationActive: Boolean(props.generationActive),
+    });
+    latestReplyAutoNavigationRef.current = next;
+    if (!next.pendingReplyKey || next.pendingReplyKey === previous.pendingReplyKey) {
       return;
     }
-    if (isDocumentHidden()) {
-      return;
-    }
-    if (
-      userDetachedFromBottomRef.current ||
-      (!stickToBottomRef.current &&
-        !returnToBottomOnVisibleRef.current &&
-        !sessionSwitchBottomLockRef.current)
-    ) {
-      return;
-    }
-
-    pendingAutoLatestReplyScrollRef.current = true;
-    let remainingFrames = 8;
-    const tryScroll = () => {
-      autoLatestReplyRafRef.current = null;
-      if (consumePendingAutoLatestReplyScroll()) {
-        return;
-      }
-      remainingFrames -= 1;
-      if (remainingFrames > 0) {
-        autoLatestReplyRafRef.current = requestAnimationFrame(tryScroll);
-      }
-    };
-
-    if (autoLatestReplyRafRef.current !== null) {
-      cancelAnimationFrame(autoLatestReplyRafRef.current);
-    }
-    autoLatestReplyRafRef.current = requestAnimationFrame(tryScroll);
-  }, [consumePendingAutoLatestReplyScroll, props.generationActive]);
+    consumePendingAutoLatestReplyScroll();
+  }, [
+    consumePendingAutoLatestReplyScroll,
+    latestNavigableReplyKey,
+    latestVisibleUserKey,
+    props.generationActive,
+  ]);
 
   useEffect(() => {
     consumePendingAutoLatestReplyScroll();
@@ -1378,14 +1432,14 @@ export const ChatThread = memo(function ChatThread(props: {
 
   const navigateToLoadedTurn = useCallback((item: ConversationTurnNavigationItem) => {
     const node = containerRef.current;
-    if (!node || !item.userEntryKey || item.startOffset === undefined) {
+    if (!node || !item.anchorEntryKey || item.startOffset === undefined) {
       return;
     }
     detachBottomFollowing();
     prependAnchorRef.current = null;
     const findTargetNode = () =>
       Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
-        (entryNode) => entryNode.dataset.feedEntryKey === item.userEntryKey,
+        (entryNode) => entryNode.dataset.feedEntryKey === item.anchorEntryKey,
       ) ?? null;
     const alignTargetNode = (targetNode: HTMLElement) => {
       const delta = targetNode.getBoundingClientRect().top - node.getBoundingClientRect().top;
@@ -1430,7 +1484,7 @@ export const ChatThread = memo(function ChatThread(props: {
 
   const handleNavigateToTurn = useCallback(
     (item: ConversationTurnNavigationItem) => {
-      if (item.userEntryKey && item.startOffset !== undefined) {
+      if (item.anchorEntryKey && item.startOffset !== undefined) {
         pendingTurnNavigationIdRef.current = null;
         navigateToLoadedTurn(item);
         return;
@@ -1457,7 +1511,7 @@ export const ChatThread = memo(function ChatThread(props: {
     const item = turnNavigationItems.find(
       (candidate) =>
         candidate.turnId === turnId &&
-        candidate.userEntryKey !== undefined &&
+        candidate.anchorEntryKey !== undefined &&
         candidate.startOffset !== undefined,
     );
     if (!item) {
@@ -1469,16 +1523,35 @@ export const ChatThread = memo(function ChatThread(props: {
 
   return (
     <div
-      className="chat-thread-shell relative min-h-0 flex-1"
-      data-conversation-source={props.conversationTurns ? "v2" : "legacy"}
+      className="chat-thread-shell relative flex min-h-0 flex-1 flex-col"
+      data-conversation-source="canonical"
+      data-turn-navigation={isPwaDisplayMode ? "hidden" : "visible"}
     >
-      <div
-        ref={containerRef}
-        data-testid="chat-thread-scroll-container"
-        className="chat-thread-scroll-container h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
-        onMouseDownCapture={handlePotentialTextSelectionStart}
-      >
-        <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={containerRef}
+          data-testid="chat-thread-scroll-container"
+          className="chat-thread-scroll-container h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
+          onMouseDownCapture={handlePotentialTextSelectionStart}
+        >
+          <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
+          {props.historyError ? (
+            <div className="mb-5 flex items-start justify-between gap-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2.5 text-sm text-[var(--app-danger)]">
+              <div className="flex min-w-0 items-start gap-2">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 break-words">{props.historyError}</span>
+              </div>
+              {props.onRetryHistory ? (
+                <button
+                  type="button"
+                  className="icon-click-feedback shrink-0 rounded-md border border-current/25 px-2 py-1 text-xs font-semibold hover:bg-[var(--app-bg)]/50"
+                  onClick={() => void props.onRetryHistory?.()}
+                >
+                  Retry
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {props.historyLoading && props.canLoadOlderHistory ? (
             <div className="flex justify-center pb-5">
               <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
@@ -1490,6 +1563,7 @@ export const ChatThread = memo(function ChatThread(props: {
           {virtualWindow.topSpacerHeight > 0 ? (
             <div
               aria-hidden="true"
+              data-chat-virtual-spacer="top"
               style={{ height: `${virtualWindow.topSpacerHeight}px` }}
             />
           ) : null}
@@ -1498,7 +1572,9 @@ export const ChatThread = memo(function ChatThread(props: {
             const assistantHeaderKey =
               row.kind === "feed_entry"
                 ? row.key
-                : row.entries.find((entry) => assistantTurnHeaders.has(entry.key))?.key;
+                : row.kind === "assistant_process_group"
+                  ? row.entries.find((entry) => assistantTurnHeaders.has(entry.key))?.key
+                  : undefined;
             const showAssistantTurnHeader =
               Boolean(props.showModelInfo && props.provider) &&
               assistantHeaderKey !== undefined &&
@@ -1507,7 +1583,9 @@ export const ChatThread = memo(function ChatThread(props: {
               row.kind === "assistant_process_group"
                 ? row.runtimeModel ??
                   (assistantHeaderKey ? assistantTurnHeaders.get(assistantHeaderKey) : undefined)
-                : assistantTurnHeaders.get(row.key);
+                : row.kind === "feed_entry"
+                  ? assistantTurnHeaders.get(row.key)
+                  : undefined;
             const rowGapPx =
               absoluteEntryIndex >= displayRows.length - 1
                 ? 0
@@ -1569,10 +1647,17 @@ export const ChatThread = memo(function ChatThread(props: {
                         props.canRespondToPermission,
                         props.onPermissionRespond,
                         props.onOpenLocalFile,
-                        props.onLoadHistoryItemDetail,
+                        props.onLoadConversationItemDetail,
                         copyableAssistantKeys,
                       )
                     }
+                  />
+                ) : row.kind === "turn_outputs" ? (
+                  <ConversationOutputsCard
+                    outputs={row.outputs}
+                    {...(props.onOpenLocalFile
+                      ? { onOpenLocalFile: props.onOpenLocalFile }
+                      : {})}
                   />
                 ) : (
                   renderEntry(
@@ -1580,7 +1665,7 @@ export const ChatThread = memo(function ChatThread(props: {
                     props.canRespondToPermission,
                     props.onPermissionRespond,
                     props.onOpenLocalFile,
-                    props.onLoadHistoryItemDetail,
+                    props.onLoadConversationItemDetail,
                     copyableAssistantKeys,
                   )
                 )}
@@ -1590,44 +1675,56 @@ export const ChatThread = memo(function ChatThread(props: {
           {virtualWindow.bottomSpacerHeight > 0 ? (
             <div
               aria-hidden="true"
+              data-chat-virtual-spacer="bottom"
               style={{ height: `${virtualWindow.bottomSpacerHeight}px` }}
             />
           ) : null}
-          <div ref={bottomRef} />
+            <div ref={bottomRef} />
+          </div>
         </div>
+
+        {!isPwaDisplayMode ? (
+          <ConversationTurnNavigator
+            items={turnNavigationItems}
+            activeKeys={activeTurnNavigationKeys}
+            onNavigate={handleNavigateToTurn}
+          />
+        ) : null}
+
+        {latestReplyStartTarget || showScrollToBottom ? (
+          <div className="absolute bottom-4 left-1/2 z-[30] flex -translate-x-1/2 flex-col items-center gap-2">
+            {latestReplyStartTarget ? (
+              <button
+                type="button"
+                onClick={handleScrollToLatestReplyStart}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+                aria-label="Read latest reply from start"
+                title="Read latest reply"
+              >
+                <ArrowUpToLine size={16} />
+              </button>
+            ) : null}
+            {showScrollToBottom ? (
+              <button
+                type="button"
+                onClick={handleScrollToBottom}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+                aria-label="Scroll to bottom"
+                title="Scroll to bottom"
+              >
+                <ArrowDown size={16} />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-
-      <ConversationTurnNavigator
-        items={turnNavigationItems}
-        activeKeys={activeTurnNavigationKeys}
-        onNavigate={handleNavigateToTurn}
-      />
-
-      {latestReplyStartTarget || showScrollToBottom ? (
-        <div className="absolute bottom-4 left-1/2 z-[30] flex -translate-x-1/2 flex-col items-center gap-2">
-          {latestReplyStartTarget ? (
-            <button
-              type="button"
-              onClick={handleScrollToLatestReplyStart}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
-              aria-label="Read latest reply from start"
-              title="Read latest reply"
-            >
-              <ArrowUpToLine size={16} />
-            </button>
-          ) : null}
-          {showScrollToBottom ? (
-            <button
-              type="button"
-              onClick={handleScrollToBottom}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
-              aria-label="Scroll to bottom"
-              title="Scroll to bottom"
-            >
-              <ArrowDown size={16} />
-            </button>
-          ) : null}
-        </div>
+      {currentPlan ? (
+        <TaskSummaryDock
+          key={currentPlan.key}
+          plan={currentPlan}
+          {...(currentPlanTurn ? { turn: currentPlanTurn } : {})}
+          {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
+        />
       ) : null}
     </div>
   );

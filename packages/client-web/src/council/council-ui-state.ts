@@ -157,7 +157,6 @@ export function councilAgentDraftToConfig(args: {
     label,
     ...(args.draft.role.trim() ? { role: args.draft.role.trim() } : {}),
     ...(modelId ? { modelId } : {}),
-    ...(reasoningId !== null ? { reasoningId } : {}),
     ...(optionValues ? { optionValues } : {}),
     ...(modeId ? { modeId } : {}),
   };

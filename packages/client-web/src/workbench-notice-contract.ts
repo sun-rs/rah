@@ -11,7 +11,6 @@ export interface InlineWorkbenchNotice {
 
 export interface WorkbenchNoticeState {
   interactionNotice: InlineWorkbenchNotice | null;
-  historyNotice: InlineWorkbenchNotice | null;
   errorDescriptor: ErrorRecoveryDescriptor | null;
 }
 
@@ -74,19 +73,8 @@ export function deriveWorkbenchNoticeState(args: {
       }
     : null;
 
-  const historyNotice =
-    selectedSummary?.session.providerSessionId &&
-    selectedProjection?.history.phase === "error" &&
-    selectedProjection.history.lastError
-      ? {
-          tone: "warning" as const,
-          message: `History sync failed: ${selectedProjection.history.lastError}`,
-        }
-      : null;
-
   return {
     interactionNotice,
-    historyNotice,
     errorDescriptor: error ? describeWorkbenchError(error, selectedSummary) : null,
   };
 }

@@ -6,6 +6,8 @@ export function InspectorHeader(props: {
   workspaceRoot: string;
   activeTab: InspectorTab;
   changeCount: number;
+  outputCount: number;
+  sourceCount: number;
   onTabChange: (tab: InspectorTab) => void;
   onOpenTerminal?: () => void;
 }) {
@@ -34,7 +36,7 @@ export function InspectorHeader(props: {
         <div className="overflow-x-auto rah-scroll-panel scrollbar-stable">
           <SegmentedControl
             size="panel"
-            className="grid min-w-full grid-cols-2 gap-1"
+            className="grid min-w-[21rem] grid-cols-4 gap-1"
             role="tablist"
             ariaLabel="Inspector sections"
           >
@@ -48,6 +50,30 @@ export function InspectorHeader(props: {
             >
               <SegmentedButtonLabel size="panel">
                 Changes {props.changeCount > 0 ? `(${props.changeCount})` : ""}
+              </SegmentedButtonLabel>
+            </SegmentedButton>
+            <SegmentedButton
+              size="panel"
+              selected={props.activeTab === "outputs"}
+              className="min-w-[5rem] overflow-hidden text-ellipsis whitespace-nowrap"
+              onClick={() => props.onTabChange("outputs")}
+              role="tab"
+              aria-selected={props.activeTab === "outputs"}
+            >
+              <SegmentedButtonLabel size="panel">
+                Outputs {props.outputCount > 0 ? `(${props.outputCount})` : ""}
+              </SegmentedButtonLabel>
+            </SegmentedButton>
+            <SegmentedButton
+              size="panel"
+              selected={props.activeTab === "sources"}
+              className="min-w-[5rem] overflow-hidden text-ellipsis whitespace-nowrap"
+              onClick={() => props.onTabChange("sources")}
+              role="tab"
+              aria-selected={props.activeTab === "sources"}
+            >
+              <SegmentedButtonLabel size="panel">
+                Sources {props.sourceCount > 0 ? `(${props.sourceCount})` : ""}
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton

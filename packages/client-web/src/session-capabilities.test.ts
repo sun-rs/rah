@@ -8,7 +8,6 @@ import {
   canSessionSwitchModes,
   isSessionControlLocked,
   isSessionGenerationActive,
-  shouldPollSessionHistoryTail,
 } from "./session-capabilities";
 
 function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionSummary {
@@ -33,7 +32,6 @@ function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionS
         contextUsage: true,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: false,
         actions: {
           info: true,
           stop: true,
@@ -225,83 +223,5 @@ test("generation state also respects live runtime status when summary sync lags"
       undefined,
     ),
     true,
-  );
-});
-
-test("history tail polling is disabled for structured live sessions", () => {
-  const summary = summaryWithSession({
-    providerSessionId: "provider-session-1",
-    liveBackend: "native_local_server",
-    runtime: {
-      kind: "native_local_server",
-      protocolStability: "project_native",
-      liveSource: "provider_server",
-      tuiRole: "client_view",
-      structuredLiveEvents: true,
-      tuiContinuity: true,
-      features: {
-        structuredLiveEvents: "available",
-        structuredControl: "available",
-        historyBackfill: "available",
-        tuiClientContinuity: "available",
-        crossClientSync: "available",
-        prelaunchConfig: "available",
-        runtimeConfig: "available",
-        interrupt: "available",
-        stopLifecycle: "unverified",
-      },
-    },
-  });
-
-  assert.equal(shouldPollSessionHistoryTail(summary), false);
-});
-
-test("history tail polling stays enabled for non-structured TUI-backed sessions", () => {
-  const tuiSummary = summaryWithSession({
-    provider: "claude",
-    providerSessionId: "provider-session-1",
-    liveBackend: "tui_mux",
-    runtime: {
-      kind: "tui_mux_fallback",
-      protocolStability: "tui_stdio",
-      liveSource: "tui_mux",
-      tuiRole: "session_owner",
-      structuredLiveEvents: false,
-      tuiContinuity: true,
-    },
-  });
-  const nativeTuiSummary = summaryWithSession({
-    provider: "claude",
-    providerSessionId: "provider-session-1",
-    liveBackend: "native_tui",
-    runtime: {
-      kind: "tui_mux_fallback",
-      protocolStability: "tui_stdio",
-      liveSource: "tui_mux",
-      tuiRole: "session_owner",
-      structuredLiveEvents: false,
-      tuiContinuity: true,
-    },
-  });
-
-  assert.equal(shouldPollSessionHistoryTail(tuiSummary), true);
-  assert.equal(shouldPollSessionHistoryTail(nativeTuiSummary), true);
-});
-
-test("history tail polling requires provider history and an interactive projection", () => {
-  assert.equal(shouldPollSessionHistoryTail(summaryWithSession({ liveBackend: "tui_mux" })), false);
-  assert.equal(
-    shouldPollSessionHistoryTail(
-      summaryWithSession({
-        providerSessionId: "provider-session-1",
-        liveBackend: "tui_mux",
-        capabilities: {
-          ...summaryWithSession().session.capabilities,
-          steerInput: false,
-          livePermissions: false,
-        },
-      }),
-    ),
-    false,
   );
 });

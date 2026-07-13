@@ -81,7 +81,6 @@ test("council agent draft maps model reasoning into provider optionValues", () =
     label: "OpenCode Specialist",
     role: "Run API-key models",
     modelId: "openai/gpt-5.5",
-    reasoningId: "xhigh",
     optionValues: { model_reasoning_variant: "xhigh" },
     modeId: "build",
   });
@@ -150,7 +149,6 @@ test("council agent config uses visible catalog defaults when draft has not been
 
   assert.equal(config.label, "openai-gpt-5.5-XHigh");
   assert.equal(config.modelId, "openai/gpt-5.5");
-  assert.equal(config.reasoningId, "xhigh");
   assert.deepEqual(config.optionValues, { model_reasoning_variant: "xhigh" });
   assert.equal(config.modeId, "build");
 });

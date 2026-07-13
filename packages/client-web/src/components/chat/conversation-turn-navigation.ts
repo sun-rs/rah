@@ -1,5 +1,9 @@
-import type { SessionTurnDirectoryItem } from "@rah/runtime-protocol";
+import type {
+  ConversationTurnProjection,
+  ConversationTurnDirectoryItem,
+} from "@rah/runtime-protocol";
 import type { FeedEntry } from "../../types";
+import { conversationItemFeedKey } from "../../conversation-feed";
 import { isInternalUserReminder } from "./assistant-turn-headers";
 import type { VirtualFeedLayout } from "./virtualized-feed-layout";
 
@@ -10,12 +14,38 @@ export type ConversationTurnNavigationItem = {
   key: string;
   turnId?: string;
   userEntryKey?: string;
+  anchorEntryKey?: string;
   userPreview: string;
   assistantPreview?: string;
   fileNames: string[];
   startOffset?: number;
   endOffset?: number;
 };
+
+type ConversationTurnAnchor = {
+  entryKey: string;
+  offsetTop: number;
+};
+
+export function conversationTurnIndexAtScrollableRailPosition(
+  itemCount: number,
+  offset: number,
+  scrollTop: number,
+  rowHeight: number,
+): number {
+  if (
+    itemCount <= 0 ||
+    rowHeight <= 0 ||
+    !Number.isFinite(offset) ||
+    !Number.isFinite(scrollTop)
+  ) {
+    return -1;
+  }
+  return Math.max(
+    0,
+    Math.min(itemCount - 1, Math.floor((Math.max(0, offset) + Math.max(0, scrollTop)) / rowHeight)),
+  );
+}
 
 type ConversationTurnDraft = {
   key: string;
@@ -24,7 +54,6 @@ type ConversationTurnDraft = {
   userPreview: string;
   finalAssistantPreview?: string;
   latestAssistantPreview?: string;
-  fileNames: string[];
 };
 
 type TimelineFeedEntry = Extract<FeedEntry, { kind: "timeline" }>;
@@ -51,40 +80,6 @@ function isVisibleUserMessage(entry: FeedEntry): entry is VisibleUserMessageEntr
   );
 }
 
-function baseName(path: string): string {
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
-}
-
-function appendFileName(draft: ConversationTurnDraft, path: string | undefined): void {
-  if (!path || draft.fileNames.length >= PREVIEW_FILE_LIMIT) {
-    return;
-  }
-  const name = baseName(path);
-  if (name && !draft.fileNames.includes(name)) {
-    draft.fileNames.push(name);
-  }
-}
-
-function appendEntryFiles(draft: ConversationTurnDraft, entry: FeedEntry): void {
-  if (entry.kind === "timeline" && entry.item.kind === "attachment") {
-    appendFileName(draft, entry.item.path ?? entry.item.label);
-    return;
-  }
-  if (entry.kind !== "tool_call") {
-    return;
-  }
-  for (const artifact of entry.toolCall.detail?.artifacts ?? []) {
-    if (artifact.kind === "file_refs") {
-      for (const file of artifact.files) {
-        appendFileName(draft, file);
-      }
-    } else if (artifact.kind === "image") {
-      appendFileName(draft, artifact.path);
-    }
-  }
-}
-
 function buildTurnDrafts(entries: readonly FeedEntry[]): ConversationTurnDraft[] {
   const drafts: ConversationTurnDraft[] = [];
   let current: ConversationTurnDraft | null = null;
@@ -98,7 +93,6 @@ function buildTurnDrafts(entries: readonly FeedEntry[]): ConversationTurnDraft[]
           : {}),
         userEntryKey: entry.key,
         userPreview: compactPreviewText(entry.item.text) || "Message",
-        fileNames: [],
       };
       drafts.push(current);
       continue;
@@ -106,7 +100,6 @@ function buildTurnDrafts(entries: readonly FeedEntry[]): ConversationTurnDraft[]
     if (!current) {
       continue;
     }
-    appendEntryFiles(current, entry);
     if (entry.kind !== "timeline" || entry.item.kind !== "assistant_message") {
       continue;
     }
@@ -124,32 +117,170 @@ function buildTurnDrafts(entries: readonly FeedEntry[]): ConversationTurnDraft[]
   return drafts;
 }
 
+function conversationTurnIdentityKeys(turn: ConversationTurnProjection): string[] {
+  return turn.providerTurnId && turn.providerTurnId !== turn.id
+    ? [turn.id, turn.providerTurnId]
+    : [turn.id];
+}
+
+function buildConversationTurnAnchors(
+  turns: readonly ConversationTurnProjection[],
+  rowByKey: ReadonlyMap<string, VirtualFeedLayout["rows"][number]>,
+): Map<string, ConversationTurnAnchor> {
+  const anchors = new Map<string, ConversationTurnAnchor>();
+  for (const turn of turns) {
+    const candidateKeys = [
+      ...turn.items.map((item) => conversationItemFeedKey(item.id)),
+      `conversation-process:${turn.id}`,
+      `conversation-outputs:${turn.id}`,
+    ];
+    const anchor = candidateKeys
+      .map((entryKey) => {
+        const row = rowByKey.get(entryKey);
+        return row ? { entryKey, offsetTop: row.offsetTop } : null;
+      })
+      .filter((candidate): candidate is ConversationTurnAnchor => candidate !== null)
+      .sort((left, right) => left.offsetTop - right.offsetTop)[0];
+    if (!anchor) {
+      continue;
+    }
+    for (const identity of conversationTurnIdentityKeys(turn)) {
+      anchors.set(identity, anchor);
+    }
+  }
+  return anchors;
+}
+
+function canonicalTurnUserPreview(turn: ConversationTurnProjection): string {
+  const userItem = turn.items.find(
+    (item) =>
+      item.role === "user" &&
+      item.content.kind === "timeline" &&
+      item.content.item.kind === "user_message",
+  );
+  if (
+    userItem?.content.kind === "timeline" &&
+    userItem.content.item.kind === "user_message"
+  ) {
+    return compactPreviewText(userItem.content.item.text) || "Message";
+  }
+  return "Session activity";
+}
+
+function canonicalTurnAssistantPreview(
+  turn: ConversationTurnProjection,
+): string | undefined {
+  const final = [...turn.items].reverse().find(
+    (item) =>
+      item.role === "final" &&
+      item.content.kind === "timeline" &&
+      item.content.item.kind === "assistant_message",
+  );
+  if (
+    final?.content.kind === "timeline" &&
+    final.content.item.kind === "assistant_message"
+  ) {
+    return compactPreviewText(final.content.item.text) || undefined;
+  }
+  return undefined;
+}
+
+function addTurnEndOffsets(
+  items: readonly ConversationTurnNavigationItem[],
+  layout: VirtualFeedLayout,
+): ConversationTurnNavigationItem[] {
+  return items.map((item, index) => {
+    if (item.startOffset === undefined) {
+      return item;
+    }
+    let nextOffset: number | undefined;
+    for (let nextIndex = index + 1; nextIndex < items.length; nextIndex += 1) {
+      const candidate = items[nextIndex];
+      if (candidate?.startOffset !== undefined) {
+        nextOffset = candidate.startOffset;
+        break;
+      }
+    }
+    return {
+      ...item,
+      endOffset: Math.max(item.startOffset + 1, nextOffset ?? layout.totalHeight),
+    };
+  });
+}
+
 export function buildConversationTurnNavigationItems(
   entries: readonly FeedEntry[],
   layout: VirtualFeedLayout,
-  directory: readonly SessionTurnDirectoryItem[] = [],
+  directory: readonly ConversationTurnDirectoryItem[] = [],
+  conversationTurns: readonly ConversationTurnProjection[] = [],
 ): ConversationTurnNavigationItem[] {
   const rowByKey = new Map(layout.rows.map((row) => [row.key, row]));
+  const anchorByTurnId = buildConversationTurnAnchors(conversationTurns, rowByKey);
+  const outputLabelsByTurnId = new Map<string, string[]>();
+  for (const turn of conversationTurns) {
+    const labels = (turn.outputs ?? [])
+      .map((output) => output.label)
+      .filter((label, index, all) => Boolean(label) && all.indexOf(label) === index)
+      .slice(0, PREVIEW_FILE_LIMIT);
+    if (labels.length === 0) {
+      continue;
+    }
+    outputLabelsByTurnId.set(turn.id, labels);
+    if (turn.providerTurnId) {
+      outputLabelsByTurnId.set(turn.providerTurnId, labels);
+    }
+  }
   const drafts = buildTurnDrafts(entries).filter((draft) => rowByKey.has(draft.userEntryKey));
-  const loadedItems: ConversationTurnNavigationItem[] = drafts.map((draft, index) => {
-    const row = rowByKey.get(draft.userEntryKey)!;
-    const nextDraft = drafts[index + 1];
-    const nextRow = nextDraft ? rowByKey.get(nextDraft.userEntryKey) : undefined;
+  const loadedItems: ConversationTurnNavigationItem[] = drafts.map((draft) => {
+    const userRow = rowByKey.get(draft.userEntryKey)!;
+    const anchor = (draft.turnId ? anchorByTurnId.get(draft.turnId) : undefined) ?? {
+      entryKey: draft.userEntryKey,
+      offsetTop: userRow.offsetTop,
+    };
     return {
       key: draft.key,
       ...(draft.turnId ? { turnId: draft.turnId } : {}),
       userEntryKey: draft.userEntryKey,
+      anchorEntryKey: anchor.entryKey,
       userPreview: draft.userPreview,
       ...(draft.finalAssistantPreview || draft.latestAssistantPreview
         ? { assistantPreview: draft.finalAssistantPreview ?? draft.latestAssistantPreview }
         : {}),
-      fileNames: draft.fileNames,
-      startOffset: row.offsetTop,
-      endOffset: Math.max(row.offsetTop + 1, nextRow?.offsetTop ?? layout.totalHeight),
+      fileNames:
+        (draft.turnId ? outputLabelsByTurnId.get(draft.turnId) : undefined) ?? [],
+      startOffset: anchor.offsetTop,
     };
   });
   if (directory.length === 0) {
-    return loadedItems;
+    const representedTurnIds = new Set(
+      loadedItems.flatMap((item) => (item.turnId ? [item.turnId] : [])),
+    );
+    const canonicalFallbacks = conversationTurns.flatMap((turn) => {
+      const identities = conversationTurnIdentityKeys(turn);
+      if (identities.some((identity) => representedTurnIds.has(identity))) {
+        return [];
+      }
+      const anchor = anchorByTurnId.get(turn.providerTurnId ?? turn.id);
+      if (!anchor) {
+        return [];
+      }
+      const assistantPreview = canonicalTurnAssistantPreview(turn);
+      return [{
+        key: `conversation-turn:${turn.providerTurnId ?? turn.id}`,
+        turnId: turn.providerTurnId ?? turn.id,
+        anchorEntryKey: anchor.entryKey,
+        userPreview: canonicalTurnUserPreview(turn),
+        ...(assistantPreview ? { assistantPreview } : {}),
+        fileNames: outputLabelsByTurnId.get(turn.providerTurnId ?? turn.id) ?? [],
+        startOffset: anchor.offsetTop,
+      } satisfies ConversationTurnNavigationItem];
+    });
+    return addTurnEndOffsets(
+      [...loadedItems, ...canonicalFallbacks].sort(
+        (left, right) => (left.startOffset ?? 0) - (right.startOffset ?? 0),
+      ),
+      layout,
+    );
   }
   const loadedByTurnId = new Map(
     loadedItems
@@ -161,23 +292,32 @@ export function buildConversationTurnNavigationItems(
   const directoryTurnIds = new Set(directory.map((item) => item.id));
   const indexed: ConversationTurnNavigationItem[] = directory.map((item) => {
     const loaded = loadedByTurnId.get(item.id);
+    const anchor = anchorByTurnId.get(item.id);
+    const anchorEntryKey = anchor?.entryKey ?? loaded?.anchorEntryKey;
     // Live/projected text is newer than a background directory snapshot.
     const assistantPreview = loaded?.assistantPreview ?? item.assistantPreview;
     return {
       key: `conversation-turn:${item.id}`,
       turnId: item.id,
       ...(loaded?.userEntryKey ? { userEntryKey: loaded.userEntryKey } : {}),
+      ...(anchorEntryKey ? { anchorEntryKey } : {}),
       userPreview: item.userPreview || loaded?.userPreview || "Message",
       ...(assistantPreview !== undefined ? { assistantPreview } : {}),
       fileNames: loaded?.fileNames ?? [],
-      ...(loaded?.startOffset !== undefined ? { startOffset: loaded.startOffset } : {}),
-      ...(loaded?.endOffset !== undefined ? { endOffset: loaded.endOffset } : {}),
+      ...(anchor?.offsetTop !== undefined
+        ? { startOffset: anchor.offsetTop }
+        : loaded?.startOffset !== undefined
+          ? { startOffset: loaded.startOffset }
+          : {}),
     };
   });
-  return [
-    ...indexed,
-    ...loadedItems.filter((item) => !item.turnId || !directoryTurnIds.has(item.turnId)),
-  ];
+  return addTurnEndOffsets(
+    [
+      ...indexed,
+      ...loadedItems.filter((item) => !item.turnId || !directoryTurnIds.has(item.turnId)),
+    ],
+    layout,
+  );
 }
 
 export function visibleConversationTurnKeys(args: {

@@ -16,6 +16,7 @@ import { isTerminalProtocolResponse } from "./terminal-protocol-response";
 import { shouldRequestPtyReplay } from "./terminal-pty-replay-policy";
 import { ptySocketCloseNotice } from "./terminal-socket-close";
 import { TERMINAL_TUI_SHORTCUTS, type TerminalShortcut } from "./terminal-shortcuts";
+import { isMeaningfulTerminalOutput } from "./terminal-startup-output";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
 import { TERMINAL_LAYOUT_SETTLE_DELAYS_MS } from "./tui-surface-lifecycle";
 
@@ -58,19 +59,7 @@ const TERMINAL_OUTPUT_FLUSH_DELAY_MS = 16;
 const PTY_CLIENT_HEARTBEAT_INTERVAL_MS = 15_000;
 const PTY_CLIENT_HEARTBEAT_TIMEOUT_MS = 45_000;
 
-function stripTerminalControlText(data: string): string {
-  return data
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[()][A-Za-z0-9]/g, "")
-    .replace(/\r/g, "\n")
-    .trim();
-}
-
-function isMeaningfulTerminalOutput(data: string): boolean {
-  const text = stripTerminalControlText(data);
-  return text.length > 0 && !/^\[rah\]\s+Starting\b/.test(text);
-}
+type TerminalStartupPhase = "connecting" | "replaying" | "starting" | null;
 
 function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
@@ -203,10 +192,8 @@ export function TerminalPane(props: TerminalPaneProps) {
   const [surfaceOwnerKind, setSurfaceOwnerKind] = useState<string | null>(null);
   const [localTuiClientActive, setLocalTuiClientActive] = useState(true);
   const [tuiClientClosing, setTuiClientClosing] = useState(false);
-  const [startupOverlayVisible, setStartupOverlayVisible] = useState(
-    props.initialReplay === false,
-  );
-  const startupOverlayVisibleRef = useRef(props.initialReplay === false);
+  const [startupPhase, setStartupPhase] = useState<TerminalStartupPhase>("connecting");
+  const startupPhaseRef = useRef<TerminalStartupPhase>("connecting");
   const startupOverlayReleaseTimerRef = useRef<number | null>(null);
   const tuiClientCloseEnabled = props.tuiClientCloseEnabled === true;
   const tuiClientActive = tuiClientCloseEnabled
@@ -357,16 +344,10 @@ export function TerminalPane(props: TerminalPaneProps) {
     setTuiClientClosing(false);
     setSurfaceOwnerKind(null);
     nextReplaySeqRef.current = 0;
-    const showStartupOverlay = props.initialReplay === false && tuiClientActive;
-    startupOverlayVisibleRef.current = showStartupOverlay;
-    setStartupOverlayVisible(showStartupOverlay);
-  }, [props.terminalId, props.tuiClientActive]);
-
-  useEffect(() => {
-    const showStartupOverlay = props.initialReplay === false && tuiClientActive;
-    startupOverlayVisibleRef.current = showStartupOverlay;
-    setStartupOverlayVisible(showStartupOverlay);
-  }, [props.initialReplay, tuiClientActive]);
+    const nextStartupPhase: TerminalStartupPhase = tuiClientActive ? "connecting" : null;
+    startupPhaseRef.current = nextStartupPhase;
+    setStartupPhase(nextStartupPhase);
+  }, [props.terminalId, tuiClientActive]);
 
   const setTuiClientActiveState = (active: boolean) => {
     props.onTuiClientActiveChange?.(active);
@@ -376,13 +357,13 @@ export function TerminalPane(props: TerminalPaneProps) {
   };
 
   const releaseStartupOverlaySoon = () => {
-    if (!startupOverlayVisibleRef.current || startupOverlayReleaseTimerRef.current) {
+    if (startupPhaseRef.current === null || startupOverlayReleaseTimerRef.current) {
       return;
     }
     startupOverlayReleaseTimerRef.current = window.setTimeout(() => {
       startupOverlayReleaseTimerRef.current = null;
-      startupOverlayVisibleRef.current = false;
-      setStartupOverlayVisible(false);
+      startupPhaseRef.current = null;
+      setStartupPhase(null);
     }, 180);
   };
 
@@ -618,6 +599,10 @@ export function TerminalPane(props: TerminalPaneProps) {
     document.addEventListener("visibilitychange", handleTerminalVisibilityChanged);
 
     const connect = (fromSeq?: number) => {
+      const replayRequested = shouldRequestPtyReplay({
+        initialReplay: props.initialReplay !== false,
+        ...(fromSeq !== undefined ? { fromSeq } : {}),
+      });
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
       let heartbeatSupported = false;
       let pendingHeartbeatNonce: string | null = null;
@@ -714,6 +699,9 @@ export function TerminalPane(props: TerminalPaneProps) {
           writeInFlight = true;
           terminal.write(chunk, () => {
             writeInFlight = false;
+            if (!disposed && isMeaningfulTerminalOutput(chunk)) {
+              releaseStartupOverlaySoon();
+            }
             if (!disposed) {
               refreshVisibleTerminal();
             }
@@ -767,13 +755,6 @@ export function TerminalPane(props: TerminalPaneProps) {
         data: string,
         options?: { replace?: boolean; softReplace?: boolean },
       ) => {
-        if (
-          startupOverlayVisibleRef.current &&
-          !options?.replace &&
-          isMeaningfulTerminalOutput(data)
-        ) {
-          releaseStartupOverlaySoon();
-        }
         if (renderOutputRef.current) {
           if (options?.replace) {
             replaceTerminalContents(
@@ -857,10 +838,7 @@ export function TerminalPane(props: TerminalPaneProps) {
         },
         {
           ...(fromSeq !== undefined ? { fromSeq } : {}),
-          replay: shouldRequestPtyReplay({
-            initialReplay: props.initialReplay !== false,
-            ...(fromSeq !== undefined ? { fromSeq } : {}),
-          }),
+          replay: replayRequested,
           ...(props.replayTailBytes !== undefined
             ? { replayTailBytes: props.replayTailBytes }
             : {}),
@@ -869,6 +847,11 @@ export function TerminalPane(props: TerminalPaneProps) {
       socketRef.current = socket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
+        if (startupPhaseRef.current !== null) {
+          const nextStartupPhase = replayRequested ? "replaying" : "starting";
+          startupPhaseRef.current = nextStartupPhase;
+          setStartupPhase(nextStartupPhase);
+        }
         startPtyHeartbeat(socket);
         claimCurrentSurface();
         settleTerminalLayout();
@@ -882,6 +865,9 @@ export function TerminalPane(props: TerminalPaneProps) {
         }
         socketRef.current = null;
         if (disposed || exited) {
+          return;
+        }
+        if (event.code === 4001) {
           return;
         }
         const closeNotice = ptySocketCloseNotice(event.code, event.reason);
@@ -1354,12 +1340,22 @@ export function TerminalPane(props: TerminalPaneProps) {
             </div>
           </div>
         ) : null}
-        {startupOverlayVisible && tuiClientActive ? (
+        {startupPhase && tuiClientActive ? (
           <div className="terminal-surface-overlay" data-testid="terminal-startup-overlay">
             <div className="terminal-surface-overlay-card">
-              <div className="terminal-surface-overlay-title">Starting TUI</div>
+              <div className="terminal-surface-overlay-title">
+                {startupPhase === "connecting"
+                  ? "Connecting to TUI"
+                  : startupPhase === "replaying"
+                    ? "Replaying terminal"
+                    : "Starting TUI"}
+              </div>
               <div className="terminal-surface-overlay-copy">
-                Waiting for the native terminal to draw its current screen.
+                {startupPhase === "connecting"
+                  ? "Opening the terminal connection."
+                  : startupPhase === "replaying"
+                    ? "Restoring the recent terminal screen."
+                    : "Waiting for the native terminal to draw its current screen."}
               </div>
             </div>
           </div>

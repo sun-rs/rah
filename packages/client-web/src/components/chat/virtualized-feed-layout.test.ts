@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { FeedEntry } from "../../types";
 import {
   buildVirtualFeedLayout,
+  projectVirtualAnchorScrollTop,
   resolveVirtualFeedWindow,
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
@@ -95,5 +96,46 @@ describe("virtualized feed layout", () => {
       ],
     );
     assert.equal(layout.totalHeight, 328);
+  });
+
+  test("projects a prepended anchor into the next virtual window before DOM alignment", () => {
+    const entries = Array.from({ length: 12 }, (_, index) =>
+      messageEntry(`entry-${index}`, `message ${index}`),
+    );
+    const layout = buildVirtualFeedLayout(
+      entries,
+      new Map(entries.map((entry) => [entry.key, 100] as const)),
+    );
+
+    const projectedScrollTop = projectVirtualAnchorScrollTop({
+      layout,
+      entryKey: "entry-8",
+      viewportOffset: 40,
+      contentTopOffset: 24,
+    });
+
+    assert.equal(projectedScrollTop, 944);
+    const window = resolveVirtualFeedWindow({
+      layout,
+      scrollTop: projectedScrollTop!,
+      viewportHeight: 300,
+      overscan: 1,
+    });
+    assert.ok(window.startIndex <= 8);
+    assert.ok(window.endIndex > 8);
+  });
+
+  test("does not project an anchor that is absent from the loaded page", () => {
+    const entries = [messageEntry("entry-0", "message")];
+    const layout = buildVirtualFeedLayout(entries, new Map());
+    assert.equal(
+      projectVirtualAnchorScrollTop({
+        layout,
+        entryKey: "missing",
+        viewportOffset: 0,
+        contentTopOffset: 0,
+      }),
+      null,
+    );
   });
 });

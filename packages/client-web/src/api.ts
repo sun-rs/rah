@@ -27,6 +27,8 @@ import type {
   DetachSessionRequest,
   EventBatch,
   EventSubscriptionRequest,
+  ForkSessionRequest,
+  ForkSessionResponse,
   GitDiffResponse,
   GitFileActionRequest,
   GitFileActionResponse,
@@ -68,26 +70,36 @@ import type {
   SetSessionModelRequest,
   SessionFileResponse,
   SessionInputRequest,
-  SessionHistoryDetailMode,
-  SessionHistoryItemDetailKind,
-  SessionHistoryItemDetailResponse,
-  SessionHistoryPageResponse,
-  SessionTurnDirectoryResponse,
-  SessionTurnHistoryResponse,
+  ConversationTurnDirectoryResponse,
   SessionSummary,
   StartDebugScenarioRequest,
   StartSessionRequest,
   StartSessionResponse,
   StoredSessionsDeltaResponse,
+  StoredSessionArchiveRequest,
   StoredSessionRemoveRequest,
   WorkspaceDirectoryResponse,
   WorkspaceDirectoryRequest,
   WorkbenchResponse,
   WorkspaceSnapshotResponse,
+  DeviceAuthStatusResponse,
+  ListTrustedDevicesResponse,
+  PairDeviceRequest,
+  PairDeviceResponse,
+  PairingCodeResponse,
+  PairingCodeStatusResponse,
+  RevokeTrustedDeviceResponse,
 } from "@rah/runtime-protocol";
 
 const DEFAULT_DAEMON_PORT = 43111;
+export const RAH_AUTH_REQUIRED_EVENT = "rah:auth-required";
 type StoredSessionsMode = "all" | "recent";
+
+function handleAuthenticatedSocketClose(event: CloseEvent): void {
+  if (event.code === 4001 && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(RAH_AUTH_REQUIRED_EVENT));
+  }
+}
 
 function computeDefaultBaseUrl(): string {
   if (typeof window === "undefined") {
@@ -198,6 +210,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${getBaseUrl()}${path}`, {
       ...init,
+      credentials: "include",
       headers: buildRequestHeaders(init),
     });
   } catch (error) {
@@ -207,6 +220,9 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(error instanceof Error ? error.message : "Network request failed.");
   }
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(RAH_AUTH_REQUIRED_EVENT));
+    }
     let raw = "";
     try {
       raw = await response.text();
@@ -216,6 +232,45 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(extractResponseErrorMessage(response, raw));
   }
   return (await response.json()) as T;
+}
+
+export async function getDeviceAuthStatus(): Promise<DeviceAuthStatusResponse> {
+  return requestJson<DeviceAuthStatusResponse>("/api/auth/status");
+}
+
+export async function pairDevice(request: PairDeviceRequest): Promise<PairDeviceResponse> {
+  return requestJson<PairDeviceResponse>("/api/auth/pair", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function createPairingCode(): Promise<PairingCodeResponse> {
+  return requestJson<PairingCodeResponse>("/api/auth/pairing-code", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function getPairingCodeStatus(
+  pairingCodeId: string,
+): Promise<PairingCodeStatusResponse> {
+  return requestJson<PairingCodeStatusResponse>(
+    `/api/auth/pairing-code/${encodeURIComponent(pairingCodeId)}/status`,
+  );
+}
+
+export async function listTrustedDevices(): Promise<ListTrustedDevicesResponse> {
+  return requestJson<ListTrustedDevicesResponse>("/api/auth/devices");
+}
+
+export async function revokeTrustedDevice(
+  deviceId: string,
+): Promise<RevokeTrustedDeviceResponse> {
+  return requestJson<RevokeTrustedDeviceResponse>(
+    `/api/auth/devices/${encodeURIComponent(deviceId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function listSessions(options?: {
@@ -312,6 +367,16 @@ export async function removeStoredSession(
   });
 }
 
+export async function archiveStoredSession(
+  request: StoredSessionArchiveRequest,
+  options?: { storedSessions?: StoredSessionsMode },
+): Promise<ListSessionsResponse> {
+  return requestJson<ListSessionsResponse>(`/api/history/sessions/archive${storedSessionsQuerySuffix(options)}`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
 export async function removeStoredWorkspaceSessions(
   request: WorkspaceDirectoryRequest,
 ): Promise<ListSessionsResponse> {
@@ -388,9 +453,21 @@ export async function listDebugScenarios(): Promise<DebugScenarioDescriptor[]> {
 
 export async function listProviders(options?: {
   forceRefresh?: boolean;
+  provider?: Extract<ProviderKind, "codex" | "claude" | "opencode">;
+  includeHealth?: boolean;
   signal?: AbortSignal;
 }): Promise<ProviderDiagnostic[]> {
-  const search = options?.forceRefresh ? "?refresh=1" : "";
+  const query = new URLSearchParams();
+  if (options?.forceRefresh) {
+    query.set("refresh", "1");
+  }
+  if (options?.provider) {
+    query.set("provider", options.provider);
+  }
+  if (options?.includeHealth === false) {
+    query.set("health", "0");
+  }
+  const search = query.size > 0 ? `?${query.toString()}` : "";
   const response = await requestJson<ListProvidersResponse>(`/api/providers${search}`, {
     ...(options?.signal ? { signal: options.signal } : {}),
   });
@@ -549,6 +626,16 @@ export async function resumeSession(
   request: ResumeSessionRequest,
 ): Promise<ResumeSessionResponse> {
   return requestJson<ResumeSessionResponse>("/api/sessions/resume", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function forkSession(
+  sessionId: string,
+  request: ForkSessionRequest,
+): Promise<ForkSessionResponse> {
+  return requestJson<ForkSessionResponse>(`/api/sessions/${sessionId}/fork`, {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -851,41 +938,6 @@ export async function searchWorkspaceFilesByDirectory(
   );
 }
 
-export async function readSessionHistory(
-  sessionId: string,
-  options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: SessionHistoryDetailMode },
-): Promise<SessionHistoryPageResponse> {
-  const query = new URLSearchParams();
-  if (options?.beforeTs) {
-    query.set("beforeTs", options.beforeTs);
-  }
-  if (options?.cursor) {
-    query.set("cursor", options.cursor);
-  }
-  if (options?.limit !== undefined) {
-    query.set("limit", String(options.limit));
-  }
-  if (options?.detail) {
-    query.set("detail", options.detail);
-  }
-  const suffix = query.size > 0 ? `?${query.toString()}` : "";
-  return requestJson<SessionHistoryPageResponse>(
-    `/api/sessions/${sessionId}/history${suffix}`,
-  );
-}
-
-export async function readSessionHistoryItemDetail(
-  sessionId: string,
-  options: { kind: SessionHistoryItemDetailKind; itemId: string },
-): Promise<SessionHistoryItemDetailResponse> {
-  const query = new URLSearchParams();
-  query.set("kind", options.kind);
-  query.set("itemId", options.itemId);
-  return requestJson<SessionHistoryItemDetailResponse>(
-    `/api/sessions/${sessionId}/history/detail?${query.toString()}`,
-  );
-}
-
 export async function readSessionConversationTurns(
   sessionId: string,
   options?: { cursor?: string; limit?: number; liveOnly?: boolean },
@@ -933,21 +985,11 @@ export async function readSessionConversationTurnDetail(
   );
 }
 
-export async function readSessionTurnDirectory(
+export async function readSessionConversationDirectory(
   sessionId: string,
-): Promise<SessionTurnDirectoryResponse> {
-  return requestJson<SessionTurnDirectoryResponse>(
-    `/api/sessions/${sessionId}/history/turn-directory`,
-  );
-}
-
-export async function readSessionTurnHistory(
-  sessionId: string,
-  turnId: string,
-): Promise<SessionTurnHistoryResponse> {
-  const query = new URLSearchParams({ turnId });
-  return requestJson<SessionTurnHistoryResponse>(
-    `/api/sessions/${sessionId}/history/turn?${query.toString()}`,
+): Promise<ConversationTurnDirectoryResponse> {
+  return requestJson<ConversationTurnDirectoryResponse>(
+    `/api/sessions/${sessionId}/conversation/directory`,
   );
 }
 
@@ -1088,7 +1130,7 @@ export function createEventsSocket(
   onError?: (error: Error) => void,
   options?: {
     onOpen?: () => void;
-    onClose?: () => void;
+    onClose?: (event: CloseEvent) => void;
   },
 ): WebSocket {
   const url = new URL("/api/events", getBaseUrl().replace(/^http/, "ws"));
@@ -1110,8 +1152,9 @@ export function createEventsSocket(
   socket.addEventListener("error", () => {
     onError?.(new Error("Events socket failed"));
   });
-  socket.addEventListener("close", () => {
-    options?.onClose?.();
+  socket.addEventListener("close", (event) => {
+    handleAuthenticatedSocketClose(event);
+    options?.onClose?.(event);
   });
   return socket;
 }
@@ -1140,6 +1183,7 @@ export function createPtySocket(
   socket.addEventListener("error", () => {
     onError?.(new Error("PTY socket failed"));
   });
+  socket.addEventListener("close", handleAuthenticatedSocketClose);
   return socket;
 }
 

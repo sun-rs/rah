@@ -9,6 +9,7 @@ import {
   groupAllStoredSessionsByDirectory,
   sessionMatchesMaxLineCount,
   sessionIdentityKey,
+  visibleStoredSessionRefs,
 } from "./session-history-grouping";
 import {
   councilConversationSubtitle,
@@ -107,6 +108,25 @@ test("dedupes identical sessions by provider and providerSessionId", () => {
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0]?.title, "better title");
   assert.equal(deduped[0]?.rootDir, "/Users/sun/Code/solars");
+});
+
+test("Chats excludes provider-archived sessions from Recent and All", () => {
+  const active = storedSession({
+    provider: "codex",
+    providerSessionId: "active-session",
+  });
+  const archived = {
+    ...storedSession({
+      provider: "codex",
+      providerSessionId: "archived-session",
+    }),
+    providerState: { archived: true },
+  } satisfies StoredSessionRef;
+
+  assert.deepEqual(
+    visibleStoredSessionRefs([active, archived]).map((session) => session.providerSessionId),
+    ["active-session"],
+  );
 });
 
 test("groups deduped sessions and counts each session only once per workspace", () => {

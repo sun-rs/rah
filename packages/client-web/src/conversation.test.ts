@@ -8,62 +8,23 @@ import type {
   ConversationTurnProjection,
   ConversationTurnsPageResponse,
 } from "@rah/runtime-protocol";
+import { summarizeConversationActivities } from "@rah/runtime-protocol";
 import {
-  conversationV2DisplayRows,
-  conversationV2FinalAssistantKeys,
-  conversationV2TurnsToFeed,
-} from "./conversation-v2-feed";
-import { resolveConversationV2Enabled } from "./conversation-v2-feature";
+  conversationDisplayRows,
+  conversationFinalAssistantKeys,
+  conversationTurnsToFeed,
+} from "./conversation-feed";
 import {
-  applyConversationV2DeltasToProjectionMap,
-  conversationV2LegacyDetailId,
-  ensureConversationV2LoadedCommand,
-  initializeLiveConversationV2Command,
-  loadConversationV2ItemDetailCommand,
-  loadConversationV2TurnDetailCommand,
-  loadPreferredConversationHistory,
-  loadOlderConversationV2Command,
-  refreshConversationV2Command,
-} from "./session-store-conversation-v2";
-import type { SessionProjection } from "./types";
-
-test("Conversation V2 defaults on while preserving explicit rollback controls", () => {
-  assert.equal(resolveConversationV2Enabled(null, null), true);
-  assert.equal(resolveConversationV2Enabled("1", "0"), true);
-  assert.equal(resolveConversationV2Enabled("0", "1"), false);
-  assert.equal(resolveConversationV2Enabled(null, "1"), true);
-  assert.equal(resolveConversationV2Enabled(null, "0"), false);
-});
-
-test("Conversation V2 history avoids legacy double reads and falls back only on failure", async () => {
-  const calls: string[] = [];
-  const preferred = await loadPreferredConversationHistory({
-    conversationV2Enabled: true,
-    loadConversationV2: async () => {
-      calls.push("v2");
-      return true;
-    },
-    loadLegacy: async () => {
-      calls.push("legacy");
-    },
-  });
-  assert.equal(preferred, "conversation_v2");
-  assert.deepEqual(calls, ["v2"]);
-
-  calls.length = 0;
-  const fallback = await loadPreferredConversationHistory({
-    conversationV2Enabled: true,
-    loadConversationV2: async () => {
-      calls.push("v2");
-      return false;
-    },
-    loadLegacy: async () => {
-      calls.push("legacy");
-    },
-  });
-  assert.equal(fallback, "legacy");
-  assert.deepEqual(calls, ["v2", "legacy"]);
-});
+  applyConversationDeltasToProjectionMap,
+  ensureConversationLoadedCommand,
+  initializeLiveConversationCommand,
+  loadConversationItemDetailCommand,
+  hydrateConversationTurnByProviderIdCommand,
+  loadConversationTurnDetailCommand,
+  loadOlderConversationCommand,
+  refreshConversationCommand,
+} from "./session-store-conversation";
+import type { FeedEntry, SessionProjection } from "./types";
 
 function timelineItem(
   id: string,
@@ -127,6 +88,7 @@ function turn(
     status: "completed",
     statusAuthority: "native",
     items,
+    activities: summarizeConversationActivities(items),
     failedItemCount: 0,
     revision: 1,
   };
@@ -159,14 +121,6 @@ function harness(responses: Array<ConversationTurnsPageResponse | Promise<Conver
           feed: [],
           events: [],
           lastSeq: 0,
-          history: {
-            phase: "idle",
-            nextCursor: null,
-            nextBeforeTs: null,
-            generation: 0,
-            authoritativeApplied: false,
-            lastError: null,
-          },
         },
       ],
     ]),
@@ -220,11 +174,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test("Conversation V2 feed uses explicit process/final roles and canonical detail ids", () => {
+test("Conversation feed uses explicit process/final roles and canonical detail ids", () => {
   const process = timelineItem("process", "turn-1", "process", "working");
   const final = timelineItem("final", "turn-1", "final", "done");
   const observation = observationItem("observation", "turn-1", true);
-  const feed = conversationV2TurnsToFeed([turn("turn-1", [process, final, observation])]);
+  const feed = conversationTurnsToFeed([turn("turn-1", [process, final, observation])]);
 
   assert.equal(
     feed[0]?.kind === "timeline" && feed[0].item.kind === "assistant_message"
@@ -244,7 +198,104 @@ test("Conversation V2 feed uses explicit process/final roles and canonical detai
   );
 });
 
-test("Conversation V2 preserves interrupted process status in the rendered feed", () => {
+test("Conversation renders a local pending user turn immediately and hands off by client id", () => {
+  const clientMessageId = "client-message:new-session";
+  const optimisticUser: FeedEntry = {
+    key: `optimistic:user:${clientMessageId}`,
+    kind: "timeline",
+    item: {
+      kind: "user_message",
+      text: "first question",
+      clientMessageId,
+    },
+    ts: "2026-07-10T00:00:00.000Z",
+  };
+  const liveTurn: ConversationTurnProjection = {
+    ...turn("turn-live", [
+      {
+        ...timelineItem("process-live", "turn-live", "process", "working"),
+        status: "running",
+      },
+    ]),
+    status: "in_progress",
+    startedAt: "2026-07-10T00:00:01.000Z",
+  };
+
+  const pendingFeed = conversationTurnsToFeed([liveTurn], [optimisticUser]);
+  assert.equal(pendingFeed.at(-1)?.key, optimisticUser.key);
+  assert.deepEqual(
+    conversationDisplayRows([liveTurn], pendingFeed).map((row) => row.key),
+    [optimisticUser.key, "conversation-process:turn-live"],
+  );
+
+  const canonicalUser = timelineItem("user-live", "turn-live", "user", "first question");
+  if (canonicalUser.content.kind !== "timeline" || canonicalUser.content.item.kind !== "user_message") {
+    assert.fail("expected a user timeline item");
+  }
+  canonicalUser.content.item.clientMessageId = clientMessageId;
+  const canonicalTurn = { ...liveTurn, items: [canonicalUser, ...liveTurn.items] };
+  const canonicalFeed = conversationTurnsToFeed([canonicalTurn], [optimisticUser]);
+
+  assert.equal(canonicalFeed.some((entry) => entry.key === optimisticUser.key), false);
+  assert.equal(
+    canonicalFeed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    ).length,
+    1,
+  );
+});
+
+test("Conversation does not re-render an optimistic key after the live store resolves it", () => {
+  const canonicalTurn = turn("turn-live", [
+    timelineItem("user-live", "turn-live", "user", "连续提问"),
+  ]);
+  const resolvedOptimistic: FeedEntry = {
+    key: "optimistic:user:client-message-1",
+    kind: "timeline",
+    item: { kind: "user_message", text: "连续提问" },
+    ts: "2026-07-10T00:00:00.000Z",
+    turnId: "provider-turn-live",
+    canonicalTurnId: "turn-live",
+  };
+
+  const feed = conversationTurnsToFeed([canonicalTurn], [resolvedOptimistic]);
+  assert.equal(
+    feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    ).length,
+    1,
+  );
+  assert.equal(feed.some((entry) => entry.key === resolvedOptimistic.key), false);
+});
+
+test("Conversation leaves queued optimistic questions after the active turn", () => {
+  const activeTurn: ConversationTurnProjection = {
+    ...turn("turn-active", [
+      timelineItem("user-active", "turn-active", "user", "first"),
+      timelineItem("process-active", "turn-active", "process", "working"),
+    ]),
+    status: "in_progress",
+    startedAt: "2026-07-10T00:00:00.000Z",
+  };
+  const queuedUser: FeedEntry = {
+    key: "optimistic:user:queued",
+    kind: "timeline",
+    item: { kind: "user_message", text: "queued" },
+    ts: "2026-07-10T00:00:05.000Z",
+  };
+  const feed = conversationTurnsToFeed([activeTurn], [queuedUser]);
+
+  assert.deepEqual(
+    conversationDisplayRows([activeTurn], feed).map((row) => row.key),
+    [
+      "conversation:user-active",
+      "conversation-process:turn-active",
+      queuedUser.key,
+    ],
+  );
+});
+
+test("Conversation preserves interrupted process status in the rendered feed", () => {
   const observation: ConversationItemProjection = {
     ...observationItem("observation", "turn-1", false),
     status: "interrupted",
@@ -263,7 +314,7 @@ test("Conversation V2 preserves interrupted process status in the rendered feed"
     status: "interrupted",
   };
 
-  const [entry] = conversationV2TurnsToFeed([projectedTurn]);
+  const [entry] = conversationTurnsToFeed([projectedTurn]);
   assert.equal(entry?.kind, "observation");
   if (entry?.kind === "observation") {
     assert.equal(entry.status, "interrupted");
@@ -271,7 +322,37 @@ test("Conversation V2 preserves interrupted process status in the rendered feed"
   }
 });
 
-test("Conversation V2 display uses canonical turn lifecycle instead of feed inference", () => {
+test("Conversation renders interrupted lifecycle when process entries are hidden", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-interrupted", [
+      timelineItem("user-interrupted", "turn-interrupted", "user", "question"),
+      {
+        ...observationItem("observation-interrupted", "turn-interrupted", false),
+        status: "completed",
+      },
+    ]),
+    status: "interrupted",
+    completedAt: "2026-07-10T00:00:05.000Z",
+  };
+  const visibleFeed = conversationTurnsToFeed([projectedTurn]).filter(
+    (entry) => entry.kind !== "observation",
+  );
+  const rows = conversationDisplayRows([projectedTurn], visibleFeed);
+
+  assert.deepEqual(rows.map((row) => row.kind), [
+    "feed_entry",
+    "assistant_process_group",
+  ]);
+  const process = rows[1];
+  assert.equal(process?.kind, "assistant_process_group");
+  if (process?.kind === "assistant_process_group") {
+    assert.equal(process.entries.length, 0);
+    assert.equal(process.turnStatus, "interrupted");
+    assert.equal(process.completed, true);
+  }
+});
+
+test("Conversation display uses canonical turn lifecycle instead of feed inference", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-1", [
       timelineItem("user", "turn-1", "user", "question"),
@@ -284,9 +365,19 @@ test("Conversation V2 display uses canonical turn lifecycle instead of feed infe
     completedAt: "2026-07-10T00:01:00.000Z",
     durationMs: 12_345,
     failedItemCount: 1,
+    activities: [
+      {
+        kind: "command",
+        totalCount: 1,
+        runningCount: 0,
+        interruptedCount: 0,
+        failureCount: 0,
+        issueCount: 1,
+      },
+    ],
   };
-  const feed = conversationV2TurnsToFeed([projectedTurn]);
-  const rows = conversationV2DisplayRows([projectedTurn], feed);
+  const feed = conversationTurnsToFeed([projectedTurn]);
+  const rows = conversationDisplayRows([projectedTurn], feed);
 
   assert.deepEqual(rows.map((row) => row.kind), [
     "feed_entry",
@@ -297,21 +388,56 @@ test("Conversation V2 display uses canonical turn lifecycle instead of feed infe
   assert.equal(process?.kind, "assistant_process_group");
   if (process?.kind === "assistant_process_group") {
     assert.deepEqual(process.entries.map((entry) => entry.key), [
-      "conversation-v2:process",
-      "conversation-v2:observation",
+      "conversation:process",
+      "conversation:observation",
     ]);
     assert.equal(process.turnStatus, "completed");
     assert.equal(process.completed, true);
     assert.equal(process.active, false);
     assert.equal(process.durationMs, 12_345);
-    assert.equal(process.failedCount, 1);
+    assert.equal(process.activities[0]?.issueCount, 1);
   }
-  assert.deepEqual([...conversationV2FinalAssistantKeys([projectedTurn])], [
-    "conversation-v2:final",
+  assert.deepEqual([...conversationFinalAssistantKeys([projectedTurn])], [
+    "conversation:final",
   ]);
 });
 
-test("Conversation V2 does not promote an in-progress final item into completed reply actions", () => {
+test("Conversation places canonical outputs directly after the final answer", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-output", [
+      timelineItem("user-output", "turn-output", "user", "question"),
+      timelineItem("final-output", "turn-output", "final", "done"),
+    ]),
+    finalAnswerItemId: "final-output",
+    outputs: [
+      {
+        id: "output-report",
+        kind: "file",
+        label: "report.md",
+        path: "/workspace/report.md",
+        activity: "written",
+        confidence: "authoritative",
+        sourceItemIds: ["tool-output"],
+      },
+    ],
+  };
+  const rows = conversationDisplayRows(
+    [projectedTurn],
+    conversationTurnsToFeed([projectedTurn]),
+  );
+
+  assert.deepEqual(rows.map((row) => row.kind), [
+    "feed_entry",
+    "feed_entry",
+    "turn_outputs",
+  ]);
+  assert.equal(rows[2]?.kind, "turn_outputs");
+  if (rows[2]?.kind === "turn_outputs") {
+    assert.equal(rows[2].outputs[0]?.path, "/workspace/report.md");
+  }
+});
+
+test("Conversation settles work as soon as the native final answer arrives", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-live", [
       timelineItem("process-live", "turn-live", "process", "working"),
@@ -320,20 +446,44 @@ test("Conversation V2 does not promote an in-progress final item into completed 
     status: "in_progress",
     finalAnswerItemId: "final-live",
   };
-  const feed = conversationV2TurnsToFeed([projectedTurn]);
-  const rows = conversationV2DisplayRows([projectedTurn], feed);
+  const feed = conversationTurnsToFeed([projectedTurn]);
+  const rows = conversationDisplayRows([projectedTurn], feed);
   const process = rows[0];
 
   assert.equal(process?.kind, "assistant_process_group");
   if (process?.kind === "assistant_process_group") {
     assert.equal(process.turnStatus, "in_progress");
-    assert.equal(process.completed, false);
-    assert.equal(process.active, true);
+    assert.equal(process.completed, true);
+    assert.equal(process.active, false);
   }
-  assert.deepEqual([...conversationV2FinalAssistantKeys([projectedTurn])], []);
+  assert.deepEqual([...conversationFinalAssistantKeys([projectedTurn])], [
+    "conversation:final-live",
+  ]);
 });
 
-test("Conversation V2 renders a lazy process placeholder for native summary turns", () => {
+test("Conversation keeps active work visible even when completed tools are hidden", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-live", [
+      timelineItem("user-live", "turn-live", "user", "question"),
+      observationItem("search-live", "turn-live", false),
+    ]),
+    status: "in_progress",
+  };
+  const allEntries = conversationTurnsToFeed([projectedTurn]);
+  const filteredEntries = allEntries.filter((entry) => entry.kind !== "observation");
+  const rows = conversationDisplayRows([projectedTurn], filteredEntries, allEntries);
+  const process = rows[1];
+
+  assert.equal(process?.kind, "assistant_process_group");
+  if (process?.kind === "assistant_process_group") {
+    assert.equal(process.active, true);
+    assert.deepEqual(process.entries.map((entry) => entry.key), [
+      "conversation:search-live",
+    ]);
+  }
+});
+
+test("Conversation renders a lazy process placeholder for native summary turns", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-summary", [
       timelineItem("user-summary", "turn-summary", "user", "question"),
@@ -343,9 +493,9 @@ test("Conversation V2 renders a lazy process placeholder for native summary turn
     finalAnswerItemId: "final-summary",
     durationMs: 60_000,
   };
-  const rows = conversationV2DisplayRows(
+  const rows = conversationDisplayRows(
     [projectedTurn],
-    conversationV2TurnsToFeed([projectedTurn]),
+    conversationTurnsToFeed([projectedTurn]),
   );
 
   assert.deepEqual(rows.map((row) => row.kind), [
@@ -363,7 +513,7 @@ test("Conversation V2 renders a lazy process placeholder for native summary turn
   }
 });
 
-test("Conversation V2 store pages older turns, refreshes newer turns, and preserves cursor", async () => {
+test("Conversation store pages older turns, refreshes newer turns, and preserves cursor", async () => {
   const latest = turn("turn-2", [timelineItem("final-2", "turn-2", "final", "two")]);
   const older = turn("turn-1", [timelineItem("final-1", "turn-1", "final", "one")]);
   const newest = turn("turn-3", [timelineItem("final-3", "turn-3", "final", "three")]);
@@ -373,11 +523,11 @@ test("Conversation V2 store pages older turns, refreshes newer turns, and preser
     page([latest, newest], "must-not-reopen-pagination"),
   ]);
 
-  assert.equal(await ensureConversationV2LoadedCommand(testHarness.deps, "session-1"), true);
-  assert.equal(await loadOlderConversationV2Command(testHarness.deps, "session-1"), true);
-  assert.equal(await refreshConversationV2Command(testHarness.deps, "session-1"), true);
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+  assert.equal(await loadOlderConversationCommand(testHarness.deps, "session-1"), true);
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
 
-  const conversation = testHarness.state().projections.get("session-1")?.conversationV2;
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
   assert.deepEqual(conversation?.turns.map((candidate) => candidate.id), [
     "turn-1",
     "turn-2",
@@ -390,44 +540,44 @@ test("Conversation V2 store pages older turns, refreshes newer turns, and preser
 test("new live sessions initialize from the resident projection without history paging", async () => {
   const testHarness = harness([page([], undefined, 0)]);
 
-  assert.equal(await initializeLiveConversationV2Command(testHarness.deps, "session-1"), true);
+  assert.equal(await initializeLiveConversationCommand(testHarness.deps, "session-1"), true);
   assert.deepEqual(testHarness.requests, [{ liveOnly: true }]);
   assert.equal(
-    testHarness.state().projections.get("session-1")?.conversationV2?.phase,
+    testHarness.state().projections.get("session-1")?.conversation?.phase,
     "ready",
   );
 });
 
-test("Conversation V2 serializes resident initialization and a concurrent history load", async () => {
+test("Conversation serializes resident initialization and a concurrent history load", async () => {
   const resident = deferred<ConversationTurnsPageResponse>();
   const historicalTurn = turn("turn-history", [
     timelineItem("final-history", "turn-history", "final", "history"),
   ]);
   const testHarness = harness([resident.promise, page([historicalTurn])]);
 
-  const initialize = initializeLiveConversationV2Command(testHarness.deps, "session-1");
-  const loadHistory = ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  const initialize = initializeLiveConversationCommand(testHarness.deps, "session-1");
+  const loadHistory = ensureConversationLoadedCommand(testHarness.deps, "session-1");
   assert.deepEqual(testHarness.requests, [{ liveOnly: true }]);
 
   resident.resolve(page([], undefined, 0));
   assert.equal(await initialize, true);
   assert.equal(await loadHistory, true);
   assert.deepEqual(testHarness.requests, [{ liveOnly: true }, {}]);
-  const conversation = testHarness.state().projections.get("session-1")?.conversationV2;
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
   assert.equal(conversation?.loadedScope, "history");
   assert.equal(conversation?.turns[0]?.id, "turn-history");
 });
 
-test("Conversation V2 applies deltas that arrive while the HTTP baseline is loading", async () => {
+test("Conversation applies deltas that arrive while the HTTP baseline is loading", async () => {
   const response = deferred<ConversationTurnsPageResponse>();
   const testHarness = harness([response.promise]);
-  const load = ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  const load = ensureConversationLoadedCommand(testHarness.deps, "session-1");
   const liveTurn = turn(
     "turn-live",
     [timelineItem("process-live", "turn-live", "process", "working")],
   );
   testHarness.deps.set((state) => ({
-    projections: applyConversationV2DeltasToProjectionMap(
+    projections: applyConversationDeltasToProjectionMap(
       state.projections,
       [delta(1, 0, liveTurn)],
     ),
@@ -435,16 +585,16 @@ test("Conversation V2 applies deltas that arrive while the HTTP baseline is load
   response.resolve(page([], undefined, 0));
 
   assert.equal(await load, true);
-  const conversation = testHarness.state().projections.get("session-1")?.conversationV2;
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
   assert.equal(conversation?.daemonRevision, 1);
   assert.equal(conversation?.needsRefresh, false);
   assert.equal(conversation?.turns[0]?.items[0]?.id, "process-live");
 });
 
-test("Conversation V2 holds revision gaps and applies the complete chain when it arrives", async () => {
+test("Conversation holds revision gaps and applies the complete chain when it arrives", async () => {
   const initial = turn("turn-live", []);
   const testHarness = harness([page([initial], undefined, 1)]);
-  await ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
   const second = turn(
     "turn-live",
     [timelineItem("second", "turn-live", "process", "second")],
@@ -455,23 +605,23 @@ test("Conversation V2 holds revision gaps and applies the complete chain when it
   );
 
   testHarness.deps.set((state) => ({
-    projections: applyConversationV2DeltasToProjectionMap(
+    projections: applyConversationDeltasToProjectionMap(
       state.projections,
       [delta(3, 2, third)],
     ),
   }));
-  let conversation = testHarness.state().projections.get("session-1")?.conversationV2;
+  let conversation = testHarness.state().projections.get("session-1")?.conversation;
   assert.equal(conversation?.daemonRevision, 1);
   assert.equal(conversation?.needsRefresh, true);
   assert.deepEqual(conversation?.turns[0]?.items, []);
 
   testHarness.deps.set((state) => ({
-    projections: applyConversationV2DeltasToProjectionMap(
+    projections: applyConversationDeltasToProjectionMap(
       state.projections,
       [delta(2, 1, second)],
     ),
   }));
-  conversation = testHarness.state().projections.get("session-1")?.conversationV2;
+  conversation = testHarness.state().projections.get("session-1")?.conversation;
   assert.equal(conversation?.daemonRevision, 3);
   assert.equal(conversation?.needsRefresh, false);
   assert.deepEqual(
@@ -480,7 +630,7 @@ test("Conversation V2 holds revision gaps and applies the complete chain when it
   );
 });
 
-test("Conversation V2 clears an unresolved delta gap from a fresh HTTP baseline", async () => {
+test("Conversation clears an unresolved delta gap from a fresh HTTP baseline", async () => {
   const initial = turn("turn-live", []);
   const recovered = turn(
     "turn-live",
@@ -490,38 +640,26 @@ test("Conversation V2 clears an unresolved delta gap from a fresh HTTP baseline"
     page([initial], undefined, 1),
     page([recovered], undefined, 3),
   ]);
-  await ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
   testHarness.deps.set((state) => ({
-    projections: applyConversationV2DeltasToProjectionMap(
+    projections: applyConversationDeltasToProjectionMap(
       state.projections,
       [delta(3, 2, recovered)],
     ),
   }));
 
-  assert.equal(await refreshConversationV2Command(testHarness.deps, "session-1"), true);
-  const conversation = testHarness.state().projections.get("session-1")?.conversationV2;
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
   assert.equal(conversation?.daemonRevision, 3);
   assert.equal(conversation?.needsRefresh, false);
   assert.deepEqual(conversation?.pendingDeltas, []);
   assert.equal(conversation?.turns[0]?.items[0]?.id, "recovered");
 });
 
-test("Conversation V2 retains the native detail id for legacy fallback", async () => {
+test("Conversation detail request uses opaque native ids and replaces only the canonical item", async () => {
   const summary = observationItem("observation", "turn-1", true);
   const testHarness = harness([page([turn("turn-1", [summary])])]);
-  await ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
-  const projection = testHarness.state().projections.get("session-1");
-  assert.ok(projection);
-  assert.equal(
-    conversationV2LegacyDetailId(projection, "observation", "observation"),
-    "native-observation",
-  );
-});
-
-test("Conversation V2 detail request uses opaque native ids and replaces only the canonical item", async () => {
-  const summary = observationItem("observation", "turn-1", true);
-  const testHarness = harness([page([turn("turn-1", [summary])])]);
-  await ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
   const detailRequests: unknown[] = [];
   const detailed: ConversationItemDetailResponse = {
     sessionId: "session-1",
@@ -545,7 +683,7 @@ test("Conversation V2 detail request uses opaque native ids and replaces only th
     },
     approximateBytes: 50,
   };
-  const loaded = await loadConversationV2ItemDetailCommand(
+  const loaded = await loadConversationItemDetailCommand(
     {
       ...testHarness.deps,
       readItemDetail: async (sessionId, options) => {
@@ -566,7 +704,7 @@ test("Conversation V2 detail request uses opaque native ids and replaces only th
       providerItemId: "provider-observation",
     },
   ]);
-  const item = testHarness.state().projections.get("session-1")?.conversationV2?.turns[0]?.items[0];
+  const item = testHarness.state().projections.get("session-1")?.conversation?.turns[0]?.items[0];
   assert.equal(item?.revision, 2);
 
   const updatedSummary: ConversationItemProjection = {
@@ -575,12 +713,12 @@ test("Conversation V2 detail request uses opaque native ids and replaces only th
     revision: 3,
   };
   testHarness.deps.set((state) => ({
-    projections: applyConversationV2DeltasToProjectionMap(
+    projections: applyConversationDeltasToProjectionMap(
       state.projections,
       [delta(1, 0, { ...turn("turn-1", [updatedSummary]), revision: 3 })],
     ),
   }));
-  const updated = testHarness.state().projections.get("session-1")?.conversationV2?.turns[0]?.items[0];
+  const updated = testHarness.state().projections.get("session-1")?.conversation?.turns[0]?.items[0];
   assert.equal(updated?.status, "failed");
   assert.equal(
     updated?.content.kind === "observation"
@@ -592,7 +730,7 @@ test("Conversation V2 detail request uses opaque native ids and replaces only th
   );
 });
 
-test("Conversation V2 turn detail hydrates process items without replacing the visible exchange", async () => {
+test("Conversation turn detail hydrates process items without replacing the visible exchange", async () => {
   const user = timelineItem("user", "turn-1", "user", "question");
   const final = timelineItem("final", "turn-1", "final", "answer");
   const summaryTurn: ConversationTurnProjection = {
@@ -607,7 +745,7 @@ test("Conversation V2 turn detail hydrates process items without replacing the v
     revision: 2,
   };
   const testHarness = harness([page([summaryTurn]), page([refreshedSummaryTurn])]);
-  await ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
   const process = timelineItem("process", "turn-1", "process", "working");
   const detailRequests: unknown[] = [];
   const detailed: ConversationTurnDetailResponse = {
@@ -622,7 +760,7 @@ test("Conversation V2 turn detail hydrates process items without replacing the v
     approximateBytes: 50,
   };
 
-  const loaded = await loadConversationV2TurnDetailCommand(
+  const loaded = await loadConversationTurnDetailCommand(
     {
       ...testHarness.deps,
       readTurnDetail: async (sessionId, options) => {
@@ -642,14 +780,14 @@ test("Conversation V2 turn detail hydrates process items without replacing the v
       providerTurnId: "provider-turn-1",
     },
   ]);
-  const hydrated = testHarness.state().projections.get("session-1")?.conversationV2?.turns[0];
+  const hydrated = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
   assert.equal(hydrated?.itemsView, "full");
   assert.deepEqual(hydrated?.items.map((item) => item.id), ["user", "process", "final"]);
   assert.equal(hydrated?.items[0], user);
   assert.equal(hydrated?.items[2], final);
 
-  assert.equal(await refreshConversationV2Command(testHarness.deps, "session-1"), true);
-  const refreshed = testHarness.state().projections.get("session-1")?.conversationV2?.turns[0];
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+  const refreshed = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
   assert.equal(refreshed?.itemsView, "full");
   assert.deepEqual(refreshed?.items.map((item) => item.id), ["user", "process", "final"]);
   assert.equal(
@@ -662,7 +800,135 @@ test("Conversation V2 turn detail hydrates process items without replacing the v
   );
 });
 
-test("Conversation V2 keeps hydrated process detail across a live summary delta", async () => {
+test("Conversation loads an unloaded directory turn directly into the canonical projection", async () => {
+  const latest: ConversationTurnProjection = {
+    ...turn("turn-latest", [
+      timelineItem("user-latest", "turn-latest", "user", "latest question"),
+      timelineItem("final-latest", "turn-latest", "final", "latest answer"),
+    ]),
+    startedAt: "2026-07-10T00:10:00.000Z",
+  };
+  const testHarness = harness([page([latest])]);
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
+  const older: ConversationTurnProjection = {
+    ...turn(
+      "provider-turn-old",
+      [
+        timelineItem("user-old", "provider-turn-old", "user", "old question"),
+        timelineItem("final-old", "provider-turn-old", "final", "old answer"),
+      ],
+      "provider-turn-old",
+    ),
+    itemsView: "full",
+    startedAt: "2026-07-10T00:00:00.000Z",
+  };
+  const requests: unknown[] = [];
+
+  const loaded = await hydrateConversationTurnByProviderIdCommand(
+    {
+      ...testHarness.deps,
+      readTurnDetail: async (sessionId, options) => {
+        requests.push({ sessionId, ...options });
+        return {
+          sessionId,
+          turnId: options.turnId,
+          turn: older,
+          approximateBytes: 80,
+        };
+      },
+    },
+    "session-1",
+    "provider-turn-old",
+  );
+
+  assert.equal(loaded, true);
+  assert.deepEqual(requests, [
+    {
+      sessionId: "session-1",
+      turnId: "provider-turn-old",
+      providerTurnId: "provider-turn-old",
+    },
+  ]);
+  assert.deepEqual(
+    testHarness.state().projections.get("session-1")?.conversation?.turns.map((item) => item.id),
+    ["provider-turn-old", "turn-latest"],
+  );
+});
+
+test("Conversation replaces colliding summary placeholders with canonical turn detail", async () => {
+  const summaryUser = {
+    ...timelineItem("summary-user", "turn-1", "user", "question"),
+    providerItemId: "item:0",
+  };
+  const summaryFinal = {
+    ...timelineItem("summary-item-1", "turn-1", "final", "answer"),
+    providerItemId: "item:1",
+  };
+  const summaryTurn: ConversationTurnProjection = {
+    ...turn("turn-1", [summaryUser, summaryFinal]),
+    itemsView: "summary",
+    finalAnswerItemId: summaryFinal.id,
+  };
+  const refreshedSummaryTurn: ConversationTurnProjection = {
+    ...summaryTurn,
+    items: [summaryUser, { ...summaryFinal, revision: 3 }],
+    revision: 3,
+  };
+  const testHarness = harness([page([summaryTurn]), page([refreshedSummaryTurn])]);
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
+
+  const detailedUser = {
+    ...timelineItem("detail-user", "turn-1", "user", "question"),
+    providerItemId: "item:0",
+  };
+  const detailedProcess = {
+    ...timelineItem("summary-item-1", "turn-1", "process", "working"),
+    providerItemId: "item:1",
+  };
+  const detailedFinal = {
+    ...timelineItem("detail-final", "turn-1", "final", "answer"),
+    providerItemId: "item:144",
+  };
+  const loaded = await loadConversationTurnDetailCommand(
+    {
+      ...testHarness.deps,
+      readTurnDetail: async () => ({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        turn: {
+          ...summaryTurn,
+          items: [detailedUser, detailedProcess, detailedFinal],
+          itemsView: "full",
+          finalAnswerItemId: detailedFinal.id,
+          revision: 2,
+        },
+      }),
+    },
+    "session-1",
+    "turn-1",
+  );
+
+  assert.equal(loaded, true);
+  const hydrated = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
+  assert.deepEqual(hydrated?.items.map((item) => [item.id, item.role]), [
+    ["detail-user", "user"],
+    ["summary-item-1", "process"],
+    ["detail-final", "final"],
+  ]);
+  assert.equal(hydrated?.finalAnswerItemId, "detail-final");
+
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+  const refreshed = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
+  assert.deepEqual(refreshed?.items.map((item) => [item.id, item.role]), [
+    ["detail-user", "user"],
+    ["summary-item-1", "process"],
+    ["detail-final", "final"],
+  ]);
+  assert.equal(refreshed?.items.filter((item) => item.role === "final").length, 1);
+  assert.equal(refreshed?.finalAnswerItemId, "detail-final");
+});
+
+test("Conversation keeps hydrated process detail across a live summary delta", async () => {
   const user = timelineItem("user", "turn-1", "user", "question");
   const final = timelineItem("final", "turn-1", "final", "answer");
   const summaryObservation = observationItem("observation", "turn-1", true);
@@ -672,7 +938,7 @@ test("Conversation V2 keeps hydrated process detail across a live summary delta"
     finalAnswerItemId: "final",
   };
   const testHarness = harness([page([summaryTurn], undefined, 0)]);
-  await ensureConversationV2LoadedCommand(testHarness.deps, "session-1");
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
   const detailedObservation: ConversationItemProjection = {
     ...summaryObservation,
     content: {
@@ -692,7 +958,7 @@ test("Conversation V2 keeps hydrated process detail across a live summary delta"
     detailAvailable: false,
     revision: 2,
   };
-  await loadConversationV2TurnDetailCommand(
+  await loadConversationTurnDetailCommand(
     {
       ...testHarness.deps,
       readTurnDetail: async () => ({
@@ -735,13 +1001,13 @@ test("Conversation V2 keeps hydrated process detail across a live summary delta"
     revision: 3,
   };
   testHarness.deps.set((state) => ({
-    projections: applyConversationV2DeltasToProjectionMap(
+    projections: applyConversationDeltasToProjectionMap(
       state.projections,
       [delta(1, 0, deltaTurn)],
     ),
   }));
 
-  const hydrated = testHarness.state().projections.get("session-1")?.conversationV2?.turns[0];
+  const hydrated = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
   const observation = hydrated?.items.find((item) => item.id === "observation");
   assert.equal(hydrated?.itemsView, "full");
   assert.equal(observation?.status, "failed");

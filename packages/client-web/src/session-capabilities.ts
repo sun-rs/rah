@@ -32,6 +32,13 @@ export function canSessionDelete(summary: SessionSummary): boolean {
   return summary.session.capabilities.actions.delete && summary.session.providerSessionId !== undefined;
 }
 
+export function canSessionArchive(summary: SessionSummary): boolean {
+  return (
+    summary.session.capabilities.actions.archive === true &&
+    summary.session.providerSessionId !== undefined
+  );
+}
+
 export function canSessionStop(summary: SessionSummary): boolean {
   return summary.session.capabilities.actions.stop;
 }
@@ -78,20 +85,6 @@ export function isReadOnlyReplay(summary: SessionSummary): boolean {
     summary.session.providerSessionId !== undefined &&
     !summary.session.capabilities.steerInput &&
     !summary.session.capabilities.livePermissions
-  );
-}
-
-export function shouldPollSessionHistoryTail(summary: SessionSummary): boolean {
-  if (!summary.session.providerSessionId || isReadOnlyReplay(summary)) {
-    return false;
-  }
-  if (summary.session.runtime?.structuredLiveEvents === true) {
-    return false;
-  }
-  return (
-    summary.session.liveBackend === "native_local_server" ||
-    summary.session.liveBackend === "tui_mux" ||
-    summary.session.liveBackend === "native_tui"
   );
 }
 

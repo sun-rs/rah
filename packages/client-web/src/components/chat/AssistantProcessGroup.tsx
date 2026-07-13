@@ -1,32 +1,30 @@
 import { useState, type ReactNode } from "react";
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  LoaderCircle,
-  Terminal,
-} from "lucide-react";
+import type { ConversationActivityKind } from "@rah/runtime-protocol";
+import { AlertTriangle, ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
 import type { FeedEntry } from "../../types";
+import { ConversationActivityIcon, conversationActivityLabel } from "./conversation-activity-display";
 import {
   buildProcessDetailRows,
   formatAssistantProcessDuration,
   type AssistantProcessGroup as AssistantProcessGroupModel,
 } from "./assistant-process-groups";
 
-function CommandBatch(props: {
+function ActivityBatch(props: {
+  activityKind: ConversationActivityKind;
   entries: FeedEntry[];
-  status: "running" | "completed" | "interrupted" | "failed";
+  runningCount: number;
+  interruptedCount: number;
+  issueCount: number;
+  failureCount: number;
   renderEntry: (entry: FeedEntry) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const label =
-    props.status === "running"
-      ? "Running multiple commands"
-      : props.status === "interrupted"
-        ? "Commands interrupted"
-        : "Ran multiple commands";
+  const running = props.runningCount > 0;
+  const label = conversationActivityLabel(props.activityKind, props.entries.length, running);
   const tone =
-    props.status === "failed"
+    props.failureCount > 0
+      ? "text-[var(--app-danger)]"
+      : props.issueCount > 0
       ? "text-[var(--app-warning)]"
       : "text-[var(--app-hint)]";
 
@@ -38,10 +36,13 @@ function CommandBatch(props: {
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <Terminal size={13} className="shrink-0" />
+        <span className="shrink-0">
+          <ConversationActivityIcon kind={props.activityKind} />
+        </span>
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        {props.status === "failed" ? <span className="shrink-0">Failed</span> : null}
-        {props.status === "interrupted" ? (
+        {props.failureCount > 0 ? <span className="shrink-0">Failed</span> : null}
+        {props.issueCount > 0 ? <span className="shrink-0">Review result</span> : null}
+        {props.interruptedCount > 0 && !running ? (
           <span className="shrink-0">Interrupted</span>
         ) : null}
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -66,6 +67,15 @@ export function AssistantProcessGroup(props: {
 }) {
   const detailRows = buildProcessDetailRows(props.group.entries);
   const duration = formatAssistantProcessDuration(props.group.durationMs);
+  const activityFailureCount = props.group.activities.reduce(
+    (total, activity) => total + activity.failureCount,
+    0,
+  );
+  const activityIssueCount = props.group.activities.reduce(
+    (total, activity) => total + activity.issueCount,
+    0,
+  );
+  const reviewResults = activityFailureCount > 0 || activityIssueCount > 0;
   const label =
     props.group.turnStatus === "failed"
       ? duration
@@ -104,14 +114,14 @@ export function AssistantProcessGroup(props: {
       >
         {props.group.active ? (
           <LoaderCircle size={13} className="shrink-0 animate-spin" />
-        ) : props.group.failedCount > 0 ? (
+        ) : props.group.turnStatus === "failed" ? (
+          <AlertTriangle size={13} className="shrink-0 text-[var(--app-danger)]" />
+        ) : reviewResults ? (
           <AlertTriangle size={13} className="shrink-0 text-[var(--app-warning)]" />
         ) : null}
         <span>{label}</span>
-        {props.group.failedCount > 0 ? (
-          <span className="text-[var(--app-warning)]">
-            {props.group.failedCount} failed
-          </span>
+        {reviewResults && props.group.turnStatus !== "failed" ? (
+          <span className="text-[var(--app-warning)]">Review results</span>
         ) : null}
         {canCollapse ? (
           props.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
@@ -127,11 +137,15 @@ export function AssistantProcessGroup(props: {
           ) : detailRows.length === 0 && props.group.detailsAvailable ? (
             <div className="text-xs text-[var(--app-hint)]">Work details unavailable.</div>
           ) : detailRows.map((row) =>
-            row.kind === "command_batch" ? (
-              <CommandBatch
+            row.kind === "activity_batch" ? (
+              <ActivityBatch
                 key={row.key}
+                activityKind={row.activityKind}
                 entries={row.entries}
-                status={row.status}
+                runningCount={row.runningCount}
+                interruptedCount={row.interruptedCount}
+                issueCount={row.issueCount}
+                failureCount={row.failureCount}
                 renderEntry={props.renderEntry}
               />
             ) : row.kind === "reasoning_batch" ? (

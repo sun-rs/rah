@@ -1,6 +1,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveLocalFileLinkPath } from "./components/chat/local-file-link";
+import {
+  extractMarkdownLocalFileLinks,
+  resolveLocalFileLinkPath,
+} from "./components/chat/local-file-link";
 
 describe("local file links", () => {
   test("resolves encoded same-origin local paths", () => {
@@ -49,5 +52,14 @@ describe("local file links", () => {
     assert.equal(resolveLocalFileLinkPath("https://example.com/Users/sun/file.txt"), null);
     assert.equal(resolveLocalFileLinkPath("/api/sessions"), null);
     assert.equal(resolveLocalFileLinkPath("notebooks/example.ipynb"), null);
+  });
+
+  test("extracts only explicit markdown links to local files", () => {
+    assert.deepEqual(
+      extractMarkdownLocalFileLinks(
+        "[Report](/Users/sun/Code/report.md) and `/Users/sun/Code/input.rs`",
+      ),
+      ["/Users/sun/Code/report.md"],
+    );
   });
 });

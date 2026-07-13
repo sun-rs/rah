@@ -17,7 +17,7 @@ export type CanvasPaneTarget =
   | { kind: "stored"; ref: StoredSessionRef };
 
 export type CanvasPendingSessionAction = {
-  kind: "attach_session" | "claim_control" | "claim_history";
+  kind: "attach_session" | "claim_control" | "resume_history";
   sessionId: string;
 };
 
@@ -100,21 +100,21 @@ export function canvasOpeningTransitionForTarget(
   target: CanvasPaneTarget,
   pendingSessionAction: CanvasPendingSessionAction | null,
   pendingSessionTransition: PendingSessionTransition | null,
-  canvasClaimingStoredKeys: ReadonlySet<string> = new Set(),
+  canvasResumingStoredKeys: ReadonlySet<string> = new Set(),
 ): PendingSessionTransition | null {
   if (!pendingSessionTransition) {
     if (
       target.kind === "stored" &&
-      canvasClaimingStoredKeys.has(canvasStoredRefKey(target.ref))
+      canvasResumingStoredKeys.has(canvasStoredRefKey(target.ref))
     ) {
-      return createPendingStoredSessionTransition(target.ref, "claim_history");
+      return createPendingStoredSessionTransition(target.ref, "resume_history");
     }
     return null;
   }
   if (
     target.kind === "session" &&
-    pendingSessionTransition.kind === "claim_history" &&
-    pendingSessionAction?.kind === "claim_history" &&
+    pendingSessionTransition.kind === "resume_history" &&
+    pendingSessionAction?.kind === "resume_history" &&
     pendingSessionAction.sessionId === target.sessionId
   ) {
     return pendingSessionTransition;
@@ -128,9 +128,9 @@ export function canvasOpeningTransitionForTarget(
   }
   if (
     target.kind === "stored" &&
-    canvasClaimingStoredKeys.has(canvasStoredRefKey(target.ref))
+    canvasResumingStoredKeys.has(canvasStoredRefKey(target.ref))
   ) {
-    return createPendingStoredSessionTransition(target.ref, "claim_history");
+    return createPendingStoredSessionTransition(target.ref, "resume_history");
   }
   return null;
 }
@@ -323,20 +323,20 @@ export function resolveCanvasLiveSessionIdForStoredRef(
   return projection && !isReadOnlyReplay(projection.summary) ? projection.summary.session.id : null;
 }
 
-export function resolveCanvasClaimedSessionId(
+export function resolveCanvasResumedSessionId(
   projections: Map<string, SessionProjection>,
-  claimedSessionId: string | null | undefined,
+  resumedSessionId: string | null | undefined,
   ref: Pick<StoredSessionRef, "provider" | "providerSessionId"> | null | undefined,
 ): string | null {
   const liveSessionId = resolveCanvasLiveSessionIdForStoredRef(projections, ref);
   if (liveSessionId) {
     return liveSessionId;
   }
-  if (!claimedSessionId) {
+  if (!resumedSessionId) {
     return null;
   }
-  const claimedProjection = projections.get(claimedSessionId);
-  return claimedProjection && isReadOnlyReplay(claimedProjection.summary) ? null : claimedSessionId;
+  const resumedProjection = projections.get(resumedSessionId);
+  return resumedProjection && isReadOnlyReplay(resumedProjection.summary) ? null : resumedSessionId;
 }
 
 export function resolveCanvasRunningUniquenessKey(

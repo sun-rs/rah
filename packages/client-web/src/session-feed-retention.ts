@@ -33,9 +33,6 @@ export function compactRecoverableLiveProjectionFeed(
   if (!canRecoverTrimmedFeedFromHistory(projection)) {
     return projection;
   }
-  if (projection.history.phase === "loading") {
-    return projection;
-  }
   if (projection.feed.length <= LIVE_FEED_RETENTION_MAX_ENTRIES) {
     return projection;
   }
@@ -45,21 +42,8 @@ export function compactRecoverableLiveProjectionFeed(
     return projection;
   }
 
-  const feed = projection.feed.slice(retainStart);
-  const nextBeforeTs = feed[0]?.ts ?? null;
-  if (!nextBeforeTs) {
-    return projection;
-  }
-
   return {
     ...projection,
-    feed,
-    history: {
-      ...projection.history,
-      phase: "ready",
-      nextCursor: null,
-      nextBeforeTs,
-      authoritativeApplied: true,
-    },
+    feed: projection.feed.slice(retainStart),
   };
 }

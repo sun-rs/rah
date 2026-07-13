@@ -18,7 +18,7 @@ import {
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
-  resolveCanvasClaimedSessionId,
+  resolveCanvasResumedSessionId,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
   resolveCanvasVisibleSessionId,
@@ -56,7 +56,6 @@ function summary(args: {
         contextUsage: false,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: false,
         actions: { info: true, stop: true, delete: false, rename: "none" },
         steerInput: !readOnlyReplay,
         queuedInput: true,
@@ -147,8 +146,8 @@ test("canvas clear all availability is based on all fixed pane slots", () => {
   assert.equal(hasAnyCanvasPaneTarget(targets), true);
 });
 
-test("canvas claiming stored targets suppresses automatic history activation", () => {
-  const storedRef = ref("codex", "claiming-provider-session");
+test("canvas resuming stored targets suppresses automatic history activation", () => {
+  const storedRef = ref("codex", "resuming-provider-session");
   const transition = canvasOpeningTransitionForTarget(
     { kind: "stored", ref: storedRef },
     null,
@@ -156,24 +155,24 @@ test("canvas claiming stored targets suppresses automatic history activation", (
     new Set([canvasStoredRefKey(storedRef)]),
   );
 
-  assert.equal(transition?.kind, "claim_history");
-  assert.equal(transition?.providerSessionId, "claiming-provider-session");
+  assert.equal(transition?.kind, "resume_history");
+  assert.equal(transition?.providerSessionId, "resuming-provider-session");
 });
 
-test("canvas local claiming state survives unrelated global claim transitions", () => {
+test("canvas local resume state survives unrelated global resume transitions", () => {
   const storedRef = ref("codex", "pane-provider-session");
   const transition = canvasOpeningTransitionForTarget(
     { kind: "stored", ref: storedRef },
-    { kind: "claim_history", sessionId: "other-history" },
+    { kind: "resume_history", sessionId: "other-history" },
     {
-      kind: "claim_history",
+      kind: "resume_history",
       provider: "codex",
       providerSessionId: "other-provider-session",
     },
     new Set([canvasStoredRefKey(storedRef)]),
   );
 
-  assert.equal(transition?.kind, "claim_history");
+  assert.equal(transition?.kind, "resume_history");
   assert.equal(transition?.providerSessionId, "pane-provider-session");
 });
 
@@ -379,7 +378,7 @@ test("canvas stored refs expose the resolved session as a visible session", () =
   );
 });
 
-test("canvas claim resolution prefers a live projection over a read-only history id", () => {
+test("canvas resume resolution prefers a live projection over a read-only history id", () => {
   const history = summary({
     id: "history-1",
     provider: "codex",
@@ -387,7 +386,7 @@ test("canvas claim resolution prefers a live projection over a read-only history
     readOnlyReplay: true,
   });
   const live = summary({ id: "live-1", provider: "codex", providerSessionId: "provider-1" });
-  const resolved = resolveCanvasClaimedSessionId(
+  const resolved = resolveCanvasResumedSessionId(
     projections(history, live),
     "history-1",
     ref("codex", "provider-1"),
@@ -396,9 +395,9 @@ test("canvas claim resolution prefers a live projection over a read-only history
   assert.equal(resolved, "live-1");
 });
 
-test("canvas claim resolution can recover a live projection when the claim return is empty", () => {
+test("canvas resume resolution can recover a live projection when the resume result is empty", () => {
   const live = summary({ id: "live-1", provider: "opencode", providerSessionId: "provider-1" });
-  const resolved = resolveCanvasClaimedSessionId(
+  const resolved = resolveCanvasResumedSessionId(
     projections(live),
     null,
     ref("opencode", "provider-1"),
@@ -407,9 +406,9 @@ test("canvas claim resolution can recover a live projection when the claim retur
   assert.equal(resolved, "live-1");
 });
 
-test("canvas claim resolution prefers provider-matched live projection over unknown claim id", () => {
+test("canvas resume resolution prefers provider-matched live projection over unknown resume id", () => {
   const live = summary({ id: "live-1", provider: "codex", providerSessionId: "provider-1" });
-  const resolved = resolveCanvasClaimedSessionId(
+  const resolved = resolveCanvasResumedSessionId(
     projections(live),
     "history-1",
     ref("codex", "provider-1"),
@@ -418,14 +417,14 @@ test("canvas claim resolution prefers provider-matched live projection over unkn
   assert.equal(resolved, "live-1");
 });
 
-test("canvas claim resolution does not rebind to an explicit read-only history projection", () => {
+test("canvas resume resolution does not rebind to an explicit read-only history projection", () => {
   const history = summary({
     id: "history-1",
     provider: "codex",
     providerSessionId: "provider-1",
     readOnlyReplay: true,
   });
-  const resolved = resolveCanvasClaimedSessionId(
+  const resolved = resolveCanvasResumedSessionId(
     projections(history),
     "history-1",
     ref("codex", "provider-1"),

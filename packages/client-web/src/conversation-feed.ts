@@ -7,8 +7,8 @@ import type {
 import type { FeedEntry } from "./types";
 import type { ChatDisplayRow } from "./components/chat/assistant-process-groups";
 
-export function conversationV2ItemFeedKey(itemId: string): string {
-  return `conversation-v2:${itemId}`;
+export function conversationItemFeedKey(itemId: string): string {
+  return `conversation:${itemId}`;
 }
 
 function terminalStatus(
@@ -31,7 +31,7 @@ function itemToFeedEntry(
   turn: ConversationTurnProjection,
   item: ConversationItemProjection,
 ): FeedEntry | null {
-  const key = conversationV2ItemFeedKey(item.id);
+  const key = conversationItemFeedKey(item.id);
   const ts = itemTimestamp(turn, item);
   const turnId = turn.providerTurnId ?? turn.id;
   const common = {
@@ -128,17 +128,40 @@ function itemToFeedEntry(
   }
 }
 
-export function conversationV2TurnsToFeed(
+export function conversationTurnsToFeed(
   turns: readonly ConversationTurnProjection[],
+  localFeed: readonly FeedEntry[] = [],
 ): FeedEntry[] {
   const feed: FeedEntry[] = [];
+  const canonicalClientMessageIds = new Set<string>();
   for (const turn of turns) {
     for (const item of turn.items) {
       const entry = itemToFeedEntry(turn, item);
       if (entry) {
         feed.push(entry);
+        if (
+          entry.kind === "timeline" &&
+          entry.item.kind === "user_message" &&
+          entry.item.clientMessageId
+        ) {
+          canonicalClientMessageIds.add(entry.item.clientMessageId);
+        }
       }
     }
+  }
+  for (const entry of localFeed) {
+    if (
+      entry.kind !== "timeline" ||
+      entry.item.kind !== "user_message" ||
+      !entry.key.startsWith("optimistic:user:") ||
+      entry.turnId !== undefined ||
+      entry.canonicalTurnId !== undefined ||
+      entry.providerTurnId !== undefined ||
+      (entry.item.clientMessageId && canonicalClientMessageIds.has(entry.item.clientMessageId))
+    ) {
+      continue;
+    }
+    feed.push(entry);
   }
   return feed;
 }
@@ -170,14 +193,11 @@ function durationBetween(startedAt: string | undefined, completedAt: string | un
   return completedMs - startedMs;
 }
 
-export function conversationV2FinalAssistantKeys(
+export function conversationFinalAssistantKeys(
   turns: readonly ConversationTurnProjection[],
 ): Set<string> {
   const keys = new Set<string>();
   for (const turn of turns) {
-    if (turn.status === "in_progress") {
-      continue;
-    }
     const finalItem =
       (turn.finalAnswerItemId
         ? turn.items.find((item) => item.id === turn.finalAnswerItemId)
@@ -186,7 +206,7 @@ export function conversationV2FinalAssistantKeys(
       finalItem?.content.kind === "timeline" &&
       finalItem.content.item.kind === "assistant_message"
     ) {
-      keys.add(conversationV2ItemFeedKey(finalItem.id));
+      keys.add(conversationItemFeedKey(finalItem.id));
     }
   }
   return keys;
@@ -194,48 +214,87 @@ export function conversationV2FinalAssistantKeys(
 
 /**
  * Builds turn-level rows from canonical roles and lifecycle. FeedEntry remains
- * only the leaf rendering contract during migration; it no longer decides
- * process/final grouping for Conversation V2.
+ * only the leaf rendering contract; it does not decide
+ * process/final grouping for the canonical conversation protocol.
  */
-export function conversationV2DisplayRows(
+export function conversationDisplayRows(
   turns: readonly ConversationTurnProjection[],
   visibleEntries: readonly FeedEntry[],
+  activeVisibleEntries: readonly FeedEntry[] = visibleEntries,
 ): ChatDisplayRow[] {
   const entryByKey = new Map(visibleEntries.map((entry) => [entry.key, entry]));
+  const activeEntryByKey = new Map(
+    activeVisibleEntries.map((entry) => [entry.key, entry]),
+  );
   const rows: ChatDisplayRow[] = [];
+  const pendingUserEntries = visibleEntries
+    .filter(
+      (entry): entry is Extract<FeedEntry, { kind: "timeline" }> =>
+        entry.kind === "timeline" &&
+        entry.item.kind === "user_message" &&
+        entry.key.startsWith("optimistic:user:"),
+    )
+    .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
+  let pendingUserIndex = 0;
+
+  const insertPendingUsersBefore = (turn: ConversationTurnProjection) => {
+    const turnStartedAt = turn.startedAt ? Date.parse(turn.startedAt) : Number.NaN;
+    while (pendingUserIndex < pendingUserEntries.length) {
+      const entry = pendingUserEntries[pendingUserIndex]!;
+      const entryStartedAt = Date.parse(entry.ts);
+      const belongsBeforeTurn =
+        Number.isFinite(turnStartedAt) &&
+        (!Number.isFinite(entryStartedAt) || entryStartedAt <= turnStartedAt);
+      if (!belongsBeforeTurn) {
+        break;
+      }
+      rows.push({ kind: "feed_entry", key: entry.key, entry });
+      pendingUserIndex += 1;
+    }
+  };
 
   for (const turn of turns) {
+    insertPendingUsersBefore(turn);
+    const finalItem =
+      (turn.finalAnswerItemId
+        ? turn.items.find((item) => item.id === turn.finalAnswerItemId)
+        : undefined) ?? [...turn.items].reverse().find((item) => item.role === "final");
+    const processSettled = turn.status !== "in_progress" || finalItem !== undefined;
+    const processEntryByKey = processSettled ? entryByKey : activeEntryByKey;
     const processEntries = turn.items
       .filter((item) => item.role === "process")
-      .map((item) => entryByKey.get(conversationV2ItemFeedKey(item.id)))
+      .map((item) => processEntryByKey.get(conversationItemFeedKey(item.id)))
       .filter((entry): entry is FeedEntry => entry !== undefined);
     const firstProcessItemId = turn.items.find((item) => item.role === "process")?.id;
     let processInserted = false;
     const insertProcessGroup = () => {
+      const lifecycleNeedsRow = turn.status !== "completed";
       if (
         processInserted ||
-        (processEntries.length === 0 && turn.itemsView !== "summary")
+        (processEntries.length === 0 && turn.itemsView !== "summary" && !lifecycleNeedsRow)
       ) {
         return;
       }
-      const settled = turn.status !== "in_progress";
       const runtimeModel = runtimeModelFromEntries(processEntries);
+      const processCompletedAt =
+        turn.completedAt ??
+        (finalItem ? itemTimestamp(turn, finalItem) : undefined);
       const durationMs =
-        turn.durationMs ?? durationBetween(turn.startedAt, turn.completedAt);
+        turn.durationMs ?? durationBetween(turn.startedAt, processCompletedAt);
       rows.push({
         kind: "assistant_process_group",
         key: `conversation-process:${turn.id}`,
         entries: processEntries,
-        completed: settled,
-        active: turn.status === "in_progress",
+        completed: processSettled,
+        active: turn.status === "in_progress" && !processSettled,
         startedAt:
           turn.startedAt ??
           processEntries[0]?.ts ??
           turn.completedAt ??
           "1970-01-01T00:00:00.000Z",
-        ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
+        ...(processCompletedAt ? { completedAt: processCompletedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
-        failedCount: turn.failedItemCount,
+        activities: turn.activities,
         ...(runtimeModel ? { runtimeModel } : {}),
         turnStatus: turn.status,
         turnId: turn.id,
@@ -245,7 +304,7 @@ export function conversationV2DisplayRows(
     };
 
     for (const item of turn.items) {
-      const entry = entryByKey.get(conversationV2ItemFeedKey(item.id));
+      const entry = entryByKey.get(conversationItemFeedKey(item.id));
       if (item.role === "process") {
         if (!processInserted && item.id === firstProcessItemId && processEntries.length > 0) {
           insertProcessGroup();
@@ -258,8 +317,20 @@ export function conversationV2DisplayRows(
       if (entry) {
         rows.push({ kind: "feed_entry", key: entry.key, entry });
       }
+      if (item.role === "final" && (turn.outputs?.length ?? 0) > 0) {
+        rows.push({
+          kind: "turn_outputs",
+          key: `conversation-outputs:${turn.id}`,
+          outputs: turn.outputs ?? [],
+        });
+      }
     }
     insertProcessGroup();
+  }
+
+  for (; pendingUserIndex < pendingUserEntries.length; pendingUserIndex += 1) {
+    const entry = pendingUserEntries[pendingUserIndex]!;
+    rows.push({ kind: "feed_entry", key: entry.key, entry });
   }
 
   return rows;

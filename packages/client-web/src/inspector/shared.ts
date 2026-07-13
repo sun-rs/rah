@@ -1,6 +1,6 @@
 import type { GitChangedFile, RahEvent } from "@rah/runtime-protocol";
 
-export type InspectorTab = "files" | "changes";
+export type InspectorTab = "files" | "changes" | "outputs" | "sources";
 export type FileDetailMode = "file" | "diff";
 
 export type FileDetailSelection = {

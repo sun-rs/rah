@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { FeedEntry } from "../../types";
 import { buildVirtualFeedLayout } from "./virtualized-feed-layout";
-import { resolveLatestReplyStartTarget } from "./latest-reply-navigation";
+import {
+  advanceLatestReplyAutoNavigationState,
+  createLatestReplyAutoNavigationState,
+  latestNavigableAssistantReplyKey,
+  latestVisibleUserMessageKey,
+  resolveLatestReplyStartTarget,
+} from "./latest-reply-navigation";
 
 function assistantEntry(key: string): FeedEntry {
   return {
@@ -32,6 +38,56 @@ function reasoningEntry(key: string): FeedEntry {
 }
 
 describe("latest reply navigation", () => {
+  test("arms on live work and targets a canonical final before the runtime becomes idle", () => {
+    let state = createLatestReplyAutoNavigationState({
+      latestUserKey: "question",
+      latestReplyKey: null,
+      generationActive: true,
+    });
+
+    state = advanceLatestReplyAutoNavigationState(state, {
+      latestUserKey: "question",
+      latestReplyKey: "answer",
+      generationActive: true,
+    });
+
+    assert.equal(state.pendingReplyKey, "answer");
+    assert.equal(state.armed, false);
+  });
+
+  test("waits for the final answer to become latest when another prompt is queued", () => {
+    let state = createLatestReplyAutoNavigationState({
+      latestUserKey: "question-1",
+      latestReplyKey: null,
+      generationActive: true,
+    });
+    state = advanceLatestReplyAutoNavigationState(state, {
+      latestUserKey: "optimistic:user:question-2",
+      latestReplyKey: null,
+      generationActive: true,
+    });
+    assert.equal(state.pendingReplyKey, null);
+
+    state = advanceLatestReplyAutoNavigationState(state, {
+      latestUserKey: "optimistic:user:question-2",
+      latestReplyKey: "answer-2",
+      generationActive: true,
+    });
+    assert.equal(state.pendingReplyKey, "answer-2");
+  });
+
+  test("does not arm an already completed historical conversation", () => {
+    const entries = [userEntry("question"), assistantEntry("answer")];
+    const state = createLatestReplyAutoNavigationState({
+      latestUserKey: latestVisibleUserMessageKey(entries),
+      latestReplyKey: latestNavigableAssistantReplyKey(entries, new Set(["answer"])),
+      generationActive: false,
+    });
+
+    assert.equal(state.armed, false);
+    assert.equal(state.pendingReplyKey, null);
+  });
+
   test("does not target short latest replies", () => {
     const entries = [userEntry("question"), assistantEntry("answer")];
     const layout = buildVirtualFeedLayout(entries, new Map([["answer", 120]]));

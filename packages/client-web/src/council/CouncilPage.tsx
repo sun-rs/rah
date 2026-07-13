@@ -861,9 +861,11 @@ export function CouncilPage(props: {
           onOpen: () => {
             reconnectAttempt = 0;
           },
-          onClose: () => {
+          onClose: (event) => {
             refreshAfterSocketLoss();
-            scheduleReconnect();
+            if (event.code !== 4001) {
+              scheduleReconnect();
+            }
           },
         },
       );

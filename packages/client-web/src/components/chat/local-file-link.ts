@@ -73,3 +73,17 @@ export function resolveLocalFileLinkPath(href: string | undefined): string | nul
   const pathname = stripFileLocationSuffix(decodePathname(stripQueryAndHash(rawHref)));
   return isLikelyLocalAbsolutePath(pathname) ? pathname : null;
 }
+
+export function extractMarkdownLocalFileLinks(markdown: string): string[] {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const links = /\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)/g;
+  for (const match of markdown.matchAll(links)) {
+    const path = resolveLocalFileLinkPath(match[1] ?? match[2]);
+    if (path && !seen.has(path)) {
+      seen.add(path);
+      files.push(path);
+    }
+  }
+  return files;
+}

@@ -68,7 +68,7 @@ describe("composer contract", () => {
     });
 
     assert.deepEqual(surface, {
-      kind: "history_claim",
+      kind: "resume_history",
       actionLabel: "Resume",
       actionPending: false,
     });
@@ -243,12 +243,12 @@ describe("composer contract", () => {
         hasControl: false,
         isGenerating: false,
         pendingSessionAction: {
-          kind: "claim_history",
+          kind: "resume_history",
           sessionId: "session-1",
         },
       }),
       {
-        kind: "history_claim",
+        kind: "resume_history",
         actionLabel: "Resuming…",
         actionPending: true,
       },

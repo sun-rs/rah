@@ -59,7 +59,7 @@ export function WorkbenchOpeningPane(props: {
             <div className="text-sm font-medium text-[var(--app-fg)]">
               {props.openingSession.kind === "new"
                 ? "Starting session"
-                : props.openingSession.kind === "claim_history"
+                : props.openingSession.kind === "resume_history"
                   ? "Resuming session"
                   : "Opening history session"}
             </div>
@@ -91,7 +91,7 @@ export function WorkbenchOpeningPane(props: {
               <span>
                 {props.openingSession.kind === "new"
                   ? "Starting…"
-                  : props.openingSession.kind === "claim_history"
+                  : props.openingSession.kind === "resume_history"
                     ? "Resuming…"
                     : "Opening…"}
               </span>
@@ -105,7 +105,7 @@ export function WorkbenchOpeningPane(props: {
             <div className="mx-auto mt-2 max-w-md text-sm text-[var(--app-hint)] md:mt-4 md:max-w-2xl md:text-lg md:leading-8 xl:max-w-3xl">
               {props.openingSession.kind === "new"
                 ? `Launching ${providerLabel(props.openingSession.provider)} and preparing the workspace.`
-                : props.openingSession.kind === "claim_history"
+                : props.openingSession.kind === "resume_history"
                   ? `Resuming ${providerLabel(props.openingSession.provider)} session and rebuilding the timeline.`
                   : `Restoring ${providerLabel(props.openingSession.provider)} session and rebuilding the timeline.`}
             </div>

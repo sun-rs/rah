@@ -7,7 +7,7 @@ import {
   revealWorkspaceCandidates,
 } from "./session-store-workspace";
 import { deriveSessionConversationActivityAt } from "./session-conversation-activity";
-import { initialHistorySyncState, type SessionProjection } from "./types";
+import { initialConversationSyncState, type SessionProjection } from "./types";
 
 type LifecycleState = {
   projections: Map<string, SessionProjection>;
@@ -23,8 +23,10 @@ type LifecycleState = {
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
-        kind: "attach_session" | "claim_control" | "claim_history";
+        kind: "attach_session" | "claim_control" | "resume_history";
         sessionId: string;
+        provider?: SessionSummary["session"]["provider"];
+        providerSessionId?: string;
       }
     | null;
   storedSessions: StoredSessionRef[];
@@ -72,8 +74,31 @@ export function createEmptySessionProjection(summary: SessionSummary): SessionPr
     feed: [],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
+}
+
+export function isPendingResumeProjectionTransferTarget(
+  state: Pick<LifecycleState, "projections" | "pendingSessionAction">,
+  sessionId: string,
+): boolean {
+  const pending = state.pendingSessionAction;
+  if (
+    pending?.kind !== "resume_history" ||
+    pending.sessionId === sessionId
+  ) {
+    return false;
+  }
+  const source = state.projections.get(pending.sessionId)?.summary.session;
+  const target = state.projections.get(sessionId)?.summary.session;
+  const provider = pending.provider ?? source?.provider;
+  const providerSessionId = pending.providerSessionId ?? source?.providerSessionId;
+  return Boolean(
+    provider &&
+      providerSessionId &&
+      target?.providerSessionId &&
+      provider === target.provider &&
+      providerSessionId === target.providerSessionId,
+  );
 }
 
 export function storedReplayPlaceholderSessionId(
@@ -95,10 +120,10 @@ function storedReplayCapabilities(provider: StoredSessionRef["provider"]): Sessi
     contextUsage: false,
     resumeByProvider: true,
     listProviderSessions: true,
-    renameSession: rename !== "none",
     actions: {
       info: true,
       stop: false,
+      ...(provider === "codex" ? { archive: true } : {}),
       delete: true,
       rename,
     },
@@ -107,6 +132,9 @@ function storedReplayCapabilities(provider: StoredSessionRef["provider"]): Sessi
     modelSwitch: false,
     planMode: false,
     subagents: false,
+    ...(provider === "codex"
+      ? { branching: { sameWorkspace: true, worktree: false, side: true } }
+      : {}),
   };
 }
 
@@ -161,9 +189,10 @@ export function createPendingStoredReplayProjection(ref: StoredSessionRef): Sess
     feed: [],
     events: [],
     lastSeq: 0,
-    history: {
-      ...initialHistorySyncState(),
+    conversation: {
+      ...initialConversationSyncState(),
       phase: "loading",
+      loadedScope: "history",
     },
   };
 }
@@ -221,6 +250,40 @@ export function applyStartedSessionState(
     ...(args.provider ? { newSessionProvider: args.provider } : {}),
     selectedSessionId: responseSession.session.id,
     pendingSessionTransition: null,
+    error: null,
+  };
+}
+
+export function applyForkedSessionState(
+  current: LifecycleState,
+  responseSession: SessionSummary,
+  args: {
+    projections: Map<string, SessionProjection>;
+    selectChild: boolean;
+  },
+): Partial<LifecycleState> {
+  args.projections.set(responseSession.session.id, createEmptySessionProjection(responseSession));
+  const unreadSessionIds = new Set(current.unreadSessionIds);
+  unreadSessionIds.delete(responseSession.session.id);
+  if (!args.selectChild) {
+    return {
+      projections: args.projections,
+      unreadSessionIds,
+      sessionTopologyVersion: current.sessionTopologyVersion + 1,
+      error: null,
+    };
+  }
+  const workspacePlacement = applySessionWorkspacePlacement(
+    current,
+    responseSession.session.rootDir,
+    responseSession.session.cwd,
+  );
+  return {
+    projections: args.projections,
+    unreadSessionIds,
+    ...workspacePlacement,
+    sessionTopologyVersion: current.sessionTopologyVersion + 1,
+    selectedSessionId: responseSession.session.id,
     error: null,
   };
 }
@@ -285,7 +348,7 @@ export function applyResumedStoredSessionState(
   };
 }
 
-export function mergeClaimedHistoryProjection(
+export function mergeResumedHistoryProjection(
   responseSession: SessionSummary,
   preservedProjection: SessionProjection,
   liveProjection?: SessionProjection,
@@ -300,8 +363,8 @@ export function mergeClaimedHistoryProjection(
   }
   const pendingInterrupt =
     liveProjection?.pendingInterrupt ?? preservedProjection.pendingInterrupt;
-  const conversationV2 =
-    preservedProjection.conversationV2 ?? liveProjection?.conversationV2;
+  const conversation =
+    preservedProjection.conversation ?? liveProjection?.conversation;
   const turnDirectory =
     preservedProjection.turnDirectory ?? liveProjection?.turnDirectory;
   return {
@@ -309,8 +372,7 @@ export function mergeClaimedHistoryProjection(
     feed: [...feedByKey.values()],
     events: [...eventsById.values()].sort((left, right) => left.seq - right.seq),
     lastSeq: Math.max(liveProjection?.lastSeq ?? 0, preservedProjection.lastSeq),
-    history: preservedProjection.history,
-    ...(conversationV2 ? { conversationV2 } : {}),
+    ...(conversation ? { conversation } : {}),
     ...(turnDirectory ? { turnDirectory } : {}),
     ...(pendingInterrupt ? { pendingInterrupt } : {}),
     ...(liveProjection?.currentRuntimeStatus
@@ -322,7 +384,7 @@ export function mergeClaimedHistoryProjection(
   };
 }
 
-export function applyClaimedHistorySessionState(
+export function applyResumedHistorySessionState(
   current: LifecycleState,
   responseSession: SessionSummary,
   sessionId: string,
@@ -340,7 +402,7 @@ export function applyClaimedHistorySessionState(
   projections.delete(sessionId);
   projections.set(
     responseSession.session.id,
-    mergeClaimedHistoryProjection(
+    mergeResumedHistoryProjection(
       responseSession,
       preservedProjection,
       projections.get(responseSession.session.id),
@@ -403,7 +465,7 @@ export function applyClosedSessionState(
   return nextState as LifecycleState;
 }
 
-export function buildFallbackStoredSessionRef(
+export function resolveStoredSessionRef(
   summary: SessionSummary,
   recentSessions: StoredSessionRef[],
   storedSessions: StoredSessionRef[],

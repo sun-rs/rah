@@ -2,7 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { NativeTuiDiagnostic, SessionSummary } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
-import { initialHistorySyncState, type SessionProjection } from "./types";
+import { type SessionProjection } from "./types";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 
 function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
@@ -44,7 +44,6 @@ function projection(summaryValue: SessionSummary): SessionProjection {
     feed: [],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
 
@@ -243,46 +242,6 @@ describe("workbench notice contract", () => {
       tone: "warning",
       message: "Chat mirror: Chat mirror source is not available yet.",
     });
-  });
-
-  test("suppresses initial history loading notice and surfaces history errors", () => {
-    const loadingProjection: SessionProjection = {
-      ...projection(summary({ providerSessionId: "provider-1" })),
-      history: {
-        ...initialHistorySyncState(),
-        phase: "loading",
-      },
-    };
-
-    assert.deepEqual(
-      deriveWorkbenchNoticeState({
-        selectedSummary: loadingProjection.summary,
-        selectedProjection: loadingProjection,
-        error: null,
-      }).historyNotice,
-      null,
-    );
-
-    const errorProjection: SessionProjection = {
-      ...projection(summary({ providerSessionId: "provider-1" })),
-      history: {
-        ...initialHistorySyncState(),
-        phase: "error",
-        lastError: "network timeout",
-      },
-    };
-
-    assert.deepEqual(
-      deriveWorkbenchNoticeState({
-        selectedSummary: errorProjection.summary,
-        selectedProjection: errorProjection,
-        error: null,
-      }).historyNotice,
-      {
-        tone: "warning",
-        message: "History sync failed: network timeout",
-      },
-    );
   });
 
   test("derives global error descriptor from workbench error text", () => {

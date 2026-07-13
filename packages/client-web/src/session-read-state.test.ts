@@ -6,7 +6,7 @@ import {
   markProjectionSeen,
   sessionReadKey,
 } from "./session-read-state";
-import { initialHistorySyncState, type SessionProjection } from "./types";
+import { type SessionProjection } from "./types";
 
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
 
@@ -53,7 +53,6 @@ function summary(args: {
         contextUsage: false,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: true,
         actions: { info: true, stop: true, delete: true, rename: "native" },
         steerInput: true,
         queuedInput: false,
@@ -89,7 +88,6 @@ function projection(args: {
       : [],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
 

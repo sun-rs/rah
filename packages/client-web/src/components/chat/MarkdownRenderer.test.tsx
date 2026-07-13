@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { fileResourceKind } from "./FileResourceIcon";
 import { createMarkdownComponents } from "./MarkdownRenderer";
 
 describe("MarkdownRenderer", () => {
@@ -40,6 +41,14 @@ describe("MarkdownRenderer", () => {
     assert.match(html, /class="prose-chat-local-file-code"/);
     assert.match(html, /Open in Inspector: \/Volumes\/Data\/strategy\/research/);
     assert.match(html, /three_layer_combo_curves\.png/);
+    assert.match(html, /data-file-resource-kind="image"/);
+  });
+
+  test("classifies resource icons from stable file extensions", () => {
+    assert.equal(fileResourceKind("src/main.rs"), "code");
+    assert.equal(fileResourceKind("report.csv"), "spreadsheet");
+    assert.equal(fileResourceKind("chart.PNG"), "image");
+    assert.equal(fileResourceKind("README.md"), "document");
   });
 
   test("does not link ordinary inline code spans", () => {

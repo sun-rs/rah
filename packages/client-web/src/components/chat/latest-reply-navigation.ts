@@ -13,6 +13,14 @@ export type LatestReplyStartTarget = {
   replyHeight: number;
 };
 
+export type LatestReplyAutoNavigationState = {
+  latestUserKey: string | null;
+  latestReplyKey: string | null;
+  generationActive: boolean;
+  armed: boolean;
+  pendingReplyKey: string | null;
+};
+
 function isAssistantReplyEntry(entry: FeedEntry): boolean {
   return entry.kind === "timeline" && entry.item.kind === "assistant_message";
 }
@@ -35,7 +43,7 @@ function isVisibleConversationMessageEntry(entry: FeedEntry): boolean {
   );
 }
 
-function latestVisibleConversationMessageIndex(entries: readonly FeedEntry[]): number {
+export function latestVisibleConversationMessageIndex(entries: readonly FeedEntry[]): number {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry && isVisibleConversationMessageEntry(entry)) {
@@ -43,6 +51,84 @@ function latestVisibleConversationMessageIndex(entries: readonly FeedEntry[]): n
     }
   }
   return -1;
+}
+
+export function latestVisibleUserMessageKey(entries: readonly FeedEntry[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (
+      entry?.kind === "timeline" &&
+      entry.item.kind === "user_message" &&
+      !isInternalUserReminder(entry.item.text)
+    ) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
+export function latestNavigableAssistantReplyKey(
+  entries: readonly FeedEntry[],
+  navigableAssistantKeys?: ReadonlySet<string>,
+): string | null {
+  const index = latestVisibleConversationMessageIndex(entries);
+  const entry = index >= 0 ? entries[index] : undefined;
+  return entry && isNavigableAssistantReplyEntry(entry, navigableAssistantKeys)
+    ? entry.key
+    : null;
+}
+
+export function createLatestReplyAutoNavigationState(args: {
+  latestUserKey: string | null;
+  latestReplyKey: string | null;
+  generationActive: boolean;
+}): LatestReplyAutoNavigationState {
+  return {
+    latestUserKey: args.latestUserKey,
+    latestReplyKey: args.latestReplyKey,
+    generationActive: args.generationActive,
+    armed: args.generationActive,
+    pendingReplyKey: null,
+  };
+}
+
+/**
+ * Arms on a live turn, then targets the first canonical final that becomes the
+ * latest visible conversation message. This follows turn identity rather than
+ * waiting for the whole session runtime to become idle, which may happen later
+ * when queued prompts or subagents are still active.
+ */
+export function advanceLatestReplyAutoNavigationState(
+  current: LatestReplyAutoNavigationState,
+  args: {
+    latestUserKey: string | null;
+    latestReplyKey: string | null;
+    generationActive: boolean;
+  },
+): LatestReplyAutoNavigationState {
+  const userChanged = args.latestUserKey !== current.latestUserKey;
+  const replyChanged = args.latestReplyKey !== current.latestReplyKey;
+  let armed = current.armed || (!current.generationActive && args.generationActive);
+  let pendingReplyKey = current.pendingReplyKey;
+
+  if (userChanged) {
+    pendingReplyKey = null;
+    if (args.generationActive || args.latestUserKey?.startsWith("optimistic:user:")) {
+      armed = true;
+    }
+  }
+  if (replyChanged && args.latestReplyKey && armed) {
+    pendingReplyKey = args.latestReplyKey;
+    armed = false;
+  }
+
+  return {
+    latestUserKey: args.latestUserKey,
+    latestReplyKey: args.latestReplyKey,
+    generationActive: args.generationActive,
+    armed,
+    pendingReplyKey,
+  };
 }
 
 function measuredReplyHeight(args: {

@@ -1,4 +1,5 @@
 import type { ConversationMetaTone } from "./ConversationMetaBadge";
+import type { SessionSideLifecycleState } from "@rah/runtime-protocol";
 
 export type ConversationLifecycleStatus = "running" | "stopped";
 
@@ -45,7 +46,48 @@ function formatPhaseLabel(phase: ConversationPhase): string {
 export function resolveConversationHeaderState(input: {
   status: ConversationLifecycleStatus;
   phase: ConversationPhase;
+  sideState?: SessionSideLifecycleState;
 }): ConversationHeaderState {
+  switch (input.sideState) {
+    case "active":
+      return {
+        label: "Working",
+        tone: "working",
+        icon: "activity",
+        title: "Side task: Working",
+      };
+    case "completed":
+      return {
+        label: "Completed",
+        tone: "running",
+        icon: "running",
+        title: "Side task: Completed and available for another turn",
+      };
+    case "expired":
+      return {
+        label: "Expired",
+        tone: "stopped",
+        icon: "stopped",
+        title: "Side task: Expired",
+      };
+    case "cleanup_failed":
+      return {
+        label: "Cleanup failed",
+        tone: "failed",
+        icon: "stopped",
+        title: "Side task cleanup failed; discard again to retry",
+      };
+    case "discarded":
+      return {
+        label: "Discarded",
+        tone: "stopped",
+        icon: "stopped",
+        title: "Side task: Discarded",
+      };
+    case "ready":
+    case undefined:
+      break;
+  }
   if (input.status === "stopped") {
     if (input.phase === "failed") {
       return {

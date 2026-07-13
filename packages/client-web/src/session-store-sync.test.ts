@@ -72,7 +72,6 @@ function summary(args: {
         contextUsage: false,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: true,
         actions: { info: true, stop: true, delete: true, rename: "native" },
         steerInput: !readOnlyReplay,
         queuedInput: false,
@@ -94,10 +93,8 @@ function applyEventsToMap(
 ): Map<string, SessionProjection> {
   return applyEventsToProjectionMap(current, events, {
     updateLastSeq: () => undefined,
-    clearBufferedSession: () => undefined,
+    clearPendingSession: () => undefined,
     queuePendingEvent: () => undefined,
-    shouldDeferEvent: () => false,
-    queueDeferredEvent: () => undefined,
   });
 }
 
@@ -252,7 +249,7 @@ describe("session store recovery", () => {
     assert.equal(events[0]?.seq, 3);
   });
 
-  test("keeps the selected history projection while claim close waits for live creation", () => {
+  test("keeps the selected history projection while resume close waits for live creation", () => {
     const history = summary({
       id: "history",
       providerSessionId: "thread-1",
@@ -276,9 +273,9 @@ describe("session store recovery", () => {
         workspaceVisibilityVersion: 0,
         sessionTopologyVersion: 0,
         eventStreamOpenRevision: 0,
-        pendingSessionAction: { kind: "claim_history", sessionId: "history" },
+        pendingSessionAction: { kind: "resume_history", sessionId: "history" },
         pendingSessionTransition: {
-          kind: "claim_history",
+          kind: "resume_history",
           provider: "codex",
           providerSessionId: "thread-1",
         },
@@ -295,7 +292,7 @@ describe("session store recovery", () => {
     );
   });
 
-  test("moves selected history projection to live session when claim live events arrive", () => {
+  test("moves selected history projection to live session when resume live events arrive", () => {
     const history = summary({
       id: "history",
       providerSessionId: "thread-1",
@@ -323,9 +320,9 @@ describe("session store recovery", () => {
         workspaceVisibilityVersion: 0,
         sessionTopologyVersion: 0,
         eventStreamOpenRevision: 0,
-        pendingSessionAction: { kind: "claim_history", sessionId: "history" },
+        pendingSessionAction: { kind: "resume_history", sessionId: "history" },
         pendingSessionTransition: {
-          kind: "claim_history",
+          kind: "resume_history",
           provider: "codex",
           providerSessionId: "thread-1",
         },

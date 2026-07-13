@@ -77,6 +77,7 @@
     --app-hint: #5f5f67;
     --app-muted: #71717a;
     --app-link: #18181b;
+    --app-resource-link: #1473e6;
     --app-border: #e4e4e7;
     --app-subtle-bg: #f4f4f5;
     --app-code-bg: #fafafa;
@@ -144,6 +145,7 @@
     --app-hint: #c4c4cc;
     --app-muted: #a1a1aa;
     --app-link: #e4e4e7;
+    --app-resource-link: #69a9ff;
     --app-border: #27272a;
     --app-subtle-bg: #18181b;
     --app-code-bg: #09090b;

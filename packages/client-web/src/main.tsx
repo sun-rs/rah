@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { DeviceAuthGate } from "./components/DeviceAuthGate";
 import "./index.css";
 import "./styles.css";
 import "@xterm/xterm/css/xterm.css";
@@ -12,6 +13,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <DeviceAuthGate>
+      <App />
+    </DeviceAuthGate>
   </StrictMode>,
 );

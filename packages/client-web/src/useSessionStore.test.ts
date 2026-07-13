@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { RahEvent, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
+  applyStoredSessionsDeltaToRecent,
   coerceSelectedSessionId,
   computeUnreadSessionIds,
   findDaemonRunningSessionForStoredRef,
@@ -18,10 +19,34 @@ import {
   applyEventsToProjectionMap,
   updateSessionSummaryInProjectionMap,
 } from "./session-store-projections";
-import { initialHistorySyncState, type SessionProjection } from "./types";
+import { type SessionProjection } from "./types";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+
+test("stored-session discovery deltas keep the bounded Recent catalog current", () => {
+  const current = Array.from({ length: 15 }, (_, index): StoredSessionRef => ({
+    provider: "codex",
+    providerSessionId: `existing-${index}`,
+    source: "provider_history",
+    updatedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+  }));
+  const next = applyStoredSessionsDeltaToRecent(current, {
+    remove: [{ provider: "codex", providerSessionId: "existing-14" }],
+    upsert: [
+      {
+        provider: "opencode",
+        providerSessionId: "newest",
+        source: "provider_history",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(next.length, 15);
+  assert.equal(next[0]?.providerSessionId, "newest");
+  assert.ok(!next.some((session) => session.providerSessionId === "existing-14"));
+});
 
 function installLocalStorageMock() {
   const store = new Map<string, string>();
@@ -102,7 +127,6 @@ function projection(rootDir: string): SessionProjection {
     feed: [],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
 
@@ -777,6 +801,7 @@ describe("workspace response reconciliation", () => {
       assert.deepEqual(urls, [
         "GET /api/fs/list?path=%2Fworkspace%2Fcurrent",
         "POST /api/sessions/start",
+        "GET /api/sessions/live-created-session/conversation/turns?limit=20&liveOnly=true",
         "POST /api/sessions/live-created-session/close",
         "GET /api/sessions?storedSessions=recent",
         "POST /api/history/sessions/remove?storedSessions=recent",
@@ -1060,10 +1085,8 @@ describe("workspace response reconciliation", () => {
       ],
       {
         updateLastSeq: () => undefined,
-        clearBufferedSession: () => undefined,
+        clearPendingSession: () => undefined,
         queuePendingEvent: () => undefined,
-        shouldDeferEvent: () => false,
-        queueDeferredEvent: () => undefined,
       },
     );
 
@@ -1178,7 +1201,7 @@ describe("workspace response reconciliation", () => {
         const patch = typeof partial === "function" ? partial(state) : partial;
         state = { ...state, ...patch };
       },
-      ensureSessionHistoryLoaded: async (sessionId) => {
+      ensureConversationLoaded: async (sessionId) => {
         historyLoadSessionId = sessionId;
       },
       sendInput: async () => undefined,

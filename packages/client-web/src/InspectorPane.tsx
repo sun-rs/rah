@@ -1,5 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import type { RahEvent } from "@rah/runtime-protocol";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  ConversationOutputProjection,
+  ConversationTurnProjection,
+  RahEvent,
+} from "@rah/runtime-protocol";
 import {
   listDirectory,
   readGitStatus,
@@ -11,6 +15,8 @@ import { InspectorChangesPane } from "./inspector/InspectorChangesPane";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import { InspectorFilesPane } from "./inspector/InspectorFilesPane";
 import { InspectorHeader } from "./inspector/InspectorHeader";
+import { InspectorResourcesPane } from "./inspector/InspectorResourcesPane";
+import { collectConversationResources } from "./conversation-resources";
 import type {
   DirectoryEntry,
   FileDetailSelection,
@@ -24,6 +30,7 @@ export function InspectorPane(props: {
   sessionId: string | null;
   workspaceRoot: string;
   events: RahEvent[];
+  conversationTurns: readonly ConversationTurnProjection[];
   onOpenTerminal?: () => void;
   openFileRequest?: InspectorOpenFileRequest | null;
 }) {
@@ -43,6 +50,14 @@ export function InspectorPane(props: {
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
   const gitStatusRequestRef = useRef(0);
+  const canonicalResources = useMemo(
+    () => collectConversationResources(props.conversationTurns),
+    [props.conversationTurns],
+  );
+  const outputResources = useMemo<ConversationOutputProjection[]>(
+    () => canonicalResources.outputs,
+    [canonicalResources.outputs],
+  );
 
   const loadDirectory = async (directoryPath: string) => {
     setDirectoryLoadingPaths((current) => new Set(current).add(directoryPath));
@@ -212,7 +227,7 @@ export function InspectorPane(props: {
 
   const openFile = (
     path: string,
-    source: "files" | "changes",
+    source: FileDetailSelection["source"],
     options?: {
       staged?: boolean;
       pureAddition?: boolean;
@@ -245,6 +260,8 @@ export function InspectorPane(props: {
         workspaceRoot={props.workspaceRoot}
         activeTab={activeTab}
         changeCount={changeCount}
+        outputCount={outputResources.length}
+        sourceCount={canonicalResources.sources.length}
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
       />
@@ -257,6 +274,38 @@ export function InspectorPane(props: {
             events={props.events}
             onRefresh={() => void loadGitStatus()}
             onOpenFile={(selection) => setSelectedFile(selection)}
+          />
+        ) : activeTab === "outputs" ? (
+          <InspectorResourcesPane
+            workspaceRoot={props.workspaceRoot}
+            resources={outputResources}
+            emptyLabel="No outputs yet."
+            testId="inspector-outputs-list"
+            onOpenFile={(path) =>
+              openFile(
+                path,
+                path.startsWith("/") && !path.startsWith(`${props.workspaceRoot}/`)
+                  ? "local"
+                  : "files",
+              )
+            }
+            onOpenUrl={(url) => window.open(url, "_blank", "noopener,noreferrer")}
+          />
+        ) : activeTab === "sources" ? (
+          <InspectorResourcesPane
+            workspaceRoot={props.workspaceRoot}
+            resources={canonicalResources.sources}
+            emptyLabel="No sources yet."
+            testId="inspector-sources-list"
+            onOpenFile={(path) =>
+              openFile(
+                path,
+                path.startsWith("/") && !path.startsWith(`${props.workspaceRoot}/`)
+                  ? "local"
+                  : "files",
+              )
+            }
+            onOpenUrl={(url) => window.open(url, "_blank", "noopener,noreferrer")}
           />
         ) : (
           <InspectorFilesPane

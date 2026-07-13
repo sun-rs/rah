@@ -27,6 +27,22 @@ export type VirtualFeedWindow = {
   bottomSpacerHeight: number;
 };
 
+export function projectVirtualAnchorScrollTop(args: {
+  layout: VirtualFeedLayout;
+  entryKey: string;
+  viewportOffset: number;
+  contentTopOffset: number;
+}): number | null {
+  const row = args.layout.rows.find((candidate) => candidate.key === args.entryKey);
+  if (!row) {
+    return null;
+  }
+  return Math.max(
+    0,
+    args.contentTopOffset + row.offsetTop - args.viewportOffset,
+  );
+}
+
 function estimateTimelineHeight(entry: Extract<FeedEntry, { kind: "timeline" }>): number {
   switch (entry.item.kind) {
     case "assistant_message":

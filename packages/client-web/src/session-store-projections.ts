@@ -10,7 +10,6 @@ import { compactRecoverableLiveProjectionFeed } from "./session-feed-retention";
 import {
   applyEventToProjection,
   createSessionMap,
-  initialHistorySyncState,
   type SessionProjection,
   type SessionsResponse,
 } from "./types";
@@ -49,7 +48,7 @@ function isPendingStoredReplayProjection(
   return (
     sessionId.startsWith("history:") &&
     projection.summary.session.runtime?.kind === "stored_history" &&
-    projection.history.phase === "loading"
+    projection.conversation?.phase === "loading"
   );
 }
 
@@ -128,10 +127,8 @@ type ProjectionStateSlice = {
 
 type ProjectionEventHandling = {
   updateLastSeq: (seq: number) => void;
-  clearBufferedSession: (sessionId: string) => void;
+  clearPendingSession: (sessionId: string) => void;
   queuePendingEvent: (event: RahEvent) => void;
-  shouldDeferEvent: (projection: SessionProjection, event: RahEvent) => boolean;
-  queueDeferredEvent: (event: RahEvent) => void;
 };
 
 type ProjectionReplay = {
@@ -155,6 +152,8 @@ function shouldMarkSessionUnread(event: RahEvent): boolean {
     case "turn.failed":
     case "turn.canceled":
       return true;
+    case "session.side.state.changed":
+      return event.payload.state === "expired" || event.payload.state === "cleanup_failed";
     default:
       return false;
   }
@@ -204,7 +203,6 @@ function createProjectionFromSessionEvent(
     feed: [],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
 
@@ -261,7 +259,7 @@ export function applyEventsToProjectionMap(
     handling.updateLastSeq(event.seq);
     if (event.type === "session.closed") {
       next.delete(event.sessionId);
-      handling.clearBufferedSession(event.sessionId);
+      handling.clearPendingSession(event.sessionId);
       continue;
     }
     let projection = next.get(event.sessionId);
@@ -274,10 +272,6 @@ export function applyEventsToProjectionMap(
     }
     if (!projection) {
       handling.queuePendingEvent(event);
-      continue;
-    }
-    if (handling.shouldDeferEvent(projection, event)) {
-      handling.queueDeferredEvent(event);
       continue;
     }
     next.set(event.sessionId, applyEventToProjection(projection, event));

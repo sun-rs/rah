@@ -1,6 +1,9 @@
 import * as api from "./api";
 import { readErrorMessage } from "./session-store-bootstrap";
-import { mergeLatestHistoryPage } from "./session-store-history";
+import {
+  ensureConversationLoadedCommand,
+  hydrateConversationTurnByProviderIdCommand,
+} from "./session-store-conversation";
 import type { SessionProjection } from "./types";
 
 type TurnDirectoryState = {
@@ -13,18 +16,9 @@ type TurnDirectorySetState = (
     | ((state: TurnDirectoryState) => Partial<TurnDirectoryState> | TurnDirectoryState),
 ) => void;
 
-const turnHistoryLoads = new Map<string, Promise<void>>();
+const directoryTurnLoads = new Map<string, Promise<void>>();
 
-function projectionHasTurn(projection: SessionProjection, turnId: string): boolean {
-  return projection.feed.some(
-    (entry) =>
-      entry.turnId === turnId ||
-      (entry.kind === "timeline" && entry.providerTurnId === turnId) ||
-      ("canonicalTurnId" in entry && entry.canonicalTurnId === turnId),
-  );
-}
-
-export async function ensureSessionTurnDirectoryCommand(args: {
+export async function ensureSessionConversationDirectoryCommand(args: {
   get: () => TurnDirectoryState;
   set: TurnDirectorySetState;
   sessionId: string;
@@ -58,7 +52,7 @@ export async function ensureSessionTurnDirectoryCommand(args: {
     return { projections: next };
   });
   try {
-    const directory = await api.readSessionTurnDirectory(args.sessionId);
+    const directory = await api.readSessionConversationDirectory(args.sessionId);
     args.set((state) => {
       const current = state.projections.get(args.sessionId);
       if (!current) {
@@ -103,33 +97,41 @@ export async function ensureSessionTurnDirectoryCommand(args: {
   }
 }
 
-export async function loadSessionTurnHistoryCommand(args: {
+export async function loadConversationDirectoryTurnCommand(args: {
   get: () => TurnDirectoryState;
   set: TurnDirectorySetState;
   sessionId: string;
   turnId: string;
 }): Promise<void> {
   const projection = args.get().projections.get(args.sessionId);
-  if (!projection || projectionHasTurn(projection, args.turnId)) {
+  if (!projection) {
     return;
   }
   const key = `${args.sessionId}:${args.turnId}`;
-  const currentLoad = turnHistoryLoads.get(key);
+  const currentLoad = directoryTurnLoads.get(key);
   if (currentLoad) {
     return currentLoad;
   }
   const load = (async () => {
     try {
-      const turn = await api.readSessionTurnHistory(args.sessionId, args.turnId);
-      args.set((state) => {
-        const current = state.projections.get(args.sessionId);
-        if (!current) {
-          return state;
+      if (!projection.conversation) {
+        const initialized = await ensureConversationLoadedCommand(
+          { get: args.get, set: args.set },
+          args.sessionId,
+        );
+        if (!initialized) {
+          throw new Error("Canonical conversation history is not available.");
         }
-        const next = new Map(state.projections);
-        next.set(args.sessionId, mergeLatestHistoryPage(current, turn.events));
-        return { projections: next };
-      });
+      }
+      const loaded = await hydrateConversationTurnByProviderIdCommand(
+        { get: args.get, set: args.set },
+        args.sessionId,
+        args.turnId,
+      );
+      if (loaded) {
+        return;
+      }
+      throw new Error("Canonical conversation turn detail is not available.");
     } catch (error) {
       args.set((state) => {
         const current = state.projections.get(args.sessionId);
@@ -154,10 +156,10 @@ export async function loadSessionTurnHistoryCommand(args: {
       throw error;
     }
   })().finally(() => {
-    if (turnHistoryLoads.get(key) === load) {
-      turnHistoryLoads.delete(key);
+    if (directoryTurnLoads.get(key) === load) {
+      directoryTurnLoads.delete(key);
     }
   });
-  turnHistoryLoads.set(key, load);
+  directoryTurnLoads.set(key, load);
   return load;
 }

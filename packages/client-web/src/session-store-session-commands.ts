@@ -32,14 +32,14 @@ type SessionCommandState = {
   selectedSessionId: string | null;
   newSessionProvider: "codex" | "claude" | "opencode";
   pendingSessionTransition: {
-    kind: "new" | "history" | "claim_history";
+    kind: "new" | "history" | "resume_history";
     provider: StoredSessionRef["provider"];
     title?: string;
     cwd?: string;
   } | null;
   pendingSessionAction:
     | {
-        kind: "attach_session" | "claim_control" | "claim_history";
+        kind: "attach_session" | "claim_control" | "resume_history";
         sessionId: string;
       }
     | null;
@@ -54,7 +54,28 @@ type SessionCommandSetState = (
     | ((state: SessionCommandState) => Partial<SessionCommandState> | SessionCommandState),
 ) => void;
 
-function createClientSideId(prefix: string): string {
+const sessionTransportCommandTails = new Map<string, Promise<void>>();
+
+export async function serializeSessionTransportCommand<T>(
+  sessionId: string,
+  command: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionTransportCommandTails.get(sessionId) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(command);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionTransportCommandTails.set(sessionId, tail);
+  void tail.finally(() => {
+    if (sessionTransportCommandTails.get(sessionId) === tail) {
+      sessionTransportCommandTails.delete(sessionId);
+    }
+  });
+  return await result;
+}
+
+export function createClientSideId(prefix: string): string {
   const randomUUID =
     typeof globalThis.crypto === "object" &&
     typeof globalThis.crypto.randomUUID === "function"
@@ -96,7 +117,7 @@ export async function attachSessionCommand(args: {
   get: () => SessionCommandState;
   set: SessionCommandSetState;
   summary: SessionSummary;
-  ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
+  ensureConversationLoaded: (sessionId: string) => Promise<void>;
 }) {
   try {
     args.set({
@@ -114,7 +135,7 @@ export async function attachSessionCommand(args: {
       projections: updateSessionSummaryInProjectionMap(state.projections, response.session),
     }));
     args.set((state) => applyAttachedSessionState(state, response.session, args.summary));
-    void args.ensureSessionHistoryLoaded(args.summary.session.id);
+    void args.ensureConversationLoaded(args.summary.session.id);
   } catch (error) {
     args.set({ pendingSessionAction: null, error: readErrorMessage(error) });
     throw error;
@@ -238,7 +259,9 @@ export async function interruptSessionCommand(args: {
       projections.set(args.sessionId, markPendingInterruptIntent(projection));
       return { projections };
     });
-    const summary = await api.interruptSession(args.sessionId, args.get().clientId);
+    const summary = await serializeSessionTransportCommand(args.sessionId, () =>
+      api.interruptSession(args.sessionId, args.get().clientId),
+    );
     args.set((state) => ({
       projections: updateSessionSummaryInProjectionMap(state.projections, summary),
       error: null,
@@ -306,12 +329,14 @@ export async function sendInputCommand(args: {
       });
       return { projections: next };
     });
-    await api.sendSessionInput(args.sessionId, {
-      clientId: args.get().clientId,
-      text: args.text,
-      clientMessageId,
-      clientTurnId,
-    });
+    await serializeSessionTransportCommand(args.sessionId, () =>
+      api.sendSessionInput(args.sessionId, {
+        clientId: args.get().clientId,
+        text: args.text,
+        clientMessageId,
+        clientTurnId,
+      }),
+    );
     args.set({ error: null });
   } catch (error) {
     const message = readErrorMessage(error);

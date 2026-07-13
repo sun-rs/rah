@@ -5,8 +5,7 @@ import { deriveWorkspaceInfos, sortWorkspaceInfos } from "./session-browser";
 import {
   appendOptimisticUserMessage,
   applyEventToProjection,
-  initialConversationV2SyncState,
-  initialHistorySyncState,
+  initialConversationSyncState,
   markPendingInterruptIntent,
   removeOptimisticUserMessage,
   type SessionProjection,
@@ -49,7 +48,6 @@ function projection(): SessionProjection {
     feed: [],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
 
@@ -98,8 +96,8 @@ function workspaceSummary(args: {
 
 describe("client projection", () => {
   test("ordinary session events preserve auxiliary conversation projections", () => {
-    const conversationV2 = {
-      ...initialConversationV2SyncState(),
+    const conversation = {
+      ...initialConversationSyncState(),
       phase: "ready" as const,
       daemonRevision: 3,
     };
@@ -114,7 +112,7 @@ describe("client projection", () => {
     };
     const current: SessionProjection = {
       ...projection(),
-      conversationV2,
+      conversation,
       turnDirectory,
     };
 
@@ -128,7 +126,7 @@ describe("client projection", () => {
       }),
     );
 
-    assert.equal(next.conversationV2, conversationV2);
+    assert.equal(next.conversation, conversation);
     assert.equal(next.turnDirectory, turnDirectory);
   });
 
@@ -1104,12 +1102,17 @@ describe("client projection", () => {
         ts: "2026-04-15T00:00:01.000Z",
       },
     ];
-    current.history = {
+    current.conversation = {
       phase: "ready",
+      loadedScope: "history",
+      turns: [],
       nextCursor: "cursor-1",
-      nextBeforeTs: "2026-04-15T00:00:01.000Z",
-      generation: 3,
-      authoritativeApplied: true,
+      revision: 3,
+      daemonRevision: 3,
+      pendingDeltas: [],
+      needsRefresh: false,
+      approximateBytes: 100,
+      loadedAt: "2026-04-15T00:00:01.000Z",
       lastError: "old error",
     };
 
@@ -1129,7 +1132,7 @@ describe("client projection", () => {
     assert.equal(rebound.summary.session.providerSessionId, "thread-2");
     assert.equal(rebound.summary.session.title, "New active thread");
     assert.deepEqual(rebound.feed, []);
-    assert.deepEqual(rebound.history, initialHistorySyncState());
+    assert.equal(rebound.conversation, undefined);
     assert.deepEqual(rebound.events, [reboundEvent]);
   });
 
@@ -2439,7 +2442,7 @@ describe("client projection", () => {
     assert.equal(current.summary.session.nativeTui?.promptState, "agent_busy");
   });
 
-  test("does not let stale control events override a fresher claimed summary", () => {
+  test("does not let stale control events override a fresher resumed summary", () => {
     const current = applyEventToProjection(
       {
         ...projection(),
@@ -2469,5 +2472,46 @@ describe("client projection", () => {
 
     assert.equal(current.summary.controlLease.holderClientId, "web-current");
     assert.equal(current.summary.session.updatedAt, "2026-04-15T00:00:10.000Z");
+  });
+
+  test("applies authoritative Side lifecycle events and clears stale failure detail", () => {
+    let current: SessionProjection = {
+      ...projection(),
+      summary: {
+        ...baseSummary(),
+        session: {
+          ...baseSummary().session,
+          relationship: {
+            parentSessionId: "parent-1",
+            kind: "side",
+            workspaceMode: "shared",
+            persistence: "ephemeral",
+            sideState: "ready",
+          },
+        },
+      },
+    };
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 11,
+        type: "session.side.state.changed",
+        payload: { state: "cleanup_failed", detail: "unsubscribe failed" },
+      }),
+    );
+    assert.equal(current.summary.session.relationship?.sideState, "cleanup_failed");
+    assert.equal(current.summary.session.relationship?.sideStateDetail, "unsubscribe failed");
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 12,
+        type: "session.side.state.changed",
+        payload: { state: "completed" },
+      }),
+    );
+    assert.equal(current.summary.session.relationship?.sideState, "completed");
+    assert.equal(current.summary.session.relationship?.sideStateDetail, undefined);
   });
 });

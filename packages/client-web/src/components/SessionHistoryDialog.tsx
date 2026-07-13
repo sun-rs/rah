@@ -17,6 +17,7 @@ import {
   filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
   sessionIdentityKey,
+  visibleStoredSessionRefs,
 } from "../session-history-grouping";
 
 const DEFAULT_GROUP_ITEM_LIMIT = 10;
@@ -548,7 +549,10 @@ export function SessionHistoryDialog(props: {
     [props.runningSessions],
   );
   const mergedHistorySessions = useMemo(
-    () => mergeSessionHistoryRefsByIdentity([...props.storedSessions, ...props.recentSessions]),
+    () =>
+      visibleStoredSessionRefs(
+        mergeSessionHistoryRefsByIdentity([...props.storedSessions, ...props.recentSessions]),
+      ),
     [props.storedSessions, props.recentSessions],
   );
   const historySessionByIdentity = useMemo(
@@ -596,7 +600,7 @@ export function SessionHistoryDialog(props: {
   const stoppedRecentSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
     return filterStoppedRecentSessions(
-      mergeSessionHistoryRefsByIdentity(props.recentSessions)
+      visibleStoredSessionRefs(mergeSessionHistoryRefsByIdentity(props.recentSessions))
         .map((session) => historySessionByIdentity.get(sessionIdentityKey(session)) ?? session),
       runningIdentityKeys,
     )

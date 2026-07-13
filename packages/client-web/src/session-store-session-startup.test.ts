@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type {
+  ConversationTurnsPageResponse,
+  SessionSummary,
+  StoredSessionRef,
+} from "@rah/runtime-protocol";
 import {
   activateHistorySessionCommand,
-  claimHistorySessionCommand,
+  forkSessionCommand,
+  resumeHistorySessionCommand,
   resumeStoredSessionCommand,
   startSessionCommand,
 } from "./session-store-session-startup";
@@ -11,7 +16,8 @@ import {
   createEmptySessionProjection,
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
-import { initialConversationV2SyncState, type FeedEntry } from "./types";
+import { initialConversationSyncState, type FeedEntry } from "./types";
+import { ensureConversationLoadedCommand } from "./session-store-conversation";
 
 type CapturedRequest = {
   url: string;
@@ -44,7 +50,7 @@ function installWebApiMocks(handler: (request: CapturedRequest) => unknown): Cap
       body: init?.body ? JSON.parse(String(init.body)) : null,
     };
     requests.push(request);
-    const result = handler(request);
+    const result = await handler(request);
     if (result instanceof Response) {
       return result;
     }
@@ -95,7 +101,6 @@ function summary(args: {
         contextUsage: false,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: true,
         actions: { info: true, stop: true, delete: true, rename: "native" },
         steerInput: !readOnlyReplay,
         queuedInput: false,
@@ -155,7 +160,7 @@ function startupDeps(
         typeof partial === "function" ? partial(state) : partial,
       );
     },
-    ensureSessionHistoryLoaded: async () => undefined,
+    ensureConversationLoaded: async () => undefined,
     initializeLiveConversationProjection: async () => undefined,
     sendInput: async () => undefined,
     attachSession: async () => undefined,
@@ -176,6 +181,167 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreWebApiMocks();
+});
+
+test("fork session command keeps Side children attached without replacing the parent selection", async () => {
+  const parent = summary({ id: "parent", providerSessionId: "thread-parent" });
+  const side = summary({ id: "side", providerSessionId: "thread-side" });
+  side.session.relationship = {
+    parentSessionId: "parent",
+    parentProviderSessionId: "thread-parent",
+    kind: "side",
+    workspaceMode: "shared",
+    persistence: "ephemeral",
+  };
+  const deps = startupDeps({
+    selectedSessionId: "parent",
+    projections: new Map([["parent", createEmptySessionProjection(parent)]]),
+  });
+  const requests = installWebApiMocks(() => ({ session: side }));
+
+  const sessionId = await forkSessionCommand(deps, "parent", {
+    operationId: "side-operation-1",
+    kind: "side",
+    workspaceMode: "shared",
+  });
+
+  assert.equal(sessionId, "side");
+  assert.equal(deps.get().selectedSessionId, "parent");
+  assert.equal(deps.get().projections.has("side"), true);
+  assert.deepEqual(requests[0], {
+    url: "http://127.0.0.1:43111/api/sessions/parent/fork",
+    method: "POST",
+    body: {
+      operationId: "side-operation-1",
+      kind: "side",
+      workspaceMode: "shared",
+      attach: {
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-connection",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    },
+  });
+});
+
+test("fork session command shares one in-flight request for repeated activation", async () => {
+  const parent = summary({ id: "parent-flight", providerSessionId: "thread-parent-flight" });
+  const side = summary({ id: "side-flight", providerSessionId: "thread-side-flight" });
+  side.session.relationship = {
+    parentSessionId: "parent-flight",
+    parentProviderSessionId: "thread-parent-flight",
+    kind: "side",
+    workspaceMode: "shared",
+    persistence: "ephemeral",
+  };
+  const deps = startupDeps({
+    selectedSessionId: "parent-flight",
+    projections: new Map([["parent-flight", createEmptySessionProjection(parent)]]),
+  });
+  let resolveRequest!: (value: { session: SessionSummary }) => void;
+  const pendingResponse = new Promise<{ session: SessionSummary }>((resolve) => {
+    resolveRequest = resolve;
+  });
+  const requests = installWebApiMocks(() => pendingResponse);
+
+  const first = forkSessionCommand(deps, "parent-flight", {
+    kind: "side",
+    workspaceMode: "shared",
+  });
+  const duplicate = forkSessionCommand(deps, "parent-flight", {
+    kind: "side",
+    workspaceMode: "shared",
+  });
+  assert.equal(requests.length, 1);
+  await assert.rejects(
+    forkSessionCommand(deps, "parent-flight", {
+      kind: "fork",
+      workspaceMode: "shared",
+    }),
+    /branch operation is already running/,
+  );
+
+  resolveRequest({ session: side });
+  assert.deepEqual(await Promise.all([first, duplicate]), ["side-flight", "side-flight"]);
+  assert.equal(requests.length, 1);
+});
+
+test("fork session command reuses operationId after an ambiguous transport failure", async () => {
+  const parent = summary({ id: "parent-retry", providerSessionId: "thread-parent-retry" });
+  const side = summary({ id: "side-retry", providerSessionId: "thread-side-retry" });
+  side.session.relationship = {
+    parentSessionId: "parent-retry",
+    parentProviderSessionId: "thread-parent-retry",
+    kind: "side",
+    workspaceMode: "shared",
+    persistence: "ephemeral",
+  };
+  const deps = startupDeps({
+    selectedSessionId: "parent-retry",
+    projections: new Map([["parent-retry", createEmptySessionProjection(parent)]]),
+  });
+  let attempt = 0;
+  const requests = installWebApiMocks(() => {
+    attempt += 1;
+    if (attempt === 1) {
+      return new Response(JSON.stringify({ error: "response lost" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return { session: side };
+  });
+
+  await assert.rejects(
+    forkSessionCommand(deps, "parent-retry", {
+      kind: "side",
+      workspaceMode: "shared",
+    }),
+    /response lost/,
+  );
+  const sessionId = await forkSessionCommand(deps, "parent-retry", {
+    kind: "side",
+    workspaceMode: "shared",
+  });
+
+  assert.equal(sessionId, "side-retry");
+  assert.equal(requests.length, 2);
+  assert.equal(
+    (requests[0]?.body as { operationId?: string }).operationId,
+    (requests[1]?.body as { operationId?: string }).operationId,
+  );
+});
+
+test("fork session command selects persistent child tasks", async () => {
+  const parent = summary({ id: "parent", providerSessionId: "thread-parent" });
+  const child = summary({ id: "fork", providerSessionId: "thread-fork" });
+  child.session.relationship = {
+    parentSessionId: "parent",
+    parentProviderSessionId: "thread-parent",
+    kind: "fork",
+    workspaceMode: "shared",
+    persistence: "persistent",
+  };
+  const deps = startupDeps({
+    selectedSessionId: "parent",
+    projections: new Map([["parent", createEmptySessionProjection(parent)]]),
+  });
+  installWebApiMocks(() => ({ session: child }));
+
+  await forkSessionCommand(deps, "parent", {
+    operationId: "fork-operation-1",
+    kind: "fork",
+    workspaceMode: "shared",
+    lastTurnId: "turn-3",
+  });
+
+  assert.equal(deps.get().selectedSessionId, "fork");
+  assert.equal(deps.get().projections.has("fork"), true);
+  assert.equal(deps.get().sessionTopologyVersion, 1);
 });
 
 describe("session startup model and mode requests", () => {
@@ -212,7 +378,7 @@ describe("session startup model and mode requests", () => {
       startupDeps(
         {},
         {
-          ensureSessionHistoryLoaded: async (sessionId: string) => {
+          ensureConversationLoaded: async (sessionId: string) => {
             historyLoads.push(sessionId);
           },
           initializeLiveConversationProjection: async (sessionId: string) => {
@@ -242,7 +408,6 @@ describe("session startup model and mode requests", () => {
       title: "test",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
-      reasoningId: "xhigh",
       modeId: "on-request/read-only",
       attach: {
         client: {
@@ -459,7 +624,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    await claimHistorySessionCommand(
+    await resumeHistorySessionCommand(
       startupDeps({
         projections,
         storedSessions: [
@@ -491,7 +656,6 @@ describe("session startup model and mode requests", () => {
       liveBackend: "native_local_server",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
-      reasoningId: "xhigh",
       modeId: "on-request/read-only",
       preferStoredReplay: false,
       historyReplay: "skip",
@@ -514,7 +678,6 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(modelRequest?.body, {
       modelId: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
-      reasoningId: "xhigh",
     });
   });
 
@@ -557,7 +720,7 @@ describe("session startup model and mode requests", () => {
       recentSessions: [],
     });
 
-    await claimHistorySessionCommand(deps, "history");
+    await resumeHistorySessionCommand(deps, "history");
 
     const state = (deps as { get: () => {
       projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
@@ -566,6 +729,179 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.projections.has("history"), false);
     assert.equal(state.projections.has("claimed"), true);
     assert.equal(state.selectedSessionId, "claimed");
+  });
+
+  test("resume history reuses the ready canonical turn page without a second history request", async () => {
+    const history = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const historyProjection = createEmptySessionProjection(history);
+    const preservedTurns = [
+      {
+        id: "canonical-turn-1",
+        provider: "codex" as const,
+        providerSessionId: "thread-1",
+        providerTurnId: "provider-turn-1",
+        status: "completed" as const,
+        statusAuthority: "native" as const,
+        items: [],
+        failedItemCount: 0,
+        revision: 7,
+      },
+    ];
+    historyProjection.conversation = {
+      ...initialConversationSyncState(),
+      phase: "ready",
+      loadedScope: "history",
+      turns: preservedTurns,
+      revision: 7,
+      daemonRevision: 7,
+      loadedAt: "2026-07-13T00:00:00.000Z",
+    };
+    let historyRequests = 0;
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps(
+      {
+        projections: new Map([["history", historyProjection]]),
+        selectedSessionId: "history",
+        storedSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+          },
+        ],
+      },
+      {
+        readTurns: async (): Promise<ConversationTurnsPageResponse> => {
+          historyRequests += 1;
+          throw new Error("resume must not reload an already-ready history page");
+        },
+      },
+    );
+
+    await resumeHistorySessionCommand(deps, "history");
+    assert.equal(await ensureConversationLoadedCommand(deps, "claimed"), true);
+
+    const state = (deps as { get: () => {
+      projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+    } }).get();
+    assert.equal(historyRequests, 0);
+    assert.equal(state.projections.get("claimed")?.conversation?.turns, preservedTurns);
+  });
+
+  test("resume waits for in-flight history hydration before migrating the projection", async () => {
+    const history = summary({
+      id: "history",
+      provider: "claude",
+      providerSessionId: "claude-thread-1",
+      cwd: "/tmp/rah",
+    });
+    const historyProjection = createEmptySessionProjection(history);
+    const hydratedTurns = [
+      {
+        id: "canonical-turn-claude",
+        provider: "claude" as const,
+        providerSessionId: "claude-thread-1",
+        providerTurnId: "provider-turn-claude",
+        status: "completed" as const,
+        statusAuthority: "native" as const,
+        items: [],
+        failedItemCount: 0,
+        revision: 3,
+      },
+    ];
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "claude",
+            providerSessionId: "claude-thread-1",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    let markHydrationStarted: (() => void) | undefined;
+    const hydrationStarted = new Promise<void>((resolve) => {
+      markHydrationStarted = resolve;
+    });
+    let releaseHydration: (() => void) | undefined;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const deps = startupDeps(
+      {
+        projections: new Map([["history", historyProjection]]),
+        selectedSessionId: "history",
+        storedSessions: [
+          {
+            provider: "claude",
+            providerSessionId: "claude-thread-1",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+          },
+        ],
+      },
+      {
+        ensureConversationLoaded: async () => {
+          markHydrationStarted?.();
+          await hydrationGate;
+        },
+      },
+    );
+
+    const resume = resumeHistorySessionCommand(deps, "history");
+    await hydrationStarted;
+    assert.deepEqual((deps as { get: () => { pendingSessionAction: unknown } }).get().pendingSessionAction, {
+      kind: "resume_history",
+      sessionId: "history",
+      provider: "claude",
+      providerSessionId: "claude-thread-1",
+    });
+    historyProjection.conversation = {
+      ...initialConversationSyncState(),
+      phase: "ready",
+      loadedScope: "history",
+      turns: hydratedTurns,
+      revision: 3,
+      daemonRevision: 3,
+      loadedAt: "2026-07-13T00:00:00.000Z",
+    };
+    releaseHydration?.();
+    await resume;
+
+    const state = (deps as {
+      get: () => {
+        projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      };
+    }).get();
+    assert.equal(state.projections.get("claimed")?.conversation?.turns, hydratedTurns);
   });
 
   test("resume history keeps the current history projection visible while resume is pending", async () => {
@@ -606,8 +942,10 @@ describe("session startup model and mode requests", () => {
         assert.equal(state.selectedSessionId, "history");
         assert.equal(state.projections.has("history"), true);
         assert.deepEqual(state.pendingSessionAction, {
-          kind: "claim_history",
+          kind: "resume_history",
           sessionId: "history",
+          provider: "codex",
+          providerSessionId: "thread-1",
         });
         assert.equal(state.pendingSessionTransition, null);
         return {
@@ -622,7 +960,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    await claimHistorySessionCommand(deps, "history");
+    await resumeHistorySessionCommand(deps, "history");
   });
 
   test("resume history keeps the resumed session when post-resume control update fails", async () => {
@@ -671,7 +1009,7 @@ describe("session startup model and mode requests", () => {
       recentSessions: [],
     });
 
-    const claimedId = await claimHistorySessionCommand(
+    const resumedId = await resumeHistorySessionCommand(
       deps,
       "history",
       {
@@ -682,7 +1020,7 @@ describe("session startup model and mode requests", () => {
     );
     const state = (deps as { get: () => { projections: Map<string, unknown>; selectedSessionId: string | null; error: string | null } }).get();
 
-    assert.equal(claimedId, "claimed");
+    assert.equal(resumedId, "claimed");
     assert.equal(state.selectedSessionId, "claimed");
     assert.equal(state.projections.has("claimed"), true);
     assert.equal(state.projections.has("history"), false);
@@ -720,7 +1058,7 @@ describe("session startup model and mode requests", () => {
         cwd: "/tmp/rah",
       });
       const projections = new Map([[history.session.id, createEmptySessionProjection(history)]]);
-      await claimHistorySessionCommand(
+      await resumeHistorySessionCommand(
         startupDeps({
           projections,
           storedSessions: [
@@ -878,7 +1216,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    await claimHistorySessionCommand(
+    await resumeHistorySessionCommand(
       startupDeps(
         {
           projections,
@@ -1097,7 +1435,7 @@ describe("session startup model and mode requests", () => {
         const projection = state.projections.get(provisionalId);
         provisionalAtResumeRequest = {
           selectedSessionId: state.selectedSessionId,
-          phase: projection?.history.phase,
+          phase: projection?.conversation?.phase,
           title: projection?.summary.session.title,
         };
         return {
@@ -1207,7 +1545,7 @@ describe("session startup model and mode requests", () => {
       },
     );
 
-    await claimHistorySessionCommand(
+    await resumeHistorySessionCommand(
       deps,
       "history",
     );
@@ -1277,13 +1615,13 @@ describe("session startup model and mode requests", () => {
       },
     };
     const historyProjection = createEmptySessionProjection(historySummary);
-    const preservedConversationV2 = {
-      ...initialConversationV2SyncState(),
+    const preservedConversation = {
+      ...initialConversationSyncState(),
       phase: "ready" as const,
       loadedScope: "history" as const,
       revision: 7,
     };
-    historyProjection.conversationV2 = preservedConversationV2;
+    historyProjection.conversation = preservedConversation;
     historyProjection.feed = [
       {
         key: "assistant:history-answer",
@@ -1316,7 +1654,7 @@ describe("session startup model and mode requests", () => {
       ],
     });
 
-    await claimHistorySessionCommand(deps, "history");
+    await resumeHistorySessionCommand(deps, "history");
 
     assert.deepEqual(
       requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
@@ -1335,7 +1673,7 @@ describe("session startup model and mode requests", () => {
       ["assistant:history-answer"],
     );
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
-    assert.equal(state.projections.get("live")?.conversationV2, preservedConversationV2);
+    assert.equal(state.projections.get("live")?.conversation, preservedConversation);
   });
 
   test("resuming history selects an already controlled live projection without network calls", async () => {
@@ -1391,7 +1729,7 @@ describe("session startup model and mode requests", () => {
       ],
     });
 
-    await claimHistorySessionCommand(deps, "history");
+    await resumeHistorySessionCommand(deps, "history");
 
     assert.equal(requests.length, 0);
     const state = (deps as { get: () => {
@@ -1500,7 +1838,7 @@ describe("session startup model and mode requests", () => {
       },
     );
 
-    await claimHistorySessionCommand(deps, "history");
+    await resumeHistorySessionCommand(deps, "history");
 
     const state = (deps as { get: () => {
       projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
@@ -1570,7 +1908,7 @@ describe("session startup model and mode requests", () => {
     });
 
     await assert.rejects(
-      claimHistorySessionCommand(deps, "history"),
+      resumeHistorySessionCommand(deps, "history"),
       /attach instead of resume/,
     );
 

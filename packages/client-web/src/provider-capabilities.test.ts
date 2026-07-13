@@ -134,7 +134,6 @@ describe("provider capability helpers", () => {
               contextUsage: true,
               resumeByProvider: true,
               listProviderSessions: false,
-              renameSession: false,
               actions: {
                 info: true,
                 stop: true,
@@ -263,7 +262,6 @@ describe("provider capability helpers", () => {
           contextUsage: true,
           resumeByProvider: true,
           listProviderSessions: true,
-          renameSession: true,
           actions: {
             info: true,
             stop: true,
@@ -364,7 +362,6 @@ describe("provider capability helpers", () => {
           contextUsage: true,
           resumeByProvider: true,
           listProviderSessions: true,
-          renameSession: true,
           actions: {
             info: true,
             stop: true,
@@ -448,7 +445,6 @@ describe("provider capability helpers", () => {
           contextUsage: true,
           resumeByProvider: true,
           listProviderSessions: true,
-          renameSession: true,
           actions: {
             info: true,
             stop: true,

@@ -10,7 +10,7 @@ import type {
   RahEvent,
   RuntimeOperation,
   SessionSummary,
-  SessionTurnDirectoryItem,
+  ConversationTurnDirectoryItem,
   TimelineIdentity,
   TimelineItem,
   TimelineRuntimeModel,
@@ -114,13 +114,12 @@ export interface SessionProjection {
   events: RahEvent[];
   lastSeq: number;
   currentRuntimeStatus?: Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"];
-  history: HistorySyncState;
-  conversationV2?: ConversationV2SyncState;
-  turnDirectory?: SessionTurnDirectoryState;
+  conversation?: ConversationSyncState;
+  turnDirectory?: ConversationDirectoryState;
   pendingInterrupt?: InterruptIntent;
 }
 
-export interface ConversationV2SyncState {
+export interface ConversationSyncState {
   phase: "idle" | "loading" | "ready" | "error";
   loadedScope: "none" | "live" | "history";
   turns: ConversationTurnProjection[];
@@ -134,7 +133,7 @@ export interface ConversationV2SyncState {
   lastError: string | null;
 }
 
-export function initialConversationV2SyncState(): ConversationV2SyncState {
+export function initialConversationSyncState(): ConversationSyncState {
   return {
     phase: "idle",
     loadedScope: "none",
@@ -150,22 +149,13 @@ export function initialConversationV2SyncState(): ConversationV2SyncState {
   };
 }
 
-export interface SessionTurnDirectoryState {
+export interface ConversationDirectoryState {
   phase: "idle" | "loading" | "ready" | "error";
   revision: string | null;
-  items: SessionTurnDirectoryItem[];
+  items: ConversationTurnDirectoryItem[];
   complete: boolean;
   sourceBytes: number | null;
   generatedAt: string | null;
-  lastError: string | null;
-}
-
-export interface HistorySyncState {
-  phase: "idle" | "loading" | "ready" | "error";
-  nextCursor: string | null;
-  nextBeforeTs: string | null;
-  generation: number;
-  authoritativeApplied: boolean;
   lastError: string | null;
 }
 
@@ -231,7 +221,6 @@ export function createSessionMap(response: SessionsResponse): SessionMap {
       feed: [],
       events: [],
       lastSeq: 0,
-      history: initialHistorySyncState(),
     });
   }
   return {
@@ -239,17 +228,6 @@ export function createSessionMap(response: SessionsResponse): SessionMap {
     storedSessionIds: response.storedSessions.map(
       (stored) => `${stored.provider}:${stored.providerSessionId}`,
     ),
-  };
-}
-
-export function initialHistorySyncState(): HistorySyncState {
-  return {
-    phase: "idle",
-    nextCursor: null,
-    nextBeforeTs: null,
-    generation: 0,
-    authoritativeApplied: false,
-    lastError: null,
   };
 }
 
@@ -265,6 +243,7 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     case "session.started":
       return isIsoTsAtLeast(event.payload.session.updatedAt, current.summary.session.updatedAt);
     case "session.state.changed":
+    case "session.side.state.changed":
     case "session.native_tui.prompt_state.changed":
     case "permission.requested":
     case "permission.resolved":
@@ -276,6 +255,18 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     default:
       return true;
   }
+}
+
+function relationshipWithSideLifecycle(
+  relationship: NonNullable<ManagedSession["relationship"]>,
+  event: Extract<RahEvent, { type: "session.side.state.changed" }>,
+): NonNullable<ManagedSession["relationship"]> {
+  const { sideStateDetail: _previousDetail, ...withoutDetail } = relationship;
+  return {
+    ...withoutDetail,
+    sideState: event.payload.state,
+    ...(event.payload.detail !== undefined ? { sideStateDetail: event.payload.detail } : {}),
+  };
 }
 
 function sessionSummaryIsActivelyRunning(summary: SessionSummary): boolean {
@@ -695,8 +686,8 @@ function insertTimelineEntry(
 ): FeedEntry[] {
   // Live mirrors must preserve daemon event order. Provider timestamps can move
   // backwards or arrive later than RAH runtime notices, especially for Claude
-  // JSONL and provider-local history mirrors. Older history is merged through
-  // prependHistoryPage, not by re-sorting live events here.
+  // JSONL mirrors. Canonical historical turns are owned by Conversation state,
+  // so this auxiliary live feed must not re-sort or reconstruct them.
   return [...feed, entry];
 }
 
@@ -2035,7 +2026,6 @@ export function applyEventToProjection(
       feed: [],
       events: [event],
       lastSeq: event.seq,
-      history: initialHistorySyncState(),
     };
   }
 
@@ -2066,6 +2056,22 @@ export function applyEventToProjection(
                       updatedAt: event.ts,
                     },
                   }
+                : event.type === "session.side.state.changed"
+                  ? {
+                      ...current.summary,
+                      session: {
+                        ...current.summary.session,
+                        updatedAt: event.ts,
+                        ...(current.summary.session.relationship
+                          ? {
+                              relationship: relationshipWithSideLifecycle(
+                                current.summary.session.relationship,
+                                event,
+                              ),
+                            }
+                          : {}),
+                      },
+                    }
                 : event.type === "session.native_tui.prompt_state.changed"
                   ? {
                       ...current.summary,
@@ -2207,9 +2213,8 @@ export function applyEventToProjection(
     events: [...current.events.slice(-199), event],
     lastSeq: event.seq,
     ...(nextRuntimeStatus !== undefined ? { currentRuntimeStatus: nextRuntimeStatus } : {}),
-    history: current.history,
-    ...(current.conversationV2 !== undefined
-      ? { conversationV2: current.conversationV2 }
+    ...(current.conversation !== undefined
+      ? { conversation: current.conversation }
       : {}),
     ...(current.turnDirectory !== undefined
       ? { turnDirectory: current.turnDirectory }

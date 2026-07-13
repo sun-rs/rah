@@ -73,6 +73,12 @@ export function dedupeStoredSessionsByIdentity(sessions: StoredSessionRef[]): St
   return [...deduped.values()];
 }
 
+export function visibleStoredSessionRefs(
+  sessions: readonly StoredSessionRef[],
+): StoredSessionRef[] {
+  return sessions.filter((session) => session.providerState?.archived !== true);
+}
+
 export function filterStoppedRecentSessions(
   sessions: readonly StoredSessionRef[],
   runningIdentityKeys: ReadonlySet<string>,

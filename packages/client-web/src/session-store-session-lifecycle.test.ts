@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { applyClosedSessionState } from "./session-store-session-lifecycle";
-import { initialHistorySyncState, type FeedEntry, type SessionProjection } from "./types";
+import {
+  applyClosedSessionState,
+  isPendingResumeProjectionTransferTarget,
+} from "./session-store-session-lifecycle";
+import { type FeedEntry, type SessionProjection } from "./types";
 
 function summary(): SessionSummary {
   return {
@@ -57,9 +60,39 @@ function projection(sessionSummary: SessionSummary): SessionProjection {
     ],
     events: [],
     lastSeq: 0,
-    history: initialHistorySyncState(),
   };
 }
+
+test("defers automatic history loading for the live target of a pending Resume transfer", () => {
+  const history = summary();
+  history.session.id = "history";
+  const live: SessionSummary = {
+    ...summary(),
+    session: {
+      ...summary().session,
+      id: "live",
+    },
+  };
+  const state = {
+    projections: new Map([
+      ["history", projection(history)],
+      ["live", projection(live)],
+    ]),
+    pendingSessionAction: {
+      kind: "resume_history" as const,
+      sessionId: "history",
+      provider: "codex" as const,
+      providerSessionId: "provider-1",
+    },
+  };
+
+  assert.equal(isPendingResumeProjectionTransferTarget(state, "history"), false);
+  assert.equal(isPendingResumeProjectionTransferTarget(state, "live"), true);
+  state.projections.delete("history");
+  assert.equal(isPendingResumeProjectionTransferTarget(state, "live"), true);
+  live.session.providerSessionId = "provider-2";
+  assert.equal(isPendingResumeProjectionTransferTarget(state, "live"), false);
+});
 
 test("remembers closed sessions using visible conversation activity, not runtime updatedAt", () => {
   const sessionSummary = summary();

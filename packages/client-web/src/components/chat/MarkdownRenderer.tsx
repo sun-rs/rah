@@ -17,6 +17,7 @@ import { copyTextToClipboard } from "../../clipboard";
 import { importWithStaleReload } from "../../lazy-module-reload";
 import { splitMarkdownBlocks } from "./markdown-blocks";
 import { resolveLocalFileLinkPath } from "./local-file-link";
+import { FileResourceIcon } from "./FileResourceIcon";
 
 const ReactMarkdown = lazy(async () => ({
   default: (await importWithStaleReload(() => import("react-markdown"))).default,
@@ -103,14 +104,17 @@ export function createMarkdownComponents(
         if (!onOpenLocalFile) {
           return (
             <span title={localFilePath} className="text-[var(--app-fg)]">
-              {children}
+              <span className="prose-chat-local-file-content">
+                <FileResourceIcon path={localFilePath} className="shrink-0" />
+                <span>{children}</span>
+              </span>
             </span>
           );
         }
         return (
           <button
             type="button"
-            className="inline cursor-pointer border-0 bg-transparent p-0 text-left text-[var(--app-link)] underline underline-offset-2 hover:opacity-80"
+            className="prose-chat-local-file-link"
             title={`Open in Inspector: ${localFilePath}`}
             onClick={(event) => {
               event.preventDefault();
@@ -118,7 +122,10 @@ export function createMarkdownComponents(
               onOpenLocalFile(localFilePath);
             }}
           >
-            {children}
+            <span className="prose-chat-local-file-content">
+              <FileResourceIcon path={localFilePath} className="shrink-0" />
+              <span>{children}</span>
+            </span>
           </button>
         );
       }
@@ -154,7 +161,10 @@ export function createMarkdownComponents(
               onOpenLocalFile(localFilePath);
             }}
           >
-            <code {...codeProps}>{children}</code>
+            <span className="prose-chat-local-file-content">
+              <FileResourceIcon path={localFilePath} className="shrink-0" />
+              <code {...codeProps}>{children}</code>
+            </span>
           </button>
         );
       }

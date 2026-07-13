@@ -53,7 +53,6 @@ function summary(
         contextUsage: false,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: true,
         actions: { info: true, stop: running, delete: true, rename: "native" },
         steerInput: running,
         queuedInput: false,
@@ -72,10 +71,8 @@ function summary(
 const replayNoop = {
   takePendingEventsForSessions: () => [],
   updateLastSeq: () => undefined,
-  clearBufferedSession: () => undefined,
+  clearPendingSession: () => undefined,
   queuePendingEvent: () => undefined,
-  shouldDeferEvent: () => false,
-  queueDeferredEvent: () => undefined,
 };
 
 test("replaceSessionsResponse keeps a pending stored replay projection until the server returns it", () => {
@@ -132,6 +129,20 @@ test("replaceSessionsResponse drops pending stored replay projection once the re
   assert.equal(next.projections.has(provisionalId), false);
   assert.equal(next.projections.has("real-replay"), true);
   assert.equal(next.selectedSessionId, "real-replay");
+});
+
+test("stored Codex replay advertises native Fork and Side without worktree support", () => {
+  const projection = createPendingStoredReplayProjection({
+    provider: "codex",
+    providerSessionId: "thread-history-branching",
+    cwd: "/workspace/demo",
+  });
+
+  assert.deepEqual(projection.summary.session.capabilities.branching, {
+    sameWorkspace: true,
+    worktree: false,
+    side: true,
+  });
 });
 
 test("applySessionsResponse derives missing workspace dirs from running session projections", () => {

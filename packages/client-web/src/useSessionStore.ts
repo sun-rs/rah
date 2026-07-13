@@ -6,7 +6,7 @@ import type {
   ProviderModelCatalog,
   RahEvent,
   SessionConfigValue,
-  SessionHistoryItemDetailKind,
+  ConversationItemDetailKind,
   SessionSummary,
   StoredSessionIdentity,
   StoredSessionRef,
@@ -46,45 +46,35 @@ import {
 } from "./session-store-session-commands";
 import {
   activateHistorySessionCommand,
-  claimHistorySessionCommand,
+  resumeHistorySessionCommand,
   resumeStoredSessionCommand,
+  forkSessionCommand,
   startScenarioCommand,
   startSessionCommand,
+  type ForkSessionOptions,
 } from "./session-store-session-startup";
+import { isPendingResumeProjectionTransferTarget } from "./session-store-session-lifecycle";
 import { notifyForRahEvents } from "./browser-notifications";
 import {
-  clearHistoryBootstrapBuffers,
-  clearHistoryBootstrapBuffersForSession,
-  queueDeferredBootstrapEvent,
+  clearPendingEvents,
+  clearPendingEventsForSession,
   queuePendingEvent,
-  shouldDeferEventForHistoryBootstrap,
   takePendingEventsForSessions,
-} from "./session-store-history-bootstrap";
-import {
-  syncLastHistorySelectionFromState as syncHistorySelectionFromState,
-} from "./session-store-history";
+} from "./session-store-pending-events";
 import { syncHistorySelectionSubscription } from "./session-store-history-selection-sync";
 import {
-  ensureSessionHistoryLoadedCommand,
-  loadOlderHistoryCommand,
-  refreshLatestHistoryCommand,
-} from "./session-store-history-paging";
+  applyConversationDeltasToProjectionMap,
+  ensureConversationLoadedCommand,
+  initializeLiveConversationCommand,
+  loadConversationItemDetailCommand,
+  loadConversationTurnDetailCommand,
+  loadOlderConversationCommand,
+  refreshConversationCommand,
+} from "./session-store-conversation";
 import {
-  applyConversationV2DeltasToProjectionMap,
-  conversationV2LegacyDetailId,
-  ensureConversationV2LoadedCommand,
-  initializeLiveConversationV2Command,
-  loadPreferredConversationHistory,
-  loadConversationV2ItemDetailCommand,
-  loadConversationV2TurnDetailCommand,
-  loadOlderConversationV2Command,
-  refreshConversationV2Command,
-} from "./session-store-conversation-v2";
-import { conversationV2Enabled } from "./conversation-v2-feature";
-import {
-  ensureSessionTurnDirectoryCommand,
-  loadSessionTurnHistoryCommand,
-} from "./session-store-turn-directory";
+  ensureSessionConversationDirectoryCommand,
+  loadConversationDirectoryTurnCommand,
+} from "./session-store-conversation-directory";
 import {
   ensureSessionReadStateInitialized,
   hasUnreadSinceReadState,
@@ -127,6 +117,7 @@ export {
 
 type ProviderChoice = "codex" | "claude" | "opencode";
 type StoredSessionsMode = "all" | "recent";
+const RECENT_STORED_SESSION_LIMIT = 15;
 
 interface StartSessionOptions {
   provider?: ProviderChoice;
@@ -141,7 +132,7 @@ interface StartSessionOptions {
   onSessionCreated?: (sessionId: string) => void;
 }
 
-interface ClaimHistorySessionOptions {
+interface ResumeHistorySessionOptions {
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   modeId?: string;
   modelId?: string;
@@ -197,8 +188,10 @@ interface SessionState {
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
-        kind: "attach_session" | "claim_control" | "claim_history";
+        kind: "attach_session" | "claim_control" | "resume_history";
         sessionId: string;
+        provider?: SessionSummary["session"]["provider"];
+        providerSessionId?: string;
       }
     | null;
   isInitialLoaded: boolean;
@@ -223,6 +216,7 @@ interface SessionState {
     catalog: ProviderModelCatalog,
   ) => void;
   startSession: (options?: StartSessionOptions) => Promise<string | null>;
+  forkSession: (parentSessionId: string, options: ForkSessionOptions) => Promise<string>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
   activateHistorySession: (
     ref: StoredSessionRef,
@@ -246,10 +240,11 @@ interface SessionState {
     reasoningId?: string | null,
     optionValues?: Record<string, SessionConfigValue>,
   ) => Promise<void>;
-  claimHistorySession: (
+  resumeHistorySession: (
     sessionId: string,
-    options?: ClaimHistorySessionOptions,
+    options?: ResumeHistorySessionOptions,
   ) => Promise<string | null>;
+  archiveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
   setVisibleSessionIds: (sessionIds: readonly string[]) => void;
@@ -259,19 +254,16 @@ interface SessionState {
   releaseControl: (sessionId: string) => Promise<void>;
   interruptSession: (sessionId: string) => Promise<void>;
   sendInput: (sessionId: string, text: string) => Promise<void>;
-  ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
-  ensureConversationV2Loaded: (sessionId: string) => Promise<boolean>;
-  initializeLiveConversationV2: (sessionId: string) => Promise<boolean>;
-  refreshConversationV2: (sessionId: string) => Promise<void>;
-  loadOlderConversationV2: (sessionId: string) => Promise<void>;
-  loadConversationV2TurnDetail: (sessionId: string, turnId: string) => Promise<void>;
-  refreshLatestHistory: (sessionId: string) => Promise<void>;
-  loadOlderHistory: (sessionId: string) => Promise<void>;
-  ensureSessionTurnDirectory: (sessionId: string) => Promise<void>;
-  loadSessionTurnHistory: (sessionId: string, turnId: string) => Promise<void>;
-  loadHistoryItemDetail: (
+  ensureConversationLoaded: (sessionId: string) => Promise<boolean>;
+  initializeLiveConversation: (sessionId: string) => Promise<boolean>;
+  refreshConversation: (sessionId: string) => Promise<void>;
+  loadOlderConversation: (sessionId: string) => Promise<void>;
+  loadConversationTurnDetail: (sessionId: string, turnId: string) => Promise<void>;
+  ensureSessionConversationDirectory: (sessionId: string) => Promise<void>;
+  loadConversationDirectoryTurn: (sessionId: string, turnId: string) => Promise<void>;
+  loadConversationItemDetail: (
     sessionId: string,
-    kind: SessionHistoryItemDetailKind,
+    kind: ConversationItemDetailKind,
     itemId: string,
   ) => Promise<void>;
   respondToPermission: (
@@ -283,7 +275,6 @@ interface SessionState {
 
 let lastEventSeq = 0;
 let storedSessionsCatalogLoadInFlight: Promise<void> | null = null;
-const HISTORY_PAGE_LIMIT = 60;
 const MODEL_CATALOG_PROVIDERS = new Set<ProviderChoice>([
   "codex",
   "claude",
@@ -295,7 +286,7 @@ const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1_000;
 const modelCatalogBackgroundInFlight = new Map<string, Promise<void>>();
 let modelCatalogBackgroundRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let modelCatalogFocusListenerInstalled = false;
-const conversationV2RefreshInFlight = new Map<string, Promise<boolean>>();
+const conversationRefreshInFlight = new Map<string, Promise<boolean>>();
 
 function logModelCatalog(message: string, details?: Record<string, unknown>): void {
   if (details) {
@@ -369,10 +360,8 @@ function createProjectionReplayHandling() {
     updateLastSeq: (seq: number) => {
       lastEventSeq = Math.max(lastEventSeq, seq);
     },
-    clearBufferedSession: clearHistoryBootstrapBuffersForSession,
+    clearPendingSession: clearPendingEventsForSession,
     queuePendingEvent,
-    shouldDeferEvent: shouldDeferEventForHistoryBootstrap,
-    queueDeferredEvent: queueDeferredBootstrapEvent,
   };
 }
 
@@ -528,6 +517,32 @@ function omitStoredSessionCatalogRefs(
   return current.filter((session) => !omittedKeys.has(storedSessionKey(session)));
 }
 
+function applyStoredSessionOmissionResponse(
+  state: SessionState,
+  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+  omittedKeys: ReadonlySet<string>,
+  workspaceVisibilityVersionAtRequest: number,
+) {
+  const applied = applySessionsResponse(state, sessionsResponse, {
+    workspaceVisibilityVersionAtRequest,
+    preserveLocalStoppedHistory: true,
+    excludeLocalStoppedHistoryKeys: omittedKeys,
+  });
+  const recentSessions = omitStoredSessionCatalogRefs(applied.recentSessions, omittedKeys);
+  const storedSessions = state.storedSessionsCatalogLoaded
+    ? mergeStoredSessionCatalogRefs(
+        omitStoredSessionCatalogRefs(state.storedSessions, omittedKeys),
+        omitStoredSessionCatalogRefs(applied.storedSessions, omittedKeys),
+      )
+    : omitStoredSessionCatalogRefs(applied.storedSessions, omittedKeys);
+  return {
+    ...applied,
+    storedSessions,
+    recentSessions,
+    error: null,
+  };
+}
+
 function sortStoredSessionCatalogRefs(sessions: Iterable<StoredSessionRef>): StoredSessionRef[] {
   return [...sessions].sort((left, right) =>
     (right.lastUsedAt ?? right.updatedAt ?? "").localeCompare(left.lastUsedAt ?? left.updatedAt ?? ""),
@@ -546,6 +561,16 @@ function applyStoredSessionsDeltaToCatalog(
     byKey.set(storedSessionKey(session), session);
   }
   return sortStoredSessionCatalogRefs(byKey.values());
+}
+
+export function applyStoredSessionsDeltaToRecent(
+  current: readonly StoredSessionRef[],
+  delta: Pick<StoredSessionsDeltaResponse, "upsert" | "remove">,
+): StoredSessionRef[] {
+  return applyStoredSessionsDeltaToCatalog(current, delta).slice(
+    0,
+    RECENT_STORED_SESSION_LIMIT,
+  );
 }
 
 function discoveryDeltaFromEvents(events: readonly RahEvent[]): StoredSessionsDeltaResponse | null {
@@ -637,12 +662,6 @@ function adoptExistingProjectionForProviderSession(
   return adoptExistingProjectionForProviderSessionImpl(projections, summary);
 }
 
-function syncLastHistorySelectionFromState(
-  state: Pick<SessionState, "selectedSessionId" | "projections" | "workspaceDir">,
-) {
-  return syncHistorySelectionFromState(state);
-}
-
 function storedSessionsModeForState(
   state: Pick<SessionState, "storedSessionsCatalogLoaded">,
 ): StoredSessionsMode {
@@ -655,14 +674,19 @@ function applyStoredSessionDiscoveryEvents(events: readonly RahEvent[]) {
     if (!delta || delta.resetRequired) {
       return { storedSessionsCatalogDirty: true };
     }
+    const recentSessions = applyStoredSessionsDeltaToRecent(state.recentSessions, delta);
     if (!state.storedSessionsCatalogLoaded || state.storedSessionsCatalogRevision === null) {
-      return { storedSessionsCatalogDirty: true };
+      return {
+        recentSessions,
+        storedSessionsCatalogDirty: true,
+      };
     }
     if (state.storedSessionsCatalogRevision !== delta.fromRevision) {
       return { storedSessionsCatalogDirty: true };
     }
     return {
       storedSessions: applyStoredSessionsDeltaToCatalog(state.storedSessions, delta),
+      recentSessions,
       storedSessionsCatalogRevision: delta.revision,
       storedSessionsCatalogDirty: false,
     };
@@ -675,7 +699,7 @@ function shouldSkipSessionsResponseForTopology(
 ): boolean {
   return (
     state.sessionTopologyVersion !== sessionTopologyVersionAtRequest ||
-    state.pendingSessionAction?.kind === "claim_history"
+    state.pendingSessionAction?.kind === "resume_history"
   );
 }
 
@@ -687,78 +711,47 @@ function updateSessionSummary(session: SessionSummary) {
   });
 }
 
-async function refreshLegacySessionHistory(sessionId: string): Promise<void> {
-  await refreshLatestHistoryCommand({
-    get: useSessionStore.getState,
-    set: useSessionStore.setState,
-    sessionId,
-    historyPageLimit: HISTORY_PAGE_LIMIT,
-  });
+async function ensureConversationReady(sessionId: string) {
+  await useSessionStore.getState().ensureConversationLoaded(sessionId);
 }
 
-async function loadOlderLegacySessionHistory(sessionId: string): Promise<void> {
-  await loadOlderHistoryCommand({
-    get: useSessionStore.getState,
-    set: useSessionStore.setState,
-    sessionId,
-    historyPageLimit: HISTORY_PAGE_LIMIT,
-  });
-}
-
-async function ensureSessionHistoryLoaded(sessionId: string) {
-  const loadLegacy = () =>
-    ensureSessionHistoryLoadedCommand({
-      get: useSessionStore.getState,
-      loadOlderHistory: loadOlderLegacySessionHistory,
-      refreshLatestHistory: refreshLegacySessionHistory,
-      sessionId,
-    });
-  await loadPreferredConversationHistory({
-    conversationV2Enabled: conversationV2Enabled(),
-    loadConversationV2: () =>
-      useSessionStore.getState().ensureConversationV2Loaded(sessionId),
-    loadLegacy,
-  });
-}
-
-function refreshConversationV2Baseline(sessionId: string): Promise<boolean> {
-  const existing = conversationV2RefreshInFlight.get(sessionId);
+function refreshConversationBaseline(sessionId: string): Promise<boolean> {
+  const existing = conversationRefreshInFlight.get(sessionId);
   if (existing) {
     return existing;
   }
-  const request = refreshConversationV2Command(
+  const request = refreshConversationCommand(
     {
       get: useSessionStore.getState,
       set: useSessionStore.setState,
     },
     sessionId,
   ).finally(() => {
-    conversationV2RefreshInFlight.delete(sessionId);
+    conversationRefreshInFlight.delete(sessionId);
   });
-  conversationV2RefreshInFlight.set(sessionId, request);
+  conversationRefreshInFlight.set(sessionId, request);
   return request;
 }
 
-function refreshConversationV2GapIfNeeded(sessionId: string): void {
+function refreshConversationGapIfNeeded(sessionId: string): void {
   const state = useSessionStore.getState();
-  const conversation = state.projections.get(sessionId)?.conversationV2;
+  const conversation = state.projections.get(sessionId)?.conversation;
   if (
-    !conversationV2Enabled() ||
     !conversation ||
     !conversation.needsRefresh ||
     conversation.phase === "loading" ||
-    conversationV2RefreshInFlight.has(sessionId)
+    conversationRefreshInFlight.has(sessionId)
   ) {
     return;
   }
-  void refreshConversationV2Baseline(sessionId);
+  void refreshConversationBaseline(sessionId);
 }
 
-function recoverConversationV2DeltaGaps(
+function recoverConversationDeltaGaps(
   deltas: readonly { sessionId: string }[],
 ): void {
   for (const sessionId of new Set(deltas.map((delta) => delta.sessionId))) {
-    refreshConversationV2GapIfNeeded(sessionId);
+    refreshConversationGapIfNeeded(sessionId);
   }
 }
 
@@ -769,17 +762,14 @@ function createStartupDeps(
       | Partial<SessionState>
       | ((state: SessionState) => Partial<SessionState> | SessionState),
   ) => void,
-  options?: ClaimHistorySessionOptions,
+  options?: ResumeHistorySessionOptions,
 ) {
   return {
     get,
     set,
-    ensureSessionHistoryLoaded,
+    ensureConversationLoaded: ensureConversationReady,
     initializeLiveConversationProjection: async (sessionId: string) => {
-      if (!conversationV2Enabled()) {
-        return;
-      }
-      await get().initializeLiveConversationV2(sessionId);
+      await get().initializeLiveConversation(sessionId);
     },
     sendInput: get().sendInput,
     attachSession: get().attachSession,
@@ -818,21 +808,18 @@ async function recoverFromReplayGap(batch: EventBatch) {
     batch,
     get: useSessionStore.getState as never,
     set: useSessionStore.setState as never,
-    clearHistoryBootstrapBuffers,
+    clearPendingEvents,
     updateLastSeq: (seq) => {
       lastEventSeq = Math.max(lastEventSeq, seq);
     },
     replaceSessionsResponse: replaceSessionsResponse as never,
     applyEventsToMap,
-    ensureSessionHistoryLoaded,
+    ensureConversationLoaded: ensureConversationReady,
   });
-  if (!conversationV2Enabled()) {
-    return;
-  }
   const loadedSessionIds = [...useSessionStore.getState().projections.entries()]
-    .filter(([, projection]) => projection.conversationV2?.phase === "ready")
+    .filter(([, projection]) => projection.conversation?.phase === "ready")
     .map(([sessionId]) => sessionId);
-  await Promise.all(loadedSessionIds.map((sessionId) => refreshConversationV2Baseline(sessionId)));
+  await Promise.all(loadedSessionIds.map((sessionId) => refreshConversationBaseline(sessionId)));
 }
 
 function connectStoreTransport() {
@@ -842,14 +829,11 @@ function connectStoreTransport() {
     set: useSessionStore.setState as never,
     getNotificationProjections: () => useSessionStore.getState().projections,
     applyEventsToMap,
-    applyConversationDeltasToMap: (current, deltas) =>
-      conversationV2Enabled()
-        ? applyConversationV2DeltasToProjectionMap(current, deltas)
-        : current,
+    applyConversationDeltasToMap: applyConversationDeltasToProjectionMap,
     computeUnreadSessionIds: computeUnreadSessionIdsImpl,
     getVisibleSessionIds: () => useSessionStore.getState().visibleSessionIds,
     notifyUnreadEvents: notifyForRahEvents,
-    onConversationDeltasApplied: recoverConversationV2DeltaGaps,
+    onConversationDeltasApplied: recoverConversationDeltaGaps,
     recoverFromReplayGap,
     refreshWorkbenchState: (events) => {
       applyStoredSessionDiscoveryEvents(events);
@@ -1022,7 +1006,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { selectedSessionId: id, unreadSessionIds };
       });
       if (id) {
-        void ensureSessionHistoryLoaded(id);
+        void ensureConversationReady(id);
       }
     },
   setNewSessionProvider: (provider) => {
@@ -1337,6 +1321,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return startSessionCommand(createStartupDeps(get, set, options), options);
   },
 
+  forkSession: async (parentSessionId, options) => {
+    return forkSessionCommand(createStartupDeps(get, set), parentSessionId, options);
+  },
+
   startScenario: async (scenario) => {
     await startScenarioCommand(createStartupDeps(get, set), scenario);
   },
@@ -1352,8 +1340,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await resumeStoredSessionCommand(createStartupDeps(get, set, options), ref, options);
   },
 
-  claimHistorySession: async (sessionId, options) => {
-    return claimHistorySessionCommand(
+  resumeHistorySession: async (sessionId, options) => {
+    return resumeHistorySessionCommand(
       createStartupDeps(get, set, options),
       sessionId,
       {
@@ -1365,31 +1353,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     );
   },
 
+  archiveHistorySession: async (session) => {
+    try {
+      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
+      const omittedKeys = new Set([storedSessionKey(session)]);
+      const sessionsResponse = await api.archiveStoredSession(session, { storedSessions: "recent" });
+      set((state) =>
+        applyStoredSessionOmissionResponse(
+          state,
+          sessionsResponse,
+          omittedKeys,
+          workspaceVisibilityVersionAtRequest,
+        ),
+      );
+    } catch (error) {
+      set({ error: readErrorMessage(error) });
+      throw error;
+    }
+  },
+
   removeHistorySession: async (session) => {
     try {
       const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
       const removedKeys = new Set([storedSessionKey(session)]);
       const sessionsResponse = await api.removeStoredSession(session, { storedSessions: "recent" });
-      set((state) => {
-        const applied = applySessionsResponse(state, sessionsResponse, {
+      set((state) =>
+        applyStoredSessionOmissionResponse(
+          state,
+          sessionsResponse,
+          removedKeys,
           workspaceVisibilityVersionAtRequest,
-          preserveLocalStoppedHistory: true,
-          excludeLocalStoppedHistoryKeys: removedKeys,
-        });
-        const recentSessions = omitStoredSessionCatalogRefs(applied.recentSessions, removedKeys);
-        const storedSessions = state.storedSessionsCatalogLoaded
-          ? mergeStoredSessionCatalogRefs(
-              omitStoredSessionCatalogRefs(state.storedSessions, removedKeys),
-              omitStoredSessionCatalogRefs(applied.storedSessions, removedKeys),
-            )
-          : omitStoredSessionCatalogRefs(applied.storedSessions, removedKeys);
-        return {
-          ...applied,
-          storedSessions,
-          recentSessions,
-          error: null,
-        };
-      });
+        ),
+      );
     } catch (error) {
       set({ error: readErrorMessage(error) });
       throw error;
@@ -1489,7 +1484,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get,
       set,
       summary,
-      ensureSessionHistoryLoaded,
+      ensureConversationLoaded: ensureConversationReady,
     });
   },
 
@@ -1526,7 +1521,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const summary = await api.setSessionModel(sessionId, {
         modelId,
         ...(optionValues !== undefined ? { optionValues } : {}),
-        ...(reasoningId !== undefined ? { reasoningId } : {}),
       });
       updateSessionSummary(summary);
       set({ error: null });
@@ -1552,92 +1546,47 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await sendInputCommand({ get, set, sessionId, text });
   },
 
-  ensureSessionHistoryLoaded: async (sessionId) => {
-    await ensureSessionHistoryLoaded(sessionId);
-  },
-
-  ensureConversationV2Loaded: async (sessionId) => {
-    const loaded = await ensureConversationV2LoadedCommand({ get, set }, sessionId);
-    refreshConversationV2GapIfNeeded(sessionId);
+  ensureConversationLoaded: async (sessionId) => {
+    if (isPendingResumeProjectionTransferTarget(get(), sessionId)) {
+      return true;
+    }
+    const loaded = await ensureConversationLoadedCommand({ get, set }, sessionId);
+    refreshConversationGapIfNeeded(sessionId);
     return loaded;
   },
 
-  initializeLiveConversationV2: async (sessionId) => {
-    const loaded = await initializeLiveConversationV2Command({ get, set }, sessionId);
-    refreshConversationV2GapIfNeeded(sessionId);
+  initializeLiveConversation: async (sessionId) => {
+    const loaded = await initializeLiveConversationCommand({ get, set }, sessionId);
+    refreshConversationGapIfNeeded(sessionId);
     return loaded;
   },
 
-  refreshConversationV2: async (sessionId) => {
-    await refreshConversationV2Baseline(sessionId);
+  refreshConversation: async (sessionId) => {
+    await refreshConversationBaseline(sessionId);
   },
 
-  loadOlderConversationV2: async (sessionId) => {
-    await loadOlderConversationV2Command({ get, set }, sessionId);
-    refreshConversationV2GapIfNeeded(sessionId);
+  loadOlderConversation: async (sessionId) => {
+    await loadOlderConversationCommand({ get, set }, sessionId);
+    refreshConversationGapIfNeeded(sessionId);
   },
 
-  loadConversationV2TurnDetail: async (sessionId, turnId) => {
-    await loadConversationV2TurnDetailCommand({ get, set }, sessionId, turnId);
+  loadConversationTurnDetail: async (sessionId, turnId) => {
+    await loadConversationTurnDetailCommand({ get, set }, sessionId, turnId);
   },
 
-  refreshLatestHistory: async (sessionId) => {
-    if (conversationV2Enabled()) {
-      const refreshed = await refreshConversationV2Baseline(sessionId);
-      const conversation = get().projections.get(sessionId)?.conversationV2;
-      if (refreshed || conversation?.turns.length) {
-        return;
-      }
+  ensureSessionConversationDirectory: async (sessionId) => {
+    await ensureSessionConversationDirectoryCommand({ get, set, sessionId });
+  },
+
+  loadConversationDirectoryTurn: async (sessionId, turnId) => {
+    await loadConversationDirectoryTurnCommand({ get, set, sessionId, turnId });
+  },
+
+  loadConversationItemDetail: async (sessionId, kind, itemId) => {
+    const loaded = await loadConversationItemDetailCommand({ get, set }, sessionId, itemId);
+    if (!loaded) {
+      set({ error: `Conversation ${kind} detail is unavailable.` });
     }
-    await refreshLegacySessionHistory(sessionId);
-  },
-
-  loadOlderHistory: async (sessionId) => {
-    if (
-      conversationV2Enabled() &&
-      get().projections.get(sessionId)?.conversationV2?.phase === "ready"
-    ) {
-      await loadOlderConversationV2Command({ get, set }, sessionId);
-      return;
-    }
-    await loadOlderLegacySessionHistory(sessionId);
-  },
-
-  ensureSessionTurnDirectory: async (sessionId) => {
-    await ensureSessionTurnDirectoryCommand({ get, set, sessionId });
-  },
-
-  loadSessionTurnHistory: async (sessionId, turnId) => {
-    await loadSessionTurnHistoryCommand({ get, set, sessionId, turnId });
-  },
-
-  loadHistoryItemDetail: async (sessionId, kind, itemId) => {
-    const projection = get().projections.get(sessionId);
-    const legacyItemId = projection
-      ? conversationV2LegacyDetailId(projection, kind, itemId)
-      : itemId;
-    if (
-      conversationV2Enabled() &&
-      projection?.conversationV2?.phase === "ready"
-    ) {
-      const loaded = await loadConversationV2ItemDetailCommand({ get, set }, sessionId, itemId);
-      if (loaded) {
-        return;
-      }
-    }
-    const response = await api.readSessionHistoryItemDetail(sessionId, {
-      kind,
-      itemId: legacyItemId,
-    });
-    set((state) => {
-      const current = state.projections.get(sessionId);
-      if (!current) {
-        return state;
-      }
-      const next = new Map(state.projections);
-      next.set(sessionId, applyEventBatchToProjection(current, response.events));
-      return { projections: next };
-    });
   },
 
   respondToPermission: async (sessionId, requestId, response) => {
@@ -1646,8 +1595,5 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 }));
 
 useSessionStore.subscribe((state) => {
-  syncHistorySelectionSubscription({
-    state,
-    syncLastHistorySelectionFromState,
-  });
+  syncHistorySelectionSubscription({ state });
 });

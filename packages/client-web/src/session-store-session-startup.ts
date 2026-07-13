@@ -1,6 +1,7 @@
 import type {
   CoreLiveProvider,
   DebugScenarioDescriptor,
+  ForkSessionRequest,
   ResumeSessionRequest,
   SessionConfigValue,
   SessionSummary,
@@ -15,16 +16,18 @@ import * as api from "./api";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
 import {
-  applyClaimedHistorySessionState,
+  applyResumedHistorySessionState,
+  applyForkedSessionState,
   applyPendingStoredReplaySessionState,
   applyResumedStoredSessionState,
   applyStartedSessionState,
-  buildFallbackStoredSessionRef,
+  resolveStoredSessionRef,
   createEmptySessionProjection,
-  mergeClaimedHistoryProjection,
+  mergeResumedHistoryProjection,
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
 import {
+  createClientSideId,
   createInteractiveAttachRequest,
   createObserveAttachRequest,
 } from "./session-store-session-commands";
@@ -39,7 +42,11 @@ import {
   resolveHistoryActivationMode,
 } from "./session-store-workspace";
 import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
-import { providerLabel, type SessionProjection } from "./types";
+import {
+  initialConversationSyncState,
+  providerLabel,
+  type SessionProjection,
+} from "./types";
 
 type ProviderChoice = CoreLiveProvider;
 
@@ -57,6 +64,22 @@ type StartSessionOptions = {
   onSessionCreated?: (sessionId: string) => void;
 };
 
+export type ForkSessionOptions = Pick<
+  ForkSessionRequest,
+  "kind" | "workspaceMode" | "lastTurnId"
+> & {
+  operationId?: string;
+};
+
+type ForkSessionFlight = {
+  key: string;
+  promise: Promise<string>;
+};
+
+const FORK_OPERATION_RETRY_TTL_MS = 5 * 60_000;
+const forkSessionFlights = new Map<string, ForkSessionFlight>();
+const forkSessionRetryIds = new Map<string, { operationId: string; expiresAt: number }>();
+
 type SessionStartupState = {
   clientId: string;
   connectionId: string;
@@ -72,8 +95,10 @@ type SessionStartupState = {
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
-        kind: "attach_session" | "claim_control" | "claim_history";
+        kind: "attach_session" | "claim_control" | "resume_history";
         sessionId: string;
+        provider?: SessionSummary["session"]["provider"];
+        providerSessionId?: string;
       }
     | null;
   storedSessions: StoredSessionRef[];
@@ -90,7 +115,7 @@ type SessionStartupSetState = (
 type SessionStartupDeps = {
   get: () => SessionStartupState;
   set: SessionStartupSetState;
-  ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
+  ensureConversationLoaded: (sessionId: string) => Promise<void>;
   initializeLiveConversationProjection: (sessionId: string) => Promise<void>;
   sendInput: (sessionId: string, text: string) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
@@ -141,18 +166,18 @@ function historyOnlyRunningMessage(provider: string): string {
   return `${label} is not a supported running provider. Use Codex, Claude, or OpenCode.`;
 }
 
-function pruneReadOnlyReplaysForClaimedProviderSession(
+function pruneReadOnlyReplaysForResumedProviderSession(
   projections: Map<string, SessionProjection>,
-  claimedSession: SessionSummary,
+  resumedSession: SessionSummary,
 ): void {
-  const providerSessionId = claimedSession.session.providerSessionId;
+  const providerSessionId = resumedSession.session.providerSessionId;
   if (!providerSessionId) {
     return;
   }
   for (const [sessionId, projection] of projections) {
     if (
-      sessionId !== claimedSession.session.id &&
-      projection.summary.session.provider === claimedSession.session.provider &&
+      sessionId !== resumedSession.session.id &&
+      projection.summary.session.provider === resumedSession.session.provider &&
       projection.summary.session.providerSessionId === providerSessionId &&
       isReadOnlyReplay(projection.summary)
     ) {
@@ -198,7 +223,6 @@ export async function startSessionCommand(
       title: options?.title ?? `${providerLabel(provider)} session`,
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
-      ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
@@ -238,6 +262,94 @@ export async function startSessionCommand(
   }
 }
 
+export function forkSessionCommand(
+  deps: SessionStartupDeps,
+  parentSessionId: string,
+  options: ForkSessionOptions,
+): Promise<string> {
+  const key = JSON.stringify({
+    parentSessionId,
+    kind: options.kind,
+    workspaceMode: options.workspaceMode,
+    lastTurnId: options.lastTurnId ?? null,
+  });
+  const active = forkSessionFlights.get(parentSessionId);
+  if (active) {
+    if (active.key === key) {
+      return active.promise;
+    }
+    return Promise.reject(
+      new Error(`A branch operation is already running for session ${parentSessionId}.`),
+    );
+  }
+
+  const retry = forkSessionRetryIds.get(key);
+  const now = Date.now();
+  if (retry && retry.expiresAt <= now) {
+    forkSessionRetryIds.delete(key);
+  }
+  const operationId =
+    options.operationId ??
+    forkSessionRetryIds.get(key)?.operationId ??
+    createClientSideId("fork-operation");
+  forkSessionRetryIds.set(key, {
+    operationId,
+    expiresAt: now + FORK_OPERATION_RETRY_TTL_MS,
+  });
+
+  const promise = executeForkSessionCommand(deps, parentSessionId, options, operationId);
+  const flight = { key, promise };
+  forkSessionFlights.set(parentSessionId, flight);
+  void promise.then(
+    () => {
+      forkSessionRetryIds.delete(key);
+    },
+    () => undefined,
+  ).finally(() => {
+    if (forkSessionFlights.get(parentSessionId) === flight) {
+      forkSessionFlights.delete(parentSessionId);
+    }
+  });
+  return promise;
+}
+
+async function executeForkSessionCommand(
+  deps: SessionStartupDeps,
+  parentSessionId: string,
+  options: ForkSessionOptions,
+  operationId: string,
+): Promise<string> {
+  try {
+    const state = deps.get();
+    const response = await api.forkSession(parentSessionId, {
+      operationId,
+      kind: options.kind,
+      workspaceMode: options.workspaceMode,
+      ...(options.lastTurnId ? { lastTurnId: options.lastTurnId } : {}),
+      attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
+    });
+    deps.set((current) => {
+      const next = new Map(current.projections);
+      const forkedState = applyForkedSessionState(current, response.session, {
+        projections: next,
+        selectChild: options.kind === "fork",
+      });
+      return {
+        ...forkedState,
+        projections: deps.applyEventsToMap(
+          forkedState.projections ?? next,
+          deps.takePendingEventsForSessions(new Set([response.session.session.id])),
+        ),
+      };
+    });
+    await deps.initializeLiveConversationProjection(response.session.session.id);
+    return response.session.session.id;
+  } catch (error) {
+    deps.set({ error: readErrorMessage(error) });
+    throw error;
+  }
+}
+
 export async function startScenarioCommand(
   deps: SessionStartupDeps,
   scenario: DebugScenarioDescriptor,
@@ -258,7 +370,7 @@ export async function startScenarioCommand(
         projections: next,
       });
     });
-    void deps.ensureSessionHistoryLoaded(response.session.session.id);
+    void deps.ensureConversationLoaded(response.session.session.id);
   } catch (error) {
     deps.set({ pendingSessionTransition: null, error: readErrorMessage(error) });
     throw error;
@@ -278,7 +390,7 @@ export async function activateHistorySessionCommand(
   });
   if (mode === "select" && existingRunning) {
     deps.set({ selectedSessionId: existingRunning.session.id });
-    void deps.ensureSessionHistoryLoaded(existingRunning.session.id);
+    void deps.ensureConversationLoaded(existingRunning.session.id);
     return;
   }
   if (mode === "attach" && existingRunning) {
@@ -403,7 +515,7 @@ export async function resumeStoredSessionCommand(
         ),
       };
     });
-    void deps.ensureSessionHistoryLoaded(response.session.session.id);
+    void deps.ensureConversationLoaded(response.session.session.id);
   } catch (error) {
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
@@ -451,9 +563,10 @@ export async function resumeStoredSessionCommand(
       const next = new Map(state.projections);
       next.set(provisionalSessionId, {
         ...current,
-        history: {
-          ...current.history,
+        conversation: {
+          ...(current.conversation ?? initialConversationSyncState()),
           phase: "error",
+          loadedScope: "history",
           lastError: message,
         },
       });
@@ -463,7 +576,7 @@ export async function resumeStoredSessionCommand(
   }
 }
 
-export async function claimHistorySessionCommand(
+export async function resumeHistorySessionCommand(
   deps: SessionStartupDeps,
   sessionId: string,
   options?: {
@@ -476,72 +589,92 @@ export async function claimHistorySessionCommand(
   const state = deps.get();
   const projection = state.projections.get(sessionId);
   const summary = projection?.summary;
-	  const providerSessionId = summary?.session.providerSessionId;
-	  if (!projection || !summary || !providerSessionId) {
-	    const error = "Only persisted provider sessions can be resumed from history.";
-	    deps.set({ error });
-	    throw new Error(error);
-	  }
+  const providerSessionId = summary?.session.providerSessionId;
+  if (!projection || !summary || !providerSessionId) {
+    const error = "Only persisted provider sessions can be resumed from history.";
+    deps.set({ error });
+    throw new Error(error);
+  }
 
-	  const ref = buildFallbackStoredSessionRef(summary, state.recentSessions, state.storedSessions);
-	  if (!ref) {
-	    const error = "Only persisted provider sessions can be resumed from history.";
-	    deps.set({ error });
-	    throw new Error(error);
-	  }
+  const ref = resolveStoredSessionRef(summary, state.recentSessions, state.storedSessions);
+  if (!ref) {
+    const error = "Only persisted provider sessions can be resumed from history.";
+    deps.set({ error });
+    throw new Error(error);
+  }
   if (!isCoreLiveProvider(ref.provider)) {
     const error = historyOnlyRunningMessage(ref.provider);
     deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error });
     throw new Error(error);
   }
 
-  const preservedProjection: SessionProjection = {
-    ...projection,
-    summary,
+  const pendingResumeAction = {
+    kind: "resume_history" as const,
+    sessionId,
+    provider: ref.provider,
+    providerSessionId: ref.providerSessionId,
   };
-  const applyClaimedSession = (claimedSession: SessionSummary) => {
+  deps.set({
+    pendingSessionAction: pendingResumeAction,
+    pendingSessionTransition: null,
+    error: null,
+  });
+  await deps.ensureConversationLoaded(sessionId);
+  const hydratedState = deps.get();
+  const hydratedProjection = hydratedState.projections.get(sessionId);
+  const hydratedSummary = hydratedProjection?.summary;
+  if (!hydratedProjection || !hydratedSummary) {
+    const error = "The history session disappeared while preparing Resume.";
+    deps.set({ pendingSessionAction: null, error });
+    throw new Error(error);
+  }
+  const preservedProjection: SessionProjection = {
+    ...hydratedProjection,
+    summary: hydratedSummary,
+  };
+  const applyResumedSession = (resumedSession: SessionSummary) => {
     deps.set((current) => {
       const next = new Map(current.projections);
       if (next.has(sessionId)) {
-        const claimedState = applyClaimedHistorySessionState(
+        const resumedState = applyResumedHistorySessionState(
           current,
-          claimedSession,
+          resumedSession,
           sessionId,
           preservedProjection,
           ref,
           next,
         );
-        pruneReadOnlyReplaysForClaimedProviderSession(
-          claimedState.projections ?? next,
-          claimedSession,
+        pruneReadOnlyReplaysForResumedProviderSession(
+          resumedState.projections ?? next,
+          resumedSession,
         );
         return {
-          ...claimedState,
+          ...resumedState,
           projections: deps.applyEventsToMap(
-            claimedState.projections ?? next,
-            deps.takePendingEventsForSessions(new Set([claimedSession.session.id])),
+            resumedState.projections ?? next,
+            deps.takePendingEventsForSessions(new Set([resumedSession.session.id])),
           ),
         };
       }
-      const existingProjection = next.get(claimedSession.session.id);
+      const existingProjection = next.get(resumedSession.session.id);
       next.set(
-        claimedSession.session.id,
-        mergeClaimedHistoryProjection(claimedSession, preservedProjection, existingProjection),
+        resumedSession.session.id,
+        mergeResumedHistoryProjection(resumedSession, preservedProjection, existingProjection),
       );
-      pruneReadOnlyReplaysForClaimedProviderSession(next, claimedSession);
+      pruneReadOnlyReplaysForResumedProviderSession(next, resumedSession);
       return {
         projections: deps.applyEventsToMap(
           next,
-          deps.takePendingEventsForSessions(new Set([claimedSession.session.id])),
+          deps.takePendingEventsForSessions(new Set([resumedSession.session.id])),
         ),
         unreadSessionIds: new Set(
           [...current.unreadSessionIds].filter(
             (sessionIdValue) =>
               sessionIdValue !== sessionId &&
-              sessionIdValue !== claimedSession.session.id,
+              sessionIdValue !== resumedSession.session.id,
           ),
         ),
-        selectedSessionId: claimedSession.session.id,
+        selectedSessionId: resumedSession.session.id,
         sessionTopologyVersion: current.sessionTopologyVersion + 1,
         pendingSessionAction: null,
         pendingSessionTransition: null,
@@ -549,13 +682,13 @@ export async function claimHistorySessionCommand(
       };
     });
   };
-  const updateClaimedSessionSummary = (claimedSession: SessionSummary) => {
+  const updateResumedSessionSummary = (resumedSession: SessionSummary) => {
     deps.set((current) => ({
       projections: deps.applyEventsToMap(
-        updateSessionSummaryInProjectionMap(current.projections, claimedSession),
-        deps.takePendingEventsForSessions(new Set([claimedSession.session.id])),
+        updateSessionSummaryInProjectionMap(current.projections, resumedSession),
+        deps.takePendingEventsForSessions(new Set([resumedSession.session.id])),
       ),
-      selectedSessionId: claimedSession.session.id,
+      selectedSessionId: resumedSession.session.id,
       pendingSessionAction: null,
       pendingSessionTransition: null,
       error: null,
@@ -563,7 +696,7 @@ export async function claimHistorySessionCommand(
   };
 
   const targetDir = ref.cwd ?? ref.rootDir ?? null;
-  const findExistingRunningForClaim = (): SessionSummary | null => {
+  const findExistingRunningForResume = (): SessionSummary | null => {
     for (const projection of deps.get().projections.values()) {
       const summary = projection.summary;
       if (summary.session.id === sessionId || isReadOnlyReplay(summary)) {
@@ -578,22 +711,19 @@ export async function claimHistorySessionCommand(
     }
     return null;
   };
-  const claimExistingRunning = async (
+  const resumeExistingRunning = async (
     running: SessionSummary,
   ): Promise<string> => {
     const mode = resolveHistoryActivationMode({
       existingRunningSummary: running,
-      clientId: state.clientId,
+      clientId: deps.get().clientId,
     });
     if (mode === "select") {
-      applyClaimedSession(running);
+      applyResumedSession(running);
       return running.session.id;
     }
     deps.set({
-      pendingSessionAction: {
-        kind: "claim_history",
-        sessionId,
-      },
+      pendingSessionAction: pendingResumeAction,
       pendingSessionTransition: null,
       error: null,
     });
@@ -602,7 +732,7 @@ export async function claimHistorySessionCommand(
         running.session.id,
         createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
       );
-      applyClaimedSession(attachResponse.session);
+      applyResumedSession(attachResponse.session);
       return attachResponse.session.session.id;
     } catch (attachError) {
       deps.set({
@@ -614,21 +744,19 @@ export async function claimHistorySessionCommand(
     }
   };
 
-  const existingRunning = findExistingRunningForClaim();
+  const existingRunning = findExistingRunningForResume();
   if (existingRunning) {
-    return await claimExistingRunning(existingRunning);
+    return await resumeExistingRunning(existingRunning);
   }
 
   if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
+    deps.set({ pendingSessionAction: null });
     return null;
   }
 
   try {
     deps.set({
-      pendingSessionAction: {
-        kind: "claim_history",
-        sessionId,
-      },
+      pendingSessionAction: pendingResumeAction,
       pendingSessionTransition: null,
       error: null,
     });
@@ -641,9 +769,6 @@ export async function claimHistorySessionCommand(
       })(),
       ...(options?.modelId ? { model: options.modelId } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
-      ...(options?.modelId && options.reasoningId !== undefined
-        ? { reasoningId: options.reasoningId }
-        : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
       preferStoredReplay: false,
       historyReplay: "skip",
@@ -655,7 +780,7 @@ export async function claimHistorySessionCommand(
     }
     const response = await api.resumeSession(request);
     let session = response.session;
-    applyClaimedSession(session);
+    applyResumedSession(session);
     try {
       if (
         options?.modeId &&
@@ -663,7 +788,7 @@ export async function claimHistorySessionCommand(
         session.session.mode.currentModeId !== options.modeId
       ) {
         session = await api.setSessionMode(session.session.id, { modeId: options.modeId });
-        updateClaimedSessionSummary(session);
+        updateResumedSessionSummary(session);
       }
       if (
         options?.modelId &&
@@ -676,9 +801,8 @@ export async function claimHistorySessionCommand(
         session = await api.setSessionModel(session.session.id, {
           modelId: options.modelId,
           ...(options.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
-          ...(options.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
         });
-        updateClaimedSessionSummary(session);
+        updateResumedSessionSummary(session);
       }
     } catch (configurationError) {
       deps.set({
@@ -699,7 +823,7 @@ export async function claimHistorySessionCommand(
           candidate.session.providerSessionId === ref.providerSessionId,
       );
       if (running) {
-        return await claimExistingRunning(running);
+        return await resumeExistingRunning(running);
       }
     }
     deps.set({

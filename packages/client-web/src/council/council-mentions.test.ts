@@ -17,7 +17,7 @@ const agents: CouncilAgent[] = [
     status: "waiting",
     updatedAt: "2026-05-14T00:00:00.000Z",
     modelId: "gpt-5.5",
-    reasoningId: "xhigh",
+    optionValues: { model_reasoning_effort: "xhigh" },
   },
   {
     id: "Default (recommended)-Max",
@@ -27,7 +27,7 @@ const agents: CouncilAgent[] = [
     status: "waiting",
     updatedAt: "2026-05-14T00:00:00.000Z",
     modelId: "opus",
-    reasoningId: "max",
+    optionValues: { effort: "max" },
   },
 ];
 

@@ -35,6 +35,14 @@ import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
 import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
+import {
+  SessionSideDock,
+} from "./components/workbench/session/SessionSideDock";
+import {
+  readRememberedSessionSideLayouts,
+  rememberSessionSideLayouts,
+  type SessionSideLayout,
+} from "./components/workbench/session/session-side-state";
 import { WorkbenchInspectorShell } from "./components/workbench/shells/WorkbenchInspectorShell";
 import { WorkbenchSidebarShell } from "./components/workbench/shells/WorkbenchSidebarShell";
 import { useChatPreferences } from "./hooks/useChatPreferences";
@@ -49,6 +57,7 @@ import {
   useWorkspaceSortModeState,
 } from "./hooks/useWorkbenchSidebarPreferences";
 import {
+  canSessionArchive,
   canSessionDelete,
   canSessionStop,
   canSessionRename,
@@ -58,7 +67,6 @@ import {
   canSessionShowInfo,
   isSessionGenerationActive,
   isReadOnlyReplay,
-  shouldPollSessionHistoryTail,
 } from "./session-capabilities";
 import {
   createDefaultModeDraft,
@@ -98,7 +106,7 @@ import {
   shouldUseMobileCanvasLayout,
   readRememberedCanvasState,
   rememberCanvasState,
-  resolveCanvasClaimedSessionId,
+  resolveCanvasResumedSessionId,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   resolveCanvasVisibleSessionId,
   shouldInitializeCanvasPaneFromSelection,
@@ -398,6 +406,7 @@ export function App() {
     setNewSessionProvider,
     loadProviderModels,
     startSession,
+    forkSession,
     startScenario,
     activateHistorySession,
     attachSession,
@@ -405,7 +414,8 @@ export function App() {
     renameSession,
     setSessionMode,
     setSessionModel,
-    claimHistorySession,
+    resumeHistorySession,
+    archiveHistorySession,
     removeHistorySession,
     setVisibleSessionIds,
     markSessionsRead,
@@ -413,13 +423,12 @@ export function App() {
     claimControl,
     interruptSession,
     sendInput,
-    ensureSessionHistoryLoaded,
-    refreshLatestHistory,
-    loadOlderHistory,
-    ensureSessionTurnDirectory,
-    loadSessionTurnHistory,
-    loadHistoryItemDetail,
-    loadConversationV2TurnDetail,
+    ensureConversationLoaded,
+    loadOlderConversation,
+    ensureSessionConversationDirectory,
+    loadConversationDirectoryTurn,
+    loadConversationItemDetail,
+    loadConversationTurnDetail,
     respondToPermission,
   } = useSessionStore(
     useShallow((state) => ({
@@ -450,6 +459,7 @@ export function App() {
       setNewSessionProvider: state.setNewSessionProvider,
       loadProviderModels: state.loadProviderModels,
       startSession: state.startSession,
+      forkSession: state.forkSession,
       startScenario: state.startScenario,
       activateHistorySession: state.activateHistorySession,
       attachSession: state.attachSession,
@@ -457,7 +467,8 @@ export function App() {
       renameSession: state.renameSession,
       setSessionMode: state.setSessionMode,
       setSessionModel: state.setSessionModel,
-      claimHistorySession: state.claimHistorySession,
+      resumeHistorySession: state.resumeHistorySession,
+      archiveHistorySession: state.archiveHistorySession,
       removeHistorySession: state.removeHistorySession,
       setVisibleSessionIds: state.setVisibleSessionIds,
       markSessionsRead: state.markSessionsRead,
@@ -465,13 +476,12 @@ export function App() {
       claimControl: state.claimControl,
       interruptSession: state.interruptSession,
       sendInput: state.sendInput,
-      ensureSessionHistoryLoaded: state.ensureSessionHistoryLoaded,
-      refreshLatestHistory: state.refreshLatestHistory,
-      loadOlderHistory: state.loadOlderHistory,
-      ensureSessionTurnDirectory: state.ensureSessionTurnDirectory,
-      loadSessionTurnHistory: state.loadSessionTurnHistory,
-      loadHistoryItemDetail: state.loadHistoryItemDetail,
-      loadConversationV2TurnDetail: state.loadConversationV2TurnDetail,
+      ensureConversationLoaded: state.ensureConversationLoaded,
+      loadOlderConversation: state.loadOlderConversation,
+      ensureSessionConversationDirectory: state.ensureSessionConversationDirectory,
+      loadConversationDirectoryTurn: state.loadConversationDirectoryTurn,
+      loadConversationItemDetail: state.loadConversationItemDetail,
+      loadConversationTurnDetail: state.loadConversationTurnDetail,
       respondToPermission: state.respondToPermission,
     })),
   );
@@ -497,11 +507,28 @@ export function App() {
   );
   const [startModeDrafts, setStartModeDrafts] =
     useState<Record<ProviderChoice, SessionModeDraft>>(() => createDefaultModeDrafts());
-  const [claimModeDrafts, setClaimModeDrafts] = useState<Record<string, SessionModeDraft>>({});
-  const [claimModelDrafts, setClaimModelDrafts] = useState<Record<string, ModelDraft>>({});
+  const [resumeModeDrafts, setResumeModeDrafts] = useState<Record<string, SessionModeDraft>>({});
+  const [resumeModelDrafts, setResumeModelDrafts] = useState<Record<string, ModelDraft>>({});
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("single");
+  const [sideLayoutByParentId, setSideLayoutByParentId] = useState<
+    Record<string, SessionSideLayout>
+  >(() =>
+    readRememberedSessionSideLayouts(
+      typeof window === "undefined" ? undefined : window.localStorage,
+    ),
+  );
+  useEffect(() => {
+    rememberSessionSideLayouts(
+      typeof window === "undefined" ? undefined : window.localStorage,
+      sideLayoutByParentId,
+    );
+  }, [sideLayoutByParentId]);
+  const pendingBranchSessionIdsRef = useRef(new Set<string>());
+  const [pendingBranchSessionIds, setPendingBranchSessionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
   const councilsRef = useRef<CouncilSnapshot[]>([]);
   const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
@@ -532,8 +559,8 @@ export function App() {
     Record<CanvasPaneId, boolean>
   >(() => rememberedCanvasState?.rightPanelsOpen ?? createDefaultCanvasRightPanelsOpen());
   const canvasStoredActivationInFlightRef = useRef<Set<string>>(new Set());
-  const canvasClaimingStoredKeysRef = useRef<Set<string>>(new Set());
-  const [canvasClaimingStoredKeys, setCanvasClaimingStoredKeys] = useState<Set<string>>(
+  const canvasResumingStoredKeysRef = useRef<Set<string>>(new Set());
+  const [canvasResumingStoredKeys, setCanvasResumingStoredKeys] = useState<Set<string>>(
     () => new Set(),
   );
   const [canvasPendingSessionActions, setCanvasPendingSessionActions] =
@@ -701,12 +728,56 @@ export function App() {
   const {
     runningSessionEntries,
     runningSessionActivityAtById,
+    sideSessionEntries,
     workspaceSections,
   } = sessionCollections;
   const {
     sanitizedPinnedSessionIdByWorkspace,
     togglePinnedSession,
   } = useWorkbenchSidebarPreferences(workspaceSections, councils);
+
+  const sideProjectionsByParentId = useMemo(() => {
+    const grouped = new Map<string, typeof sideSessionEntries>();
+    for (const entry of sideSessionEntries) {
+      const parentSessionId = entry.summary.session.relationship?.parentSessionId;
+      if (!parentSessionId) {
+        continue;
+      }
+      const siblings = grouped.get(parentSessionId) ?? [];
+      siblings.push(entry);
+      grouped.set(parentSessionId, siblings);
+    }
+    return grouped;
+  }, [sideSessionEntries]);
+
+  const handleForkSession = useCallback(
+    (parentSessionId: string, kind: "fork" | "side") => {
+      if (pendingBranchSessionIdsRef.current.has(parentSessionId)) {
+        return;
+      }
+      pendingBranchSessionIdsRef.current.add(parentSessionId);
+      setPendingBranchSessionIds(new Set(pendingBranchSessionIdsRef.current));
+      void forkSession(parentSessionId, {
+        kind,
+        workspaceMode: "shared",
+      })
+        .catch(() => undefined)
+        .finally(() => {
+          pendingBranchSessionIdsRef.current.delete(parentSessionId);
+          setPendingBranchSessionIds(new Set(pendingBranchSessionIdsRef.current));
+        });
+    },
+    [forkSession],
+  );
+
+  const handleRecreateSide = useCallback(
+    (parentSessionId: string, sideSessionId: string) => {
+      void closeSession(sideSessionId)
+        .then(() => handleForkSession(parentSessionId, "side"))
+        .catch(() => undefined);
+    },
+    [closeSession, handleForkSession],
+  );
 
   const runtimeStatusBySessionId = useMemo(
     () =>
@@ -801,8 +872,8 @@ export function App() {
   const visibleSessionIdsRef = useRef(visibleSessionIds);
   const projectionsRef = useRef(projections);
   const isInitialLoadedRef = useRef(isInitialLoaded);
-  const visibleHistoryCatchupInFlightRef = useRef(new Map<string, Promise<void>>());
-  const visibleHistoryCatchupFreshRef = useRef(new Map<string, { key: string; at: number }>());
+  const visibleConversationCatchupInFlightRef = useRef(new Map<string, Promise<void>>());
+  const visibleConversationCatchupFreshRef = useRef(new Map<string, { key: string; at: number }>());
   const foregroundRecoveryTimerRef = useRef<number | null>(null);
   const foregroundRecoveryInFlightRef = useRef<Promise<void> | null>(null);
 
@@ -826,13 +897,13 @@ export function App() {
     return document.visibilityState === "visible" && document.hasFocus();
   }, []);
 
-  const catchUpVisibleSessionHistory = useCallback(async () => {
+  const catchUpVisibleConversations = useCallback(async () => {
     if (!isInitialLoadedRef.current) {
       return;
     }
     const requests: Promise<void>[] = [];
     for (const sessionId of visibleSessionIdsRef.current) {
-      const inFlight = visibleHistoryCatchupInFlightRef.current.get(sessionId);
+      const inFlight = visibleConversationCatchupInFlightRef.current.get(sessionId);
       if (inFlight) {
         requests.push(inFlight);
         continue;
@@ -842,36 +913,37 @@ export function App() {
         continue;
       }
       const freshnessKey = `${projection.summary.session.updatedAt ?? ""}:${projection.lastSeq}`;
-      const fresh = visibleHistoryCatchupFreshRef.current.get(sessionId);
+      const fresh = visibleConversationCatchupFreshRef.current.get(sessionId);
       if (
         fresh?.key === freshnessKey &&
         Date.now() - fresh.at < VISIBLE_HISTORY_CATCHUP_FRESH_MS
       ) {
         continue;
       }
-      const request = ensureSessionHistoryLoaded(sessionId)
+      const request = ensureConversationLoaded(sessionId)
+        .then(() => undefined)
         .catch(() => undefined)
         .finally(() => {
-          visibleHistoryCatchupFreshRef.current.set(sessionId, {
+          visibleConversationCatchupFreshRef.current.set(sessionId, {
             key: freshnessKey,
             at: Date.now(),
           });
-          visibleHistoryCatchupInFlightRef.current.delete(sessionId);
+          visibleConversationCatchupInFlightRef.current.delete(sessionId);
         });
-      visibleHistoryCatchupInFlightRef.current.set(sessionId, request);
+      visibleConversationCatchupInFlightRef.current.set(sessionId, request);
       requests.push(request);
     }
     await Promise.all(requests);
-  }, [ensureSessionHistoryLoaded]);
+  }, [ensureConversationLoaded]);
 
   const reconcileVisibleUnreadState = useCallback(async () => {
-    await catchUpVisibleSessionHistory();
+    await catchUpVisibleConversations();
     const activeVisibleSessionIds = workbenchHasForegroundAttention()
       ? visibleSessionIdsRef.current
       : [];
     reconcileUnreadFromLastSeen(activeVisibleSessionIds);
   }, [
-    catchUpVisibleSessionHistory,
+    catchUpVisibleConversations,
     reconcileUnreadFromLastSeen,
     workbenchHasForegroundAttention,
   ]);
@@ -949,10 +1021,10 @@ export function App() {
     }));
   }, []);
 
-  const markCanvasClaimPending = useCallback((sessionId: string, ref: StoredSessionRef) => {
+  const markCanvasResumePending = useCallback((sessionId: string, ref: StoredSessionRef) => {
     const key = canvasStoredRefKey(ref);
-    canvasClaimingStoredKeysRef.current.add(key);
-    setCanvasClaimingStoredKeys((current) => {
+    canvasResumingStoredKeysRef.current.add(key);
+    setCanvasResumingStoredKeys((current) => {
       if (current.has(key)) {
         return current;
       }
@@ -961,20 +1033,20 @@ export function App() {
       return next;
     });
     setCanvasPendingSessionActions((current) => {
-      if (current[sessionId]?.kind === "claim_history") {
+      if (current[sessionId]?.kind === "resume_history") {
         return current;
       }
       return {
         ...current,
-        [sessionId]: { kind: "claim_history", sessionId },
+        [sessionId]: { kind: "resume_history", sessionId },
       };
     });
   }, []);
 
-  const clearCanvasClaimPending = useCallback((sessionId: string, ref: StoredSessionRef) => {
+  const clearCanvasResumePending = useCallback((sessionId: string, ref: StoredSessionRef) => {
     const key = canvasStoredRefKey(ref);
-    canvasClaimingStoredKeysRef.current.delete(key);
-    setCanvasClaimingStoredKeys((current) => {
+    canvasResumingStoredKeysRef.current.delete(key);
+    setCanvasResumingStoredKeys((current) => {
       if (!current.has(key)) {
         return current;
       }
@@ -1079,6 +1151,25 @@ export function App() {
       clearCanvasTargetsForStoredSession(current, session, options),
     );
   };
+  const archiveSessionAndClearCanvasTargets = async (sessionId: string) => {
+    const summary = useSessionStore.getState().projections.get(sessionId)?.summary;
+    const providerSessionId = summary?.session.providerSessionId;
+    if (!summary || !providerSessionId) {
+      return;
+    }
+    const storedRef = {
+      provider: summary.session.provider,
+      providerSessionId,
+    };
+    await closeSession(sessionId);
+    await archiveHistorySession(storedRef);
+    setCanvasPaneTargets((current) =>
+      clearCanvasTargetsForStoredSession(current, storedRef, { sessionId }),
+    );
+    if (useSessionStore.getState().selectedSessionId === sessionId) {
+      setSelectedSessionId(null);
+    }
+  };
   const removeFilteredHistoryWorkspaceSessions = async (
     _workspaceDir: string,
     sessions: readonly StoredSessionRef[],
@@ -1176,35 +1267,6 @@ export function App() {
     ? canSessionRespondToPermissions(selectedSummary)
     : false;
   const selectedIsReadOnlyReplay = selectedSummary ? isReadOnlyReplay(selectedSummary) : false;
-  const shouldSyncSelectedHistoryTail = selectedSummary
-    ? shouldPollSessionHistoryTail(selectedSummary)
-    : false;
-
-  useEffect(() => {
-    if (!selectedSessionId || !shouldSyncSelectedHistoryTail) {
-      return;
-    }
-    let cancelled = false;
-    let inFlight = false;
-    const syncLatestHistory = () => {
-      if (cancelled || inFlight) {
-        return;
-      }
-      inFlight = true;
-      void refreshLatestHistory(selectedSessionId)
-        .catch(() => undefined)
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-    syncLatestHistory();
-    const interval = window.setInterval(syncLatestHistory, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [refreshLatestHistory, selectedSessionId, shouldSyncSelectedHistoryTail]);
-
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary,
     selectedProjection,
@@ -1212,7 +1274,6 @@ export function App() {
     error,
   });
   const interactionNotice = noticeState.interactionNotice;
-  const historyNotice = noticeState.historyNotice;
   const errorDescriptor = noticeState.errorDescriptor;
   const isGenerating = selectedSummary
     ? isSessionGenerationActive(selectedSummary, selectedProjection?.currentRuntimeStatus)
@@ -1265,9 +1326,9 @@ export function App() {
           target,
           pendingSessionAction,
           pendingSessionTransition,
-          canvasClaimingStoredKeys,
+          canvasResumingStoredKeys,
         );
-        if (globalOpeningTransition?.kind === "claim_history") {
+        if (globalOpeningTransition?.kind === "resume_history") {
           continue;
         }
         const activationKey = `${target.ref.provider}:${target.ref.providerSessionId}`;
@@ -1284,17 +1345,20 @@ export function App() {
       if (
         projection &&
         projection.summary.session.providerSessionId &&
-        !projection.history.authoritativeApplied &&
-        projection.history.phase !== "loading"
+        (!projection.conversation ||
+          projection.conversation.phase === "idle" ||
+          projection.conversation.phase === "error" ||
+          (projection.conversation.phase === "ready" &&
+            projection.conversation.loadedScope !== "history"))
       ) {
-        void ensureSessionHistoryLoaded(projection.summary.session.id).catch(() => undefined);
+        void ensureConversationLoaded(projection.summary.session.id).catch(() => undefined);
       }
     }
   }, [
     activateHistorySession,
-    canvasClaimingStoredKeys,
+    canvasResumingStoredKeys,
     canvasPaneTargets,
-    ensureSessionHistoryLoaded,
+    ensureConversationLoaded,
     pendingSessionAction,
     pendingSessionTransition,
     projections,
@@ -1344,27 +1408,27 @@ export function App() {
   const selectedModelCatalogState = selectedSummary
     ? modelCatalogs[selectedSummary.session.provider as ProviderChoice]
     : undefined;
-  const claimModelDraft = selectedSummary ? claimModelDrafts[selectedSummary.session.id] : undefined;
-  const claimDraftModelId = draftModelIdForCatalog(
+  const resumeModelDraft = selectedSummary ? resumeModelDrafts[selectedSummary.session.id] : undefined;
+  const resumeDraftModelId = draftModelIdForCatalog(
     selectedModelCatalogState?.catalog,
-    claimModelDraft,
+    resumeModelDraft,
   );
-  const claimModelControl = selectedSummary
+  const resumeModelControl = selectedSummary
     ? resolveSelectedModelDraft({
         catalog: selectedModelCatalogState?.catalog,
         selectedModelId:
-          claimDraftModelId ?? selectedSummary.session.model?.currentModelId ?? null,
+          resumeDraftModelId ?? selectedSummary.session.model?.currentModelId ?? null,
         selectedReasoningId:
-          (claimDraftModelId ? claimModelDraft?.reasoningId : undefined) ??
+          (resumeDraftModelId ? resumeModelDraft?.reasoningId : undefined) ??
           selectedSummary.session.model?.currentReasoningId ??
           null,
-        preserveMissingSelectedModel: claimDraftModelId === null,
+        preserveMissingSelectedModel: resumeDraftModelId === null,
       })
     : null;
-  const claimModeControl = selectedSummary
+  const resumeModeControl = selectedSummary
     ? resolveSessionModeControlState({
         provider: selectedSummary.session.provider,
-        draft: claimModeDrafts[selectedSummary.session.id] ?? null,
+        draft: resumeModeDrafts[selectedSummary.session.id] ?? null,
         summary: selectedSummary,
         catalog: selectedModelCatalogState?.catalog ?? null,
       })
@@ -1514,7 +1578,7 @@ export function App() {
       }
       return changed ? next : current;
     });
-    setClaimModelDrafts((current) => {
+    setResumeModelDrafts((current) => {
       let changed = false;
       const next = { ...current };
       for (const [sessionId, draft] of Object.entries(current)) {
@@ -1732,6 +1796,7 @@ export function App() {
           sessionId={selectedSummary?.session.id ?? null}
           workspaceRoot={selectedInspectorWorkspaceDir}
           events={selectedProjection?.events ?? []}
+          conversationTurns={selectedProjection?.conversation?.turns ?? []}
           onOpenTerminal={() => {
             setTerminalDialogMounted(true);
             setTerminalOpen(true);
@@ -1768,6 +1833,105 @@ export function App() {
       return;
     }
     setRightOpen((open) => !open);
+  };
+
+  const renderSideSessionPane = (projection: typeof sideSessionEntries[number]) => {
+    const summary = projection.summary;
+    const provider = summary.session.provider as ProviderChoice;
+    const modelCatalogState = modelCatalogs[provider];
+    return (
+      <CanvasSessionPane
+        variant="compact"
+        summary={summary}
+        projection={projection}
+        sidePanelOpen={false}
+        sidePanelToggleDisabled
+        onToggleSidePanel={() => undefined}
+        clientId={clientId}
+        hideToolCallsInChat={hideToolCallsInChat}
+        hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
+        showModelInfoInChat={showModelInfoInChat}
+        pendingSessionAction={
+          pendingSessionAction?.sessionId === summary.session.id
+            ? pendingSessionAction
+            : null
+        }
+        modelCatalog={modelCatalogState?.catalog ?? null}
+        modelCatalogLoading={modelCatalogState?.loading ?? false}
+        onRequestModelCatalogRefresh={() => {
+          if (summary.session.provider !== "custom") {
+            void loadProviderModels(provider, {
+              background: true,
+              reason: "side-session-control",
+            }).catch(() => undefined);
+          }
+        }}
+        resumeModeDraft={resumeModeDrafts[summary.session.id]}
+        resumeModelDraft={resumeModelDrafts[summary.session.id]}
+        modeChangePending={modeChangeSessionId === summary.session.id}
+        modelChangePending={modelChangeSessionId === summary.session.id}
+        onResumeModeDraftChange={(sessionId, nextDraft) => {
+          setResumeModeDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
+        }}
+        onResumeModelDraftChange={(sessionId, nextDraft) => {
+          setResumeModelDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
+        }}
+        onRememberModelDraft={(draftProvider, nextDraft) => {
+          rememberModelDraft(draftProvider, nextDraft);
+          setStartModelDrafts((current) => ({
+            ...current,
+            [draftProvider]: nextDraft.modelId ? nextDraft : {},
+          }));
+        }}
+        onSendInput={(sessionId, text) => sendInput(sessionId, text)}
+        onRespondToPermission={(sessionId, requestId, response) =>
+          respondToPermission(sessionId, requestId, response)
+        }
+        onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
+        onLoadConversationItemDetail={(sessionId, kind, itemId) =>
+          loadConversationItemDetail(sessionId, kind, itemId)
+        }
+        onLoadConversationTurnDetail={(sessionId, turnId) =>
+          loadConversationTurnDetail(sessionId, turnId)
+        }
+        onResumeHistory={() => undefined}
+        onClaimControl={(sessionId) => claimControl(sessionId)}
+        onInterrupt={(sessionId) => void interruptSession(sessionId)}
+        onLoadOlderHistory={(sessionId) => loadOlderConversation(sessionId)}
+        onEnsureTurnDirectory={(sessionId) =>
+          ensureSessionConversationDirectory(sessionId)
+        }
+        onLoadTurnHistory={(sessionId, turnId) =>
+          loadConversationDirectoryTurn(sessionId, turnId)
+        }
+        onStop={(sessionId) => setStopConfirmSessionId(sessionId)}
+        onCloseHistory={(sessionId) => void closeSession(sessionId)}
+        onArchive={() => undefined}
+        onDelete={() => undefined}
+        onRename={() => undefined}
+        onSetSessionMode={async (sessionId, modeId) => {
+          setModeChangeSessionId(sessionId);
+          try {
+            return await setSessionMode(sessionId, modeId);
+          } finally {
+            setModeChangeSessionId((current) => (current === sessionId ? null : current));
+          }
+        }}
+        onSetSessionModel={async (sessionId, modelId, reasoningId, optionValues) => {
+          setModelChangeSessionId(sessionId);
+          try {
+            return await setSessionModel(sessionId, modelId, reasoningId, optionValues);
+          } finally {
+            setModelChangeSessionId((current) => (current === sessionId ? null : current));
+          }
+        }}
+        sideProjections={[]}
+        sideLayout="columns"
+        onSideLayoutChange={() => undefined}
+        onForkSession={handleForkSession}
+        branchOperationPending={pendingBranchSessionIds.has(summary.session.id)}
+      />
+    );
   };
 
   return (
@@ -2092,7 +2256,7 @@ export function App() {
                   target,
                   pendingSessionAction,
                   pendingSessionTransition,
-                  canvasClaimingStoredKeys,
+                  canvasResumingStoredKeys,
                 );
                 const paneExpanded = effectiveCanvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
@@ -2424,6 +2588,20 @@ export function App() {
                     sidePanelOpen={paneRightPanelOpen}
                     sidePanelToggleDisabled={!paneExpanded}
                     onToggleSidePanel={() => toggleCanvasPaneRightPanel(typedPaneId)}
+                    sideProjections={
+                      sideProjectionsByParentId.get(summary.session.id) ?? []
+                    }
+                    sideUnreadSessionIds={unreadSessionIds}
+                    sideLayout={sideLayoutByParentId[summary.session.id] ?? "columns"}
+                    onSideLayoutChange={(layout) => {
+                      setSideLayoutByParentId((current) => ({
+                        ...current,
+                        [summary.session.id]: layout,
+                      }));
+                    }}
+                    onForkSession={handleForkSession}
+                    onRecreateSide={handleRecreateSide}
+                    branchOperationPending={pendingBranchSessionIds.has(summary.session.id)}
                     {...(paneExpanded
                       ? {
                         inspector: (
@@ -2447,6 +2625,7 @@ export function App() {
                                     ""
                                   }
                                   events={projection.events ?? []}
+                                  conversationTurns={projection.conversation?.turns ?? []}
                                   onOpenTerminal={() => {
                                     setTerminalDialogMounted(true);
                                     setTerminalOpen(true);
@@ -2480,18 +2659,18 @@ export function App() {
                         }).catch(() => undefined);
                       }
                     }}
-                    claimModeDraft={claimModeDrafts[summary.session.id]}
-                    claimModelDraft={claimModelDrafts[summary.session.id]}
+                    resumeModeDraft={resumeModeDrafts[summary.session.id]}
+                    resumeModelDraft={resumeModelDrafts[summary.session.id]}
                     modeChangePending={modeChangeSessionId === summary.session.id}
                     modelChangePending={modelChangeSessionId === summary.session.id}
-                    onClaimModeDraftChange={(sessionId, nextDraft) => {
-                      setClaimModeDrafts((current) => ({
+                    onResumeModeDraftChange={(sessionId, nextDraft) => {
+                      setResumeModeDrafts((current) => ({
                         ...current,
                         [sessionId]: nextDraft,
                       }));
                     }}
-                    onClaimModelDraftChange={(sessionId, nextDraft) => {
-                      setClaimModelDrafts((current) => ({
+                    onResumeModelDraftChange={(sessionId, nextDraft) => {
+                      setResumeModelDrafts((current) => ({
                         ...current,
                         [sessionId]: nextDraft,
                       }));
@@ -2508,32 +2687,32 @@ export function App() {
                       respondToPermission(sessionId, requestId, response)
                     }
                     onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
-                    onLoadHistoryItemDetail={(sessionId, kind, itemId) =>
-                      loadHistoryItemDetail(sessionId, kind, itemId)
+                    onLoadConversationItemDetail={(sessionId, kind, itemId) =>
+                      loadConversationItemDetail(sessionId, kind, itemId)
                     }
                     onLoadConversationTurnDetail={(sessionId, turnId) =>
-                      loadConversationV2TurnDetail(sessionId, turnId)
+                      loadConversationTurnDetail(sessionId, turnId)
                     }
-                    onClaimHistory={(sessionId, request) => {
+                    onResumeHistory={(sessionId, request) => {
                       const ref = storedRefFromSessionSummary(summary);
                       if (!ref) {
                         return;
                       }
-                      const claimKey = canvasStoredRefKey(ref);
-                      if (canvasClaimingStoredKeysRef.current.has(claimKey)) {
+                      const resumeKey = canvasStoredRefKey(ref);
+                      if (canvasResumingStoredKeysRef.current.has(resumeKey)) {
                         return;
                       }
-                      markCanvasClaimPending(sessionId, ref);
+                      markCanvasResumePending(sessionId, ref);
                       void (async () => {
-                        let claimedSessionId: string | null = null;
+                        let resumedSessionId: string | null = null;
                         try {
-                          claimedSessionId = await claimHistorySession(sessionId, {
+                          resumedSessionId = await resumeHistorySession(sessionId, {
                             confirmCreateMissingWorkspace,
                             ...request,
                           });
-                          const resolvedSessionId = resolveCanvasClaimedSessionId(
+                          const resolvedSessionId = resolveCanvasResumedSessionId(
                             useSessionStore.getState().projections,
-                            claimedSessionId,
+                            resumedSessionId,
                             ref,
                           );
                           if (resolvedSessionId) {
@@ -2541,7 +2720,7 @@ export function App() {
                           }
                         } catch {
                           const latestProjections = useSessionStore.getState().projections;
-                          const resolvedSessionId = resolveCanvasClaimedSessionId(
+                          const resolvedSessionId = resolveCanvasResumedSessionId(
                             latestProjections,
                             null,
                             ref,
@@ -2556,7 +2735,7 @@ export function App() {
                             setCanvasPaneSession(typedPaneId, resolvedSessionId);
                           }
                         } finally {
-                          clearCanvasClaimPending(sessionId, ref);
+                          clearCanvasResumePending(sessionId, ref);
                         }
                       })();
                     }}
@@ -2566,15 +2745,16 @@ export function App() {
                       })
                     }
                     onInterrupt={(sessionId) => void interruptSession(sessionId)}
-                    onLoadOlderHistory={(sessionId) => loadOlderHistory(sessionId)}
+                    onLoadOlderHistory={(sessionId) => loadOlderConversation(sessionId)}
                     onEnsureTurnDirectory={(sessionId) =>
-                      ensureSessionTurnDirectory(sessionId)
+                      ensureSessionConversationDirectory(sessionId)
                     }
                     onLoadTurnHistory={(sessionId, turnId) =>
-                      loadSessionTurnHistory(sessionId, turnId)
+                      loadConversationDirectoryTurn(sessionId, turnId)
                     }
                     onStop={(sessionId) => setStopConfirmSessionId(sessionId)}
                     onCloseHistory={() => clearCanvasPane(typedPaneId)}
+                    onArchive={(sessionId) => void archiveSessionAndClearCanvasTargets(sessionId)}
                     onDelete={(sessionId) => setDeleteConfirmSessionId(sessionId)}
                     onRename={(sessionId) => setRenameDialogSessionId(sessionId)}
                     onSetSessionMode={async (sessionId, modeId) => {
@@ -2602,7 +2782,9 @@ export function App() {
               }}
             />
           ) : primaryPaneState.kind === "active" && selectedSummary ? (
-            <WorkbenchSelectedPane
+            <SessionSideDock
+              dockId={selectedSummary.session.id}
+              main={<WorkbenchSelectedPane
               selectedSummary={selectedSummary}
               clientId={clientId}
               selectedProjection={selectedProjection}
@@ -2611,35 +2793,25 @@ export function App() {
               rightSidebarOpen={rightSidebarOpen}
               isAttached={isAttached}
               interactionNotice={interactionNotice}
-              historyNotice={historyNotice}
               generationActive={isGenerating}
               hideToolCallsInChat={hideToolCallsInChat}
               hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
               showModelInfoInChat={showModelInfoInChat}
-              canLoadOlderHistory={Boolean(
-                selectedSummary.session.providerSessionId &&
-                  selectedProjection &&
-                  (selectedProjection.history.phase === "loading" ||
-                    (selectedProjection.history.authoritativeApplied &&
-                      (selectedProjection.history.nextCursor ||
-                        selectedProjection.history.nextBeforeTs))),
-              )}
-              historyLoading={selectedProjection?.history.phase === "loading"}
               turnDirectory={selectedProjection?.turnDirectory?.items}
               onEnsureTurnDirectory={() =>
-                ensureSessionTurnDirectory(selectedSummary.session.id)
+                ensureSessionConversationDirectory(selectedSummary.session.id)
               }
               onLoadTurnHistory={(turnId) =>
-                loadSessionTurnHistory(selectedSummary.session.id, turnId)
+                loadConversationDirectoryTurn(selectedSummary.session.id, turnId)
               }
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
               onOpenLocalFile={openLinkedFilePreview}
-              onLoadHistoryItemDetail={(kind, itemId) =>
-                loadHistoryItemDetail(selectedSummary.session.id, kind, itemId)
+              onLoadConversationItemDetail={(kind, itemId) =>
+                loadConversationItemDetail(selectedSummary.session.id, kind, itemId)
               }
               onLoadConversationTurnDetail={(turnId) =>
-                loadConversationV2TurnDetail(selectedSummary.session.id, turnId)
+                loadConversationTurnDetail(selectedSummary.session.id, turnId)
               }
               composerSurface={composerSurface}
               composerRef={composerRef}
@@ -2653,9 +2825,9 @@ export function App() {
               onRemoveDraftImage={removeDraftImage}
               onRemoveLastDraftImage={removeLastDraftImage}
               onSend={() => void handleSend()}
-              onClaimHistory={() => {
+              onResumeHistory={() => {
                 const sessionId = selectedSummary.session.id;
-                const modelDraft = claimModelDrafts[sessionId];
+                const modelDraft = resumeModelDrafts[sessionId];
                 const modelDraftId = draftModelIdForCatalog(
                   selectedModelCatalogState?.catalog,
                   modelDraft,
@@ -2669,10 +2841,10 @@ export function App() {
                         reasoningId: modelDraft?.reasoningId ?? null,
                       })
                     : undefined);
-                void claimHistorySession(sessionId, {
+                void resumeHistorySession(sessionId, {
                   confirmCreateMissingWorkspace,
-                  ...(claimModeControl?.effectiveModeId
-                    ? { modeId: claimModeControl.effectiveModeId }
+                  ...(resumeModeControl?.effectiveModeId
+                    ? { modeId: resumeModeControl.effectiveModeId }
                     : {}),
                   ...(modelDraftId ? { modelId: modelDraftId } : {}),
                   ...(optionValues !== undefined ? { optionValues } : {}),
@@ -2681,15 +2853,15 @@ export function App() {
                     : {}),
                 });
               }}
-              claimAccessModes={claimModeControl?.accessModes ?? []}
-              selectedClaimAccessModeId={claimModeControl?.selectedAccessModeId ?? null}
-              claimPlanModeAvailable={claimModeControl?.planModeAvailable ?? false}
-              claimPlanModeEnabled={claimModeControl?.planModeEnabled ?? false}
-              claimModePending={pendingSessionAction?.kind === "claim_history"}
-              selectedClaimModelId={claimModelControl?.model?.id ?? null}
-              selectedClaimReasoningId={claimModelControl?.reasoning?.id ?? null}
-              onClaimAccessModeChange={(modeId) => {
-                setClaimModeDrafts((current) => ({
+              resumeAccessModes={resumeModeControl?.accessModes ?? []}
+              selectedResumeAccessModeId={resumeModeControl?.selectedAccessModeId ?? null}
+              resumePlanModeAvailable={resumeModeControl?.planModeAvailable ?? false}
+              resumePlanModeEnabled={resumeModeControl?.planModeEnabled ?? false}
+              resumeModePending={pendingSessionAction?.kind === "resume_history"}
+              selectedResumeModelId={resumeModelControl?.model?.id ?? null}
+              selectedResumeReasoningId={resumeModelControl?.reasoning?.id ?? null}
+              onResumeAccessModeChange={(modeId) => {
+                setResumeModeDrafts((current) => ({
                   ...current,
                   [selectedSummary.session.id]: {
                     ...(current[selectedSummary.session.id] ??
@@ -2698,8 +2870,8 @@ export function App() {
                   },
                 }));
               }}
-              onClaimPlanModeToggle={(enabled) => {
-                setClaimModeDrafts((current) => ({
+              onResumePlanModeToggle={(enabled) => {
+                setResumeModeDrafts((current) => ({
                   ...current,
                   [selectedSummary.session.id]: {
                     ...(current[selectedSummary.session.id] ??
@@ -2708,7 +2880,7 @@ export function App() {
                   },
                 }));
               }}
-              onClaimModelChange={(modelId, defaultReasoningId) => {
+              onResumeModelChange={(modelId, defaultReasoningId) => {
                 const provider = selectedSummary.session.provider as ProviderChoice;
                 const optionValues = modelId
                   ? buildModelOptionValuesFromReasoning({
@@ -2727,19 +2899,19 @@ export function App() {
                   ...current,
                   [provider]: modelId ? nextDraft : {},
                 }));
-                setClaimModelDrafts((current) => ({
+                setResumeModelDrafts((current) => ({
                   ...current,
                   [selectedSummary.session.id]: nextDraft,
                 }));
               }}
-              onClaimReasoningChange={(reasoningId) => {
+              onResumeReasoningChange={(reasoningId) => {
                 const provider = selectedSummary.session.provider as ProviderChoice;
                 const modelId =
                   draftModelIdForCatalog(
                     selectedModelCatalogState?.catalog,
-                    claimModelDrafts[selectedSummary.session.id],
+                    resumeModelDrafts[selectedSummary.session.id],
                   ) ??
-                  claimModelControl?.model?.id ??
+                  resumeModelControl?.model?.id ??
                   null;
                 const optionValues = modelId
                   ? buildModelOptionValuesFromReasoning({
@@ -2749,7 +2921,7 @@ export function App() {
                     })
                   : undefined;
                 const { optionValues: _previousOptionValues, ...previousDraft } =
-                  claimModelDrafts[selectedSummary.session.id] ?? {};
+                  resumeModelDrafts[selectedSummary.session.id] ?? {};
                 void _previousOptionValues;
                 const nextDraft = {
                   ...previousDraft,
@@ -2762,22 +2934,22 @@ export function App() {
                   ...current,
                   [provider]: nextDraft.modelId ? nextDraft : {},
                 }));
-                setClaimModelDrafts((current) => ({
+                setResumeModelDrafts((current) => ({
                   ...current,
                   [selectedSummary.session.id]: nextDraft,
                 }));
               }}
               onClaimControl={() => {
                 const sessionId = selectedSummary.session.id;
-                const modeId = claimModeControl?.effectiveModeId ?? null;
-                const modelDraft = claimModelDrafts[sessionId];
+                const modeId = resumeModeControl?.effectiveModeId ?? null;
+                const modelDraft = resumeModelDrafts[sessionId];
                 const modelId = draftModelIdForCatalog(
                   selectedModelCatalogState?.catalog,
                   modelDraft,
                 );
                 const reasoningId =
                   (modelId ? modelDraft?.reasoningId : undefined) ??
-                  claimModelControl?.reasoning?.id ??
+                  resumeModelControl?.reasoning?.id ??
                   null;
                 const optionValues =
                   (modelId ? modelDraft?.optionValues : undefined) ??
@@ -2819,7 +2991,7 @@ export function App() {
               }}
               onInterrupt={() => void interruptSession(selectedSummary.session.id)}
               onOpenFileReference={() => setFileReferenceOpen(true)}
-              onLoadOlderHistory={() => loadOlderHistory(selectedSummary.session.id)}
+              onLoadOlderHistory={() => loadOlderConversation(selectedSummary.session.id)}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
               showLeftSidebarControls={showPrimaryLeftSidebarControls}
@@ -2846,7 +3018,22 @@ export function App() {
                 setStopConfirmSessionId(selectedSummary.session.id);
               }}
               onDeleteSession={() => setDeleteConfirmSessionId(selectedSummary.session.id)}
+              onArchiveSession={() => {
+                void archiveSessionAndClearCanvasTargets(selectedSummary.session.id);
+              }}
               canStopSession={canSessionStop(selectedSummary)}
+              canArchiveSession={canSessionArchive(selectedSummary)}
+              canForkSession={
+                selectedSummary.session.capabilities.branching?.sameWorkspace === true
+              }
+              canCreateSide={
+                selectedSummary.session.capabilities.branching?.side === true
+              }
+              onForkSession={() => handleForkSession(selectedSummary.session.id, "fork")}
+              onCreateSide={() => handleForkSession(selectedSummary.session.id, "side")}
+              branchOperationPending={pendingBranchSessionIds.has(
+                selectedSummary.session.id,
+              )}
               canDeleteSession={canSessionDelete(selectedSummary)}
               canShowSessionInfo={canSessionShowInfo(selectedSummary)}
               canRenameSession={canSessionRename(selectedSummary)}
@@ -2906,6 +3093,29 @@ export function App() {
               showInspectorToggle={!rightOpen && !rightSidebarOpen}
               inspectorToggleClassName="md:hidden"
               reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
+            />}
+              sides={(sideProjectionsByParentId.get(selectedSummary.session.id) ?? []).map(
+                (sideProjection) => ({
+                  id: sideProjection.summary.session.id,
+                  summary: sideProjection.summary,
+                  unread: unreadSessionIds.has(sideProjection.summary.session.id),
+                  onDiscard: () =>
+                    setStopConfirmSessionId(sideProjection.summary.session.id),
+                  onRecreate: () =>
+                    handleRecreateSide(
+                      selectedSummary.session.id,
+                      sideProjection.summary.session.id,
+                    ),
+                  content: renderSideSessionPane(sideProjection),
+                }),
+              )}
+              layout={sideLayoutByParentId[selectedSummary.session.id] ?? "columns"}
+              onLayoutChange={(layout) => {
+                setSideLayoutByParentId((current) => ({
+                  ...current,
+                  [selectedSummary.session.id]: layout,
+                }));
+              }}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane

@@ -20,7 +20,10 @@ export interface PrimaryPaneState {
 }
 
 export interface WorkbenchSessionCollections {
+  /** Primary sessions shown in Chats and the workspace sidebar. */
   sessionEntries: SessionProjection[];
+  /** Ephemeral Side children stay addressable without entering primary navigation. */
+  sideSessionEntries: SessionProjection[];
   runningSessionEntries: SessionProjection[];
   controlledRunningSessionEntries: SessionProjection[];
   runningSessionSummaries: SessionSummary[];
@@ -69,7 +72,7 @@ function isControlledByClient(summary: SessionSummary, clientId: string): boolea
 function isEndedNativeTuiSession(summary: SessionSummary): boolean {
   return (
     summary.session.liveBackend === "native_tui" &&
-    (summary.session.status === "stopped" || summary.session.runtimeState === "stopped")
+    summary.session.status === "stopped"
   );
 }
 
@@ -101,7 +104,13 @@ export function deriveWorkbenchSessionCollections(args: {
   workspaceDir: string;
   workspaceSortMode: WorkspaceSortMode;
 }): WorkbenchSessionCollections {
-  const sessionEntries = sortSessionEntries(args.projections);
+  const allSessionEntries = sortSessionEntries(args.projections);
+  const sideSessionEntries = allSessionEntries.filter(
+    (entry) => entry.summary.session.relationship?.kind === "side",
+  );
+  const sessionEntries = allSessionEntries.filter(
+    (entry) => entry.summary.session.relationship?.kind !== "side",
+  );
   const storedSessionByKey = new Map(
     args.storedSessions.map((ref) => [storedSessionKey(ref), ref] as const),
   );
@@ -160,6 +169,7 @@ export function deriveWorkbenchSessionCollections(args: {
 
   return {
     sessionEntries,
+    sideSessionEntries,
     runningSessionEntries,
     controlledRunningSessionEntries,
     runningSessionSummaries,

@@ -3,14 +3,17 @@ import type {
   ContextUsage,
   PermissionResponseRequest,
   ProviderModelCatalog,
-  SessionHistoryItemDetailKind,
+  ConversationItemDetailKind,
   SessionSummary,
-  SessionTurnDirectoryItem,
+  ConversationTurnDirectoryItem,
 } from "@rah/runtime-protocol";
 import {
+  Archive,
   ArrowUp,
   Info,
+  GitFork,
   MessageSquareText,
+  PanelRightOpen,
   PencilLine,
   Plus,
   SquareTerminal,
@@ -72,8 +75,7 @@ import {
   shouldReplayInitialSessionTuiOutput,
 } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
-import { conversationV2Enabled } from "../../../conversation-v2-feature";
-import { conversationV2TurnsToFeed } from "../../../conversation-v2-feed";
+import { conversationTurnsToFeed } from "../../../conversation-feed";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
 
@@ -164,21 +166,18 @@ export function WorkbenchSelectedPane(props: {
   rightSidebarOpen: boolean;
   isAttached: boolean;
   interactionNotice: InlineWorkbenchNotice | null;
-  historyNotice: InlineWorkbenchNotice | null;
   generationActive: boolean;
   hideToolCallsInChat: boolean;
   hideOpenCodeReasoningInChat: boolean;
   showModelInfoInChat: boolean;
-  canLoadOlderHistory: boolean;
-  historyLoading: boolean;
-  turnDirectory?: readonly SessionTurnDirectoryItem[] | undefined;
+  turnDirectory?: readonly ConversationTurnDirectoryItem[] | undefined;
   onEnsureTurnDirectory?: () => void | Promise<void>;
   onLoadTurnHistory?: (turnId: string) => void | Promise<void>;
   canRespondToPermission: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
-  onLoadHistoryItemDetail?: (
-    kind: SessionHistoryItemDetailKind,
+  onLoadConversationItemDetail?: (
+    kind: ConversationItemDetailKind,
     itemId: string,
   ) => Promise<void> | void;
   onLoadConversationTurnDetail?: (turnId: string) => Promise<void> | void;
@@ -188,24 +187,24 @@ export function WorkbenchSelectedPane(props: {
   draftImageUrls?: readonly string[] | undefined;
   draftImageCount?: number | undefined;
   sendPending: boolean;
-  claimAccessModes: SessionModeChoice[];
-  selectedClaimAccessModeId: string | null;
-  claimPlanModeAvailable: boolean;
-  claimPlanModeEnabled: boolean;
-  claimModePending: boolean;
-  selectedClaimModelId: string | null;
-  selectedClaimReasoningId: string | null;
+  resumeAccessModes: SessionModeChoice[];
+  selectedResumeAccessModeId: string | null;
+  resumePlanModeAvailable: boolean;
+  resumePlanModeEnabled: boolean;
+  resumeModePending: boolean;
+  selectedResumeModelId: string | null;
+  selectedResumeReasoningId: string | null;
   onDraftChange: (value: string) => void;
   onComposerPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
   onClearDraftImages?: (() => void) | undefined;
   onRemoveDraftImage?: ((index: number) => void) | undefined;
   onRemoveLastDraftImage?: (() => void) | undefined;
   onSend: () => void;
-  onClaimHistory: () => void;
-  onClaimAccessModeChange: (modeId: string) => void;
-  onClaimPlanModeToggle: (enabled: boolean) => void;
-  onClaimModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
-  onClaimReasoningChange: (reasoningId: string) => void;
+  onResumeHistory: () => void;
+  onResumeAccessModeChange: (modeId: string) => void;
+  onResumePlanModeToggle: (enabled: boolean) => void;
+  onResumeModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
+  onResumeReasoningChange: (reasoningId: string) => void;
   onClaimControl: () => void;
   onInterrupt: () => void;
   onOpenFileReference: () => void;
@@ -221,7 +220,14 @@ export function WorkbenchSelectedPane(props: {
   onHideSession?: () => void;
   onStopOrClose: () => void;
   onDeleteSession: () => void;
+  onArchiveSession: () => void;
+  onForkSession?: (() => void) | undefined;
+  onCreateSide?: (() => void) | undefined;
   canStopSession: boolean;
+  canArchiveSession: boolean;
+  canForkSession?: boolean;
+  canCreateSide?: boolean;
+  branchOperationPending?: boolean;
   canDeleteSession: boolean;
   canShowSessionInfo: boolean;
   canRenameSession: boolean;
@@ -245,6 +251,7 @@ export function WorkbenchSelectedPane(props: {
   inspectorToggleClassName?: string;
   reserveRightPanelToggleSpace?: boolean;
   reserveRightPanelBreakpoint?: "md" | "wide";
+  sideTaskCount?: number;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -268,12 +275,12 @@ export function WorkbenchSelectedPane(props: {
   const [openedTuiTerminalIds, setOpenedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const onLoadOlderHistoryRef = useRef(props.onLoadOlderHistory);
-  const onLoadHistoryItemDetailRef = useRef(props.onLoadHistoryItemDetail);
+  const onLoadConversationItemDetailRef = useRef(props.onLoadConversationItemDetail);
   const onPermissionRespondRef = useRef(props.onPermissionRespond);
   const onOpenLocalFileRef = useRef(props.onOpenLocalFile);
 
   onLoadOlderHistoryRef.current = props.onLoadOlderHistory;
-  onLoadHistoryItemDetailRef.current = props.onLoadHistoryItemDetail;
+  onLoadConversationItemDetailRef.current = props.onLoadConversationItemDetail;
   onPermissionRespondRef.current = props.onPermissionRespond;
   onOpenLocalFileRef.current = props.onOpenLocalFile;
 
@@ -281,9 +288,9 @@ export function WorkbenchSelectedPane(props: {
     return onLoadOlderHistoryRef.current();
   }, []);
 
-  const handleChatLoadHistoryItemDetail = useCallback(
-    (kind: SessionHistoryItemDetailKind, itemId: string) =>
-      onLoadHistoryItemDetailRef.current?.(kind, itemId),
+  const handleChatLoadConversationItemDetail = useCallback(
+    (kind: ConversationItemDetailKind, itemId: string) =>
+      onLoadConversationItemDetailRef.current?.(kind, itemId),
     [],
   );
 
@@ -318,29 +325,20 @@ export function WorkbenchSelectedPane(props: {
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
   const chatThreadKey = chatThreadKeyForSession(props.selectedSummary);
-  const conversationV2 = props.selectedProjection?.conversationV2;
-  const useConversationV2 =
-    conversationV2Enabled() &&
-    conversationV2 !== undefined &&
-    (conversationV2.phase === "ready" || conversationV2.turns.length > 0);
+  const conversation = props.selectedProjection?.conversation;
   const chatFeed = useMemo(
-    () =>
-      useConversationV2
-        ? conversationV2TurnsToFeed(conversationV2?.turns ?? [])
-        : props.selectedProjection?.feed ?? [],
+    () => conversationTurnsToFeed(
+      conversation?.turns ?? [],
+      props.selectedProjection?.feed ?? [],
+    ),
     [
-      conversationV2?.revision,
-      conversationV2?.turns,
+      conversation?.revision,
+      conversation?.turns,
       props.selectedProjection?.feed,
-      useConversationV2,
     ],
   );
-  const chatCanLoadOlderHistory = useConversationV2
-    ? Boolean(conversationV2?.nextCursor)
-    : props.canLoadOlderHistory;
-  const chatHistoryLoading = useConversationV2
-    ? conversationV2?.phase === "loading"
-    : props.historyLoading;
+  const chatCanLoadOlderHistory = Boolean(conversation?.nextCursor);
+  const chatHistoryLoading = conversation?.phase === "loading";
   const isCouncilSession = props.selectedSummary.session.origin?.kind === "council";
   const sessionLifecycleStatus = props.selectedIsReadOnlyReplay
     ? "stopped"
@@ -352,6 +350,9 @@ export function WorkbenchSelectedPane(props: {
   const sessionHeaderState = resolveConversationHeaderState({
     status: sessionLifecycleStatus,
     phase: sessionPhase,
+    ...(props.selectedSummary.session.relationship?.sideState
+      ? { sideState: props.selectedSummary.session.relationship.sideState }
+      : {}),
   });
   const sessionHeaderMetaItems: ConversationHeaderMetaItem[] = [
     {
@@ -403,6 +404,14 @@ export function WorkbenchSelectedPane(props: {
     });
   }
   const showSessionDeleteMenuItem = props.canDeleteSession || sessionLifecycleStatus === "running";
+  const showSessionArchiveMenuItem = props.canArchiveSession || sessionLifecycleStatus === "running";
+  const sessionArchiveDisabled = !props.canArchiveSession || sessionLifecycleStatus === "running";
+  const sessionArchiveTitle =
+    sessionLifecycleStatus === "running"
+      ? "Stop this session before archiving it"
+      : props.canArchiveSession
+        ? "Archive session"
+        : "This provider session cannot be archived from RAH";
   const sessionDeleteDisabled = !props.canDeleteSession || sessionLifecycleStatus === "running";
   const sessionDeleteTitle =
     sessionLifecycleStatus === "running"
@@ -477,7 +486,7 @@ export function WorkbenchSelectedPane(props: {
       ? `${providerLabel(props.selectedSummary.session.provider)} runs as a native TUI session here. Change model or permissions inside the provider TUI, or choose them before launch/resume.`
       : undefined;
   const composerActionPending =
-    props.composerSurface.kind === "history_claim" ||
+    props.composerSurface.kind === "resume_history" ||
     props.composerSurface.kind === "claim_control"
       ? props.composerSurface.actionPending
       : false;
@@ -486,7 +495,7 @@ export function WorkbenchSelectedPane(props: {
     props.composerSurface.kind === "compose" && nativeTui?.promptState === "prompt_dirty";
   const resumeSessionControlDisabled =
     sessionControlBusy ||
-    props.claimModePending ||
+    props.resumeModePending ||
     props.modelChangePending ||
     composerActionPending;
   const stopDisabled =
@@ -517,25 +526,25 @@ export function WorkbenchSelectedPane(props: {
       </div>
       <div className="flex shrink-0 items-center gap-2.5">
         <SessionControlPopover
-          accessModes={props.claimAccessModes}
-          selectedAccessModeId={props.selectedClaimAccessModeId}
-          planModeAvailable={props.claimPlanModeAvailable}
-          planModeEnabled={props.claimPlanModeEnabled}
-          modeDisabled={props.claimModePending || args.actionPending}
+          accessModes={props.resumeAccessModes}
+          selectedAccessModeId={props.selectedResumeAccessModeId}
+          planModeAvailable={props.resumePlanModeAvailable}
+          planModeEnabled={props.resumePlanModeEnabled}
+          modeDisabled={props.resumeModePending || args.actionPending}
           modelCatalog={props.modelCatalog}
           modelCatalogLoading={props.modelCatalogLoading}
-          selectedModelId={props.selectedClaimModelId}
-          selectedReasoningId={props.selectedClaimReasoningId}
+          selectedModelId={props.selectedResumeModelId}
+          selectedReasoningId={props.selectedResumeReasoningId}
           modelDisabled={props.modelChangePending || args.actionPending}
           disabled={resumeSessionControlDisabled}
           showModel
           align="right"
           buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
           onOpen={props.onRequestModelCatalogRefresh}
-          onAccessModeChange={props.onClaimAccessModeChange}
-          onPlanModeToggle={props.onClaimPlanModeToggle}
-          onModelChange={props.onClaimModelChange}
-          onReasoningChange={props.onClaimReasoningChange}
+          onAccessModeChange={props.onResumeAccessModeChange}
+          onPlanModeToggle={props.onResumePlanModeToggle}
+          onModelChange={props.onResumeModelChange}
+          onReasoningChange={props.onResumeReasoningChange}
         />
         <button
           type="button"
@@ -697,6 +706,15 @@ export function WorkbenchSelectedPane(props: {
               ) : null}
             </>
           ) : null}
+          {(props.sideTaskCount ?? 0) > 0 ? (
+            <span
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 text-xs font-medium text-[var(--app-hint)]"
+              title={`${props.sideTaskCount} open Side ${props.sideTaskCount === 1 ? "task" : "tasks"}`}
+            >
+              <PanelRightOpen size={13} />
+              {props.sideTaskCount}
+            </span>
+          ) : null}
           {!props.selectedIsReadOnlyReplay ? (
             <ConversationHeaderStopButton
               disabled={stopOrCloseDisabled}
@@ -744,6 +762,67 @@ export function WorkbenchSelectedPane(props: {
                   >
                     <PencilLine size={14} />
                     <span>Rename</span>
+                  </button>
+                ) : null}
+                {props.canForkSession && props.onForkSession ? (
+                  <button
+                    type="button"
+                    className={HEADER_MENU_ITEM_CLASS}
+                    disabled={props.branchOperationPending}
+                    aria-label="Continue in new task"
+                    title="Starts another task in the same workspace. File changes are shared."
+                    onClick={() => {
+                      setSessionMenuOpen(false);
+                      props.onForkSession?.();
+                    }}
+                  >
+                    <GitFork size={14} />
+                    <span className="flex min-w-0 flex-col items-start">
+                      <span>{props.branchOperationPending ? "Starting..." : "Continue in new task"}</span>
+                      <span className="text-[10px] font-normal text-[var(--app-hint)]">
+                        Shares this workspace
+                      </span>
+                    </span>
+                  </button>
+                ) : null}
+                {props.canCreateSide && props.onCreateSide ? (
+                  <button
+                    type="button"
+                    className={HEADER_MENU_ITEM_CLASS}
+                    disabled={props.branchOperationPending}
+                    aria-label="Open Side task"
+                    title="Opens an ephemeral Side task in the same workspace. File changes are shared."
+                    onClick={() => {
+                      setSessionMenuOpen(false);
+                      props.onCreateSide?.();
+                    }}
+                  >
+                    <PanelRightOpen size={14} />
+                    <span className="flex min-w-0 flex-col items-start">
+                      <span>{props.branchOperationPending ? "Starting..." : "Open Side task"}</span>
+                      <span className="text-[10px] font-normal text-[var(--app-hint)]">
+                        Ephemeral, shared workspace
+                      </span>
+                    </span>
+                  </button>
+                ) : null}
+                {showSessionArchiveMenuItem ? (
+                  <button
+                    type="button"
+                    className={HEADER_MENU_ITEM_CLASS}
+                    disabled={sessionArchiveDisabled}
+                    title={sessionArchiveTitle}
+                    aria-label={sessionArchiveTitle}
+                    onClick={() => {
+                      if (sessionArchiveDisabled) {
+                        return;
+                      }
+                      setSessionMenuOpen(false);
+                      props.onArchiveSession();
+                    }}
+                  >
+                    <Archive size={14} />
+                    <span>Archive</span>
                   </button>
                 ) : null}
                 {showSessionDeleteMenuItem ? (
@@ -815,10 +894,6 @@ export function WorkbenchSelectedPane(props: {
         >
           {props.interactionNotice.message}
         </div>
-      ) : props.historyNotice ? (
-        <div className="shrink-0 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-2 text-xs text-[var(--app-hint)]">
-          {props.historyNotice.message}
-        </div>
       ) : null}
 
       {effectiveSessionViewMode === "tui" && nativeTui ? (
@@ -843,24 +918,28 @@ export function WorkbenchSelectedPane(props: {
           key={chatThreadKey}
           sessionId={props.selectedSummary.session.id}
           feed={chatFeed}
-          {...(useConversationV2 && conversationV2
-            ? { conversationTurns: conversationV2.turns }
-            : {})}
+          conversationTurns={conversation?.turns ?? []}
           hideToolCalls={props.hideToolCallsInChat}
           hideOpenCodeReasoning={props.hideOpenCodeReasoningInChat}
           showModelInfo={props.showModelInfoInChat}
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={chatCanLoadOlderHistory}
           historyLoading={chatHistoryLoading}
+          historyError={
+            conversation?.phase === "error"
+              ? conversation.lastError ?? "Canonical conversation history is unavailable."
+              : null
+          }
+          onRetryHistory={handleChatLoadOlderHistory}
           turnDirectory={props.turnDirectory}
           onEnsureTurnDirectory={props.onEnsureTurnDirectory}
           onLoadTurnHistory={props.onLoadTurnHistory}
           generationActive={props.generationActive}
           onLoadOlderHistory={handleChatLoadOlderHistory}
-          {...(props.onLoadHistoryItemDetail
-            ? { onLoadHistoryItemDetail: handleChatLoadHistoryItemDetail }
+          {...(props.onLoadConversationItemDetail
+            ? { onLoadConversationItemDetail: handleChatLoadConversationItemDetail }
             : {})}
-          {...(useConversationV2 && props.onLoadConversationTurnDetail
+          {...(props.onLoadConversationTurnDetail
             ? { onLoadConversationTurnDetail: props.onLoadConversationTurnDetail }
             : {})}
           canRespondToPermission={props.canRespondToPermission}
@@ -876,12 +955,12 @@ export function WorkbenchSelectedPane(props: {
           style={COMPOSER_LAYOUT.bottomPaddingStyle}
         >
         <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
-          {props.composerSurface.kind === "history_claim" ? (
+          {props.composerSurface.kind === "resume_history" ? (
             renderResumeComposer({
               title: "History only",
               actionLabel: props.composerSurface.actionLabel,
               actionPending: props.composerSurface.actionPending,
-              onResume: props.onClaimHistory,
+              onResume: props.onResumeHistory,
             })
           ) : props.composerSurface.kind === "unavailable" ? (
             <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">

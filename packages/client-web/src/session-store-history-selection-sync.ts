@@ -1,3 +1,7 @@
+import {
+  clearLastHistorySelection,
+  writeLastHistorySelection,
+} from "./history-selection";
 import { isReadOnlyReplay } from "./session-capabilities";
 import type { SessionProjection } from "./types";
 
@@ -12,7 +16,6 @@ const CLEARED_HISTORY_SELECTION_KEY = "__cleared__";
 
 export function syncHistorySelectionSubscription(args: {
   state: HistorySelectionSyncState;
-  syncLastHistorySelectionFromState: (state: HistorySelectionSyncState) => void;
 }) {
   const selectedSummary = args.state.selectedSessionId
     ? args.state.projections.get(args.state.selectedSessionId)?.summary ?? null
@@ -33,12 +36,16 @@ export function syncHistorySelectionSubscription(args: {
       return;
     }
     lastSyncedHistorySelectionKey = nextKey;
-    args.syncLastHistorySelectionFromState(args.state);
+    writeLastHistorySelection({
+      provider: selectedSummary.session.provider,
+      providerSessionId: selectedSummary.session.providerSessionId,
+      ...(historyWorkspaceDir ? { workspaceDir: historyWorkspaceDir } : {}),
+    });
     return;
   }
 
   if (lastSyncedHistorySelectionKey !== CLEARED_HISTORY_SELECTION_KEY) {
     lastSyncedHistorySelectionKey = CLEARED_HISTORY_SELECTION_KEY;
-    args.syncLastHistorySelectionFromState(args.state);
+    clearLastHistorySelection();
   }
 }

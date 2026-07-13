@@ -6,7 +6,7 @@ import {
   LIVE_FEED_RETENTION_TARGET_ENTRIES,
 } from "./session-feed-retention";
 import { applyEventsToProjectionMap } from "./session-store-projections";
-import { initialHistorySyncState, type FeedEntry, type SessionProjection } from "./types";
+import { type FeedEntry, type SessionProjection } from "./types";
 
 function summary(options?: {
   providerSessionId?: string;
@@ -36,7 +36,6 @@ function summary(options?: {
         contextUsage: true,
         resumeByProvider: true,
         listProviderSessions: true,
-        renameSession: true,
         actions: {
           info: true,
           stop: !readOnly,
@@ -63,7 +62,6 @@ function projection(feed: FeedEntry[], options?: Parameters<typeof summary>[0]):
     feed,
     events: [],
     lastSeq: feed.length,
-    history: initialHistorySyncState(),
   };
 }
 
@@ -111,10 +109,6 @@ function timelineEvent(index: number, kind: "assistant_message" | "user_message"
         text: `${kind} ${index}`,
         messageId: `${kind}-${index}`,
       },
-      identity: {
-        canonicalItemId: `${kind}-${index}`,
-        canonicalTurnId: `turn-${Math.floor(index / 2)}`,
-      },
     },
   };
 }
@@ -129,10 +123,6 @@ test("compactRecoverableLiveProjectionFeed trims long recoverable live feeds at 
   assert.equal(next.feed[0]?.key, "user_message:340");
   assert.equal(next.feed.at(-1)?.key, "assistant_message:999");
   assert.equal(next.feed.length, 660);
-  assert.equal(next.history.phase, "ready");
-  assert.equal(next.history.authoritativeApplied, true);
-  assert.equal(next.history.nextCursor, null);
-  assert.equal(next.history.nextBeforeTs, ts(340));
 });
 
 test("applyEventsToProjectionMap compacts touched live projections after event batches", () => {
@@ -148,18 +138,14 @@ test("applyEventsToProjectionMap compacts touched live projections after event b
 
   const next = applyEventsToProjectionMap(current, events, {
     updateLastSeq: () => undefined,
-    clearBufferedSession: () => undefined,
+    clearPendingSession: () => undefined,
     queuePendingEvent: () => undefined,
-    shouldDeferEvent: () => false,
-    queueDeferredEvent: () => undefined,
   });
 
   const compacted = next.get("session-1");
   assert.ok(compacted);
   assert.equal(compacted.feed.length, 660);
   assert.equal(compacted.feed[0]?.ts, ts(340));
-  assert.equal(compacted.history.authoritativeApplied, true);
-  assert.equal(compacted.history.nextBeforeTs, ts(340));
 });
 
 test("compactRecoverableLiveProjectionFeed leaves read-only history replays intact", () => {
@@ -183,18 +169,27 @@ test("compactRecoverableLiveProjectionFeed leaves projections without provider s
   assert.equal(next.feed.length, 1_000);
 });
 
-test("compactRecoverableLiveProjectionFeed does not trim during explicit older-history loads", () => {
+test("canonical history loading does not retain the auxiliary live event feed", () => {
   const current: SessionProjection = {
     ...projection(feedWithUserBoundary(1_000), { providerSessionId: "thread-1" }),
-    history: {
-      ...initialHistorySyncState(),
+    conversation: {
       phase: "loading",
-      generation: 1,
+      loadedScope: "history",
+      turns: [],
+      nextCursor: null,
+      revision: 0,
+      daemonRevision: null,
+      pendingDeltas: [],
+      needsRefresh: false,
+      approximateBytes: null,
+      loadedAt: null,
+      lastError: null,
     },
   };
 
   const next = compactRecoverableLiveProjectionFeed(current);
 
-  assert.equal(next, current);
-  assert.equal(next.feed.length, 1_000);
+  assert.notEqual(next, current);
+  assert.equal(next.feed.length, 660);
+  assert.equal(next.conversation, current.conversation);
 });

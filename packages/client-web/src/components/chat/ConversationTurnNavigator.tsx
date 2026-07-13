@@ -1,54 +1,35 @@
 import {
   memo,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { FileCode2 } from "lucide-react";
 import type { ConversationTurnNavigationItem } from "./conversation-turn-navigation";
+import { conversationTurnIndexAtScrollableRailPosition } from "./conversation-turn-navigation";
+import { FileResourceIcon } from "./FileResourceIcon";
 
-const BASE_TICK_WIDTH_PX = 10;
-const ACTIVE_TICK_WIDTH_PX = 34;
-const HOVER_TICK_WIDTH_PX = 40;
-const NEAR_TICK_WIDTH_PX = 22;
-const SECOND_NEAR_TICK_WIDTH_PX = 15;
+const MIN_NAVIGATION_TURNS = 4;
+const MARKER_ROW_HEIGHT_PX = 10;
 const PREVIEW_EDGE_GUARD_PX = 94;
 
-type NavigatorSize = {
-  width: number;
-  height: number;
+type ScrubState = {
+  pointerId: number;
+  targetIndex: number;
 };
 
-function targetTickWidth(index: number, hoveredIndex: number, active: boolean): number {
-  if (hoveredIndex >= 0) {
-    const distance = Math.abs(index - hoveredIndex);
-    if (distance === 0) {
-      return HOVER_TICK_WIDTH_PX;
-    }
-    if (distance === 1) {
-      return Math.max(active ? ACTIVE_TICK_WIDTH_PX : 0, NEAR_TICK_WIDTH_PX);
-    }
-    if (distance === 2) {
-      return Math.max(active ? ACTIVE_TICK_WIDTH_PX : 0, SECOND_NEAR_TICK_WIDTH_PX);
-    }
-  }
-  return active ? ACTIVE_TICK_WIDTH_PX : BASE_TICK_WIDTH_PX;
-}
-
-function turnIndexAtPointer(
-  event: ReactPointerEvent<HTMLCanvasElement>,
-  itemCount: number,
-): number {
-  const rect = event.currentTarget.getBoundingClientRect();
-  if (rect.height <= 0 || itemCount <= 0) {
-    return -1;
-  }
-  const ratio = Math.min(0.999999, Math.max(0, (event.clientY - rect.top) / rect.height));
-  return Math.min(itemCount - 1, Math.floor(ratio * itemCount));
+function markerWidth(index: number, activeIndex: number, interactionIndex: number | null): number {
+  const interactionDistance = interactionIndex === null
+    ? Number.POSITIVE_INFINITY
+    : Math.abs(interactionIndex - index);
+  if (interactionDistance === 0) return 30;
+  if (index === activeIndex) return 26;
+  if (interactionDistance === 1) return 20;
+  if (interactionDistance === 2) return 13;
+  if (interactionDistance === 3) return 10;
+  return 7;
 }
 
 export const ConversationTurnNavigator = memo(function ConversationTurnNavigator(props: {
@@ -57,242 +38,219 @@ export const ConversationTurnNavigator = memo(function ConversationTurnNavigator
   onNavigate: (item: ConversationTurnNavigationItem) => void;
 }) {
   const hostRef = useRef<HTMLElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const currentWidthsRef = useRef<number[]>([]);
-  const [size, setSize] = useState<NavigatorSize>({ width: 0, height: 0 });
-  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
-  const [themeVersion, setThemeVersion] = useState(0);
-  const hoveredIndex = useMemo(
-    () => props.items.findIndex((item) => item.key === hoveredKey),
-    [hoveredKey, props.items],
-  );
-  const hoveredItem = hoveredIndex >= 0 ? props.items[hoveredIndex] : undefined;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const markerRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const scrubRef = useRef<ScrubState | null>(null);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
+  const [scrubIndex, setScrubIndex] = useState<number | null>(null);
+  const [previewTop, setPreviewTop] = useState(0);
+
+  const activeIndex = useMemo(() => {
+    const index = props.items.findIndex((item) => props.activeKeys.has(item.key));
+    return index >= 0 ? index : Math.max(0, props.items.length - 1);
+  }, [props.activeKeys, props.items]);
+  const interactionIndex = scrubIndex ?? hoveredIndex ?? keyboardIndex;
+  const previewItem = interactionIndex === null ? undefined : props.items[interactionIndex];
 
   useEffect(() => {
-    if (hoveredKey && hoveredIndex < 0) {
-      setHoveredKey(null);
-    }
-  }, [hoveredIndex, hoveredKey]);
+    markerRefs.current.length = props.items.length;
+  }, [props.items.length]);
 
-  useLayoutEffect(() => {
-    const host = hostRef.current;
-    if (!host || typeof ResizeObserver === "undefined") {
-      return;
+  const ensureIndexVisible = (index: number) => {
+    const list = listRef.current;
+    if (!list) return;
+    const rowTop = index * MARKER_ROW_HEIGHT_PX;
+    const rowBottom = rowTop + MARKER_ROW_HEIGHT_PX;
+    if (rowTop < list.scrollTop) {
+      list.scrollTop = rowTop;
+    } else if (rowBottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = rowBottom - list.clientHeight;
     }
-    const report = () => {
-      const rect = host.getBoundingClientRect();
-      const next = {
-        width: Math.max(0, Math.round(rect.width)),
-        height: Math.max(0, Math.round(rect.height)),
-      };
-      setSize((current) =>
-        current.width === next.width && current.height === next.height ? current : next,
-      );
-    };
-    const observer = new ResizeObserver(report);
-    observer.observe(host);
-    report();
-    return () => observer.disconnect();
-  }, []);
+  };
 
   useEffect(() => {
-    if (typeof MutationObserver === "undefined") {
-      return;
-    }
-    const observer = new MutationObserver(() => setThemeVersion((version) => version + 1));
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"],
-    });
-    return () => observer.disconnect();
-  }, []);
+    ensureIndexVisible(activeIndex);
+  }, [activeIndex]);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const host = hostRef.current;
-    if (!canvas || !host || size.width <= 0 || size.height <= 0 || props.items.length === 0) {
-      return;
-    }
-    const deviceScale = Math.max(1, window.devicePixelRatio || 1);
-    const pixelWidth = Math.max(1, Math.round(size.width * deviceScale));
-    const pixelHeight = Math.max(1, Math.round(size.height * deviceScale));
-    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-      canvas.width = pixelWidth;
-      canvas.height = pixelHeight;
-    }
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
-    const styles = getComputedStyle(host);
-    const foreground = styles.getPropertyValue("--app-fg").trim() || "#09090b";
-    const hint = styles.getPropertyValue("--app-hint").trim() || "#71717a";
-    const tickOriginX = Math.min(6, Math.max(4, size.width * 0.15));
-    const widthScale = Math.min(1, Math.max(0.55, (size.width - tickOriginX - 3) / HOVER_TICK_WIDTH_PX));
-    const targetWidths = props.items.map(
-      (item, index) =>
-        targetTickWidth(index, hoveredIndex, props.activeKeys.has(item.key)) * widthScale,
-    );
-    if (currentWidthsRef.current.length !== targetWidths.length) {
-      currentWidthsRef.current = targetWidths.map((width) =>
-        Math.min(width, BASE_TICK_WIDTH_PX),
-      );
-    }
-    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-
-    const draw = () => {
-      context.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
-      context.clearRect(0, 0, size.width, size.height);
-      const slotHeight = size.height / props.items.length;
-      for (let index = 0; index < props.items.length; index += 1) {
-        const item = props.items[index]!;
-        const active = props.activeKeys.has(item.key);
-        const hoverDistance = hoveredIndex >= 0 ? Math.abs(index - hoveredIndex) : Number.POSITIVE_INFINITY;
-        const width = currentWidthsRef.current[index] ?? BASE_TICK_WIDTH_PX;
-        context.beginPath();
-        context.lineCap = "round";
-        context.lineWidth = Math.min(
-          active || hoverDistance === 0 ? 2.5 : 2,
-          Math.max(0.5, slotHeight * 0.55),
-        );
-        context.strokeStyle = active || hoverDistance === 0 ? foreground : hint;
-        context.globalAlpha = active || hoverDistance === 0 ? 1 : hoverDistance <= 2 ? 0.62 : 0.4;
-        const y = (index + 0.5) * slotHeight;
-        context.moveTo(tickOriginX, y);
-        context.lineTo(tickOriginX + width, y);
-        context.stroke();
-      }
-      context.globalAlpha = 1;
-    };
-
-    const animate = () => {
-      animationFrameRef.current = null;
-      let settled = true;
-      currentWidthsRef.current = currentWidthsRef.current.map((width, index) => {
-        const target = targetWidths[index] ?? BASE_TICK_WIDTH_PX;
-        if (reducedMotion || Math.abs(target - width) < 0.15) {
-          return target;
-        }
-        settled = false;
-        return width + (target - width) * 0.28;
-      });
-      draw();
-      if (!settled) {
-        animationFrameRef.current = requestAnimationFrame(animate);
-      }
-    };
-
-    if (animationFrameRef.current !== null) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-    animationFrameRef.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationFrameRef.current !== null) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    };
-  }, [hoveredIndex, props.activeKeys, props.items, size, themeVersion]);
-
-  if (props.items.length < 2) {
+  if (props.items.length < MIN_NAVIGATION_TURNS) {
     return null;
   }
 
-  const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    const index = turnIndexAtPointer(event, props.items.length);
-    setHoveredKey(index >= 0 ? props.items[index]!.key : null);
+  const updatePreviewPosition = (index: number) => {
+    const host = hostRef.current;
+    const marker = markerRefs.current[index];
+    if (!host || !marker) return;
+    const hostRect = host.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const rawTop = markerRect.top - hostRect.top + markerRect.height / 2;
+    setPreviewTop(
+      Math.min(
+        Math.max(PREVIEW_EDGE_GUARD_PX, rawTop),
+        Math.max(PREVIEW_EDGE_GUARD_PX, hostRect.height - PREVIEW_EDGE_GUARD_PX),
+      ),
+    );
+  };
+
+  const selectIndex = (index: number, source: "pointer" | "keyboard") => {
+    if (index < 0 || index >= props.items.length) return;
+    if (source === "keyboard") setKeyboardIndex(index);
+    else setHoveredIndex(index);
+    ensureIndexVisible(index);
+    requestAnimationFrame(() => updatePreviewPosition(index));
+  };
+
+  const pointerIndex = (event: ReactPointerEvent<HTMLDivElement>): number => {
+    const list = listRef.current;
+    if (!list) return -1;
+    const rect = list.getBoundingClientRect();
+    return conversationTurnIndexAtScrollableRailPosition(
+      props.items.length,
+      event.clientY - rect.top,
+      list.scrollTop,
+      MARKER_ROW_HEIGHT_PX,
+    );
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.target !== event.currentTarget) {
+    const current = keyboardIndex ?? activeIndex;
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowUp") nextIndex = Math.max(0, current - 1);
+    else if (event.key === "ArrowDown") nextIndex = Math.min(props.items.length - 1, current + 1);
+    else if (event.key === "PageUp") nextIndex = Math.max(0, current - 10);
+    else if (event.key === "PageDown") nextIndex = Math.min(props.items.length - 1, current + 10);
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = props.items.length - 1;
+    else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      const item = props.items[current];
+      if (item) props.onNavigate(item);
       return;
     }
-    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-      event.preventDefault();
-      const activeIndex = props.items.findIndex((item) => props.activeKeys.has(item.key));
-      const startIndex = hoveredIndex >= 0 ? hoveredIndex : Math.max(0, activeIndex);
-      const delta = event.key === "ArrowUp" ? -1 : 1;
-      const nextIndex = Math.min(props.items.length - 1, Math.max(0, startIndex + delta));
-      setHoveredKey(props.items[nextIndex]!.key);
-      return;
-    }
-    if ((event.key === "Enter" || event.key === " ") && hoveredItem) {
-      event.preventDefault();
-      props.onNavigate(hoveredItem);
-    }
+    if (nextIndex === null) return;
+    event.preventDefault();
+    selectIndex(nextIndex, "keyboard");
   };
-
-  const previewTop = hoveredItem
-    ? Math.min(
-        Math.max(
-          PREVIEW_EDGE_GUARD_PX,
-          ((hoveredIndex + 0.5) / props.items.length) * size.height,
-        ),
-        Math.max(PREVIEW_EDGE_GUARD_PX, size.height - PREVIEW_EDGE_GUARD_PX),
-      )
-    : 0;
 
   return (
     <nav
       ref={hostRef}
-      className="chat-turn-navigator absolute inset-y-5 z-[20] outline-none"
+      className="chat-turn-navigator absolute z-[20] outline-none"
       aria-label={`Conversation turns, ${props.items.length} total`}
       tabIndex={0}
+      onKeyDown={handleKeyDown}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setHoveredKey(null);
+          setKeyboardIndex(null);
+          setHoveredIndex(null);
         }
       }}
-      onFocus={() => {
-        if (!hoveredKey) {
-          const activeItem = [...props.items].reverse().find((item) => props.activeKeys.has(item.key));
-          setHoveredKey(activeItem?.key ?? props.items.at(-1)?.key ?? null);
-        }
-      }}
-      onKeyDown={handleKeyDown}
-      onPointerLeave={() => setHoveredKey(null)}
     >
-      <canvas
-        ref={canvasRef}
-        className="h-full w-full cursor-pointer"
-        aria-hidden="true"
-        onPointerMove={handlePointerMove}
-        onPointerDown={(event) => {
-          const index = turnIndexAtPointer(event, props.items.length);
-          if (index >= 0) {
-            props.onNavigate(props.items[index]!);
-          }
+      <div
+        ref={listRef}
+        className="chat-turn-navigator-list rah-scroll-overlay"
+        data-scrubbing={scrubRef.current ? "true" : undefined}
+        onScroll={() => {
+          if (interactionIndex !== null) updatePreviewPosition(interactionIndex);
         }}
-      />
-      {hoveredItem ? (
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          const index = pointerIndex(event);
+          if (index < 0) return;
+          scrubRef.current = { pointerId: event.pointerId, targetIndex: index };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setScrubIndex(index);
+          selectIndex(index, "pointer");
+        }}
+        onPointerMove={(event) => {
+          const index = pointerIndex(event);
+          if (index < 0) return;
+          const scrub = scrubRef.current;
+          if (scrub?.pointerId === event.pointerId) {
+            scrub.targetIndex = index;
+            setScrubIndex(index);
+          }
+          selectIndex(index, "pointer");
+        }}
+        onPointerUp={(event) => {
+          const scrub = scrubRef.current;
+          if (!scrub || scrub.pointerId !== event.pointerId) return;
+          const item = props.items[scrub.targetIndex];
+          scrubRef.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          setScrubIndex(null);
+          if (item) props.onNavigate(item);
+        }}
+        onPointerCancel={(event) => {
+          scrubRef.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          setScrubIndex(null);
+        }}
+        onPointerLeave={() => {
+          if (!scrubRef.current) setHoveredIndex(null);
+        }}
+      >
+        {props.items.map((item, index) => {
+          const active = props.activeKeys.has(item.key);
+          const target = interactionIndex === index;
+          return (
+            <div
+              key={item.key}
+              className="chat-turn-navigator-row"
+              style={{ height: `${MARKER_ROW_HEIGHT_PX}px` }}
+            >
+              <button
+                ref={(node) => {
+                  markerRefs.current[index] = node;
+                }}
+                type="button"
+                className="chat-turn-navigator-marker"
+                style={{ width: `${markerWidth(index, activeIndex, interactionIndex)}px` }}
+                data-active={active ? "true" : undefined}
+                data-target={target ? "true" : undefined}
+                aria-current={active ? "step" : undefined}
+                aria-label={`Turn ${index + 1}: ${item.userPreview}`}
+                tabIndex={-1}
+                onFocus={() => selectIndex(index, "keyboard")}
+                onPointerEnter={() => selectIndex(index, "pointer")}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {previewItem ? (
         <button
           type="button"
-          className="chat-turn-navigator-preview absolute left-12 w-80 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-left shadow-xl transition-transform duration-150 hover:scale-[1.01]"
+          className="chat-turn-navigator-preview absolute left-full ml-1 w-80 max-w-[calc(100vw-1rem)] -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[color-mix(in_srgb,var(--app-bg)_95%,transparent)] p-3 text-left shadow-xl backdrop-blur-sm transition-transform duration-150 hover:scale-[1.01]"
           style={{ top: `${previewTop}px` }}
-          onClick={() => props.onNavigate(hoveredItem)}
-          aria-label={`Jump to: ${hoveredItem.userPreview}`}
+          onClick={() => props.onNavigate(previewItem)}
+          aria-label={`Jump to: ${previewItem.userPreview}`}
         >
           <div className="line-clamp-2 text-sm font-semibold leading-5 text-[var(--app-fg)]">
-            {hoveredItem.userPreview}
+            {previewItem.userPreview}
           </div>
-          {hoveredItem.assistantPreview ? (
+          {previewItem.assistantPreview ? (
             <div className="mt-1 line-clamp-3 text-sm leading-5 text-[var(--app-hint)]">
-              {hoveredItem.assistantPreview}
+              {previewItem.assistantPreview}
             </div>
           ) : (
             <div className="mt-1 text-xs text-[var(--app-hint)]">Waiting for reply</div>
           )}
-          {hoveredItem.fileNames.length > 0 ? (
-            <div className="mt-2 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-[var(--app-hint)]">
-              {hoveredItem.fileNames.slice(0, 2).map((fileName) => (
-                <span key={fileName} className="inline-flex min-w-0 items-center gap-1">
-                  <FileCode2 size={12} className="shrink-0" />
-                  <span className="max-w-24 truncate">{fileName}</span>
+          {previewItem.fileNames.length > 0 ? (
+            <div className="mt-2 flex min-w-0 items-center gap-3 overflow-hidden text-xs text-[var(--app-hint)]">
+              {previewItem.fileNames.slice(0, 2).map((fileName) => (
+                <span key={fileName} className="inline-flex min-w-0 items-center gap-1.5">
+                  <FileResourceIcon path={fileName} size={12} className="shrink-0" />
+                  <span className="max-w-28 truncate">{fileName}</span>
                 </span>
               ))}
-              {hoveredItem.fileNames.length > 2 ? (
-                <span className="shrink-0">+{hoveredItem.fileNames.length - 2}</span>
+              {previewItem.fileNames.length > 2 ? (
+                <span className="shrink-0 tabular-nums">+{previewItem.fileNames.length - 2}</span>
               ) : null}
             </div>
           ) : null}

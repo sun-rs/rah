@@ -23,9 +23,9 @@ export function AssistantMessage(props: {
     <div className="flex flex-col items-start" data-testid="chat-assistant-message">
       {isFinalReply ? (
         <MarkdownRenderer
-          className="prose-chat max-w-none text-[15px] leading-relaxed text-[var(--app-fg)]"
+          className="prose-chat prose-chat-final max-w-none text-[var(--app-fg)]"
           content={props.content}
-          fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed"
+          fallbackClassName="prose-chat-final whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
         />
       ) : (

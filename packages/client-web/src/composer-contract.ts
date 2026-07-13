@@ -2,7 +2,7 @@ import type { NativeTuiPromptState, SessionSummary } from "@rah/runtime-protocol
 import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
 
 export type ComposerSurface =
-  | { kind: "history_claim"; actionLabel: string; actionPending: boolean }
+  | { kind: "resume_history"; actionLabel: string; actionPending: boolean }
   | { kind: "claim_control"; actionLabel: string; actionPending: boolean }
   | {
       kind: "compose";
@@ -151,7 +151,7 @@ export function deriveComposerSurface(args: {
   isGenerating: boolean;
   pendingSessionAction:
     | {
-        kind: "attach_session" | "claim_control" | "claim_history";
+        kind: "attach_session" | "claim_control" | "resume_history";
         sessionId: string;
       }
     | null;
@@ -165,13 +165,13 @@ export function deriveComposerSurface(args: {
     pendingSessionAction?.kind === "claim_control" &&
     pendingSessionAction.sessionId === selectedSummary.session.id;
   const isResumingHistory =
-    pendingSessionAction?.kind === "claim_history" &&
+    pendingSessionAction?.kind === "resume_history" &&
     pendingSessionAction.sessionId === selectedSummary.session.id;
 
   if (!canSessionSendInput(selectedSummary)) {
     return isReadOnlyReplay(selectedSummary) && selectedSummary.session.providerSessionId
 	      ? {
-	          kind: "history_claim",
+	          kind: "resume_history",
 	          actionLabel: isResumingHistory ? "Resuming…" : "Resume",
 	          actionPending: isResumingHistory,
 	        }

@@ -6,7 +6,7 @@ import type {
 import * as api from "./api";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
-import { mergeClaimedHistoryProjection } from "./session-store-session-lifecycle";
+import { mergeResumedHistoryProjection } from "./session-store-session-lifecycle";
 import { connectSessionStoreTransport } from "./session-store-transport";
 import type { PendingSessionTransition } from "./session-transition-contract";
 import type { SessionProjection } from "./types";
@@ -23,7 +23,7 @@ type SessionSyncState = {
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
-        kind: "attach_session" | "claim_control" | "claim_history";
+        kind: "attach_session" | "claim_control" | "resume_history";
         sessionId: string;
       }
     | null;
@@ -94,13 +94,13 @@ export function coalesceConversationProjectionDeltas(
   });
 }
 
-function selectedClaimedReplayClosedByEvents(
+function selectedResumedReplayClosedByEvents(
   state: SessionSyncState,
   events: readonly RahEvent[],
 ): SessionProjection | null {
   const pendingAction = state.pendingSessionAction;
   if (
-    pendingAction?.kind !== "claim_history" ||
+    pendingAction?.kind !== "resume_history" ||
     pendingAction.sessionId !== state.selectedSessionId
   ) {
     return null;
@@ -156,26 +156,26 @@ export function applyProjectionEventsToSyncState(args: {
     events: RahEvent[],
   ) => Map<string, SessionProjection>;
 }): Pick<SessionSyncState, "projections" | "selectedSessionId" | "sessionTopologyVersion"> {
-  const claimedReplay = selectedClaimedReplayClosedByEvents(args.state, args.events);
+  const resumedReplay = selectedResumedReplayClosedByEvents(args.state, args.events);
   const projections = args.applyEventsToMap(args.state.projections, args.events);
   const sessionTopologyVersion = eventsMayChangeSessionTopology(args.events)
     ? args.state.sessionTopologyVersion + 1
     : args.state.sessionTopologyVersion;
-  if (!claimedReplay) {
+  if (!resumedReplay) {
     return {
       projections,
       selectedSessionId: args.state.selectedSessionId,
       sessionTopologyVersion,
     };
   }
-  const liveProjection = findLiveProjectionForReplay(projections, claimedReplay);
+  const liveProjection = findLiveProjectionForReplay(projections, resumedReplay);
   if (liveProjection) {
     const next = new Map(projections);
     next.set(
       liveProjection.summary.session.id,
-      mergeClaimedHistoryProjection(
+      mergeResumedHistoryProjection(
         liveProjection.summary,
-        claimedReplay,
+        resumedReplay,
         liveProjection,
       ),
     );
@@ -186,10 +186,10 @@ export function applyProjectionEventsToSyncState(args: {
     };
   }
   const next = new Map(projections);
-  next.set(claimedReplay.summary.session.id, claimedReplay);
+  next.set(resumedReplay.summary.session.id, resumedReplay);
   return {
     projections: next,
-    selectedSessionId: claimedReplay.summary.session.id,
+    selectedSessionId: resumedReplay.summary.session.id,
     sessionTopologyVersion,
   };
 }
@@ -200,7 +200,7 @@ function shouldSkipSessionsResponse(
 ): boolean {
   return (
     state.sessionTopologyVersion !== sessionTopologyVersionAtRequest ||
-    state.pendingSessionAction?.kind === "claim_history"
+    state.pendingSessionAction?.kind === "resume_history"
   );
 }
 
@@ -208,7 +208,7 @@ export async function recoverFromReplayGapCommand(args: {
   batch: EventBatch;
   get: () => SessionSyncState;
   set: SessionSyncSetState;
-  clearHistoryBootstrapBuffers: () => void;
+  clearPendingEvents: () => void;
   updateLastSeq: (seq: number) => void;
   replaceSessionsResponse: (
     state: Pick<
@@ -234,9 +234,9 @@ export async function recoverFromReplayGapCommand(args: {
     current: Map<string, SessionProjection>,
     events: RahEvent[],
   ) => Map<string, SessionProjection>;
-  ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
+  ensureConversationLoaded: (sessionId: string) => Promise<void>;
 }) {
-  args.clearHistoryBootstrapBuffers();
+  args.clearPendingEvents();
   if (
     args.batch.replayGap?.newestAvailableSeq !== null &&
     args.batch.replayGap?.newestAvailableSeq !== undefined
@@ -278,7 +278,7 @@ export async function recoverFromReplayGapCommand(args: {
   });
   const selectedSessionId = args.get().selectedSessionId;
   if (selectedSessionId) {
-    void args.ensureSessionHistoryLoaded(selectedSessionId);
+    void args.ensureConversationLoaded(selectedSessionId);
   }
 }
 
