@@ -1,4 +1,9 @@
-import type { CouncilMessagesPageResponse, CouncilSnapshot } from "@rah/runtime-protocol";
+import type {
+  CouncilMessage,
+  CouncilMessagesPageResponse,
+  CouncilSnapshot,
+  CouncilSummary,
+} from "@rah/runtime-protocol";
 
 function mergeCouncilMessages(
   left: readonly CouncilSnapshot["messages"][number][],
@@ -16,6 +21,60 @@ function mergeCouncilMessages(
 
 function messageCount(council: CouncilSnapshot): number {
   return council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length;
+}
+
+function summaryIsOlder(current: CouncilSnapshot, incoming: CouncilSummary): boolean {
+  const currentUpdatedAt = Date.parse(current.updatedAt);
+  const incomingUpdatedAt = Date.parse(incoming.updatedAt);
+  return Number.isFinite(currentUpdatedAt)
+    && Number.isFinite(incomingUpdatedAt)
+    && incomingUpdatedAt < currentUpdatedAt;
+}
+
+function isCouncilSnapshot(council: CouncilSummary | CouncilSnapshot): council is CouncilSnapshot {
+  return "messages" in council && Array.isArray(council.messages);
+}
+
+export function councilSnapshotFromSummary(summary: CouncilSummary): CouncilSnapshot {
+  const total = summary.meta?.messageCount ?? 0;
+  return {
+    ...summary,
+    messages: [],
+    messageWindow: {
+      total,
+      loaded: 0,
+      hasMoreBefore: total > 0,
+    },
+  };
+}
+
+export function mergeCouncilSummary(
+  current: CouncilSnapshot | undefined,
+  incoming: CouncilSummary,
+): CouncilSnapshot {
+  if (isCouncilSnapshot(incoming)) {
+    return mergeCouncilSnapshot(current, incoming);
+  }
+  if (!current || current.id !== incoming.id) {
+    return councilSnapshotFromSummary(incoming);
+  }
+
+  const effectiveSummary = summaryIsOlder(current, incoming) ? current : incoming;
+  const total = effectiveSummary.meta?.messageCount ?? messageCount(current);
+  const loaded = current.messages.length;
+  const hasMoreBefore = current.messageWindow?.hasMoreBefore ?? total > loaded;
+  const nextBeforeMessageId = current.messageWindow?.nextBeforeMessageId;
+  return {
+    ...current,
+    ...effectiveSummary,
+    messages: current.messages,
+    messageWindow: {
+      total,
+      loaded,
+      hasMoreBefore,
+      ...(hasMoreBefore && nextBeforeMessageId !== undefined ? { nextBeforeMessageId } : {}),
+    },
+  };
 }
 
 export function mergeCouncilSnapshot(
@@ -56,7 +115,7 @@ export function mergeCouncilSnapshot(
 
 export function mergeCouncilLists(
   current: readonly CouncilSnapshot[],
-  incoming: readonly CouncilSnapshot[],
+  incoming: readonly (CouncilSummary | CouncilSnapshot)[],
 ): CouncilSnapshot[] {
   const currentById = new Map(current.map((council) => [council.id, council]));
   const incomingIds = new Set(incoming.map((council) => council.id));
@@ -64,9 +123,32 @@ export function mergeCouncilLists(
     (council) => council.status === "running" && !incomingIds.has(council.id),
   );
   return [
-    ...incoming.map((council) => mergeCouncilSnapshot(currentById.get(council.id), council)),
+    ...incoming.map((council) => mergeCouncilSummary(currentById.get(council.id), council)),
     ...preservedActive,
   ];
+}
+
+export function mergeCouncilMessageEvent(
+  current: CouncilSnapshot | undefined,
+  summary: CouncilSummary,
+  message: CouncilMessage,
+): CouncilSnapshot {
+  const base = mergeCouncilSummary(current, summary);
+  const messages = mergeCouncilMessages(base.messages, [message]);
+  const total = summary.meta?.messageCount ?? Math.max(messageCount(base), messages.length);
+  const hasMoreBefore = base.messageWindow?.hasMoreBefore ?? total > messages.length;
+  const nextBeforeMessageId = base.messageWindow?.nextBeforeMessageId
+    ?? (hasMoreBefore ? messages[0]?.id : undefined);
+  return {
+    ...base,
+    messages,
+    messageWindow: {
+      total,
+      loaded: messages.length,
+      hasMoreBefore,
+      ...(hasMoreBefore && nextBeforeMessageId !== undefined ? { nextBeforeMessageId } : {}),
+    },
+  };
 }
 
 export function prependCouncilMessagesPage(
@@ -90,6 +172,49 @@ export function prependCouncilMessagesPage(
         : {}),
     },
   };
+}
+
+export function mergeLatestCouncilMessagesPage(
+  council: CouncilSnapshot,
+  page: CouncilMessagesPageResponse,
+): CouncilSnapshot {
+  const currentIds = new Set(council.messages.map((message) => message.id));
+  const overlapsCurrentWindow = page.messages.some((message) => currentIds.has(message.id));
+  const messages = overlapsCurrentWindow
+    ? mergeCouncilMessages(council.messages, page.messages)
+    : [...page.messages];
+  const hasMoreBefore = messages.length < page.total;
+  return {
+    ...council,
+    messages,
+    meta: {
+      ...council.meta,
+      messageCount: page.total,
+    },
+    messageWindow: {
+      total: page.total,
+      loaded: messages.length,
+      hasMoreBefore,
+      ...(hasMoreBefore && messages[0] ? { nextBeforeMessageId: messages[0].id } : {}),
+    },
+  };
+}
+
+export function councilNeedsLatestMessages(
+  council: CouncilSnapshot,
+  pageLimit: number,
+): boolean {
+  const total = council.meta?.messageCount ?? council.messageWindow?.total ?? 0;
+  if (total === 0) {
+    return false;
+  }
+  const expectedWindowSize = Math.min(total, pageLimit);
+  if (council.messages.length < expectedWindowSize) {
+    return true;
+  }
+  const expectedLastMessageId = council.meta?.lastMessage?.id;
+  return expectedLastMessageId !== undefined
+    && council.messages.at(-1)?.id !== expectedLastMessageId;
 }
 
 export function canLoadOlderCouncilMessages(council: CouncilSnapshot | null): boolean {

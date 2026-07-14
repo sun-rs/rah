@@ -1,4 +1,4 @@
-import type { CouncilMessage, CouncilSnapshot } from "./council";
+import type { CouncilMessage, CouncilSummary } from "./council";
 import type {
   ClientKind,
   ManagedSession,
@@ -422,7 +422,7 @@ export type RahEventPayloadMap = {
   "terminal.output": { data: string };
   "terminal.exited": { exitCode?: number; signal?: string };
 
-  "council.message.created": { council: CouncilSnapshot; message: CouncilMessage };
+  "council.message.created": { council: CouncilSummary; message: CouncilMessage };
 
   "notification.emitted": {
     level: "info" | "warning" | "critical";

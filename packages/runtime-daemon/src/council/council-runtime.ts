@@ -11,6 +11,7 @@ import type {
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
   CouncilSnapshot,
+  CouncilSummary,
   CouncilStopAgentResponse,
   CreateCouncilRequest,
   CreateCouncilResponse,
@@ -84,10 +85,12 @@ export class CouncilRuntime {
     return {
       councils: this.store
         .listCouncils({
-          messageLimit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+          messageLimit: 0,
           messageFilter: isFrontendVisibleCouncilMessage,
         })
-        .map((council) => this.projectRuntimeCouncilState(council)),
+        .map((council) => this.clientCouncilSummaryFromSnapshot(
+          this.projectRuntimeCouncilState(council),
+        )),
     };
   }
 
@@ -508,7 +511,7 @@ export class CouncilRuntime {
         authority: "authoritative",
       },
       payload: {
-        council: this.clientCouncilSnapshot(councilId),
+        council: this.clientCouncilSummary(councilId),
         message,
       },
     });
@@ -521,6 +524,22 @@ export class CouncilRuntime {
         messageFilter: isFrontendVisibleCouncilMessage,
       }),
     );
+  }
+
+  private clientCouncilSummary(councilId: string): CouncilSummary {
+    return this.clientCouncilSummaryFromSnapshot(
+      this.projectRuntimeCouncilState(
+        this.store.snapshot(councilId, {
+          limit: 0,
+          messageFilter: isFrontendVisibleCouncilMessage,
+        }),
+      ),
+    );
+  }
+
+  private clientCouncilSummaryFromSnapshot(snapshot: CouncilSnapshot): CouncilSummary {
+    const { messages: _messages, messageWindow: _messageWindow, storage: _storage, ...summary } = snapshot;
+    return summary;
   }
 
   private projectRuntimeCouncilState(snapshot: CouncilSnapshot): CouncilSnapshot {

@@ -1131,11 +1131,21 @@ export function createEventsSocket(
   options?: {
     onOpen?: () => void;
     onClose?: (event: CloseEvent) => void;
+    initialReplay?: boolean;
   },
 ): WebSocket {
   const url = new URL("/api/events", getBaseUrl().replace(/^http/, "ws"));
+  if (options?.initialReplay === false) {
+    url.searchParams.set("initialReplay", "false");
+  }
   if (subscription.replayFromSeq !== undefined) {
     url.searchParams.set("replayFromSeq", String(subscription.replayFromSeq));
+  }
+  for (const sessionId of subscription.sessionIds ?? []) {
+    url.searchParams.append("sessionId", sessionId);
+  }
+  for (const eventType of subscription.eventTypes ?? []) {
+    url.searchParams.append("eventType", eventType);
   }
   const socket = new WebSocket(url);
   socket.addEventListener("open", () => {

@@ -28,9 +28,10 @@ import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBou
 import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
 import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
-import { CouncilPage } from "./council/CouncilPage";
 import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
-import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
+import { mergeCouncilLists, mergeCouncilMessageEvent, mergeCouncilSnapshot } from "./council/council-message-window";
+import type { CouncilStateUpdater } from "./council/CouncilPage";
+import { useCouncilTransport } from "./council/useCouncilTransport";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
@@ -128,6 +129,10 @@ const WorkbenchTerminalDialog = lazy(async () => ({
 const loadInspectorPane = () => importWithStaleReload(() => import("./InspectorPane"));
 const InspectorPane = lazy(async () => ({
   default: (await loadInspectorPane()).InspectorPane,
+}));
+const loadCouncilPage = () => importWithStaleReload(() => import("./council/CouncilPage"));
+const CouncilPage = lazy(async () => ({
+  default: (await loadCouncilPage()).CouncilPage,
 }));
 type ModelDraft = {
   modelId?: string | null;
@@ -531,6 +536,7 @@ export function App() {
   );
   const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
   const councilsRef = useRef<CouncilSnapshot[]>([]);
+  const councilRefreshRef = useRef<Promise<void> | null>(null);
   const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
   const [homeNewCouncilDialogOpen, setHomeNewCouncilDialogOpen] = useState(false);
   const [pendingNewSessionWorkspaceDir, setPendingNewSessionWorkspaceDir] = useState<string | null>(
@@ -638,22 +644,55 @@ export function App() {
     canvasRatios,
   ]);
 
-  const refreshCouncils = useCallback(async () => {
-    try {
-      const response = await api.listCouncils();
-      const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
-      councilsRef.current = mergedCouncils;
-      setCouncils(mergedCouncils);
-      setSelectedCouncilId((current) => {
-        if (!current || mergedCouncils.some((council) => council.id === current)) {
-          return current;
-        }
-        return null;
-      });
-    } catch {
-      // The full Council page owns user-visible council loading errors.
-    }
+  const updateCouncils = useCallback((update: CouncilStateUpdater): CouncilSnapshot[] => {
+    const next = update(councilsRef.current);
+    councilsRef.current = next;
+    setCouncils(next);
+    return next;
   }, []);
+
+  const refreshCouncils = useCallback((): Promise<void> => {
+    if (councilRefreshRef.current) {
+      return councilRefreshRef.current;
+    }
+    const operation = api.listCouncils()
+      .then((response) => {
+        const mergedCouncils = updateCouncils((current) =>
+          mergeCouncilLists(current, response.councils),
+        );
+        setSelectedCouncilId((current) => {
+          if (!current || mergedCouncils.some((council) => council.id === current)) {
+            return current;
+          }
+          return null;
+        });
+      })
+      .catch(() => {
+        // The full Council page owns user-visible council loading errors.
+      })
+      .finally(() => {
+        if (councilRefreshRef.current === operation) {
+          councilRefreshRef.current = null;
+        }
+      });
+    councilRefreshRef.current = operation;
+    return operation;
+  }, [updateCouncils]);
+
+  const handleCouncilMessage = useCallback((council: Parameters<typeof mergeCouncilMessageEvent>[1], message: Parameters<typeof mergeCouncilMessageEvent>[2]) => {
+    updateCouncils((current) => {
+      const index = current.findIndex((candidate) => candidate.id === council.id);
+      const nextCouncil = mergeCouncilMessageEvent(index >= 0 ? current[index] : undefined, council, message);
+      return index >= 0
+        ? current.map((candidate, candidateIndex) => candidateIndex === index ? nextCouncil : candidate)
+        : [nextCouncil, ...current];
+    });
+  }, [updateCouncils]);
+
+  useCouncilTransport({
+    onMessage: handleCouncilMessage,
+    onRefresh: refreshCouncils,
+  });
 
   const removeCouncilFromChats = useCallback(async (councilId: string) => {
     await api.deleteCouncil(councilId);
@@ -662,27 +701,29 @@ export function App() {
 
   const renameCouncilFromChats = useCallback(async (councilId: string, title: string) => {
     const response = await api.renameCouncil(councilId, { title });
-    const existingIndex = councilsRef.current.findIndex((candidate) => candidate.id === response.council.id);
-    const next = [...councilsRef.current];
-    if (existingIndex >= 0) {
-      next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], response.council);
-    } else {
-      next.unshift(response.council);
-    }
-    councilsRef.current = next;
-    setCouncils(next);
-  }, []);
+    updateCouncils((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.id === response.council.id);
+      const next = [...current];
+      if (existingIndex >= 0) {
+        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], response.council);
+      } else {
+        next.unshift(response.council);
+      }
+      return next;
+    });
+  }, [updateCouncils]);
 
   const openCreatedCouncil = useCallback((council: CouncilSnapshot) => {
-    const existingIndex = councilsRef.current.findIndex((candidate) => candidate.id === council.id);
-    const next = [...councilsRef.current];
-    if (existingIndex >= 0) {
-      next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
-    } else {
-      next.unshift(council);
-    }
-    councilsRef.current = next;
-    setCouncils(next);
+    updateCouncils((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
+      const next = [...current];
+      if (existingIndex >= 0) {
+        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
+      } else {
+        next.unshift(council);
+      }
+      return next;
+    });
     setSelectedSessionId(null);
     setSelectedWorkspaceOnlyDir(null);
     setWorkspaceDir(council.workspace);
@@ -692,19 +733,7 @@ export function App() {
     setRightOpen(false);
     setLeftOpen(false);
     void refreshCouncils();
-  }, [refreshCouncils, setSelectedSessionId, setWorkspaceDir]);
-
-  useEffect(() => {
-    councilsRef.current = councils;
-  }, [councils]);
-
-  useEffect(() => {
-    void refreshCouncils();
-    const timer = window.setInterval(() => {
-      void refreshCouncils();
-    }, 5_000);
-    return () => window.clearInterval(timer);
-  }, [refreshCouncils]);
+  }, [refreshCouncils, setSelectedSessionId, setWorkspaceDir, updateCouncils]);
 
   useEffect(() => {
     const preloadSettingsDialog = window.setTimeout(() => {
@@ -2202,21 +2231,29 @@ export function App() {
         {/* Center chat */}
         <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
           {workbenchMode === "council" ? (
-            <CouncilPage
-              clientId={clientId}
-              workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
-              workspaceDirs={workspaceDirs}
-              selectedCouncilId={selectedCouncilId}
-              onSelectedCouncilIdChange={setSelectedCouncilId}
-              onCouncilsChange={setCouncils}
-              initialCouncils={councils}
-              sidebarOpen={sidebarOpen}
-              onExpandSidebar={() => setSidebarOpen(true)}
-              onOpenLeft={() => setLeftOpen(true)}
-              showLeftSidebarControls={showPrimaryLeftSidebarControls}
-              onAddWorkspace={(dir) => void addWorkspace(dir)}
-              onHide={hideCouncilMode}
-            />
+            <Suspense
+              fallback={
+                <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-[var(--app-hint)]">
+                  Loading Council…
+                </div>
+              }
+            >
+              <CouncilPage
+                clientId={clientId}
+                workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
+                workspaceDirs={workspaceDirs}
+                selectedCouncilId={selectedCouncilId}
+                onSelectedCouncilIdChange={setSelectedCouncilId}
+                onCouncilsChange={updateCouncils}
+                initialCouncils={councils}
+                sidebarOpen={sidebarOpen}
+                onExpandSidebar={() => setSidebarOpen(true)}
+                onOpenLeft={() => setLeftOpen(true)}
+                showLeftSidebarControls={showPrimaryLeftSidebarControls}
+                onAddWorkspace={(dir) => void addWorkspace(dir)}
+                onHide={hideCouncilMode}
+              />
+            </Suspense>
           ) : workbenchMode === "canvas" ? (
             <CanvasWorkbench
               panes={visibleCanvasPaneIds.map((paneId, index) => {
@@ -2263,43 +2300,48 @@ export function App() {
                   paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] === true;
                 if (target.kind === "council") {
                   return (
-                    <CouncilPage
-                      clientId={clientId}
-                      workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
-                      workspaceDirs={workspaceDirs}
-                      initialCouncils={councils}
-                      selectedCouncilId={target.councilId}
-                      onSelectedCouncilIdChange={(councilId) => {
-                        if (councilId) {
-                          setCanvasPaneCouncil(typedPaneId, councilId);
-                        }
-                      }}
-                      onCouncilsChange={(nextCouncils) => {
-                        councilsRef.current = nextCouncils;
-                        setCouncils(nextCouncils);
-                      }}
-                      sidebarOpen
-                      onExpandSidebar={() => undefined}
-                      onOpenLeft={() => undefined}
-                      onAddWorkspace={(dir) => void addWorkspace(dir)}
-                      onHide={() => clearCanvasPane(typedPaneId)}
-                      onStopped={(councilId) => {
-                        setCanvasPaneTargets((current) =>
-                          clearCanvasCouncilTargets(current, councilId),
-                        );
-                        if (selectedCouncilId === councilId) {
-                          setSelectedCouncilId(null);
-                        }
-                      }}
-                      agentsPanelMode={paneRightPanelOpen ? "open" : "closed"}
-                      onAgentsPanelModeChange={(mode) =>
-                        setCanvasPaneRightPanelOpen(typedPaneId, mode === "open")
+                    <Suspense
+                      fallback={
+                        <div className="flex h-full min-h-0 items-center justify-center text-xs text-[var(--app-hint)]">
+                          Loading Council…
+                        </div>
                       }
-                      agentsToggleDisabled={!paneExpanded}
-                      showAgentsToggle
-                      showLeftSidebarControls={false}
-                      showCloseButton={false}
-                    />
+                    >
+                      <CouncilPage
+                        clientId={clientId}
+                        workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
+                        workspaceDirs={workspaceDirs}
+                        initialCouncils={councils}
+                        selectedCouncilId={target.councilId}
+                        onSelectedCouncilIdChange={(councilId) => {
+                          if (councilId) {
+                            setCanvasPaneCouncil(typedPaneId, councilId);
+                          }
+                        }}
+                        onCouncilsChange={updateCouncils}
+                        sidebarOpen
+                        onExpandSidebar={() => undefined}
+                        onOpenLeft={() => undefined}
+                        onAddWorkspace={(dir) => void addWorkspace(dir)}
+                        onHide={() => clearCanvasPane(typedPaneId)}
+                        onStopped={(councilId) => {
+                          setCanvasPaneTargets((current) =>
+                            clearCanvasCouncilTargets(current, councilId),
+                          );
+                          if (selectedCouncilId === councilId) {
+                            setSelectedCouncilId(null);
+                          }
+                        }}
+                        agentsPanelMode={paneRightPanelOpen ? "open" : "closed"}
+                        onAgentsPanelModeChange={(mode) =>
+                          setCanvasPaneRightPanelOpen(typedPaneId, mode === "open")
+                        }
+                        agentsToggleDisabled={!paneExpanded}
+                        showAgentsToggle
+                        showLeftSidebarControls={false}
+                        showCloseButton={false}
+                      />
+                    </Suspense>
                   );
                 }
                 if (!projection) {

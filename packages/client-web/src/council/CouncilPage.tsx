@@ -103,6 +103,8 @@ import {
 } from "./CouncilsBrowser";
 import {
   canLoadOlderCouncilMessages,
+  councilNeedsLatestMessages,
+  mergeLatestCouncilMessagesPage,
   mergeCouncilLists,
   mergeCouncilSnapshot,
   prependCouncilMessagesPage,
@@ -374,6 +376,10 @@ function CouncilAgentOptionValues(props: {
   );
 }
 
+export type CouncilStateUpdater = (
+  current: readonly CouncilSnapshot[],
+) => CouncilSnapshot[];
+
 export function CouncilPage(props: {
   clientId: string;
   workspaceDir: string;
@@ -381,7 +387,7 @@ export function CouncilPage(props: {
   initialCouncils?: readonly CouncilSnapshot[];
   selectedCouncilId?: string | null;
   onSelectedCouncilIdChange?: (councilId: string | null) => void;
-  onCouncilsChange?: (councils: CouncilSnapshot[]) => void;
+  onCouncilsChange?: (update: CouncilStateUpdater) => CouncilSnapshot[];
   sidebarOpen: boolean;
   onExpandSidebar: () => void;
   onOpenLeft: () => void;
@@ -395,10 +401,25 @@ export function CouncilPage(props: {
   showLeftSidebarControls?: boolean;
   showCloseButton?: boolean;
 }) {
-  const [councils, setCouncils] = useState<CouncilSnapshot[]>(() => [
+  const controlledCouncils = props.initialCouncils !== undefined && props.onCouncilsChange !== undefined;
+  const [localCouncils, setLocalCouncils] = useState<CouncilSnapshot[]>(() => [
     ...(props.initialCouncils ?? []),
   ]);
-  const councilsRef = useRef<CouncilSnapshot[]>([...(props.initialCouncils ?? [])]);
+  const councils = controlledCouncils ? props.initialCouncils ?? [] : localCouncils;
+  const councilsRef = useRef<readonly CouncilSnapshot[]>(councils);
+  councilsRef.current = councils;
+  const setCouncils = useCallback(
+    (update: CouncilStateUpdater): CouncilSnapshot[] => {
+      if (controlledCouncils) {
+        return props.onCouncilsChange!(update);
+      }
+      const next = update(councilsRef.current);
+      councilsRef.current = next;
+      setLocalCouncils(next);
+      return next;
+    },
+    [controlledCouncils, props.onCouncilsChange],
+  );
   const [selectedCouncilIdState, setSelectedCouncilIdState] = useState<string | null>(
     props.selectedCouncilId ?? null,
   );
@@ -461,6 +482,7 @@ export function CouncilPage(props: {
   const preserveCouncilSidebarAfterActionRef = useRef(false);
   const preserveTerminalAfterActionRef = useRef<string | null>(null);
   const autoWarmedCouncilIdRef = useRef<string | null>(null);
+  const hydratingCouncilIdsRef = useRef<Set<string>>(new Set());
   const selectedCouncilIdRef = useRef<string | null>(props.selectedCouncilId ?? null);
   const selectedCouncilId =
     props.selectedCouncilId !== undefined ? props.selectedCouncilId : selectedCouncilIdState;
@@ -481,11 +503,6 @@ export function CouncilPage(props: {
       setSelectedCouncilIdState(props.selectedCouncilId);
     }
   }, [props.selectedCouncilId]);
-
-  useEffect(() => {
-    councilsRef.current = councils;
-    props.onCouncilsChange?.(councils);
-  }, [props.onCouncilsChange, councils]);
 
   useEffect(() => {
     if (props.agentsPanelMode === undefined) {
@@ -723,9 +740,9 @@ export function CouncilPage(props: {
     setError(null);
     try {
       const response = await api.listCouncils();
-      const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
-      councilsRef.current = mergedCouncils;
-      setCouncils(mergedCouncils);
+      const mergedCouncils = setCouncils((current) =>
+        mergeCouncilLists(current, response.councils),
+      );
       setSelectedCouncilId((current) => {
         return reconcileCouncilSelection(current, mergedCouncils, {
           allowRunningDefault: options?.allowRunningDefault,
@@ -743,8 +760,39 @@ export function CouncilPage(props: {
   };
 
   useEffect(() => {
-    void refreshCouncils({ allowRunningDefault: true });
-  }, []);
+    if (!controlledCouncils) {
+      void refreshCouncils({ allowRunningDefault: true });
+    }
+  }, [controlledCouncils]);
+
+  useEffect(() => {
+    const council = selectedCouncil;
+    if (!council) return;
+    if (
+      !councilNeedsLatestMessages(council, COUNCIL_MESSAGE_PAGE_LIMIT) ||
+      hydratingCouncilIdsRef.current.has(council.id)
+    ) {
+      return;
+    }
+    hydratingCouncilIdsRef.current.add(council.id);
+    void api.readCouncilMessages(council.id, { limit: COUNCIL_MESSAGE_PAGE_LIMIT })
+      .then((page) => {
+        hydratingCouncilIdsRef.current.delete(council.id);
+        setCouncils((current) => current.map((candidate) => (
+          candidate.id === council.id ? mergeLatestCouncilMessagesPage(candidate, page) : candidate
+        )));
+      })
+      .catch((caught) => {
+        hydratingCouncilIdsRef.current.delete(council.id);
+        setError(caught instanceof Error ? caught.message : String(caught));
+      });
+  }, [
+    selectedCouncil?.id,
+    selectedCouncil?.meta?.messageCount,
+    selectedCouncil?.meta?.lastMessage?.id,
+    selectedCouncil?.messages.length,
+    selectedCouncil?.messages.at(-1)?.id,
+  ]);
 
   useEffect(() => {
     if (!selectedTerminalAgentId) {
@@ -789,134 +837,6 @@ export function CouncilPage(props: {
     }, Math.min(COUNCIL_TUI_WARM_TTL_MS, 60_000));
     return () => window.clearInterval(timer);
   }, [liveTerminalAgentIds, selectedTerminalAgentId]);
-
-  useEffect(() => {
-    if (!selectedCouncilId) return;
-    let cancelled = false;
-    let socket: WebSocket | null = null;
-    let reconnectTimer: number | null = null;
-    let reconnectAttempt = 0;
-
-    const clearReconnectTimer = () => {
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    };
-
-    const refreshAfterSocketLoss = () => {
-      void api.listCouncils()
-        .then((response) => {
-          if (cancelled) return;
-          const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
-          councilsRef.current = mergedCouncils;
-          setCouncils(mergedCouncils);
-        })
-        .catch(() => {
-          // The normal 5s polling loop owns user-visible Council refresh errors.
-        });
-    };
-
-    const scheduleReconnect = () => {
-      if (cancelled || reconnectTimer !== null) return;
-      const baseDelay = document.visibilityState === "visible" ? 750 : 3_000;
-      const delay = Math.min(30_000, baseDelay * 2 ** reconnectAttempt);
-      reconnectAttempt += 1;
-      reconnectTimer = window.setTimeout(() => {
-        reconnectTimer = null;
-        connectSocket();
-      }, delay);
-    };
-
-    const connectSocket = () => {
-      if (cancelled) return;
-      socket = api.createEventsSocket(
-        {
-          sessionIds: [selectedCouncilId],
-          eventTypes: ["council.message.created"],
-        },
-        (batch) => {
-          const latest = batch.events
-            .filter((event) => event.type === "council.message.created")
-            .at(-1);
-          if (!latest) return;
-          setCouncils((current) => {
-            const nextCouncil = latest.payload.council;
-            const index = current.findIndex((council) => council.id === nextCouncil.id);
-            if (index < 0) {
-              return [nextCouncil, ...current];
-            }
-            const next = [...current];
-            next[index] = mergeCouncilSnapshot(next[index], nextCouncil);
-            return next;
-          });
-        },
-        () => {
-          refreshAfterSocketLoss();
-          if (socket && socket.readyState < WebSocket.CLOSING) {
-            socket.close();
-          }
-        },
-        {
-          onOpen: () => {
-            reconnectAttempt = 0;
-          },
-          onClose: (event) => {
-            refreshAfterSocketLoss();
-            if (event.code !== 4001) {
-              scheduleReconnect();
-            }
-          },
-        },
-      );
-    };
-
-    const handleForegroundResume = () => {
-      if (document.visibilityState !== "visible") return;
-      refreshAfterSocketLoss();
-      if (!socket || socket.readyState >= WebSocket.CLOSING) {
-        clearReconnectTimer();
-        connectSocket();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleForegroundResume);
-    connectSocket();
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", handleForegroundResume);
-      clearReconnectTimer();
-      if (socket && socket.readyState < WebSocket.CLOSING) {
-        socket.close();
-      }
-    };
-  }, [selectedCouncilId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const intervalId = window.setInterval(() => {
-      void api.listCouncils()
-        .then((response) => {
-          if (cancelled) return;
-          const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
-          councilsRef.current = mergedCouncils;
-          setCouncils(mergedCouncils);
-          setError(null);
-          setSelectedCouncilId((current) => {
-            return reconcileCouncilSelection(current, mergedCouncils);
-          });
-        })
-        .catch((caught) => {
-          if (!cancelled) {
-            setError(caught instanceof Error ? caught.message : String(caught));
-          }
-        });
-    }, 5_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, []);
 
   useEffect(() => {
     setWorkspace((current) => current || props.workspaceDir || "");
@@ -1012,15 +932,16 @@ export function CouncilPage(props: {
   };
 
   const handleNewCouncilCreated = (council: CouncilSnapshot) => {
-    const existingIndex = councilsRef.current.findIndex((candidate) => candidate.id === council.id);
-    const nextCouncils = [...councilsRef.current];
-    if (existingIndex >= 0) {
-      nextCouncils[existingIndex] = mergeCouncilSnapshot(nextCouncils[existingIndex], council);
-    } else {
-      nextCouncils.unshift(council);
-    }
-    councilsRef.current = nextCouncils;
-    setCouncils(nextCouncils);
+    setCouncils((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
+      const next = [...current];
+      if (existingIndex >= 0) {
+        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
+      } else {
+        next.unshift(council);
+      }
+      return next;
+    });
     setSelectedCouncilId(council.id);
     setCouncilSidebarOpen(false);
     void refreshCouncils({ silent: true });
@@ -1326,15 +1247,16 @@ export function CouncilPage(props: {
   };
 
   const replaceCouncil = (council: CouncilSnapshot) => {
-    const index = councilsRef.current.findIndex((item) => item.id === council.id);
-    const next = [...councilsRef.current];
-    if (index < 0) {
-      next.unshift(council);
-    } else {
-      next[index] = mergeCouncilSnapshot(next[index], council);
-    }
-    councilsRef.current = next;
-    setCouncils(next);
+    setCouncils((current) => {
+      const index = current.findIndex((item) => item.id === council.id);
+      const next = [...current];
+      if (index < 0) {
+        next.unshift(council);
+      } else {
+        next[index] = mergeCouncilSnapshot(next[index], council);
+      }
+      return next;
+    });
     setSelectedCouncilId(council.id);
   };
 

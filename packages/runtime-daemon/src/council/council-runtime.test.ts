@@ -13,6 +13,10 @@ import { CouncilStore } from "./council-store";
 import { CouncilRuntime, type CouncilRuntimeOptions } from "./council-runtime";
 import type { StartSessionMcpOptions } from "../provider-mcp-server-spec";
 
+function visibleCouncilMessages(runtime: CouncilRuntime, councilId: string) {
+  return runtime.readCouncilMessages(councilId, { limit: 10_000 }).messages;
+}
+
 class FakeManagedSessionRunner {
   readonly started: Array<StartSessionRequest & StartSessionMcpOptions> = [];
   readonly inputs: Array<{ sessionId: string; request: SessionInputRequest }> = [];
@@ -239,8 +243,7 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.match(claudePrompt, /不要用 Bash、echo、curl、ps、node/);
     assert.match(claudePrompt, /必须先实际调用下面的 MCP 工具/);
     assert.doesNotMatch(claudePrompt, /工具不可见/);
-    const claudeSentMessage = runtime.listCouncils().councils
-      .find((council) => council.id === response.council.id)?.messages
+    const claudeSentMessage = visibleCouncilMessages(runtime, response.council.id)
       .some((message) => message.parts.some((part) => part.kind === "text" && part.text === `${claudeId} sent`));
     assert.equal(claudeSentMessage, true);
     assert.equal(managed.started[2]!.provider, "opencode");
@@ -250,7 +253,7 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.match(openCodePrompt, /你的唯一名字是 'OpenCode Builder'/);
     assert.match(openCodePrompt, /你的角色: Inspect implementation details and report exact findings\./);
     assert.match(openCodePrompt, /timeout_s=120/);
-    const initialStatusTexts = runtime.listCouncils().councils.find((council) => council.id === response.council.id)!.messages.map((message) =>
+    const initialStatusTexts = visibleCouncilMessages(runtime, response.council.id).map((message) =>
       message.parts.map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data)).join("\n")
     );
     assert.equal(initialStatusTexts.includes(`${codexId} sent`), true);
@@ -278,7 +281,9 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.equal(agentMessageEvent.type, "council.message.created");
     if (agentMessageEvent.type === "council.message.created") {
       assert.equal(agentMessageEvent.payload.message.actorId, codexId);
+      assert.equal("messages" in agentMessageEvent.payload.council, false);
     }
+    assert.equal("messages" in runtime.listCouncils().councils[0]!, false);
 
     const tui = await runtime.getAgentTui(response.council.id, codexId);
     assert.equal(tui.terminalId, "managed:codex:1");
@@ -614,8 +619,7 @@ test("CouncilRuntime treats wait timeout as a heartbeat without auto re-injectio
     const councilId = response.council.id;
     const agentId = response.council.agents[0]!.id;
 
-    const before = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
-    const beforeMessageCount = before.messages.length;
+    const beforeMessageCount = visibleCouncilMessages(runtime, councilId).length;
     const timedOut = await runtime.callMcpTool({
       councilId,
       actorId: agentId,
@@ -627,11 +631,12 @@ test("CouncilRuntime treats wait timeout as a heartbeat without auto re-injectio
     assert.equal(timedOut.result.next_action, "call_channel_wait_new_again");
     assert.match(timedOut.result.instruction ?? "", /heartbeat/);
 
-    const snapshot = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
-    assert.equal(snapshot.agents[0]!.status, "waiting");
-    assert.equal(snapshot.agents[0]!.lastStatusDetail, "listening");
-    assert.equal(snapshot.messages.length, beforeMessageCount + 1);
-    const lastMessage = snapshot.messages.at(-1);
+    const summary = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
+    assert.equal(summary.agents[0]!.status, "waiting");
+    assert.equal(summary.agents[0]!.lastStatusDetail, "listening");
+    const messages = visibleCouncilMessages(runtime, councilId);
+    assert.equal(messages.length, beforeMessageCount + 1);
+    const lastMessage = messages.at(-1);
     const lastPart = lastMessage?.parts[0];
     assert.equal(lastMessage?.role, "system");
     assert.match(lastPart?.kind === "text" ? lastPart.text : "", /listening/);
@@ -664,18 +669,18 @@ test("CouncilRuntime does not project legacy wait-timeout noise to frontend coun
       text: "Codex Listener wait timed out; no active listener is currently blocking on channel_wait_new.",
     });
 
-    const projected = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
+    const projectedMessages = visibleCouncilMessages(runtime, councilId);
     assert.equal(
-      projected.messages.some((message) => (
+      projectedMessages.some((message) => (
         message.parts.some((part) => part.kind === "text" && part.text.includes("wait timed out"))
       )),
       false,
     );
     const page = runtime.readCouncilMessages(councilId, { limit: 100 });
-    assert.equal(page.total, projected.messages.length);
+    assert.equal(page.total, projectedMessages.length);
     assert.deepEqual(
       page.messages.map((message) => message.id),
-      projected.messages.map((message) => message.id),
+      projectedMessages.map((message) => message.id),
     );
     assert.equal(
       eventBus.list({
@@ -723,8 +728,7 @@ test("CouncilRuntime projects joined and listening diagnostics for UI status fol
       arguments: { timeout_s: 0.01 },
     });
 
-    const projected = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
-    const visibleTexts = projected.messages.map((message) =>
+    const visibleTexts = visibleCouncilMessages(runtime, councilId).map((message) =>
       message.parts.map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data)).join("\n")
     );
     assert.equal(visibleTexts.includes(`${agentId} joined`), true);
@@ -837,8 +841,7 @@ test("CouncilRuntime announces listening again after an agent re-joins", async (
       arguments: { timeout_s: 0.01 },
     });
 
-    const snapshot = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
-    const listeningMessages = snapshot.messages.filter((message) => (
+    const listeningMessages = visibleCouncilMessages(runtime, councilId).filter((message) => (
       message.role === "system" &&
       message.actorId === agentId &&
       message.parts.some((part) => part.kind === "text" && part.text.includes("listening"))
@@ -890,11 +893,11 @@ test("CouncilRuntime does not auto re-inject bootstrap prompt after a live agent
       arguments: { text: "I am still here." },
     });
 
-    const snapshot = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
-    assert.equal(snapshot.agents[0]!.status, "waiting");
-    assert.equal(snapshot.agents[0]!.lastStatusDetail, "listening");
+    const summary = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
+    assert.equal(summary.agents[0]!.status, "waiting");
+    assert.equal(summary.agents[0]!.lastStatusDetail, "listening");
     assert.equal(
-      snapshot.messages.some((message) =>
+      visibleCouncilMessages(runtime, councilId).some((message) =>
         message.parts.some((part) => part.kind === "text" && part.text.includes("bootstrap prompt re-injected"))
       ),
       false,
@@ -1502,12 +1505,13 @@ test("CouncilRuntime isolates a failed background agent launch without closing t
       () => runtime.listCouncils().councils.find((council) => council.id === response.council.id)?.agents.some((agent) => agent.status === "failed") === true,
       "expected failed agent status after background launch",
     );
-    const snapshot = runtime.listCouncils().councils.find((council) => council.id === response.council.id)!;
-    assert.equal(snapshot.status, "running");
-    assert.deepEqual(snapshot.agents.map((agent) => agent.status), ["starting", "failed"]);
+    const summary = runtime.listCouncils().councils.find((council) => council.id === response.council.id)!;
+    assert.equal(summary.status, "running");
+    assert.deepEqual(summary.agents.map((agent) => agent.status), ["starting", "failed"]);
     assert.deepEqual(managed.closed, []);
-    assert.equal(snapshot.messages.at(-1)?.role, "system");
-    const lastPart = snapshot.messages.at(-1)?.parts[0];
+    const lastMessage = visibleCouncilMessages(runtime, response.council.id).at(-1);
+    assert.equal(lastMessage?.role, "system");
+    const lastPart = lastMessage?.parts[0];
     assert.match(
       lastPart?.kind === "text" ? lastPart.text : "",
       /Codex B failed to start: managed session launch failed/,

@@ -90,10 +90,13 @@ export interface CouncilMeta {
   lastMessage?: CouncilMessageSummary;
 }
 
-export interface CouncilSnapshot extends Council {
+export interface CouncilSummary extends Council {
   agents: CouncilAgent[];
-  messages: CouncilMessage[];
   meta?: CouncilMeta;
+}
+
+export interface CouncilSnapshot extends CouncilSummary {
+  messages: CouncilMessage[];
   messageWindow?: CouncilMessageWindow;
   storage?: {
     storePath: string;
@@ -129,7 +132,7 @@ export interface AddCouncilAgentResponse {
 }
 
 export interface ListCouncilsResponse {
-  councils: CouncilSnapshot[];
+  councils: CouncilSummary[];
 }
 
 export interface CouncilMessagesPageResponse {
