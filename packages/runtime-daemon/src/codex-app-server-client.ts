@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { WebSocket } from "ws";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
 import {
   CodexJsonRpcClient,
   CodexWebSocketRpcClient,
@@ -31,7 +31,11 @@ async function resolveCodexBinary(): Promise<string> {
 
 export async function createCodexStdioAppServerClient(binary?: string): Promise<CodexJsonRpcClient> {
   const resolvedBinary = binary ?? await resolveCodexBinary();
-  const child = spawn(resolvedBinary, ["app-server"], {
+  const [command, ...prefixArgs] = providerBinaryArgv(resolvedBinary);
+  if (!command) {
+    throw new Error("Codex app-server command is empty.");
+  }
+  const child = spawn(command, [...prefixArgs, "app-server"], {
     stdio: ["pipe", "pipe", "pipe"],
     env: providerProcessEnv(rahNativeServerEnv("codex")),
   });
@@ -114,7 +118,11 @@ async function connectCodexWebSocket(endpoint: string): Promise<WebSocket> {
 
 export async function createCodexWebSocketAppServerClient(binary?: string): Promise<CodexWebSocketRpcClient> {
   const resolvedBinary = binary ?? await resolveCodexBinary();
-  const child = spawn(resolvedBinary, ["app-server", "--listen", "ws://127.0.0.1:0"], {
+  const [command, ...prefixArgs] = providerBinaryArgv(resolvedBinary);
+  if (!command) {
+    throw new Error("Codex app-server command is empty.");
+  }
+  const child = spawn(command, [...prefixArgs, "app-server", "--listen", "ws://127.0.0.1:0"], {
     stdio: ["ignore", "ignore", "pipe"],
     env: providerProcessEnv(rahNativeServerEnv("codex")),
   });

@@ -137,6 +137,8 @@ import {
   writeStoredSessionCatalogSnapshot,
 } from "./stored-session-metadata-cache";
 import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
+import { releaseTimelineIdentityTelemetrySession } from "./timeline-identity-telemetry";
+import { releaseTimelineReconcilerSession } from "./timeline-reconciler";
 import { RuntimeSessionLifecycle } from "./runtime-session-lifecycle";
 import {
   createDefaultNativeTuiProviderRuntime,
@@ -205,6 +207,8 @@ const SYSTEM_SOURCE = {
 
 const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 const STORED_SESSION_DELTA_LOG_LIMIT = 200;
+const PROVIDER_MODEL_CATALOG_STARTUP_REFRESH_DELAY_MS = 1_000;
+const PROVIDER_MODEL_CATALOG_REFRESH_INTERVAL_MS = 30 * 60 * 1_000;
 
 function isStoredSessionCatalogProvider(
   provider: ProviderKind,
@@ -374,6 +378,7 @@ export class RuntimeEngine {
   private readonly orphanSessionCleanupInFlight = new Set<string>();
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
   private readonly startupMaintenance: Promise<void>;
+  private providerModelCatalogRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private shuttingDown = false;
 
   constructor(adapters?: ProviderAdapter[]) {
@@ -462,6 +467,10 @@ export class RuntimeEngine {
       removeStructuredSessionOwner: (sessionId) => {
         this.structuredSessionOwners.delete(sessionId);
       },
+      releaseTimelineSessionState: (sessionId) => {
+        releaseTimelineReconcilerSession(this, sessionId);
+        releaseTimelineIdentityTelemetrySession(this, sessionId);
+      },
       requireStructuredLifecycleAdapter: (sessionId) =>
         this.requireStructuredLifecycleAdapter(sessionId),
       requireActionCapabilityAdapter: (sessionId) =>
@@ -538,6 +547,9 @@ export class RuntimeEngine {
           error: error instanceof Error ? error.message : String(error),
         });
       });
+    if (adapters === undefined) {
+      this.scheduleProviderModelCatalogRefresh(PROVIDER_MODEL_CATALOG_STARTUP_REFRESH_DELAY_MS);
+    }
   }
 
   private async waitForStartupMaintenance(): Promise<void> {
@@ -2170,6 +2182,10 @@ export class RuntimeEngine {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    if (this.providerModelCatalogRefreshTimer !== undefined) {
+      clearTimeout(this.providerModelCatalogRefreshTimer);
+      this.providerModelCatalogRefreshTimer = undefined;
+    }
     this.conversationStore.close();
     await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
     await runShutdownStep("stored session catalog", () => this.storedSessionCatalog?.shutdown());
@@ -2392,6 +2408,48 @@ export class RuntimeEngine {
         reason,
         ...(options.provider ? { provider: options.provider } : {}),
         error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private scheduleProviderModelCatalogRefresh(delayMs: number): void {
+    if (this.shuttingDown || this.providerModelCatalogRefreshTimer !== undefined) {
+      return;
+    }
+    this.providerModelCatalogRefreshTimer = setTimeout(() => {
+      this.providerModelCatalogRefreshTimer = undefined;
+      void this.refreshProviderModelCatalogsInBackground().finally(() => {
+        this.scheduleProviderModelCatalogRefresh(PROVIDER_MODEL_CATALOG_REFRESH_INTERVAL_MS);
+      });
+    }, delayMs);
+    this.providerModelCatalogRefreshTimer.unref?.();
+  }
+
+  private async refreshProviderModelCatalogsInBackground(): Promise<void> {
+    const snapshot = this.workbenchState.snapshot();
+    const cwd = snapshot.activeWorkspaceDir ?? snapshot.workspaces[0];
+    const providers = (["codex", "claude", "opencode"] as const).filter((provider) =>
+      this.modelAdaptersByProvider.has(provider),
+    );
+    const results = await Promise.allSettled(
+      providers.map((provider) =>
+        this.listProviderModels(provider, {
+          ...(cwd ? { cwd } : {}),
+          forceRefresh: true,
+        }),
+      ),
+    );
+    if (this.shuttingDown) {
+      return;
+    }
+    for (let index = 0; index < results.length; index += 1) {
+      const result = results[index];
+      if (result?.status !== "rejected") {
+        continue;
+      }
+      console.warn("[rah] background provider model refresh failed", {
+        provider: providers[index],
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
       });
     }
   }

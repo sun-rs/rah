@@ -20,6 +20,8 @@ import type {
 } from "./native-tui-provider-runtime-types";
 
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const OPENCODE_NATIVE_TUI_MIRROR_MESSAGE_LIMIT = 16;
+const OPENCODE_NATIVE_TUI_MIRROR_REVISION_LIMIT = 64;
 
 function isOpenCodeMessageReadyForNativeMirror(message: OpenCodeMessageWithParts): boolean {
   if (message.info.role === "user") {
@@ -111,7 +113,9 @@ function updateOpenCodeMirror(
   }
 
   const items: NativeTuiProviderActivityEnvelope[] = [];
-  const messages = loadOpenCodeStoredMessages(mirror.record, { limit: 1000 });
+  const messages = loadOpenCodeStoredMessages(mirror.record, {
+    limit: OPENCODE_NATIVE_TUI_MIRROR_MESSAGE_LIMIT,
+  });
   for (const message of messages) {
     if (!isOpenCodeMessageReadyForNativeMirror(message)) {
       continue;
@@ -120,7 +124,17 @@ function updateOpenCodeMirror(
     if (mirror.processedMessageRevisions.get(message.info.id) === revision) {
       continue;
     }
+    mirror.processedMessageRevisions.delete(message.info.id);
     mirror.processedMessageRevisions.set(message.info.id, revision);
+    while (
+      mirror.processedMessageRevisions.size > OPENCODE_NATIVE_TUI_MIRROR_REVISION_LIMIT
+    ) {
+      const oldest = mirror.processedMessageRevisions.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      mirror.processedMessageRevisions.delete(oldest);
+    }
     const ts = openCodeMessageTimestamp(message);
     for (const activity of translateOpenCodeMessage(mirror.activityState, message)) {
       items.push({

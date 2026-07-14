@@ -765,6 +765,105 @@ describe("translateOpenCodeEvent", () => {
     }
   });
 
+  test("keeps late interrupted output bound to its preallocated provider message turn", () => {
+    const state = createOpenCodeActivityState("session-1", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+      statusCompletesTurns: false,
+    });
+    const interruptedTurnId = "11111111-1111-4111-8111-111111111111";
+    const recoveryTurnId = "22222222-2222-4222-8222-222222222222";
+    startOpenCodeTurn(state, interruptedTurnId);
+    recordOpenCodeSubmittedUserMessage(state, {
+      text: "interrupt me",
+      turnId: interruptedTurnId,
+      providerMessageId: "msg_interrupted-user",
+    });
+    completeOpenCodeTurn(state, interruptedTurnId);
+
+    startOpenCodeTurn(state, recoveryTurnId);
+    recordOpenCodeSubmittedUserMessage(state, {
+      text: "recover now",
+      turnId: recoveryTurnId,
+      providerMessageId: "msg_recovery-user",
+    });
+
+    const late = translateOpenCodeMessage(state, {
+      info: {
+        id: "msg_interrupted-assistant",
+        sessionID: "session-1",
+        role: "assistant",
+        parentID: "msg_interrupted-user",
+        finish: "stop",
+        time: { completed: 2 },
+      },
+      parts: [
+        {
+          id: "part_interrupted-assistant",
+          sessionID: "session-1",
+          messageID: "msg_interrupted-assistant",
+          type: "text",
+          text: "late interrupted answer",
+        },
+      ],
+    });
+    const recovery = translateOpenCodeMessage(state, {
+      info: {
+        id: "msg_recovery-assistant",
+        sessionID: "session-1",
+        role: "assistant",
+        parentID: "msg_recovery-user",
+        finish: "stop",
+        time: { completed: 3 },
+      },
+      parts: [
+        {
+          id: "part_recovery-assistant",
+          sessionID: "session-1",
+          messageID: "msg_recovery-assistant",
+          type: "text",
+          text: "recovery answer",
+        },
+      ],
+    });
+
+    assert.equal(state.currentTurnId, undefined);
+    assert.ok(late.length > 0);
+    assert.ok(recovery.length > 0);
+    assert.equal(late.every((activity) => !("turnId" in activity) || activity.turnId === interruptedTurnId), true);
+    assert.equal(recovery.every((activity) => !("turnId" in activity) || activity.turnId === recoveryTurnId), true);
+  });
+
+  test("structured live streams never attach an unparented assistant to the current turn", () => {
+    const state = createOpenCodeActivityState("session-1", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+      statusCompletesTurns: false,
+    });
+    const currentTurnId = "22222222-2222-4222-8222-222222222222";
+    startOpenCodeTurn(state, currentTurnId);
+
+    const activities = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "late-assistant-a",
+          sessionID: "session-1",
+          role: "assistant",
+          finish: "stop",
+          time: { completed: Date.now() },
+        },
+      },
+    });
+
+    assert.equal(state.turnByMessageId.get("late-assistant-a"), "opencode:late-assistant-a");
+    assert.equal(state.currentTurnId, currentTurnId);
+    assert.equal(
+      activities.some((activity) => "turnId" in activity && activity.turnId === currentTurnId),
+      false,
+    );
+  });
+
   test("does not emit provisional OpenCode user bubble before provider message id is known", () => {
     const state = createOpenCodeActivityState("session-1");
     const turnId = "11111111-1111-4111-8111-111111111111";

@@ -18,7 +18,7 @@ import type {
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
 import { knownModelContextWindow } from "./model-context-window";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
 import {
   buildClaudeModeDescriptorsFromHelp,
   defaultProviderModeId,
@@ -310,10 +310,14 @@ async function fetchClaudeSupportedModels(cwd?: string): Promise<ClaudeModelCata
 
 async function fetchClaudeModeDescriptorsFromHelp(): Promise<SessionModeDescriptor[]> {
   const binary = await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude");
+  const [command, ...prefixArgs] = providerBinaryArgv(binary);
+  if (!command) {
+    throw new Error("Claude help command is empty.");
+  }
   const helpText = await new Promise<string>((resolve, reject) => {
     const child = execFile(
-      binary,
-      ["--help"],
+      command,
+      [...prefixArgs, "--help"],
       { timeout: CLAUDE_HELP_FETCH_TIMEOUT_MS, maxBuffer: 128_000 },
       (error, stdout, stderr) => {
         if (error) {

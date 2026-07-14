@@ -5,6 +5,7 @@ import type {
   ConversationTurnDirectoryResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import { statSync } from "node:fs";
 import { canFinalizeCodexStoredHistory } from "./codex-history-liveness";
 import {
   createCodexStoredSessionFrozenHistoryPageLoader,
@@ -53,6 +54,12 @@ function isBrokenPagingTransport(error: unknown): boolean {
   return /timed out|closed|exited|ECONN|socket|websocket/i.test(message);
 }
 
+const DEFAULT_INDEXED_SUMMARY_THRESHOLD_BYTES = 64 * 1024 * 1024;
+
+type CodexStoredHistoryOptions = {
+  indexedSummaryThresholdBytes?: number;
+};
+
 export class CodexStoredHistoryAdapter
   implements ProviderAdapter, ProviderStoredHistoryAdapter, ProviderShutdownAdapter
 {
@@ -71,6 +78,7 @@ export class CodexStoredHistoryAdapter
   constructor(
     private readonly services: RuntimeServices,
     private readonly createPagingClient: () => Promise<CodexAppServerRpcClient> = createCodexAppServerClient,
+    private readonly options: CodexStoredHistoryOptions = {},
   ) {}
 
   resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
@@ -127,16 +135,27 @@ export class CodexStoredHistoryAdapter
     sessionId: string,
     options: { cursor?: string; limit?: number } = {},
   ): Promise<ConversationEvidencePage | undefined> {
-    if (this.turnsListSupport === "unavailable") {
-      return undefined;
-    }
     const record = this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return undefined;
     }
+    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+    const sourceSettled = this.canFinalizeStoredHistory(record);
+    const indexedThreshold = Math.max(
+      0,
+      this.options.indexedSummaryThresholdBytes ?? DEFAULT_INDEXED_SUMMARY_THRESHOLD_BYTES,
+    );
+    const useIndexedSummary =
+      this.turnsListSupport === "unavailable" ||
+      statSync(record.rolloutPath).size >= indexedThreshold;
+    if (useIndexedSummary) {
+      return this.materializeIndexedSummaryPage(sessionId, record, {
+        ...(options.cursor ? { cursor: options.cursor } : {}),
+        limit,
+        sourceSettled,
+      });
+    }
     try {
-      const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
-      const sourceSettled = this.canFinalizeStoredHistory(record);
       const page = await this.turnPages.getOrLoad({
         providerSessionId: record.ref.providerSessionId,
         rolloutPath: record.rolloutPath,
@@ -175,12 +194,12 @@ export class CodexStoredHistoryAdapter
     } catch (error) {
       if (isUnsupportedExperimentalListError(error)) {
         this.turnsListSupport = "unavailable";
-        console.warn("[rah] Codex native turn paging is unavailable; using rollout fallback", {
+        console.warn("[rah] Codex native turn paging is unavailable; using indexed persisted history", {
           providerSessionId: record.ref.providerSessionId,
           error: error instanceof Error ? error.message : String(error),
         });
       } else {
-        console.warn("[rah] Codex native turn paging failed; using rollout fallback", {
+        console.warn("[rah] Codex native turn paging failed; using indexed persisted history", {
           providerSessionId: record.ref.providerSessionId,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -188,8 +207,25 @@ export class CodexStoredHistoryAdapter
       if (isBrokenPagingTransport(error)) {
         await this.resetPagingClient();
       }
-      return undefined;
+      return this.materializeIndexedSummaryPage(sessionId, record, {
+        ...(options.cursor ? { cursor: options.cursor } : {}),
+        limit,
+        sourceSettled,
+      });
     }
+  }
+
+  private async materializeIndexedSummaryPage(
+    sessionId: string,
+    record: CodexStoredSessionRecord,
+    options: { cursor?: string; limit: number; sourceSettled: boolean },
+  ): Promise<ConversationEvidencePage> {
+    const page = await this.turnDirectories.getSummaryPage(record, options);
+    return materializeCodexAppServerTurnsPage({
+      sessionId,
+      providerSessionId: record.ref.providerSessionId,
+      page,
+    });
   }
 
   async getSessionConversationItemDetail(

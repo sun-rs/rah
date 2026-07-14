@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
@@ -46,7 +55,9 @@ describe("CodexAdapter", () => {
     tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-codex-home-"));
     process.env.CODEX_HOME = tmpHome;
     process.env.RAH_HOME = path.join(tmpHome, "rah-home");
-    resetDefaultManualProviderModelStoreForTests(path.join(process.env.RAH_HOME, "runtime-daemon"));
+    resetDefaultManualProviderModelStoreForTests(
+      path.join(process.env.RAH_HOME, "runtime-daemon"),
+    );
     process.env.RAH_CODEX_APP_SERVER_TRANSPORT = "stdio";
   });
 
@@ -75,7 +86,11 @@ describe("CodexAdapter", () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  function writeRollout(sessionId: string, cwd: string, options?: { archived?: boolean }): string {
+  function writeRollout(
+    sessionId: string,
+    cwd: string,
+    options?: { archived?: boolean },
+  ): string {
     const dir = path.join(
       tmpHome,
       options?.archived ? "archived_sessions" : "sessions",
@@ -122,7 +137,10 @@ describe("CodexAdapter", () => {
         payload: {
           type: "function_call",
           name: "exec_command",
-          arguments: '{"cmd":"echo hello","workdir":"%CWD%"}'.replace("%CWD%", cwd),
+          arguments: '{"cmd":"echo hello","workdir":"%CWD%"}'.replace(
+            "%CWD%",
+            cwd,
+          ),
           call_id: "call-1",
         },
       }),
@@ -132,7 +150,8 @@ describe("CodexAdapter", () => {
         payload: {
           type: "function_call_output",
           call_id: "call-1",
-          output: "Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 0\nOutput:\nhello",
+          output:
+            "Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 0\nOutput:\nhello",
         },
       }),
     ]);
@@ -200,7 +219,10 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.steerInput, false);
     assert.equal(resumed.session.session.capabilities.livePermissions, false);
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
-    assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
+    assert.equal(
+      resumed.session.session.capabilities.listProviderSessions,
+      true,
+    );
     assert.equal(resumed.session.session.capabilities.queuedInput, false);
     assert.equal(resumed.session.session.capabilities.actions.stop, false);
     assert.equal(resumed.session.session.capabilities.modelSwitch, false);
@@ -213,10 +235,17 @@ rl.on('line', (line) => {
         .filter((event) => event.type === "timeline.item.added").length,
       0,
     );
-    const page = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 20 });
-    assert.ok(page.events.some((event) => event.type === "timeline.item.added"));
+    const page = storedHistory.getConversationEvidencePage(
+      resumed.session.session.id,
+      { limit: 20 },
+    );
+    assert.ok(
+      page.events.some((event) => event.type === "timeline.item.added"),
+    );
     assert.ok(page.events.some((event) => event.type === "tool.call.started"));
-    assert.ok(page.events.some((event) => event.type === "tool.call.completed"));
+    assert.ok(
+      page.events.some((event) => event.type === "tool.call.completed"),
+    );
 
     assert.throws(
       () =>
@@ -298,7 +327,10 @@ rl.on('line', (line) => {
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
     };
-    const storedHistory = new CodexStoredHistoryAdapter(services, async () => client);
+    const storedHistory = new CodexStoredHistoryAdapter(
+      services,
+      async () => client,
+    );
     storedHistory.listStoredSessions();
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
@@ -308,10 +340,13 @@ rl.on('line', (line) => {
       rootDir: cwd,
     });
 
-    const page = await storedHistory.getConversationSummaryEvidencePage(managed.session.id, {
-      cursor: "native-cursor",
-      limit: 12,
-    });
+    const page = await storedHistory.getConversationSummaryEvidencePage(
+      managed.session.id,
+      {
+        cursor: "native-cursor",
+        limit: 12,
+      },
+    );
     assert.ok(page);
     assert.equal(page.nextCursor, "older-native-turns");
     assert.ok(page.events.every((event) => event.raw === undefined));
@@ -327,27 +362,40 @@ rl.on('line', (line) => {
         },
       },
     ]);
-    const repeatedPage = await storedHistory.getConversationSummaryEvidencePage(managed.session.id, {
-      cursor: "native-cursor",
-      limit: 12,
-    });
+    const repeatedPage = await storedHistory.getConversationSummaryEvidencePage(
+      managed.session.id,
+      {
+        cursor: "native-cursor",
+        limit: 12,
+      },
+    );
     assert.ok(repeatedPage);
     assert.equal(
-      requests.filter((request) => request.method === "thread/turns/list").length,
+      requests.filter((request) => request.method === "thread/turns/list")
+        .length,
       1,
     );
-    writeFileSync(rolloutPath, `${JSON.stringify({ type: "event_msg", payload: {} })}\n`, {
-      encoding: "utf8",
-      flag: "a",
-    });
-    const refreshedPage = await storedHistory.getConversationSummaryEvidencePage(managed.session.id, {
-      cursor: "native-cursor",
-      limit: 12,
-    });
+    writeFileSync(
+      rolloutPath,
+      `${JSON.stringify({ type: "event_msg", payload: {} })}\n`,
+      {
+        encoding: "utf8",
+        flag: "a",
+      },
+    );
+    const refreshedPage =
+      await storedHistory.getConversationSummaryEvidencePage(
+        managed.session.id,
+        {
+          cursor: "native-cursor",
+          limit: 12,
+        },
+      );
     assert.ok(refreshedPage);
     assert.equal(
-      requests.filter((request) => request.method === "thread/turns/list").length,
-      2,
+      requests.filter((request) => request.method === "thread/turns/list")
+        .length,
+      1,
     );
     assert.ok(
       page.events.some(
@@ -359,19 +407,24 @@ rl.on('line', (line) => {
     );
     assert.ok(
       page.events.some(
-        (event) => event.type === "turn.completed" && event.payload.durationMs === 5_000,
+        (event) =>
+          event.type === "turn.completed" && event.payload.durationMs === 5_000,
       ),
     );
-    const detail = await storedHistory.getSessionConversationItemDetail(managed.session.id, {
-      providerTurnId: "turn-native-1",
-      providerItemId: "command-native-1",
-    });
+    const detail = await storedHistory.getSessionConversationItemDetail(
+      managed.session.id,
+      {
+        providerTurnId: "turn-native-1",
+        providerItemId: "command-native-1",
+      },
+    );
     assert.ok(detail);
     assert.ok(
       detail.events.some(
         (event) =>
           event.type === "observation.completed" &&
-          event.payload.observation.subject?.providerCallId === "command-native-1" &&
+          event.payload.observation.subject?.providerCallId ===
+            "command-native-1" &&
           event.payload.observation.durationMs === 1_250,
       ),
     );
@@ -384,15 +437,19 @@ rl.on('line', (line) => {
         sortDirection: "asc",
       },
     });
-    const turnDetail = await storedHistory.getSessionConversationTurnDetail(managed.session.id, {
-      providerTurnId: "turn-native-1",
-    });
+    const turnDetail = await storedHistory.getSessionConversationTurnDetail(
+      managed.session.id,
+      {
+        providerTurnId: "turn-native-1",
+      },
+    );
     assert.ok(turnDetail);
     assert.ok(
       turnDetail.events.some(
         (event) =>
           event.type === "observation.completed" &&
-          event.payload.observation.subject?.providerCallId === "command-native-1",
+          event.payload.observation.subject?.providerCallId ===
+            "command-native-1",
       ),
     );
     assert.deepEqual(requests.at(-1), {
@@ -409,6 +466,54 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("pages large Codex history from the persisted turn index without invoking app-server", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-indexed-page-cwd-"));
+    const sessionId = "019d9999-index-7bbb-8ccc-ddddeeeeffff";
+    writeRollout(sessionId, cwd);
+    let clientCreated = false;
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const storedHistory = new CodexStoredHistoryAdapter(
+      services,
+      async () => {
+        clientCreated = true;
+        throw new Error("app-server should not be used for indexed summary paging");
+      },
+      { indexedSummaryThresholdBytes: 0 },
+    );
+    storedHistory.listStoredSessions();
+    const managed = services.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      launchSource: "web",
+      cwd,
+      rootDir: cwd,
+    });
+    try {
+      const page = await storedHistory.getConversationSummaryEvidencePage(
+        managed.session.id,
+        { limit: 20 },
+      );
+      assert.ok(page);
+      assert.equal(clientCreated, false);
+      assert.ok(
+        page.events.some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "user_message" &&
+            event.payload.item.text === "Fix the resume bug",
+        ),
+      );
+      assert.equal(JSON.stringify(page).includes("echo hello"), false);
+    } finally {
+      await storedHistory.shutdown();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("archives Codex history through the official thread/archive method", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-archive-cwd-"));
     const sessionId = "019d9999-archive-7bbb-8ccc-ddddeeeeffff";
@@ -420,9 +525,18 @@ rl.on('line', (line) => {
       setCloseHandler() {},
       async request(method, params) {
         requests.push({ method, params });
-        const archivedDir = path.join(tmpHome, "archived_sessions", "2026", "04", "15");
+        const archivedDir = path.join(
+          tmpHome,
+          "archived_sessions",
+          "2026",
+          "04",
+          "15",
+        );
         mkdirSync(archivedDir, { recursive: true });
-        renameSync(rolloutPath, path.join(archivedDir, path.basename(rolloutPath)));
+        renameSync(
+          rolloutPath,
+          path.join(archivedDir, path.basename(rolloutPath)),
+        );
         return {};
       },
       notify() {},
@@ -443,7 +557,10 @@ rl.on('line', (line) => {
     assert.deepEqual(requests, [
       { method: "thread/archive", params: { threadId: sessionId } },
     ]);
-    assert.equal(storedHistory.listStoredSessions()[0]?.providerState?.archived, true);
+    assert.equal(
+      storedHistory.listStoredSessions()[0]?.providerState?.archived,
+      true,
+    );
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -521,13 +638,17 @@ rl.on('line', (line) => {
     );
     assert.equal(resumed.session.session.runtime?.kind, "native_local_server");
     assert.ok(methods.indexOf("thread/unarchive") > -1);
-    assert.ok(methods.indexOf("thread/resume") > methods.indexOf("thread/unarchive"));
+    assert.ok(
+      methods.indexOf("thread/resume") > methods.indexOf("thread/unarchive"),
+    );
 
     rmSync(cwd, { recursive: true, force: true });
   });
 
   test("pauses active Codex goals before resuming a history session live", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-goal-claim-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-goal-claim-cwd-"),
+    );
     const sessionId = "019e3333-bbbb-7ccc-8ddd-eeeeffff0000";
     const methodLog = path.join(tmpHome, "goal-claim-method-log.jsonl");
     writeRollout(sessionId, cwd);
@@ -592,10 +713,22 @@ rl.on('line', (line) => {
     const methods = readFileSync(methodLog, "utf8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { method: string; params?: Record<string, unknown> });
-    const goalGetIndex = methods.findIndex((entry) => entry.method === "thread/goal/get");
-    const goalSetIndex = methods.findIndex((entry) => entry.method === "thread/goal/set");
-    const resumeIndex = methods.findIndex((entry) => entry.method === "thread/resume");
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            method: string;
+            params?: Record<string, unknown>;
+          },
+      );
+    const goalGetIndex = methods.findIndex(
+      (entry) => entry.method === "thread/goal/get",
+    );
+    const goalSetIndex = methods.findIndex(
+      (entry) => entry.method === "thread/goal/set",
+    );
+    const resumeIndex = methods.findIndex(
+      (entry) => entry.method === "thread/resume",
+    );
     assert.ok(goalGetIndex > -1);
     assert.ok(goalSetIndex > goalGetIndex);
     assert.ok(resumeIndex > goalSetIndex);
@@ -606,7 +739,9 @@ rl.on('line', (line) => {
   });
 
   test("starts Codex threads without legacy params and sets title through native rename", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-start-params-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-start-params-cwd-"),
+    );
     const paramsLog = path.join(tmpHome, "start-params.jsonl");
     writeMockCodexServer(`
 const fs = require('node:fs');
@@ -654,12 +789,35 @@ rl.on('line', (line) => {
     const entries = readFileSync(paramsLog, "utf8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
-    const startParams = entries.find((entry) => entry.method === "thread/start")?.params;
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            method: string;
+            params: Record<string, unknown>;
+          },
+      );
+    const startParams = entries.find(
+      (entry) => entry.method === "thread/start",
+    )?.params;
     assert.ok(startParams);
-    assert.equal(Object.prototype.hasOwnProperty.call(startParams, "name"), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(startParams, "experimentalRawEvents"), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(startParams, "persistExtendedHistory"), false);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(startParams, "name"),
+      false,
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        startParams,
+        "experimentalRawEvents",
+      ),
+      false,
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        startParams,
+        "persistExtendedHistory",
+      ),
+      false,
+    );
     assert.deepEqual(
       entries.find((entry) => entry.method === "thread/name/set")?.params,
       { threadId: "thread-start-params-1", name: "Native title" },
@@ -669,11 +827,16 @@ rl.on('line', (line) => {
   });
 
   test("does not finalize pending stored tools while a RAH terminal writer owns the session", () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-terminal-writer-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-terminal-writer-cwd-"),
+    );
     const sessionId = "019d1111-terminal-7ddd-8eee-ffff00001111";
     const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
     mkdirSync(dir, { recursive: true });
-    const rolloutPath = path.join(dir, `rollout-2026-04-15T03-00-00-${sessionId}.jsonl`);
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-04-15T03-00-00-${sessionId}.jsonl`,
+    );
     writeRolloutLines(rolloutPath, [
       JSON.stringify({
         timestamp: "2026-04-15T03:00:00.000Z",
@@ -725,9 +888,14 @@ rl.on('line', (line) => {
       },
     });
 
-    const page = storedHistory.getConversationEvidencePage(managed.session.id, { limit: 20 });
+    const page = storedHistory.getConversationEvidencePage(managed.session.id, {
+      limit: 20,
+    });
     assert.ok(page.events.some((event) => event.type === "tool.call.started"));
-    assert.equal(page.events.some((event) => event.type === "tool.call.failed"), false);
+    assert.equal(
+      page.events.some((event) => event.type === "tool.call.failed"),
+      false,
+    );
 
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -772,7 +940,10 @@ rl.on('line', (line) => {
       "Renamed Codex Session",
     );
     assert.equal(renamed.session.title, "Renamed Codex Session");
-    assert.equal(storedHistory.listStoredSessions()[0]?.title, "Renamed Codex Session");
+    assert.equal(
+      storedHistory.listStoredSessions()[0]?.title,
+      "Renamed Codex Session",
+    );
 
     const freshServices = {
       eventBus: new EventBus(),
@@ -780,7 +951,10 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const freshStoredHistory = new CodexStoredHistoryAdapter(freshServices);
-    assert.equal(freshStoredHistory.listStoredSessions()[0]?.title, "Renamed Codex Session");
+    assert.equal(
+      freshStoredHistory.listStoredSessions()[0]?.title,
+      "Renamed Codex Session",
+    );
 
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -890,10 +1064,7 @@ rl.on('line', (line) => {
       catalog.modelProfiles?.[0]?.configOptions[0]?.id,
       "model_reasoning_effort",
     );
-    assert.equal(
-      validateProviderModelCatalog(catalog).ok,
-      true,
-    );
+    assert.equal(validateProviderModelCatalog(catalog).ok, true);
 
     const started = await adapter.startSession({
       provider: "codex",
@@ -919,39 +1090,40 @@ rl.on('line', (line) => {
       "high",
     );
 
-    const updated = await adapter.setSessionModel?.(started.session.session.id, {
-      modelId: "gpt-beta",
-      optionValues: { model_reasoning_effort: "xhigh" },
-    });
+    const updated = await adapter.setSessionModel?.(
+      started.session.session.id,
+      {
+        modelId: "gpt-beta",
+        optionValues: { model_reasoning_effort: "xhigh" },
+      },
+    );
     assert.equal(updated?.session.model?.currentModelId, "gpt-beta");
     assert.equal(updated?.session.model?.currentReasoningId, "xhigh");
     assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
-    assert.equal(updated?.session.config?.values.model_reasoning_effort, "xhigh");
-
-    await assert.rejects(
-      async () => {
-        await adapter.setSessionModel!(started.session.session.id, {
-          modelId: "gpt-missing",
-        });
-      },
-      /Unsupported Codex model 'gpt-missing'/,
-    );
-    await assert.rejects(
-      async () => {
-        await adapter.setSessionModel!(started.session.session.id, {
-          modelId: "gpt-beta",
-          optionValues: { model_reasoning_effort: "ultra" },
-        });
-      },
-      /Unsupported value 'ultra' for model option 'model_reasoning_effort'/,
-    );
     assert.equal(
-      services.sessionStore.getSession(started.session.session.id)?.session.model?.currentModelId,
+      updated?.session.config?.values.model_reasoning_effort,
+      "xhigh",
+    );
+
+    await assert.rejects(async () => {
+      await adapter.setSessionModel!(started.session.session.id, {
+        modelId: "gpt-missing",
+      });
+    }, /Unsupported Codex model 'gpt-missing'/);
+    await assert.rejects(async () => {
+      await adapter.setSessionModel!(started.session.session.id, {
+        modelId: "gpt-beta",
+        optionValues: { model_reasoning_effort: "ultra" },
+      });
+    }, /Unsupported value 'ultra' for model option 'model_reasoning_effort'/);
+    assert.equal(
+      services.sessionStore.getSession(started.session.session.id)?.session
+        .model?.currentModelId,
       "gpt-beta",
     );
     assert.equal(
-      services.sessionStore.getSession(started.session.session.id)?.session.config?.values
-        .model_reasoning_effort,
+      services.sessionStore.getSession(started.session.session.id)?.session
+        .config?.values.model_reasoning_effort,
       "xhigh",
     );
 
@@ -972,32 +1144,43 @@ rl.on('line', (line) => {
     });
 
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("model=gpt-beta;effort=xhigh") &&
-          event.payload.item.text.includes("collab=plan/gpt-beta/xhigh") &&
-          event.payload.item.text.includes("approval=on-request") &&
-          event.payload.item.text.includes("reviewer=auto_review"),
-      ),
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("model=gpt-beta;effort=xhigh") &&
+            event.payload.item.text.includes("collab=plan/gpt-beta/xhigh") &&
+            event.payload.item.text.includes("approval=on-request") &&
+            event.payload.item.text.includes("reviewer=auto_review"),
+        ),
     ).catch((error) => {
-      throw new Error(`plan wait failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `plan wait failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     });
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
-        (event) =>
-          event.type === "turn.completed" && event.turnId === "turn-model-1",
-      ),
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "turn.completed" && event.turnId === "turn-model-1",
+        ),
     ).catch((error) => {
-      throw new Error(`first completion wait failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `first completion wait failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     });
 
     const unplanned = await adapter.setSessionMode?.(
       started.session.session.id,
       "never/danger-full-access",
     );
-    assert.equal(unplanned?.session.mode?.currentModeId, "never/danger-full-access");
+    assert.equal(
+      unplanned?.session.mode?.currentModeId,
+      "never/danger-full-access",
+    );
 
     adapter.sendInput(started.session.session.id, {
       clientId: "web-user",
@@ -1005,15 +1188,19 @@ rl.on('line', (line) => {
     });
 
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("model=gpt-beta;effort=xhigh") &&
-          event.payload.item.text.includes("collab=default/gpt-beta/xhigh"),
-      ),
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("model=gpt-beta;effort=xhigh") &&
+            event.payload.item.text.includes("collab=default/gpt-beta/xhigh"),
+        ),
     ).catch((error) => {
-      throw new Error(`default wait failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `default wait failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     });
 
     await adapter.shutdown?.();
@@ -1021,7 +1208,9 @@ rl.on('line', (line) => {
   });
 
   test("sends Codex sandbox policies without deprecated read access fields", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-sandbox-policy-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-sandbox-policy-cwd-"),
+    );
     writeMockCodexServer(`
 const readline = require('node:readline');
 const rl = readline.createInterface({ input: process.stdin });
@@ -1091,41 +1280,55 @@ rl.on('line', (line) => {
       },
     });
 
-    await adapter.setSessionMode?.(started.session.session.id, "on-request/read-only");
+    await adapter.setSessionMode?.(
+      started.session.session.id,
+      "on-request/read-only",
+    );
     adapter.sendInput(started.session.session.id, {
       clientId: "web-client",
       text: "read only",
     });
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes(
-            'sandbox-ok:{"type":"readOnly","networkAccess":false}',
-          ),
-      ),
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes(
+              'sandbox-ok:{"type":"readOnly","networkAccess":false}',
+            ),
+        ),
     );
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
-        (event) => event.type === "turn.completed" && event.turnId === "turn-sandbox-1",
-      ),
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "turn.completed" &&
+            event.turnId === "turn-sandbox-1",
+        ),
     );
 
-    await adapter.setSessionMode?.(started.session.session.id, "on-request/workspace-write");
+    await adapter.setSessionMode?.(
+      started.session.session.id,
+      "on-request/workspace-write",
+    );
     adapter.sendInput(started.session.session.id, {
       clientId: "web-client",
       text: "workspace write",
     });
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes('"type":"workspaceWrite"') &&
-          event.payload.item.text.includes('"networkAccess":false') &&
-          !event.payload.item.text.includes("deprecated-sandbox-field"),
-      ),
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes('"type":"workspaceWrite"') &&
+            event.payload.item.text.includes('"networkAccess":false') &&
+            !event.payload.item.text.includes("deprecated-sandbox-field"),
+        ),
     );
 
     await adapter.shutdown?.();
@@ -1133,7 +1336,9 @@ rl.on('line', (line) => {
   });
 
   test("opens stored Codex history immediately when preferStoredReplay is requested", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-prefer-stored-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-prefer-stored-cwd-"),
+    );
     const sessionId = "019d9999-stored-7bbb-8ccc-ddddeeeeffff";
     writeRollout(sessionId, cwd);
 
@@ -1164,7 +1369,9 @@ rl.on('line', (line) => {
   });
 
   test("preferStoredReplay rejects missing Codex rollout records before live resume", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-missing-stored-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-missing-stored-cwd-"),
+    );
     const services = {
       eventBus: new EventBus(),
       ptyHub: new PtyHub(),
@@ -1222,31 +1429,44 @@ rl.on('line', (line) => {
       providerSessionId: sessionId,
     });
 
-    const firstPage = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 3 });
+    const firstPage = storedHistory.getConversationEvidencePage(
+      resumed.session.session.id,
+      { limit: 3 },
+    );
     assert.equal(firstPage.sessionId, resumed.session.session.id);
     assert.equal(firstPage.events.length, 3);
     assert.ok(firstPage.nextBeforeTs);
     assert.ok(firstPage.events[0]!.ts <= firstPage.events[1]!.ts);
     assert.ok(firstPage.events[1]!.ts <= firstPage.events[2]!.ts);
 
-    const secondPage = storedHistory.getConversationEvidencePage(resumed.session.session.id, {
-      beforeTs: firstPage.nextBeforeTs,
-      limit: 3,
-    });
+    const secondPage = storedHistory.getConversationEvidencePage(
+      resumed.session.session.id,
+      {
+        beforeTs: firstPage.nextBeforeTs,
+        limit: 3,
+      },
+    );
     assert.ok(secondPage.events.length >= 1);
     assert.ok(
-      secondPage.events.every((event) => event.ts < (firstPage.nextBeforeTs as string)),
+      secondPage.events.every(
+        (event) => event.ts < (firstPage.nextBeforeTs as string),
+      ),
     );
 
     rmSync(cwd, { recursive: true, force: true });
   });
 
   test("collapses duplicate assistant history and ignores persisted noise", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-history-clean-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-history-clean-cwd-"),
+    );
     const sessionId = "019d7777-clean-7ddd-8eee-ffff00001111";
     const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
     mkdirSync(dir, { recursive: true });
-    const rolloutPath = path.join(dir, `rollout-2026-04-15T01-00-00-${sessionId}.jsonl`);
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-04-15T01-00-00-${sessionId}.jsonl`,
+    );
     writeRolloutLines(rolloutPath, [
       JSON.stringify({
         timestamp: "2026-04-15T01:00:00.000Z",
@@ -1284,7 +1504,10 @@ rl.on('line', (line) => {
       JSON.stringify({
         timestamp: "2026-04-15T01:00:04.000Z",
         type: "event_msg",
-        payload: { type: "agent_reasoning", text: "**Inspecting**\n\n<!-- -->" },
+        payload: {
+          type: "agent_reasoning",
+          text: "**Inspecting**\n\n<!-- -->",
+        },
       }),
       JSON.stringify({
         timestamp: "2026-04-15T01:00:04.100Z",
@@ -1306,7 +1529,10 @@ rl.on('line', (line) => {
       JSON.stringify({
         timestamp: "2026-04-15T01:00:04.300Z",
         type: "event_msg",
-        payload: { type: "agent_reasoning", text: "**Inspecting**\n\n<!-- -->" },
+        payload: {
+          type: "agent_reasoning",
+          text: "**Inspecting**\n\n<!-- -->",
+        },
       }),
       JSON.stringify({
         timestamp: "2026-04-15T01:00:04.400Z",
@@ -1358,7 +1584,10 @@ rl.on('line', (line) => {
       providerSessionId: sessionId,
     });
 
-    const page = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 10 });
+    const page = storedHistory.getConversationEvidencePage(
+      resumed.session.session.id,
+      { limit: 10 },
+    );
     assert.deepEqual(
       page.events.map((event) => ({
         type: event.type,
@@ -1384,7 +1613,8 @@ rl.on('line', (line) => {
       ],
     );
     const reasoningTexts = page.events.flatMap((event) =>
-      event.type === "timeline.item.added" && event.payload.item.kind === "reasoning"
+      event.type === "timeline.item.added" &&
+      event.payload.item.kind === "reasoning"
         ? [event.payload.item.text]
         : [],
     );
@@ -1394,11 +1624,16 @@ rl.on('line', (line) => {
   });
 
   test("stored session discovery ignores bootstrap prompt when deriving title and preview", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-bootstrap-title-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-bootstrap-title-cwd-"),
+    );
     const sessionId = "019d7777-bootstrap-7ddd-8eee-ffff00001111";
     const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
     mkdirSync(dir, { recursive: true });
-    const rolloutPath = path.join(dir, `rollout-2026-04-15T02-00-00-${sessionId}.jsonl`);
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-04-15T02-00-00-${sessionId}.jsonl`,
+    );
     writeRolloutLines(rolloutPath, [
       JSON.stringify({
         timestamp: "2026-04-15T02:00:00.000Z",
@@ -1419,8 +1654,7 @@ rl.on('line', (line) => {
           content: [
             {
               type: "input_text",
-              text:
-                "# AGENTS.md instructions for /workspace/demo\n\n<INSTRUCTIONS>\ninternal\n</INSTRUCTIONS>\n<environment_context>\n  <cwd>/workspace/demo</cwd>\n</environment_context>",
+              text: "# AGENTS.md instructions for /workspace/demo\n\n<INSTRUCTIONS>\ninternal\n</INSTRUCTIONS>\n<environment_context>\n  <cwd>/workspace/demo</cwd>\n</environment_context>",
             },
           ],
         },
@@ -1451,11 +1685,16 @@ rl.on('line', (line) => {
   });
 
   test("stored session discovery reaches the first real user prompt after oversized bootstrap lines", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-bootstrap-large-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-bootstrap-large-cwd-"),
+    );
     const sessionId = "019d7777-large-7ddd-8eee-ffff00001111";
     const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
     mkdirSync(dir, { recursive: true });
-    const rolloutPath = path.join(dir, `rollout-2026-04-15T03-00-00-${sessionId}.jsonl`);
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-04-15T03-00-00-${sessionId}.jsonl`,
+    );
     const giant = "X".repeat(220_000);
     writeRolloutLines(rolloutPath, [
       JSON.stringify({
@@ -1588,14 +1827,20 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.steerInput, true);
     assert.equal(resumed.session.session.capabilities.livePermissions, true);
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
-    assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
+    assert.equal(
+      resumed.session.session.capabilities.listProviderSessions,
+      true,
+    );
     assert.equal(resumed.session.session.capabilities.queuedInput, true);
     assert.equal(resumed.session.session.capabilities.actions.stop, true);
     assert.equal(resumed.session.session.capabilities.modelSwitch, true);
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
 
-    const historicalEvents = storedHistory.getConversationEvidencePage(resumed.session.session.id, { limit: 20 }).events;
+    const historicalEvents = storedHistory.getConversationEvidencePage(
+      resumed.session.session.id,
+      { limit: 20 },
+    ).events;
     assert.ok(
       historicalEvents.some(
         (event) =>
@@ -1611,15 +1856,19 @@ rl.on('line', (line) => {
     });
 
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [resumed.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("Live reattach works"),
-      ),
+      services.eventBus
+        .list({ sessionIds: [resumed.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("Live reattach works"),
+        ),
     );
 
-    const events = services.eventBus.list({ sessionIds: [resumed.session.session.id] });
+    const events = services.eventBus.list({
+      sessionIds: [resumed.session.session.id],
+    });
     assert.ok(events.some((event) => event.type === "turn.started"));
     assert.ok(events.some((event) => event.type === "turn.completed"));
 
@@ -1695,7 +1944,9 @@ rl.on('line', (line) => {
       },
     });
 
-    const historicalEvents = services.eventBus.list({ sessionIds: [resumed.session.session.id] });
+    const historicalEvents = services.eventBus.list({
+      sessionIds: [resumed.session.session.id],
+    });
     assert.ok(
       !historicalEvents.some(
         (event) =>
@@ -1711,12 +1962,14 @@ rl.on('line', (line) => {
     });
 
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [resumed.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("Only new live output."),
-      ),
+      services.eventBus
+        .list({ sessionIds: [resumed.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("Only new live output."),
+        ),
     );
 
     await adapter.shutdown?.();
@@ -1724,7 +1977,9 @@ rl.on('line', (line) => {
   });
 
   test("upgrades a rehydrated replay to live resume without duplicating stored history", async () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-upgrade-live-cwd-"));
+    const cwd = mkdtempSync(
+      path.join(os.tmpdir(), "rah-codex-upgrade-live-cwd-"),
+    );
     const sessionId = "019d8888-upgrade-7ccc-8ddd-eeeeffff0000";
     writeRollout(sessionId, cwd);
     writeMockCodexServer(`
@@ -1804,7 +2059,9 @@ rl.on('line', (line) => {
       .filter((event) => event.type === "session.closed");
     assert.equal(sessionClosedEvents.length, 1);
 
-    const historicalEvents = services.eventBus.list({ sessionIds: [resumed.session.session.id] });
+    const historicalEvents = services.eventBus.list({
+      sessionIds: [resumed.session.session.id],
+    });
     assert.ok(
       !historicalEvents.some(
         (event) =>
@@ -1820,12 +2077,14 @@ rl.on('line', (line) => {
     });
 
     await waitFor(() =>
-      services.eventBus.list({ sessionIds: [resumed.session.session.id] }).some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("Continue after claim."),
-      ),
+      services.eventBus
+        .list({ sessionIds: [resumed.session.session.id] })
+        .some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("Continue after claim."),
+        ),
     );
 
     await adapter.shutdown?.();

@@ -43,12 +43,12 @@ interface TimelineIdentitySnapshot {
 
 interface TelemetryState {
   identitySnapshotsBySession: Map<string, Map<string, TimelineIdentitySnapshot>>;
-  warnedCollisionKeys: Set<string>;
+  warnedCollisionKeysBySession: Map<string, Set<string>>;
+  warnedMismatchKeysBySession: Map<string, Set<string>>;
 }
 
 let statesByServices = new WeakMap<object, TelemetryState>();
 let warnedMissingKeys = new Set<string>();
-let warnedMismatchKeys = new Set<string>();
 let warnSink = defaultWarnSink;
 
 export function recordTimelineIdentityTelemetry(
@@ -104,7 +104,7 @@ export function recordTimelineIdentityTelemetry(
     return;
   }
 
-  recordIdentityMismatch({
+  recordIdentityMismatch(services, {
     sessionId: params.sessionId,
     provider: params.provider,
     channel,
@@ -164,11 +164,17 @@ export function setTimelineIdentityTelemetryWarnSinkForTests(
 export function resetTimelineIdentityTelemetryForTests(): void {
   statesByServices = new WeakMap<object, TelemetryState>();
   warnedMissingKeys = new Set<string>();
-  warnedMismatchKeys = new Set<string>();
   warnSink = defaultWarnSink;
 }
 
-function recordIdentityMismatch(params: {
+export function releaseTimelineIdentityTelemetrySession(services: object, sessionId: string): void {
+  const state = statesByServices.get(services);
+  state?.identitySnapshotsBySession.delete(sessionId);
+  state?.warnedCollisionKeysBySession.delete(sessionId);
+  state?.warnedMismatchKeysBySession.delete(sessionId);
+}
+
+function recordIdentityMismatch(services: object, params: {
   sessionId: string;
   provider: ProviderKind;
   channel: EventChannel;
@@ -201,10 +207,14 @@ function recordIdentityMismatch(params: {
     params.itemKind,
     JSON.stringify(mismatches),
   ].join(":");
-  if (warnedMismatchKeys.has(warningKey)) {
+  const warnedKeys = warningKeysForSession(
+    stateForServices(services).warnedMismatchKeysBySession,
+    params.sessionId,
+  );
+  if (warnedKeys.has(warningKey)) {
     return;
   }
-  warnedMismatchKeys.add(warningKey);
+  warnedKeys.add(warningKey);
   warnSink({
     code: "timeline.identity.mismatch",
     sessionId: params.sessionId,
@@ -252,11 +262,15 @@ function recordIdentityCollision(
     return;
   }
 
-  const warningKey = `${params.sessionId}:${snapshot.canonicalItemId}`;
-  if (state.warnedCollisionKeys.has(warningKey)) {
+  const warningKey = snapshot.canonicalItemId;
+  const warnedKeys = warningKeysForSession(
+    state.warnedCollisionKeysBySession,
+    params.sessionId,
+  );
+  if (warnedKeys.has(warningKey)) {
     return;
   }
-  state.warnedCollisionKeys.add(warningKey);
+  warnedKeys.add(warningKey);
   warnSink({
     code: "timeline.identity.collision",
     sessionId: params.sessionId,
@@ -293,11 +307,24 @@ function stateForServices(services: object): TelemetryState {
   if (state === undefined) {
     state = {
       identitySnapshotsBySession: new Map(),
-      warnedCollisionKeys: new Set(),
+      warnedCollisionKeysBySession: new Map(),
+      warnedMismatchKeysBySession: new Map(),
     };
     statesByServices.set(services, state);
   }
   return state;
+}
+
+function warningKeysForSession(
+  keysBySession: Map<string, Set<string>>,
+  sessionId: string,
+): Set<string> {
+  let keys = keysBySession.get(sessionId);
+  if (keys === undefined) {
+    keys = new Set<string>();
+    keysBySession.set(sessionId, keys);
+  }
+  return keys;
 }
 
 function snapshotIdentity(identity: TimelineIdentity): TimelineIdentitySnapshot {

@@ -1,4 +1,4 @@
-import { constants, statSync } from "node:fs";
+import { closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
@@ -114,4 +114,47 @@ export async function resolveConfiguredBinary(
   }
   await access(raw, constants.X_OK);
   return raw;
+}
+
+function readShebang(binary: string): string | undefined {
+  if (!path.isAbsolute(binary)) {
+    return undefined;
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(binary, "r");
+    const buffer = Buffer.allocUnsafe(512);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split(/\r?\n/, 1)[0];
+    return firstLine?.startsWith("#!") ? firstLine.slice(2).trim() : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+function shebangArgv(binary: string, shebang: string): string[] | undefined {
+  const parts = shebang.split(/\s+/).filter(Boolean);
+  const interpreter = parts.shift();
+  if (!interpreter) {
+    return undefined;
+  }
+  if (path.basename(interpreter) === "env" && parts[0] === "-S") {
+    parts.shift();
+  }
+  return [interpreter, ...parts, binary];
+}
+
+export function providerBinaryArgv(binary: string): string[] {
+  const shebang = readShebang(binary);
+  if (shebang) {
+    return shebangArgv(binary, shebang) ?? [binary];
+  }
+  if (path.isAbsolute(binary) && /\.(?:cjs|mjs|js)$/i.test(binary)) {
+    return [process.execPath, binary];
+  }
+  return [binary];
 }

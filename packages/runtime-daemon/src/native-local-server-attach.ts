@@ -2,6 +2,7 @@ import type {
   ProviderKind,
   SessionRuntimeDiagnostics,
 } from "@rah/runtime-protocol";
+import { providerBinaryArgv } from "./provider-binary-utils";
 
 export type NativeLocalServerAttachSpec = {
   command: string;
@@ -39,12 +40,17 @@ export function nativeLocalServerAttachSpec(args: {
   if (!command) {
     return null;
   }
+  const [runtimeCommand, ...runtimeArgs] = providerBinaryArgv(command);
+  if (!runtimeCommand) {
+    return null;
+  }
 
   if (args.provider === "codex") {
     if (!/^wss?:\/\//.test(endpoint)) {
       return null;
     }
     const attachArgs = [
+      ...runtimeArgs,
       ...CODEX_TUI_CLIENT_CONFIG_ARGS,
       "--remote",
       endpoint,
@@ -52,18 +58,18 @@ export function nativeLocalServerAttachSpec(args: {
       providerSessionId,
     ];
     return {
-      command,
+      command: runtimeCommand,
       args: attachArgs,
-      attachCommand: `${command} ${attachArgs.join(" ")}`,
+      attachCommand: `${runtimeCommand} ${attachArgs.join(" ")}`,
     };
   }
 
   if (args.provider === "opencode") {
-    const attachArgs = ["attach", endpoint, "--session", providerSessionId];
+    const attachArgs = [...runtimeArgs, "attach", endpoint, "--session", providerSessionId];
     return {
-      command,
+      command: runtimeCommand,
       args: attachArgs,
-      attachCommand: `${command} ${attachArgs.join(" ")}`,
+      attachCommand: `${runtimeCommand} ${attachArgs.join(" ")}`,
     };
   }
 

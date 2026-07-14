@@ -16,6 +16,9 @@ import {
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
+  getOpenCodeStoredSessionTurnDetail,
+  getOpenCodeStoredSessionTurnDirectory,
+  getOpenCodeStoredSessionTurnHistoryPage,
   OpenCodeSqliteReadError,
   resolveOpenCodeStoredSessionWatchRoots,
   resumeOpenCodeStoredSession,
@@ -83,6 +86,57 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
       record,
       ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
       ...(options?.limit ? { limit: options.limit } : {}),
+    });
+  }
+
+  getConversationSummaryEvidencePage(
+    sessionId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): ConversationEvidencePage | undefined {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const runtime = this.services.sessionStore.getSession(sessionId)?.session.runtime;
+    return getOpenCodeStoredSessionTurnHistoryPage({
+      sessionId,
+      record,
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+      ...(options.limit ? { limit: options.limit } : {}),
+      // A read-only replay represents settled history. A live structured
+      // session gets its lifecycle from the server overlay, so an unfinished
+      // database tail must remain in progress rather than being fabricated as
+      // completed by the pager.
+      finalizeTrailingTurn: runtime?.structuredLiveEvents !== true,
+    });
+  }
+
+  getSessionConversationDirectory(sessionId: string) {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return {
+        sessionId,
+        revision: "missing",
+        items: [],
+        complete: false,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+    return getOpenCodeStoredSessionTurnDirectory({ sessionId, record });
+  }
+
+  getSessionConversationTurnDetail(
+    sessionId: string,
+    options: { providerTurnId: string },
+  ): ConversationEvidencePage | undefined {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    return getOpenCodeStoredSessionTurnDetail({
+      sessionId,
+      record,
+      providerTurnId: options.providerTurnId,
     });
   }
 

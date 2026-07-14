@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,8 @@ import type {
   ManagedSession,
   RahEvent,
   ConversationEvidencePage,
+  ConversationTurnDirectoryResponse,
+  ConversationTurnDirectoryStatus,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
@@ -19,6 +22,7 @@ import type {
 import {
   completeOpenCodeTurn,
   createOpenCodeActivityState,
+  isOpenCodeInternalInitiatorText,
   translateOpenCodeMessage,
 } from "./opencode-activity";
 import type {
@@ -112,8 +116,21 @@ type OpenCodePartRow = {
   data: string | null;
 };
 
+type OpenCodeTurnDirectoryRow = {
+  id: string;
+  time_created: number | null;
+  user_preview: string | null;
+  assistant_preview: string | null;
+  assistant_created: number | null;
+  assistant_completed: number | null;
+  assistant_finish: string | null;
+  assistant_error_name: string | null;
+  assistant_error_message: string | null;
+};
+
 type OpenCodeFrozenHistoryCursor = {
   beforeTs: string;
+  beforeMessageId?: string;
 };
 
 function encodeOpenCodeFrozenHistoryCursor(cursor: OpenCodeFrozenHistoryCursor): string {
@@ -124,11 +141,23 @@ function decodeOpenCodeFrozenHistoryCursor(cursor: string): OpenCodeFrozenHistor
   try {
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
       beforeTs?: unknown;
+      beforeMessageId?: unknown;
     };
-    if (typeof parsed.beforeTs !== "string" || !parsed.beforeTs) {
+    if (
+      typeof parsed.beforeTs !== "string" ||
+      !parsed.beforeTs ||
+      !Number.isFinite(Date.parse(parsed.beforeTs)) ||
+      (parsed.beforeMessageId !== undefined &&
+        (typeof parsed.beforeMessageId !== "string" || !parsed.beforeMessageId))
+    ) {
       throw new Error("Invalid OpenCode frozen history cursor.");
     }
-    return { beforeTs: parsed.beforeTs };
+    return {
+      beforeTs: parsed.beforeTs,
+      ...(typeof parsed.beforeMessageId === "string"
+        ? { beforeMessageId: parsed.beforeMessageId }
+        : {}),
+    };
   } catch {
     throw new Error("Invalid OpenCode frozen history cursor.");
   }
@@ -311,31 +340,166 @@ export function archiveOpenCodeStoredSession(record: OpenCodeStoredSessionRecord
 
 export function loadOpenCodeStoredMessages(
   record: OpenCodeStoredSessionRecord,
-  options: { beforeTs?: string; limit?: number } = {},
+  options: {
+    beforeTs?: string;
+    beforeMessageId?: string;
+    limit?: number;
+    summary?: boolean;
+  } = {},
 ): OpenCodeMessageWithParts[] {
   const beforeMs = parseBeforeTimestamp(options.beforeTs);
   const limit = Math.max(1, options.limit ?? 1000);
   const rows = sqliteJson<OpenCodeMessageRow>(
     record.databasePath,
     `
-      select id, session_id, time_created, time_updated, data
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
       from message
       where session_id = ${quoteSql(record.ref.providerSessionId)}
-        ${beforeMs !== null ? `and time_created < ${beforeMs}` : ""}
+        ${openCodeMessageBoundarySql(beforeMs, options.beforeMessageId)}
       order by time_created desc, id desc
       limit ${limit}
     `,
   ).reverse();
+  return loadOpenCodeMessagesForRows(record, rows, {
+    summary: options.summary === true,
+  });
+}
+
+type OpenCodeStoredTurnMessagesPage = {
+  messages: OpenCodeMessageWithParts[];
+  nextCursor?: string;
+  nextBeforeTs?: string;
+};
+
+function loadOpenCodeStoredTurnMessages(params: {
+  record: OpenCodeStoredSessionRecord;
+  cursor?: string;
+  limit: number;
+  summary?: boolean;
+}): OpenCodeStoredTurnMessagesPage {
+  const cursor = params.cursor ? decodeOpenCodeFrozenHistoryCursor(params.cursor) : undefined;
+  const beforeMs = parseBeforeTimestamp(cursor?.beforeTs);
+  const rootRows = sqliteJson<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and json_extract(data, '$.role') = 'user'
+        ${openCodeMessageBoundarySql(beforeMs, cursor?.beforeMessageId)}
+      order by time_created desc, id desc
+      limit ${params.limit + 1}
+    `,
+  );
+  const selectedRoots = rootRows.slice(0, params.limit);
+  if (selectedRoots.length === 0) {
+    return { messages: [] };
+  }
+
+  const rootIds = selectedRoots.map((row) => quoteSql(row.id)).join(",");
+  // OpenCode's message protocol defines a turn as one user root plus every
+  // assistant message whose parentID is that root. Query that contract
+  // directly so a small page never scans or materializes unrelated turns.
+  const rows = sqliteJson<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and (
+          id in (${rootIds})
+          or json_extract(data, '$.parentID') in (${rootIds})
+        )
+      order by time_created asc, id asc
+    `,
+  );
+  const hasOlder = rootRows.length > params.limit;
+  const earliestRoot = selectedRoots.at(-1);
+  const nextBeforeTs = hasOlder ? toIso(earliestRoot?.time_created) ?? undefined : undefined;
+  const nextCursor =
+    hasOlder && nextBeforeTs && earliestRoot
+      ? encodeOpenCodeFrozenHistoryCursor({
+          beforeTs: nextBeforeTs,
+          beforeMessageId: earliestRoot.id,
+        })
+      : undefined;
+  return {
+    messages: loadOpenCodeMessagesForRows(params.record, rows, {
+      summary: params.summary === true,
+    }),
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextBeforeTs ? { nextBeforeTs } : {}),
+  };
+}
+
+function loadOpenCodeMessagesForRows(
+  record: OpenCodeStoredSessionRecord,
+  rows: readonly OpenCodeMessageRow[],
+  options: { summary?: boolean } = {},
+): OpenCodeMessageWithParts[] {
   if (rows.length === 0) {
     return [];
   }
   const messageIds = rows.map((row) => quoteSql(row.id)).join(",");
+  const partDataSql = options.summary
+    ? `
+        case
+          when json_extract(data, '$.type') = 'tool'
+            and json_extract(data, '$.tool') not like 'rah_council_%'
+            and json_extract(data, '$.tool') not like 'mcp__rah_council__%'
+            and json_extract(data, '$.tool') not in (
+              'channel_join', 'channel_post', 'channel_wait_new', 'channel_history',
+              'channel_state', 'channel_peek_inbox', 'channel_set_status',
+              'channel_claim_file', 'channel_release_file', 'channel_list_claims',
+              'channel_send_control', 'channel_peek_control'
+            )
+          then json_remove(
+            data,
+            '$.state.input',
+            '$.state.output',
+            '$.state.metadata.output',
+            '$.state.metadata.diagnostics',
+            '$.state.metadata.files',
+            '$.state.metadata.filediff',
+            '$.state.metadata.diff',
+            '$.state.metadata.preview',
+            '$.state.metadata.todos'
+          )
+          else data
+        end
+      `
+    : "data";
+  const partFilterSql = options.summary
+    ? `
+        and (
+          json_extract(data, '$.type') not in ('reasoning', 'tool')
+          or (
+            json_extract(data, '$.type') = 'tool'
+            and (
+              json_extract(data, '$.tool') like 'rah_council_%'
+              or json_extract(data, '$.tool') like 'mcp__rah_council__%'
+              or json_extract(data, '$.tool') in (
+                'channel_join', 'channel_post', 'channel_wait_new', 'channel_history',
+                'channel_state', 'channel_peek_inbox', 'channel_set_status',
+                'channel_claim_file', 'channel_release_file', 'channel_list_claims',
+                'channel_send_control', 'channel_peek_control'
+              )
+            )
+          )
+        )
+      `
+    : "";
   const partRows = sqliteJson<OpenCodePartRow>(
     record.databasePath,
     `
-      select id, session_id, message_id, data
+      select id, session_id, message_id, ${partDataSql} as data
       from part
-      where message_id in (${messageIds})
+      where session_id = ${quoteSql(record.ref.providerSessionId)}
+        and message_id in (${messageIds})
+        ${partFilterSql}
       order by message_id asc, id asc
     `,
   );
@@ -364,23 +528,6 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
   beforeTs?: string;
   limit?: number;
 }): ConversationEvidencePage {
-  const services = {
-    eventBus: new EventBus(),
-    ptyHub: new PtyHub(),
-    sessionStore: new SessionStore(),
-  };
-  const cwd = params.record.ref.cwd ?? process.cwd();
-  const temp = services.sessionStore.createManagedSession({
-    provider: "opencode",
-    providerSessionId: params.record.ref.providerSessionId,
-    launchSource: "web",
-    cwd,
-    rootDir: params.record.ref.rootDir ?? cwd,
-    ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
-    ...(params.record.ref.preview ? { preview: params.record.ref.preview } : {}),
-    runtime: runtimeDescriptorForStoredHistory(),
-    capabilities: REHYDRATED_CAPABILITIES,
-  });
   const messageLimit = Math.min(Math.max((params.limit ?? 1000) * 4, 100), 10_000);
   let fetchLimit = Math.min(messageLimit + 1, 10_000);
   let fetchedMessages = loadOpenCodeStoredMessages(params.record, {
@@ -406,51 +553,13 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
   const firstUserIndex = boundedMessages.findIndex((message) => message.info.role === "user");
   const messages = firstUserIndex > 0 ? boundedMessages.slice(firstUserIndex) : boundedMessages;
   const droppedLeadingContinuation = firstUserIndex > 0;
-  const historyState = createOpenCodeActivityState(
-    messages[0]?.info.sessionID ?? params.record.ref.providerSessionId,
-    { origin: "history" },
-  );
-  let lastMessageTs: string | undefined;
-  for (const message of messages) {
-    const messageTs = toIso(message.info.time?.created) ?? lastMessageTs;
-    if (messageTs) {
-      lastMessageTs = messageTs;
-    }
-    for (const activity of translateOpenCodeMessage(historyState, message)) {
-      applyProviderActivity(
-        services,
-        temp.session.id,
-        {
-          ...HISTORY_SOURCE,
-          ...(messageTs ? { ts: messageTs } : {}),
-        },
-        activity,
-      );
-    }
-  }
-  if (historyState.currentTurnId) {
-    for (const activity of completeOpenCodeTurn(historyState)) {
-      applyProviderActivity(
-        services,
-        temp.session.id,
-        {
-          ...HISTORY_SOURCE,
-          ...(lastMessageTs ? { ts: lastMessageTs } : {}),
-        },
-        activity,
-      );
-    }
-  }
-
-  const all: RahEvent[] = services.eventBus
-    .list({ sessionIds: [temp.session.id] })
+  const all = materializeOpenCodeStoredMessages({
+    sessionId: params.sessionId,
+    record: params.record,
+    messages,
+    finalizeTrailingTurn: true,
+  })
     .filter((event) => (params.beforeTs ? event.ts < params.beforeTs : true))
-    .map((event) => ({
-      ...event,
-      id: `history:${event.id}`,
-      seq: event.seq + 1_000_000_000,
-      sessionId: params.sessionId,
-    }))
     .sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
   const limit = Math.max(1, params.limit ?? 1000);
   const naiveStart = Math.max(0, all.length - limit);
@@ -468,6 +577,298 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
     events,
     ...(hasOlder && events[0] ? { nextBeforeTs: events[0].ts } : {}),
   };
+}
+
+export function getOpenCodeStoredSessionTurnHistoryPage(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+  cursor?: string;
+  limit?: number;
+  finalizeTrailingTurn?: boolean;
+}): ConversationEvidencePage {
+  const page = loadOpenCodeStoredTurnMessages({
+    record: params.record,
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+    limit: Math.max(1, Math.min(params.limit ?? 20, 100)),
+    summary: true,
+  });
+  return {
+    sessionId: params.sessionId,
+    events: materializeOpenCodeStoredMessages({
+      sessionId: params.sessionId,
+      record: params.record,
+      messages: page.messages,
+      finalizeTrailingTurn: params.finalizeTrailingTurn !== false,
+    }),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(page.nextBeforeTs ? { nextBeforeTs: page.nextBeforeTs } : {}),
+  };
+}
+
+export function getOpenCodeStoredSessionTurnDetail(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+  providerTurnId: string;
+}): ConversationEvidencePage | undefined {
+  const rootMessageId = openCodeRootMessageIdFromProviderTurnId(params.providerTurnId);
+  if (!rootMessageId) {
+    return undefined;
+  }
+  const rootRows = sqliteJson<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and id = ${quoteSql(rootMessageId)}
+        and json_extract(data, '$.role') = 'user'
+      limit 1
+    `,
+  );
+  if (rootRows.length === 0) {
+    return undefined;
+  }
+  const rows = sqliteJson<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and (
+          id = ${quoteSql(rootMessageId)}
+          or json_extract(data, '$.parentID') = ${quoteSql(rootMessageId)}
+        )
+      order by time_created asc, id asc
+    `,
+  );
+  return {
+    sessionId: params.sessionId,
+    events: materializeOpenCodeStoredMessages({
+      sessionId: params.sessionId,
+      record: params.record,
+      messages: loadOpenCodeMessagesForRows(params.record, rows),
+      finalizeTrailingTurn: true,
+    }),
+  };
+}
+
+export function getOpenCodeStoredSessionTurnDirectory(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+}): ConversationTurnDirectoryResponse {
+  const providerSessionId = quoteSql(params.record.ref.providerSessionId);
+  const rows = sqliteJson<OpenCodeTurnDirectoryRow>(
+    params.record.databasePath,
+    `
+      with roots as (
+        select
+          m.id,
+          m.time_created,
+          (
+            select json_extract(p.data, '$.text')
+            from part p
+            where p.message_id = m.id
+              and json_extract(p.data, '$.type') = 'text'
+              and coalesce(json_extract(p.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(p.data, '$.ignored'), 0) = 0
+            order by p.id asc
+            limit 1
+          ) as user_preview
+        from message m
+        where m.session_id = ${providerSessionId}
+          and json_extract(m.data, '$.role') = 'user'
+      ),
+      latest_assistant as (
+        select
+          r.id as root_id,
+          (
+            select a.id
+            from message a
+            where a.session_id = ${providerSessionId}
+              and json_extract(a.data, '$.role') = 'assistant'
+              and json_extract(a.data, '$.parentID') = r.id
+            order by a.time_created desc, a.id desc
+            limit 1
+          ) as assistant_id
+        from roots r
+      )
+      select
+        r.id,
+        r.time_created,
+        r.user_preview,
+        (
+          select json_extract(p.data, '$.text')
+          from part p
+          join message candidate on candidate.id = p.message_id
+          where candidate.session_id = ${providerSessionId}
+            and json_extract(candidate.data, '$.role') = 'assistant'
+            and json_extract(candidate.data, '$.parentID') = r.id
+            and json_extract(p.data, '$.type') = 'text'
+            and coalesce(json_extract(p.data, '$.synthetic'), 0) = 0
+            and coalesce(json_extract(p.data, '$.ignored'), 0) = 0
+          order by candidate.time_created desc, p.id desc
+          limit 1
+        ) as assistant_preview,
+        a.time_created as assistant_created,
+        json_extract(a.data, '$.time.completed') as assistant_completed,
+        json_extract(a.data, '$.finish') as assistant_finish,
+        json_extract(a.data, '$.error.name') as assistant_error_name,
+        json_extract(a.data, '$.error.data.message') as assistant_error_message
+      from roots r
+      left join latest_assistant la on la.root_id = r.id
+      left join message a on a.id = la.assistant_id
+      order by r.time_created asc, r.id asc
+    `,
+  ).filter((row) => {
+    const preview = row.user_preview?.trim();
+    return Boolean(preview) && !isOpenCodeInternalInitiatorText(preview!);
+  });
+  const drafts = rows.flatMap((row, index) => {
+    const startedAt = toIso(row.time_created);
+    const userPreview = row.user_preview?.trim();
+    if (!startedAt || !userPreview) {
+      return [];
+    }
+    const completedAt = toIso(row.assistant_completed);
+    const status = openCodeDirectoryStatus(row, index < rows.length - 1);
+    const durationMs =
+      completedAt && typeof row.time_created === "number"
+        ? Math.max(0, Date.parse(completedAt) - row.time_created)
+        : undefined;
+    return [{
+      id: `opencode:${row.id}`,
+      ordinal: index,
+      userPreview: truncateText(userPreview),
+      ...(row.assistant_preview?.trim()
+        ? { assistantPreview: truncateText(row.assistant_preview) }
+        : {}),
+      startedAt,
+      ...(completedAt ? { completedAt } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      status,
+    }];
+  });
+  const revision = createHash("sha256")
+    .update(params.record.ref.updatedAt ?? "")
+    .update(JSON.stringify(drafts.map((item) => [item.id, item.status, item.completedAt ?? null])))
+    .digest("base64url")
+    .slice(0, 22);
+  return {
+    sessionId: params.sessionId,
+    revision,
+    items: drafts,
+    complete: true,
+    ...(params.record.ref.historyMeta?.bytes !== undefined
+      ? { sourceBytes: params.record.ref.historyMeta.bytes }
+      : {}),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function openCodeDirectoryStatus(
+  row: OpenCodeTurnDirectoryRow,
+  hasLaterTurn: boolean,
+): ConversationTurnDirectoryStatus {
+  const errorName = row.assistant_error_name?.trim() ?? "";
+  const errorMessage = row.assistant_error_message?.trim() ?? "";
+  if (
+    errorName === "MessageAbortedError" ||
+    errorName === "AbortError" ||
+    errorMessage === "Aborted" ||
+    /operation was aborted/i.test(errorMessage)
+  ) {
+    return "interrupted";
+  }
+  if (errorName || errorMessage) {
+    return "failed";
+  }
+  if (
+    row.assistant_completed !== null &&
+    row.assistant_finish !== "tool-calls"
+  ) {
+    return "completed";
+  }
+  return hasLaterTurn ? "interrupted" : "in_progress";
+}
+
+function openCodeRootMessageIdFromProviderTurnId(providerTurnId: string): string | null {
+  const prefix = "opencode:";
+  if (!providerTurnId.startsWith(prefix)) {
+    return null;
+  }
+  const messageId = providerTurnId.slice(prefix.length).trim();
+  return messageId || null;
+}
+
+function materializeOpenCodeStoredMessages(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+  messages: readonly OpenCodeMessageWithParts[];
+  finalizeTrailingTurn: boolean;
+}): RahEvent[] {
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const cwd = params.record.ref.cwd ?? process.cwd();
+  const temp = services.sessionStore.createManagedSession({
+    provider: "opencode",
+    providerSessionId: params.record.ref.providerSessionId,
+    launchSource: "web",
+    cwd,
+    rootDir: params.record.ref.rootDir ?? cwd,
+    ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
+    ...(params.record.ref.preview ? { preview: params.record.ref.preview } : {}),
+    runtime: runtimeDescriptorForStoredHistory(),
+    capabilities: REHYDRATED_CAPABILITIES,
+  });
+  const historyState = createOpenCodeActivityState(
+    params.messages[0]?.info.sessionID ?? params.record.ref.providerSessionId,
+    { origin: "history" },
+  );
+  let lastMessageTs: string | undefined;
+  for (const message of params.messages) {
+    const messageTs = toIso(message.info.time?.created) ?? lastMessageTs;
+    if (messageTs) {
+      lastMessageTs = messageTs;
+    }
+    for (const activity of translateOpenCodeMessage(historyState, message)) {
+      applyProviderActivity(
+        services,
+        temp.session.id,
+        {
+          ...HISTORY_SOURCE,
+          ...(messageTs ? { ts: messageTs } : {}),
+        },
+        activity,
+      );
+    }
+  }
+  if (params.finalizeTrailingTurn && historyState.currentTurnId) {
+    for (const activity of completeOpenCodeTurn(historyState)) {
+      applyProviderActivity(
+        services,
+        temp.session.id,
+        {
+          ...HISTORY_SOURCE,
+          ...(lastMessageTs ? { ts: lastMessageTs } : {}),
+        },
+        activity,
+      );
+    }
+  }
+  return services.eventBus
+    .list({ sessionIds: [temp.session.id] })
+    .map((event) => ({
+      ...event,
+      id: `history:${event.id}`,
+      seq: event.seq + 1_000_000_000,
+      sessionId: params.sessionId,
+    }))
+    .sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
 }
 
 export function createOpenCodeStoredSessionFrozenHistoryPageLoader(args: {
@@ -701,6 +1102,19 @@ function parseBeforeTimestamp(value: string | undefined): number | null {
   }
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
+}
+
+function openCodeMessageBoundarySql(
+  beforeMs: number | null,
+  beforeMessageId: string | undefined,
+): string {
+  if (beforeMs === null) {
+    return "";
+  }
+  if (!beforeMessageId) {
+    return `and time_created < ${beforeMs}`;
+  }
+  return `and (time_created < ${beforeMs} or (time_created = ${beforeMs} and id < ${quoteSql(beforeMessageId)}))`;
 }
 
 function parseJsonRecord(value: string | null): Record<string, unknown> | null {

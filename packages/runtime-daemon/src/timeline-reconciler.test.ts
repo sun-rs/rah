@@ -6,6 +6,7 @@ import {
   normalizeTranscriptEvents,
   reconcileTimelineActivity,
   reconcileTurnLifecycleActivity,
+  releaseTimelineReconcilerSession,
   resetTimelineReconcilerForTests,
 } from "./timeline-reconciler";
 
@@ -171,4 +172,23 @@ test("normalizeTranscriptEvents preserves the first item position while applying
     assert.equal(only.payload.item.kind, "assistant_message");
     assert.equal(only.payload.item.kind === "assistant_message" ? only.payload.item.text : null, "final answer");
   }
+});
+
+test("releasing a session removes its live reconciliation ledger", () => {
+  resetTimelineReconcilerForTests();
+  const services = { eventBus: {} };
+  const sharedIdentity = identity({ turnId: "provider-turn-release", itemKey: "assistant-release" });
+  const activity = {
+    type: "timeline_item" as const,
+    item: { kind: "assistant_message" as const, text: "hello" },
+    turnId: "turn-release",
+    identity: sharedIdentity,
+  };
+
+  assert.ok(reconcileTimelineActivity(services, "session-release", activity));
+  assert.equal(reconcileTimelineActivity(services, "session-release", activity), null);
+
+  releaseTimelineReconcilerSession(services, "session-release");
+
+  assert.ok(reconcileTimelineActivity(services, "session-release", activity));
 });

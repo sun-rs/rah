@@ -4,7 +4,7 @@ import type {
   ProviderKind,
   ProviderRuntimeHealthDiagnostic,
 } from "@rah/runtime-protocol";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
 
 export type CoreLiveDiagnosticProvider = Extract<
   ProviderKind,
@@ -50,19 +50,19 @@ const VERSION_PATTERN = /\bv?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/;
 
 export async function codexLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex")],
+    argv: providerBinaryArgv(await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex")),
   };
 }
 
 export async function claudeLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude")],
+    argv: providerBinaryArgv(await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude")),
   };
 }
 
 export async function opencodeLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [await resolveConfiguredBinary("RAH_OPENCODE_BINARY", "opencode")],
+    argv: providerBinaryArgv(await resolveConfiguredBinary("RAH_OPENCODE_BINARY", "opencode")),
   };
 }
 

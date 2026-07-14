@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { RahEvent } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { OpenCodeStoredHistoryAdapter } from "./opencode-stored-history-adapter";
 import { EventBus } from "./event-bus";
@@ -15,6 +16,9 @@ import {
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
+  getOpenCodeStoredSessionTurnDetail,
+  getOpenCodeStoredSessionTurnDirectory,
+  getOpenCodeStoredSessionTurnHistoryPage,
   loadOpenCodeStoredMessages,
   resumeOpenCodeStoredSession,
 } from "./opencode-stored-sessions";
@@ -115,6 +119,55 @@ test("loads OpenCode stored messages and materializes history", { skip: !hasSqli
   }
 });
 
+test("scopes OpenCode parts to the selected session", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+    execFileSync("sqlite3", [
+      record.databasePath,
+      `
+        insert into part (id, message_id, session_id, time_created, time_updated, data)
+        values (
+          'prt_foreign',
+          'msg_assistant',
+          'ses_archived',
+          1,
+          1,
+          ${sqlJson({ type: "text", text: "foreign session text" })}
+        );
+      `,
+    ]);
+
+    const messages = loadOpenCodeStoredMessages(record);
+    assert.equal(
+      messages.flatMap((message) => message.parts).some(
+        (part) => part.type === "text" && part.text === "foreign session text",
+      ),
+      false,
+    );
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("loads a compact OpenCode message summary when requested", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+
+    const messages = loadOpenCodeStoredMessages(record, { summary: true });
+    assert.equal(messages.length, 2);
+    assert.deepEqual(
+      messages.flatMap((message) => message.parts).map((part) => part.type),
+      ["text", "text"],
+    );
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("pages OpenCode stored history through a frozen loader", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {
@@ -193,6 +246,213 @@ test("pages OpenCode stored history through a frozen loader", { skip: !hasSqlite
       ],
     );
     assert.equal(older.nextCursor, undefined);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("pages OpenCode stored history by exact user turns", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+
+    const secondTurnAt = Date.parse("2026-04-26T16:00:10.000Z");
+    execFileSync("sqlite3", [
+      record.databasePath,
+      `
+        insert into message (id, session_id, time_created, time_updated, data) values
+          ('msg_user_2', 'ses_active', ${secondTurnAt}, ${secondTurnAt}, ${sqlJson({
+            role: "user",
+            time: { created: secondTurnAt },
+          })}),
+          ('msg_assistant_2', 'ses_active', ${secondTurnAt + 100}, ${secondTurnAt + 200}, ${sqlJson({
+            role: "assistant",
+            parentID: "msg_user_2",
+            providerID: "test",
+            modelID: "test-model",
+            finish: "stop",
+            time: { created: secondTurnAt + 100, completed: secondTurnAt + 200 },
+          })});
+        insert into part (id, message_id, session_id, time_created, time_updated, data) values
+          ('prt_user_2', 'msg_user_2', 'ses_active', ${secondTurnAt + 1}, ${secondTurnAt + 1}, ${sqlJson({
+            type: "text",
+            text: "Second question",
+          })}),
+          ('prt_assistant_2', 'msg_assistant_2', 'ses_active', ${secondTurnAt + 101}, ${secondTurnAt + 200}, ${sqlJson({
+            type: "text",
+            text: "Second answer",
+          })}),
+          ('prt_tool_2', 'msg_assistant_2', 'ses_active', ${secondTurnAt + 102}, ${secondTurnAt + 199}, ${sqlJson({
+            type: "tool",
+            callID: "call_summary",
+            tool: "bash",
+            state: {
+              status: "completed",
+              title: "Runs focused test",
+              input: { command: "summary-secret-input" },
+              output: "summary-secret-output",
+              metadata: {
+                output: "summary-secret-metadata-output",
+                diff: "summary-secret-diff",
+                exit: 1,
+                description: "Runs focused test",
+              },
+            },
+          })});
+      `,
+    ]);
+
+    const latest = getOpenCodeStoredSessionTurnHistoryPage({
+      sessionId: "runtime-session",
+      record,
+      limit: 1,
+    });
+    assert.ok(latest.nextCursor);
+    assert.deepEqual(timelineMessageTexts(latest.events), ["Second question", "Second answer"]);
+    const serializedLatest = JSON.stringify(latest);
+    assert.doesNotMatch(serializedLatest, /summary-secret/);
+    assert.doesNotMatch(serializedLatest, /Runs focused test/);
+    assert.doesNotMatch(serializedLatest, /\"exit\":1/);
+
+    const detail = getOpenCodeStoredSessionTurnDetail({
+      sessionId: "runtime-session",
+      record,
+      providerTurnId: "opencode:msg_user_2",
+    });
+    assert.ok(detail);
+    const serializedDetail = JSON.stringify(detail);
+    assert.match(serializedDetail, /summary-secret-input/);
+    assert.match(serializedDetail, /summary-secret-output/);
+    assert.match(serializedDetail, /Runs focused test/);
+    assert.match(serializedDetail, /\"exit\":1/);
+
+    const older = getOpenCodeStoredSessionTurnHistoryPage({
+      sessionId: "runtime-session",
+      record,
+      cursor: latest.nextCursor,
+      limit: 1,
+    });
+    assert.equal(older.nextCursor, undefined);
+    assert.deepEqual(timelineMessageTexts(older.events), ["Hello", "Assistant answer"]);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("builds the OpenCode turn directory from native roots without replaying full parts", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+    const interruptedAt = Date.parse("2026-04-26T16:00:10.000Z");
+    execFileSync("sqlite3", [
+      record.databasePath,
+      `
+        insert into message (id, session_id, time_created, time_updated, data) values
+          ('msg_internal', 'ses_active', ${interruptedAt - 100}, ${interruptedAt - 100}, ${sqlJson({
+            role: "user",
+            time: { created: interruptedAt - 100 },
+          })}),
+          ('msg_interrupted', 'ses_active', ${interruptedAt}, ${interruptedAt}, ${sqlJson({
+            role: "user",
+            time: { created: interruptedAt },
+          })}),
+          ('msg_interrupted_assistant', 'ses_active', ${interruptedAt + 100}, ${interruptedAt + 200}, ${sqlJson({
+            role: "assistant",
+            parentID: "msg_interrupted",
+            error: {
+              name: "MessageAbortedError",
+              data: { message: "The operation was aborted." },
+            },
+            time: { created: interruptedAt + 100, completed: interruptedAt + 200 },
+          })});
+        insert into part (id, message_id, session_id, time_created, time_updated, data) values
+          ('prt_internal', 'msg_internal', 'ses_active', ${interruptedAt - 99}, ${interruptedAt - 99}, ${sqlJson({
+            type: "text",
+            text: "<system-reminder>\n[BACKGROUND TASK COMPLETED]\n</system-reminder>",
+          })}),
+          ('prt_interrupted', 'msg_interrupted', 'ses_active', ${interruptedAt + 1}, ${interruptedAt + 1}, ${sqlJson({
+            type: "text",
+            text: "Stop this turn",
+          })}),
+          ('prt_interrupted_assistant', 'msg_interrupted_assistant', 'ses_active', ${interruptedAt + 101}, ${interruptedAt + 101}, ${sqlJson({
+            type: "text",
+            text: "Partial answer",
+          })});
+      `,
+    ]);
+
+    const directory = getOpenCodeStoredSessionTurnDirectory({
+      sessionId: "runtime-session",
+      record,
+    });
+    assert.equal(directory.complete, true);
+    assert.deepEqual(
+      directory.items.map((item) => ({
+        id: item.id,
+        userPreview: item.userPreview,
+        assistantPreview: item.assistantPreview,
+        status: item.status,
+      })),
+      [
+        {
+          id: "opencode:msg_user",
+          userPreview: "Hello",
+          assistantPreview: "Assistant answer",
+          status: "completed",
+        },
+        {
+          id: "opencode:msg_interrupted",
+          userPreview: "Stop this turn",
+          assistantPreview: "Partial answer",
+          status: "interrupted",
+        },
+      ],
+    );
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("keeps the live OpenCode database tail in progress", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+    const pendingAt = Date.parse("2026-04-26T16:00:10.000Z");
+    execFileSync("sqlite3", [
+      record.databasePath,
+      `
+        insert into message (id, session_id, time_created, time_updated, data)
+        values ('msg_pending', 'ses_active', ${pendingAt}, ${pendingAt}, ${sqlJson({
+          role: "user",
+          time: { created: pendingAt },
+        })});
+        insert into part (id, message_id, session_id, time_created, time_updated, data)
+        values ('prt_pending', 'msg_pending', 'ses_active', ${pendingAt + 1}, ${pendingAt + 1}, ${sqlJson({
+          type: "text",
+          text: "Still running",
+        })});
+      `,
+    ]);
+
+    const live = getOpenCodeStoredSessionTurnHistoryPage({
+      sessionId: "runtime-session",
+      record,
+      limit: 1,
+      finalizeTrailingTurn: false,
+    });
+    assert.deepEqual(timelineMessageTexts(live.events), ["Still running"]);
+    assert.equal(live.events.some((event) => event.type === "turn.completed"), false);
+
+    const settled = getOpenCodeStoredSessionTurnHistoryPage({
+      sessionId: "runtime-session",
+      record,
+      limit: 1,
+      finalizeTrailingTurn: true,
+    });
+    assert.equal(settled.events.some((event) => event.type === "turn.completed"), true);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
@@ -415,4 +675,14 @@ function fixtureSql(
 
 function sqlJson(value: unknown): string {
   return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+}
+
+function timelineMessageTexts(events: readonly RahEvent[]): string[] {
+  return events.flatMap((event) =>
+    event.type === "timeline.item.added" &&
+    (event.payload.item.kind === "user_message" ||
+      event.payload.item.kind === "assistant_message")
+      ? [event.payload.item.text]
+      : [],
+  );
 }

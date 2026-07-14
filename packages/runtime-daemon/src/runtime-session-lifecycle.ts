@@ -47,6 +47,7 @@ type RuntimeSessionLifecycleDeps = {
   refreshRememberedState: () => void;
   publishStoredSessionDiscovery: (session?: StoredSessionIdentity) => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
+  releaseTimelineSessionState: (sessionId: string) => void;
   requireStructuredLifecycleAdapter: (sessionId: string) => ProviderStructuredLifecycleAdapter;
   requireActionCapabilityAdapter: (sessionId: string) =>
     ProviderCapabilityView<ProviderActionCapabilityAdapter>;
@@ -71,6 +72,7 @@ export class RuntimeSessionLifecycle {
     this.deps.ptyHub.removeSession(sessionId);
     this.deps.historySnapshots.clear(sessionId);
     this.deps.removeStructuredSessionOwner(sessionId);
+    this.deps.releaseTimelineSessionState(sessionId);
     this.deps.eventBus.publish({
       sessionId,
       type: "session.closed",

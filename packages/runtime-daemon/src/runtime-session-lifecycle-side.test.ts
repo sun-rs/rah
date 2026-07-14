@@ -89,6 +89,7 @@ test("closing a parent destroys ephemeral Side children but preserves persistent
     removeStructuredSessionOwner: (sessionId) => {
       removedOwners.push(sessionId);
     },
+    releaseTimelineSessionState: () => undefined,
     requireStructuredLifecycleAdapter: () => adapter,
     requireActionCapabilityAdapter: () => adapter,
     requireEnhancedModeAdapter: () => adapter,
@@ -183,6 +184,7 @@ test("failed Side disposal keeps the parent and child recoverable for retry", as
     removeStructuredSessionOwner: (sessionId) => {
       removedOwners.push(sessionId);
     },
+    releaseTimelineSessionState: () => undefined,
     requireStructuredLifecycleAdapter: () => adapter,
     requireActionCapabilityAdapter: () => adapter,
     requireEnhancedModeAdapter: () => adapter,
@@ -269,6 +271,7 @@ test("missing Side destroy support keeps parent and child visible", async () => 
     refreshRememberedState: () => undefined,
     publishStoredSessionDiscovery: () => undefined,
     removeStructuredSessionOwner: () => undefined,
+    releaseTimelineSessionState: () => undefined,
     requireStructuredLifecycleAdapter: () => adapter,
     requireActionCapabilityAdapter: () => adapter,
     requireEnhancedModeAdapter: () => adapter,
@@ -341,6 +344,7 @@ test("explicit Side discard publishes a terminal Side state before removing the 
     refreshRememberedState: () => undefined,
     publishStoredSessionDiscovery: () => undefined,
     removeStructuredSessionOwner: () => undefined,
+    releaseTimelineSessionState: () => undefined,
     requireStructuredLifecycleAdapter: () => adapter,
     requireActionCapabilityAdapter: () => adapter,
     requireEnhancedModeAdapter: () => adapter,

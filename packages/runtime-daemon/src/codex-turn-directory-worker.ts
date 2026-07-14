@@ -12,14 +12,20 @@ import type {
 } from "@rah/runtime-protocol";
 import { scanSelectedJsonlLines } from "./bounded-jsonl-reader.ts";
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const USER_PREVIEW_TEXT_LIMIT = 96;
 const ASSISTANT_PREVIEW_TEXT_LIMIT = 144;
+const SUMMARY_TEXT_LIMIT = 2 * 1024 * 1024;
 
 export type CodexIndexedTurn = ConversationTurnDirectoryItem & {
   startOffset: number;
   endOffset: number;
   hasFinalAnswer: boolean;
+  userText?: string;
+  userItemId?: string;
+  assistantText?: string;
+  assistantItemId?: string;
+  assistantPhase?: "commentary" | "final_answer";
 };
 
 export type CodexTurnDirectorySnapshot = {
@@ -62,6 +68,14 @@ function compactPreviewText(text: string, limit: number): string {
     return compact;
   }
   return `${compact.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function summaryText(text: string): string {
+  const sanitized = text.replace(/data:image\/[^\s)]+/gi, "[Image]").trim();
+  if (sanitized.length <= SUMMARY_TEXT_LIMIT) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, SUMMARY_TEXT_LIMIT).trimEnd()}\n\n[Content truncated in history summary]`;
 }
 
 function isBootstrapUserMessage(text: string): boolean {
@@ -237,6 +251,7 @@ function applyRolloutLine(
         if (!turn.userPreview) {
           turn.userPreview = compactPreviewText(text, USER_PREVIEW_TEXT_LIMIT) || "Message";
         }
+        turn.userText ??= summaryText(text);
         turn.endOffset = context.endOffset;
         return;
       }
@@ -249,7 +264,9 @@ function applyRolloutLine(
         const preview = compactPreviewText(text, ASSISTANT_PREVIEW_TEXT_LIMIT);
         if (preview) {
           turn.assistantPreview = preview;
-          turn.hasFinalAnswer = payload.phase === "final_answer" || turn.hasFinalAnswer;
+          turn.assistantText = summaryText(text);
+          turn.assistantPhase = payload.phase === "final_answer" ? "final_answer" : "commentary";
+          turn.hasFinalAnswer = turn.assistantPhase === "final_answer" || turn.hasFinalAnswer;
         }
         turn.endOffset = context.endOffset;
         return;
@@ -263,6 +280,8 @@ function applyRolloutLine(
           typeof payload.last_agent_message === "string" ? payload.last_agent_message : "";
         if (finalText) {
           turn.assistantPreview = compactPreviewText(finalText, ASSISTANT_PREVIEW_TEXT_LIMIT);
+          turn.assistantText = summaryText(finalText);
+          turn.assistantPhase = "final_answer";
           turn.hasFinalAnswer = true;
         }
         turn.status = "completed";
@@ -313,6 +332,10 @@ function applyRolloutLine(
     if (!turn.userPreview) {
       turn.userPreview = compactPreviewText(text, USER_PREVIEW_TEXT_LIMIT) || "Message";
     }
+    turn.userText ??= summaryText(text);
+    if (typeof payload.id === "string") {
+      turn.userItemId ??= payload.id;
+    }
     turn.endOffset = context.endOffset;
     return;
   }
@@ -324,7 +347,12 @@ function applyRolloutLine(
     const preview = compactPreviewText(text, ASSISTANT_PREVIEW_TEXT_LIMIT);
     if (preview) {
       turn.assistantPreview = preview;
-      turn.hasFinalAnswer = payload.phase === "final_answer" || turn.hasFinalAnswer;
+      turn.assistantText = summaryText(text);
+      if (typeof payload.id === "string") {
+        turn.assistantItemId = payload.id;
+      }
+      turn.assistantPhase = payload.phase === "final_answer" ? "final_answer" : "commentary";
+      turn.hasFinalAnswer = turn.assistantPhase === "final_answer" || turn.hasFinalAnswer;
     }
     turn.endOffset = context.endOffset;
   }

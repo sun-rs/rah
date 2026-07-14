@@ -2701,7 +2701,11 @@ describe("RuntimeEngine", () => {
       });
 
       await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
+        assert.equal(
+          engine.getSessionSummary(sessionId).session.providerSessionId,
+          providerSessionId,
+          `native TUI did not bind; terminal replay: ${JSON.stringify(transcript)}`,
+        );
       });
       engine.sendInput(sessionId, { clientId: "web-native", text: "first queued prompt" });
       engine.sendInput(sessionId, { clientId: "web-native", text: "second queued prompt" });
@@ -2784,7 +2788,11 @@ describe("RuntimeEngine", () => {
       });
 
       await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
+        assert.equal(
+          engine.getSessionSummary(sessionId).session.providerSessionId,
+          providerSessionId,
+          `native TUI did not bind; terminal replay: ${JSON.stringify(transcript)}`,
+        );
       });
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
       assert.throws(

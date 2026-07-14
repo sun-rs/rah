@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import type { ConversationTurnDirectoryResponse } from "@rah/runtime-protocol";
+import type { CodexAppServerTurnsPage } from "./codex-app-server-turns-page";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 import type { CodexTurnDirectorySnapshot } from "./codex-turn-directory-worker";
 
@@ -67,17 +68,18 @@ export class CodexTurnDirectoryStore {
       revision: sourceRevision(snapshot),
       items: snapshot.items
         .filter((item) => item.userPreview)
-        .map(
-          (
-            {
-              startOffset: _startOffset,
-              endOffset: _endOffset,
-              hasFinalAnswer: _hasFinalAnswer,
-              ...item
-            },
-            ordinal,
-          ) => ({ ...item, ordinal }),
-        ),
+        .map((item, ordinal) => ({
+          id: item.id,
+          ordinal,
+          userPreview: item.userPreview,
+          ...(item.assistantPreview !== undefined
+            ? { assistantPreview: item.assistantPreview }
+            : {}),
+          startedAt: item.startedAt,
+          ...(item.completedAt !== undefined ? { completedAt: item.completedAt } : {}),
+          ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
+          status: item.status,
+        })),
       complete: sourceIsCurrent && snapshot.scannedBytes >= snapshot.source.size,
       sourceBytes: snapshot.source.size,
       generatedAt: snapshot.generatedAt,
@@ -91,6 +93,75 @@ export class CodexTurnDirectoryStore {
     const snapshot = await this.getSnapshot(record);
     const item = snapshot.items.find((candidate) => candidate.id === turnId);
     return item ? { startOffset: item.startOffset, endOffset: item.endOffset } : null;
+  }
+
+  async getSummaryPage(
+    record: CodexStoredSessionRecord,
+    options: { cursor?: string; limit: number; sourceSettled: boolean },
+  ): Promise<CodexAppServerTurnsPage> {
+    const snapshot = await this.getSnapshot(record);
+    const indexedTurns = snapshot.items.filter((item) => item.userText || item.userPreview);
+    const anchor = options.cursor ? parseTurnCursor(options.cursor) : undefined;
+    let startIndex = indexedTurns.length - 1;
+    if (anchor) {
+      const anchorIndex = indexedTurns.findIndex((item) => item.id === anchor.turnId);
+      if (anchorIndex < 0) {
+        throw new Error("Codex history cursor no longer exists in the indexed rollout.");
+      }
+      startIndex = anchor.includeAnchor ? anchorIndex : anchorIndex - 1;
+    }
+    const selected = indexedTurns
+      .slice(Math.max(0, startIndex - options.limit + 1), startIndex + 1)
+      .reverse();
+    const data = selected.map((item, index) => {
+      const isTrailing = !options.cursor && index === 0;
+      const status =
+        item.status === "in_progress" && options.sourceSettled && isTrailing
+          ? "interrupted"
+          : item.status === "in_progress"
+            ? "inProgress"
+            : item.status;
+      const userText = item.userText ?? item.userPreview;
+      const items: unknown[] = [
+        {
+          type: "userMessage",
+          id: item.userItemId ?? `history-user:${item.id}`,
+          content: [{ type: "text", text: userText, text_elements: [] }],
+        },
+      ];
+      if (item.assistantText || item.assistantPreview) {
+        items.push({
+          type: "agentMessage",
+          id: item.assistantItemId ?? `history-assistant:${item.id}`,
+          text: item.assistantText ?? item.assistantPreview,
+          phase: item.assistantPhase ?? (item.hasFinalAnswer ? "final_answer" : "commentary"),
+          memoryCitation: null,
+        });
+      }
+      return {
+        id: item.id,
+        items,
+        itemsView: "summary",
+        status,
+        error: item.status === "failed" ? { message: "Codex turn failed" } : null,
+        startedAt: isoToEpochSeconds(item.startedAt),
+        completedAt: item.completedAt ? isoToEpochSeconds(item.completedAt) : null,
+        durationMs: item.durationMs ?? null,
+      };
+    });
+    const oldest = selected.at(-1);
+    const oldestIndex = oldest
+      ? indexedTurns.findIndex((item) => item.id === oldest.id)
+      : -1;
+    return {
+      data,
+      ...(oldest && oldestIndex > 0
+        ? { nextCursor: createTurnCursor(oldest.id, false) }
+        : { nextCursor: null }),
+      ...(selected[0]
+        ? { backwardsCursor: createTurnCursor(selected[0].id, true) }
+        : { backwardsCursor: null }),
+    };
   }
 
   clear(providerSessionId: string): void {
@@ -181,5 +252,25 @@ export class CodexTurnDirectoryStore {
         }
       });
     });
+  }
+}
+
+function isoToEpochSeconds(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp / 1_000 : 0;
+}
+
+function createTurnCursor(turnId: string, includeAnchor: boolean): string {
+  return JSON.stringify({ turnId, includeAnchor });
+}
+
+function parseTurnCursor(cursor: string): { turnId: string; includeAnchor: boolean } | undefined {
+  try {
+    const parsed = JSON.parse(cursor) as Record<string, unknown>;
+    return typeof parsed.turnId === "string"
+      ? { turnId: parsed.turnId, includeAnchor: parsed.includeAnchor === true }
+      : undefined;
+  } catch {
+    return cursor ? { turnId: cursor, includeAnchor: false } : undefined;
   }
 }

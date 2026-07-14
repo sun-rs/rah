@@ -7,8 +7,13 @@ import os from "node:os";
 import path from "node:path";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
-import { OpenCodeAdapter } from "./provider-control/opencode-structured-adapter";
 import {
+  OpenCodeAdapter,
+  readOpenCodeStartupModelCatalog,
+} from "./provider-control/opencode-structured-adapter";
+import {
+  createOpenCodeMessageId,
+  getOpenCodeMessages,
   promptOpenCodeSession,
   promptOpenCodeSessionAsync,
   startOpenCodeServer,
@@ -80,6 +85,32 @@ test("OpenCode default variant normalizes to no explicit provider parameter", ()
   );
 });
 
+test("OpenCode startup model discovery never blocks an interactive launch", async () => {
+  let requestedCwd: string | undefined;
+  let releaseDiscovery: ((catalog: ProviderModelCatalog) => void) | undefined;
+  const discovery = new Promise<ProviderModelCatalog>((resolve) => {
+    releaseDiscovery = resolve;
+  });
+  const catalog = readOpenCodeStartupModelCatalog(
+    {
+      getCached: () => null,
+      listModels: (options) => {
+        requestedCwd = options?.cwd;
+        return discovery;
+      },
+    },
+    "/tmp/rah-opencode-startup",
+  );
+
+  assert.equal(requestedCwd, "/tmp/rah-opencode-startup");
+  assert.equal(catalog.provider, "opencode");
+  assert.equal(catalog.source, "fallback");
+  assert.equal(catalog.modelsExact, false);
+
+  releaseDiscovery?.(catalog);
+  await discovery;
+});
+
 test("OpenCode prompt APIs pass explicit model ids instead of falling back", async () => {
   const bodies: unknown[] = [];
   const server = http.createServer((request, response) => {
@@ -114,12 +145,14 @@ test("OpenCode prompt APIs pass explicit model ids instead of falling back", asy
       providerSessionId: "session-1",
       text: "hello",
       model: "niubiwudi",
+      messageId: "msg_async-user",
     });
     await promptOpenCodeSession({
       handle,
       providerSessionId: "session-1",
       text: "hello",
       model: "aaa/wokao",
+      messageId: "msg_sync-user",
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -128,6 +161,45 @@ test("OpenCode prompt APIs pass explicit model ids instead of falling back", asy
     { providerID: "niubiwudi", modelID: "" },
     { providerID: "aaa", modelID: "wokao" },
   ]);
+  assert.deepEqual(bodies.map((body) => (body as { messageID?: unknown }).messageID), [
+    "msg_async-user",
+    "msg_sync-user",
+  ]);
+});
+
+test("OpenCode message reads request a bounded provider tail", async () => {
+  let requestUrl = "";
+  const server = http.createServer((request, response) => {
+    requestUrl = request.url ?? "";
+    response.writeHead(200, { "Content-Type": "application/json" }).end("[]");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  try {
+    assert.deepEqual(
+      await getOpenCodeMessages(
+        { baseUrl: `http://127.0.0.1:${address.port}`, cwd: "/tmp/rah opencode" },
+        "session/tail",
+        { limit: 8 },
+      ),
+      [],
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  const parsed = new URL(requestUrl, "http://127.0.0.1");
+  assert.equal(parsed.pathname, "/session/session%2Ftail/message");
+  assert.equal(parsed.searchParams.get("limit"), "8");
+  assert.equal(parsed.searchParams.get("directory"), "/tmp/rah opencode");
+});
+
+test("createOpenCodeMessageId follows OpenCode's monotonic message identity format", () => {
+  const first = createOpenCodeMessageId(1_700_000_000_000);
+  const second = createOpenCodeMessageId(1_700_000_000_000);
+  assert.match(first, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+  assert.match(second, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+  assert.ok(first.slice(4, 16) < second.slice(4, 16));
 });
 
 test("startOpenCodeServer rejects missing working directories before spawn", async () => {
@@ -401,6 +473,42 @@ test("primeOpenCodeHistoryMirrorState records persisted identity without replayi
   );
 });
 
+test("primeOpenCodeHistoryMirrorState keeps a bounded revision window", () => {
+  const liveSession = {
+    providerSessionId: "opencode-history-prime-bounded",
+    activityState: createOpenCodeActivityState("opencode-history-prime-bounded", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    }),
+    mirroredMessageRevisions: new Map(),
+  } as unknown as LiveOpenCodeSession;
+  primeOpenCodeHistoryMirrorState(
+    liveSession,
+    Array.from({ length: 80 }, (_, index) => ({
+      info: {
+        id: `msg-user-${index}`,
+        sessionID: "opencode-history-prime-bounded",
+        role: "user" as const,
+        time: { created: index },
+      },
+      parts: [
+        {
+          id: `part-user-${index}`,
+          sessionID: "opencode-history-prime-bounded",
+          messageID: `msg-user-${index}`,
+          type: "text" as const,
+          text: `question ${index}`,
+        },
+      ],
+    })),
+  );
+
+  assert.equal(liveSession.mirroredMessageRevisions.size, 64);
+  assert.equal(liveSession.mirroredMessageRevisions.has("msg-user-15"), false);
+  assert.equal(liveSession.mirroredMessageRevisions.has("msg-user-16"), true);
+  assert.equal(liveSession.mirroredMessageRevisions.has("msg-user-79"), true);
+});
+
 test("normalizeOpenCodeLiveActivities drops a provider abort error after local cancellation", () => {
   const liveSession = {
     activityState: createOpenCodeActivityState("opencode-local-cancel", {
@@ -424,6 +532,40 @@ test("normalizeOpenCodeLiveActivities drops a provider abort error after local c
       { type: "turn_failed", turnId: "next-turn", error: "real failure" },
     ]),
     [{ type: "turn_failed", turnId: "next-turn", error: "real failure" }],
+  );
+});
+
+test("normalizeOpenCodeLiveActivities quarantines late output from an interrupted turn", () => {
+  const liveSession = {
+    activityState: createOpenCodeActivityState("opencode-late-output", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+      statusCompletesTurns: false,
+    }),
+    locallyCanceledTurnIds: new Set(["interrupted-turn"]),
+  } as unknown as LiveOpenCodeSession;
+
+  assert.deepEqual(
+    normalizeOpenCodeLiveActivities(liveSession, [
+      {
+        type: "timeline_item",
+        turnId: "interrupted-turn",
+        item: { kind: "assistant_message", text: "late answer" },
+      },
+      { type: "turn_completed", turnId: "interrupted-turn" },
+      {
+        type: "timeline_item",
+        turnId: "next-turn",
+        item: { kind: "assistant_message", text: "current answer" },
+      },
+    ]),
+    [
+      {
+        type: "timeline_item",
+        turnId: "next-turn",
+        item: { kind: "assistant_message", text: "current answer" },
+      },
+    ],
   );
 });
 

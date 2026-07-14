@@ -212,6 +212,75 @@ test("Codex turn directory bounds navigation previews independently from turn de
     assert.equal(directory.items.length, 1);
     assert.ok((directory.items[0]?.userPreview.length ?? 0) <= 96);
     assert.ok((directory.items[0]?.assistantPreview?.length ?? 0) <= 144);
+    assert.equal(JSON.stringify(directory).includes(`user-${"u".repeat(300)}`), false);
+    assert.equal(JSON.stringify(directory).includes(`assistant-${"a".repeat(500)}`), false);
+    const summary = await store.getSummaryPage(recordFor(rolloutPath), {
+      limit: 1,
+      sourceSettled: false,
+    });
+    const turn = summary.data[0] as {
+      items: Array<{ type: string; content?: Array<{ text?: string }>; text?: string }>;
+    };
+    assert.equal(turn.items[0]?.content?.[0]?.text, `user-${"u".repeat(300)}`);
+    assert.equal(turn.items[1]?.text, `assistant-${"a".repeat(500)}`);
+  } finally {
+    await store.shutdown();
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Codex indexed summary pages keep official cursor boundaries stable across appends", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-turn-summary-page-"));
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_HOME = path.join(tempDir, "rah-home");
+  const rolloutPath = path.join(tempDir, "rollout.jsonl");
+  const completedTurn = (minute: number, turnId: string, question: string, answer: string) => [
+    taskStarted(`2026-07-10T00:${String(minute).padStart(2, "0")}:00.000Z`, turnId),
+    userMessage(`2026-07-10T00:${String(minute).padStart(2, "0")}:00.001Z`, question),
+    agentMessage(`2026-07-10T00:${String(minute).padStart(2, "0")}:01.000Z`, answer, "final_answer"),
+    line(`2026-07-10T00:${String(minute).padStart(2, "0")}:01.001Z`, "event_msg", {
+      type: "task_complete",
+      turn_id: turnId,
+      last_agent_message: answer,
+    }),
+  ];
+  writeFileSync(
+    rolloutPath,
+    `${[
+      ...completedTurn(0, "turn-1", "Question one", "Answer one"),
+      ...completedTurn(1, "turn-2", "Question two", "Answer two"),
+      ...completedTurn(2, "turn-3", "Question three", "Answer three"),
+    ].join("\n")}\n`,
+  );
+  const store = new CodexTurnDirectoryStore();
+  try {
+    const record = recordFor(rolloutPath);
+    const latest = await store.getSummaryPage(record, { limit: 2, sourceSettled: true });
+    assert.deepEqual(
+      latest.data.map((turn) => (turn as { id: string }).id),
+      ["turn-3", "turn-2"],
+    );
+    assert.ok(latest.nextCursor);
+
+    appendFileSync(
+      rolloutPath,
+      `${completedTurn(3, "turn-4", "Question four", "Answer four").join("\n")}\n`,
+    );
+    const older = await store.getSummaryPage(record, {
+      cursor: latest.nextCursor ?? undefined,
+      limit: 2,
+      sourceSettled: true,
+    });
+    assert.deepEqual(
+      older.data.map((turn) => (turn as { id: string }).id),
+      ["turn-1"],
+    );
+    assert.equal(older.nextCursor, null);
   } finally {
     await store.shutdown();
     if (previousRahHome === undefined) {

@@ -51,8 +51,10 @@ test("Codex turn page cache coalesces requests and survives a new cache instance
   rmSync(root, { recursive: true, force: true });
 });
 
-test("Codex turn page cache invalidates on rollout growth and explicit clear", async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), "rah-codex-page-cache-revision-"));
+test("Codex newest turn page cache invalidates on rollout growth and explicit clear", async () => {
+  const root = mkdtempSync(
+    path.join(os.tmpdir(), "rah-codex-page-cache-revision-"),
+  );
   const rolloutPath = path.join(root, "rollout.jsonl");
   writeFileSync(rolloutPath, "first\n", "utf8");
   let loads = 0;
@@ -68,6 +70,67 @@ test("Codex turn page cache invalidates on rollout growth and explicit clear", a
 
   assert.deepEqual(await cache.getOrLoad(request), page("turn-1"));
   writeFileSync(rolloutPath, "second\n", { encoding: "utf8", flag: "a" });
+  assert.deepEqual(await cache.getOrLoad(request), page("turn-2"));
+  cache.clear("provider-session");
+  assert.deepEqual(await cache.getOrLoad(request), page("turn-3"));
+  assert.equal(loads, 3);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("Codex historical turn page cache survives append-only growth", async () => {
+  const root = mkdtempSync(
+    path.join(os.tmpdir(), "rah-codex-page-cache-append-"),
+  );
+  const rolloutPath = path.join(root, "rollout.jsonl");
+  const cacheRoot = path.join(root, "cache");
+  writeFileSync(rolloutPath, "first historical boundary\n", "utf8");
+  let loads = 0;
+  const request = {
+    providerSessionId: "provider-session",
+    rolloutPath,
+    cursor: "older",
+    limit: 20,
+    sourceSettled: false,
+    load: async () => page(`turn-${++loads}`),
+  };
+  const cache = new CodexTurnPageCache({ rootDir: cacheRoot });
+
+  assert.deepEqual(await cache.getOrLoad(request), page("turn-1"));
+  writeFileSync(rolloutPath, "appended live output\n", {
+    encoding: "utf8",
+    flag: "a",
+  });
+  assert.deepEqual(await cache.getOrLoad(request), page("turn-1"));
+
+  const freshCache = new CodexTurnPageCache({ rootDir: cacheRoot });
+  assert.deepEqual(await freshCache.getOrLoad(request), page("turn-1"));
+  assert.equal(loads, 1);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("Codex historical turn page cache rejects in-place rewrites and clear", async () => {
+  const root = mkdtempSync(
+    path.join(os.tmpdir(), "rah-codex-page-cache-rewrite-"),
+  );
+  const rolloutPath = path.join(root, "rollout.jsonl");
+  writeFileSync(rolloutPath, "original historical boundary\n", "utf8");
+  let loads = 0;
+  const cache = new CodexTurnPageCache({ rootDir: path.join(root, "cache") });
+  const request = {
+    providerSessionId: "provider-session",
+    rolloutPath,
+    cursor: "older",
+    limit: 20,
+    sourceSettled: false,
+    load: async () => page(`turn-${++loads}`),
+  };
+
+  assert.deepEqual(await cache.getOrLoad(request), page("turn-1"));
+  writeFileSync(
+    rolloutPath,
+    "rewritten historical boundary with a different body\n",
+    "utf8",
+  );
   assert.deepEqual(await cache.getOrLoad(request), page("turn-2"));
   cache.clear("provider-session");
   assert.deepEqual(await cache.getOrLoad(request), page("turn-3"));

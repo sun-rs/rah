@@ -66,6 +66,29 @@ test("nativeLocalServerAttachSpec refuses impossible or incomplete attach specs"
   );
 });
 
+test("nativeLocalServerAttachSpec runs explicit JavaScript CLIs through Node", () => {
+  const previous = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = "/tmp/fake-codex.js";
+  try {
+    const spec = nativeLocalServerAttachSpec({
+      provider: "codex",
+      providerSessionId: "thread-1",
+      endpoint: "ws://127.0.0.1:12345/",
+    });
+    assert.equal(spec?.command, process.execPath);
+    assert.deepEqual(spec?.args.slice(0, 2), [
+      "/tmp/fake-codex.js",
+      "-c",
+    ]);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.RAH_CODEX_BINARY;
+    } else {
+      process.env.RAH_CODEX_BINARY = previous;
+    }
+  }
+});
+
 test("nativeLocalServerRuntimeDiagnostics includes attach command only when safe", () => {
   assert.deepEqual(
     nativeLocalServerRuntimeDiagnostics({

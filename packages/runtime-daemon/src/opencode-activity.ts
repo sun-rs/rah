@@ -36,6 +36,7 @@ interface OpenCodeActivityStateOptions {
    */
   userMessagesStartTurns?: boolean;
   statusStartsTurns?: boolean;
+  statusCompletesTurns?: boolean;
   emitUserMessages?: boolean;
   origin?: "live" | "history";
 }
@@ -45,6 +46,7 @@ export interface OpenCodeActivityState {
   readonly providerSessionId: string;
   readonly userMessagesStartTurns: boolean;
   readonly statusStartsTurns: boolean;
+  readonly statusCompletesTurns: boolean;
   readonly emitUserMessages: boolean;
   readonly origin: "live" | "history";
   currentTurnId?: string;
@@ -80,11 +82,12 @@ interface PendingOpenCodeTextDelta {
 interface PendingSubmittedOpenCodeUserMessage {
   text: string;
   turnId: string;
+  providerMessageId?: string;
   clientMessageId?: string;
   clientTurnId?: string;
 }
 
-function isOpenCodeInternalInitiatorText(text: string): boolean {
+export function isOpenCodeInternalInitiatorText(text: string): boolean {
   if (/<!--\s*OMO_INTERNAL_INITIATOR\s*-->/.test(text)) {
     return true;
   }
@@ -158,6 +161,7 @@ export function createOpenCodeActivityState(
     providerSessionId,
     userMessagesStartTurns: options.userMessagesStartTurns ?? true,
     statusStartsTurns: options.statusStartsTurns ?? true,
+    statusCompletesTurns: options.statusCompletesTurns ?? true,
     emitUserMessages: options.emitUserMessages ?? true,
     origin: options.origin ?? "live",
     turnByMessageId: new Map(),
@@ -189,6 +193,14 @@ export function recordOpenCodeSubmittedUserMessage(
   message: PendingSubmittedOpenCodeUserMessage,
 ): void {
   state.pendingSubmittedUserMessages.push(message);
+  if (state.pendingSubmittedUserMessages.length > 128) {
+    state.pendingSubmittedUserMessages.splice(0, state.pendingSubmittedUserMessages.length - 128);
+  }
+  if (message.providerMessageId) {
+    state.roleByMessageId.set(message.providerMessageId, "user");
+    state.turnByMessageId.set(message.providerMessageId, message.turnId);
+    state.turnRootMessageIdByMessageId.set(message.providerMessageId, message.providerMessageId);
+  }
 }
 
 export function startOpenCodeTurn(
@@ -251,7 +263,7 @@ export function translateOpenCodeMessage(
     return activities;
   }
   if (isTerminalAssistantMessage(message.info)) {
-    activities.push(...completeOpenCodeTurn(state, state.turnByMessageId.get(message.info.id) ?? state.currentTurnId));
+    activities.push(...completeOpenCodeTurn(state, state.turnByMessageId.get(message.info.id)));
   }
   return activities;
 }
@@ -304,7 +316,7 @@ function translateStatus(
     return startOpenCodeTurn(state);
   }
   if (type === "idle") {
-    return completeOpenCodeTurn(state);
+    return state.statusCompletesTurns ? completeOpenCodeTurn(state) : [];
   }
   if (type === "retry") {
     return [
@@ -346,8 +358,11 @@ function translateError(
       : typeof properties.error === "string"
         ? properties.error
         : "OpenCode session error";
-  const turnId = state.currentTurnId ?? randomUUID();
-  delete state.currentTurnId;
+  const messageId = typeof properties.messageID === "string" ? properties.messageID : undefined;
+  const turnId = (messageId ? state.turnByMessageId.get(messageId) : undefined) ?? state.currentTurnId ?? randomUUID();
+  if (state.currentTurnId === turnId) {
+    delete state.currentTurnId;
+  }
   return [{ type: "turn_failed", turnId, error: message }];
 }
 
@@ -367,7 +382,7 @@ function translateMessageUpdated(
     return activities;
   }
   if (isTerminalAssistantMessage(info)) {
-    activities.push(...completeOpenCodeTurn(state, state.turnByMessageId.get(info.id) ?? state.currentTurnId));
+    activities.push(...completeOpenCodeTurn(state, state.turnByMessageId.get(info.id)));
   }
   return activities;
 }
@@ -415,7 +430,13 @@ function rememberMessageInfo(
   }
   const parentTurnId = info.parentID ? state.turnByMessageId.get(info.parentID) : undefined;
   const parentRootMessageId = info.parentID ? state.turnRootMessageIdByMessageId.get(info.parentID) : undefined;
-  const turnId = parentTurnId ?? state.currentTurnId ?? `opencode:${info.id}`;
+  // Provider-driven mirrors may observe `busy` before message metadata and use
+  // that status-created turn as their identity anchor. RAH-owned live prompts
+  // disable statusStartsTurns and must only bind assistants through parentID;
+  // falling back to currentTurnId there can attach a late response to a newer
+  // prompt.
+  const statusTurnId = state.statusStartsTurns ? state.currentTurnId : undefined;
+  const turnId = parentTurnId ?? statusTurnId ?? `opencode:${info.parentID ?? info.id}`;
   state.turnRootMessageIdByMessageId.set(
     info.id,
     parentRootMessageId ?? info.parentID ?? info.id,
@@ -530,8 +551,13 @@ function runtimeModelUpdatesForKnownAssistantMessage(
 function takePendingSubmittedUserMessage(
   state: OpenCodeActivityState,
   text: string,
+  providerMessageId: string,
 ): PendingSubmittedOpenCodeUserMessage | undefined {
-  const index = state.pendingSubmittedUserMessages.findIndex((message) => message.text === text);
+  const index = state.pendingSubmittedUserMessages.findIndex(
+    (message) =>
+      message.providerMessageId === providerMessageId ||
+      (message.providerMessageId === undefined && message.text === text),
+  );
   if (index < 0) {
     return undefined;
   }
@@ -623,7 +649,7 @@ function usageActivitiesForMessageInfo(
   if (!usage) {
     return [];
   }
-  const turnId = state.turnByMessageId.get(info.id) ?? state.currentTurnId;
+  const turnId = state.turnByMessageId.get(info.id);
   return [
     {
       type: "usage",
@@ -656,9 +682,7 @@ function cancelOpenCodeTurn(
   info: OpenCodeMessageInfo,
 ): ProviderActivity[] {
   const turnId =
-    state.turnByMessageId.get(info.id) ??
-    state.currentTurnId ??
-    `opencode:${info.id}`;
+    state.turnByMessageId.get(info.id) ?? `opencode:${info.parentID ?? info.id}`;
   if (state.currentTurnId === turnId) {
     delete state.currentTurnId;
   }
@@ -708,7 +732,9 @@ function translateOpenCodePart(
   }
   rememberPartInfo(state, part);
   const role = state.roleByMessageId.get(part.messageID);
-  const turnId = state.turnByMessageId.get(part.messageID) ?? state.currentTurnId;
+  const turnId =
+    state.turnByMessageId.get(part.messageID) ??
+    (state.statusStartsTurns ? state.currentTurnId : undefined);
   switch (part.type) {
     case "text": {
       const text = readStringProperty(part, "text");
@@ -729,7 +755,7 @@ function translateOpenCodePart(
         if (state.passiveUserMessageIds.has(part.messageID)) {
           return [];
         }
-        const submitted = takePendingSubmittedUserMessage(state, text);
+        const submitted = takePendingSubmittedUserMessage(state, text, part.messageID);
         const userTurnId = submitted?.turnId ?? turnId;
         return [
           {
@@ -802,10 +828,10 @@ function translateOpenCodePart(
       ];
     case "step-start": {
       const title = readStringProperty(part, "title");
-      return startOpenCodeStep(state, part, turnId ?? state.currentTurnId ?? randomUUID(), title);
+      return startOpenCodeStep(state, part, turnId ?? `opencode:${part.messageID}`, title);
     }
     case "step-finish": {
-      const stepTurnId = turnId ?? state.currentTurnId ?? randomUUID();
+      const stepTurnId = turnId ?? `opencode:${part.messageID}`;
       const reason = readStringProperty(part, "reason");
       const activities: ProviderActivity[] = finishOpenCodeStep(state, part, stepTurnId, reason);
       if (role !== "user" && reason !== "tool-calls") {
@@ -840,7 +866,7 @@ function translatePartDelta(
     queuePendingTextDelta(state, { messageID, partID, delta });
     return [];
   }
-  const turnId = state.turnByMessageId.get(messageID) ?? state.currentTurnId;
+  const turnId = state.turnByMessageId.get(messageID);
   if (role === "user") {
     return [];
   }
@@ -956,7 +982,7 @@ function translateKnownOpenCodeTextDelta(
   if (partType !== "text" && partType !== "reasoning") {
     return [];
   }
-  const turnId = state.turnByMessageId.get(delta.messageID) ?? state.currentTurnId;
+  const turnId = state.turnByMessageId.get(delta.messageID);
   const text = appendOpenCodePartTextDelta(state, delta.partID, delta.delta, options);
   if (partType === "reasoning") {
     return [

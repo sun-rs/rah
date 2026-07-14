@@ -1,11 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
 import { rahNativeServerEnv } from "./native-local-server-orphans";
 
 const OPENCODE_HEALTHCHECK_REQUEST_TIMEOUT_MS = 1_500;
+const OPENCODE_ID_RANDOM_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+let lastOpenCodeMessageIdTimestamp = 0;
+let openCodeMessageIdCounter = 0;
 
 export interface OpenCodeServerHandle {
   baseUrl: string;
@@ -133,6 +137,29 @@ export interface OpenCodeEvent {
   properties?: Record<string, unknown>;
 }
 
+/**
+ * OpenCode accepts a client-supplied user message ID. Matching its monotonic
+ * ID format lets RAH bind provider events to a turn before the prompt starts.
+ */
+export function createOpenCodeMessageId(timestamp = Date.now()): string {
+  if (timestamp !== lastOpenCodeMessageIdTimestamp) {
+    lastOpenCodeMessageIdTimestamp = timestamp;
+    openCodeMessageIdCounter = 0;
+  }
+  openCodeMessageIdCounter += 1;
+  const encodedTime = BigInt(timestamp) * BigInt(0x1000) + BigInt(openCodeMessageIdCounter);
+  const timeBytes = Buffer.alloc(6);
+  for (let index = 0; index < timeBytes.length; index += 1) {
+    timeBytes[index] = Number((encodedTime >> BigInt(40 - 8 * index)) & BigInt(0xff));
+  }
+  const random = randomBytes(14);
+  let suffix = "";
+  for (const byte of random) {
+    suffix += OPENCODE_ID_RANDOM_ALPHABET[byte % OPENCODE_ID_RANDOM_ALPHABET.length];
+  }
+  return `msg_${timeBytes.toString("hex")}${suffix}`;
+}
+
 export async function resolveOpenCodeBinary(): Promise<string> {
   return await resolveConfiguredBinary("RAH_OPENCODE_BINARY", "opencode");
 }
@@ -163,7 +190,11 @@ export async function startOpenCodeServer(params: {
   await assertOpenCodeWorkingDirectory(params.cwd);
   const port = params.port ?? (await allocateOpenCodePort());
   const binary = await resolveOpenCodeBinary();
-  const child = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+  const [command, ...prefixArgs] = providerBinaryArgv(binary);
+  if (!command) {
+    throw new Error("OpenCode server command is empty.");
+  }
+  const child = spawn(command, [...prefixArgs, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: params.cwd,
     env: {
       ...process.env,
@@ -399,10 +430,17 @@ export async function listOpenCodeSessions(
 export async function getOpenCodeMessages(
   handle: Pick<OpenCodeServerHandle, "baseUrl" | "cwd" | "authHeader">,
   providerSessionId: string,
+  options: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<OpenCodeMessageWithParts[]> {
+  const limit =
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.floor(options.limit))
+      : undefined;
+  const query = limit !== undefined ? `?limit=${limit}` : "";
   return await openCodeRequestJson<OpenCodeMessageWithParts[]>(
     handle,
-    `/session/${encodeURIComponent(providerSessionId)}/message`,
+    `/session/${encodeURIComponent(providerSessionId)}/message${query}`,
+    options.signal ? { signal: options.signal } : {},
   );
 }
 
@@ -413,14 +451,17 @@ export async function promptOpenCodeSessionAsync(params: {
   model?: string;
   variant?: string;
   agent?: string;
+  messageId?: string;
 }): Promise<void> {
   const body: {
     parts: Array<{ type: "text"; text: string }>;
+    messageID?: string;
     model?: { providerID: string; modelID: string };
     variant?: string;
     agent?: string;
   } = {
     parts: [{ type: "text", text: params.text }],
+    ...(params.messageId ? { messageID: params.messageId } : {}),
   };
   const model = parseOpenCodeModel(params.model);
   if (model) {
@@ -449,14 +490,17 @@ export async function promptOpenCodeSession(params: {
   model?: string;
   variant?: string;
   agent?: string;
+  messageId?: string;
 }): Promise<OpenCodeMessageWithParts> {
   const body: {
     parts: Array<{ type: "text"; text: string }>;
+    messageID?: string;
     model?: { providerID: string; modelID: string };
     variant?: string;
     agent?: string;
   } = {
     parts: [{ type: "text", text: params.text }],
+    ...(params.messageId ? { messageID: params.messageId } : {}),
   };
   const model = parseOpenCodeModel(params.model);
   if (model) {

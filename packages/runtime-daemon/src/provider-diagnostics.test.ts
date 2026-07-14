@@ -12,7 +12,7 @@ import {
   resetProviderDiagnosticsCacheForTests,
   summarizeCodexDoctorReport,
 } from "./provider-diagnostics";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
 
 describe("provider diagnostics version helpers", () => {
   test("extractVersionString pulls a semver token out of cli output", () => {
@@ -279,6 +279,34 @@ process.exit(2);
       } else {
         process.env.RAH_CODEX_BINARY = previousBinary;
       }
+    }
+  });
+
+  test("launches explicit JavaScript provider binaries through the current Node runtime", () => {
+    assert.deepEqual(providerBinaryArgv("/tmp/fake-provider.js"), [
+      process.execPath,
+      "/tmp/fake-provider.js",
+    ]);
+    assert.deepEqual(providerBinaryArgv("/tmp/fake-provider.mjs"), [
+      process.execPath,
+      "/tmp/fake-provider.mjs",
+    ]);
+    assert.deepEqual(providerBinaryArgv("/opt/homebrew/bin/codex"), [
+      "/opt/homebrew/bin/codex",
+    ]);
+  });
+
+  test("launches shebang provider scripts through their declared interpreter", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-provider-script-"));
+    const shellScript = path.join(tempDir, "provider-wrapper");
+    const nodeScript = path.join(tempDir, "provider.js");
+    try {
+      writeFileSync(shellScript, "#!/bin/sh\nexit 0\n");
+      writeFileSync(nodeScript, "#!/usr/bin/env node\nprocess.exit(0);\n");
+      assert.deepEqual(providerBinaryArgv(shellScript), ["/bin/sh", shellScript]);
+      assert.deepEqual(providerBinaryArgv(nodeScript), ["/usr/bin/env", "node", nodeScript]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

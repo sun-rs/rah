@@ -290,13 +290,18 @@ export class CodexModelCatalogCache {
   private cached: ProviderModelCatalog | null = null;
   private inFlight: Promise<ProviderModelCatalog> | null = null;
 
+  constructor(
+    private readonly createClient: () => Promise<CodexAppServerRpcClient> =
+      createCodexAppServerClient,
+  ) {}
+
   listModels(options?: { forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
     if (!options?.forceRefresh && this.cached) {
       const ageMs = Date.now() - Date.parse(this.cached.fetchedAt);
       if (Number.isFinite(ageMs) && ageMs < CODEX_MODEL_CACHE_TTL_MS) {
         return Promise.resolve(this.cached);
       }
-      void this.refresh();
+      void this.refresh().catch(() => undefined);
       return Promise.resolve(this.cached);
     }
     return this.refresh();
@@ -316,11 +321,12 @@ export class CodexModelCatalogCache {
       return this.inFlight;
     }
     this.inFlight = (async () => {
-      const client = await createCodexAppServerClient();
+      let client: CodexAppServerRpcClient | null = null;
       try {
+        client = await this.createClient();
         return this.remember(await fetchCodexModelCatalogWithClient(client));
       } finally {
-        await client.dispose();
+        await client?.dispose();
         this.inFlight = null;
       }
     })();

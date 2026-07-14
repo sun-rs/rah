@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -12,7 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import type { CodexAppServerTurnsPage } from "./codex-app-server-turns-page";
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
+const HISTORICAL_BOUNDARY_BYTES = 64 * 1024;
 const DEFAULT_MAX_ENTRY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const DEFAULT_MAX_MEMORY_ENTRIES = 128;
@@ -31,12 +35,21 @@ type CacheEnvelope = {
   cacheKey: string;
   providerSessionId: string;
   page: CodexAppServerTurnsPage;
+  historicalValidation?: HistoricalCacheValidation;
 };
 
 type MemoryEntry = {
   providerSessionId: string;
   bytes: number;
   page: CodexAppServerTurnsPage;
+  historicalValidation?: HistoricalCacheValidation;
+};
+
+type HistoricalCacheValidation = {
+  revision: RolloutRevision;
+  boundaryStart: number;
+  boundaryLength: number;
+  boundaryHash: string;
 };
 
 export type CodexTurnPageCacheOptions = {
@@ -49,7 +62,9 @@ export type CodexTurnPageCacheOptions = {
 };
 
 function resolveRahRuntimeHome(): string {
-  return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
+  return (
+    process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon")
+  );
 }
 
 function hash(value: string, length = 32): string {
@@ -68,6 +83,121 @@ function readRolloutRevision(rolloutPath: string): RolloutRevision {
     size: stats.size,
     mtimeMs: stats.mtimeMs,
   };
+}
+
+function isRolloutRevision(value: unknown): value is RolloutRevision {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const revision = value as Record<string, unknown>;
+  return (
+    typeof revision.dev === "number" &&
+    typeof revision.ino === "number" &&
+    typeof revision.size === "number" &&
+    typeof revision.mtimeMs === "number"
+  );
+}
+
+function isHistoricalCacheValidation(
+  value: unknown,
+): value is HistoricalCacheValidation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const validation = value as Record<string, unknown>;
+  return (
+    isRolloutRevision(validation.revision) &&
+    typeof validation.boundaryStart === "number" &&
+    typeof validation.boundaryLength === "number" &&
+    typeof validation.boundaryHash === "string"
+  );
+}
+
+function hashRolloutRange(
+  rolloutPath: string,
+  start: number,
+  length: number,
+): string | undefined {
+  if (start < 0 || length <= 0) {
+    return undefined;
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(rolloutPath, "r");
+    const body = Buffer.allocUnsafe(length);
+    let offset = 0;
+    while (offset < length) {
+      const bytesRead = readSync(
+        fd,
+        body,
+        offset,
+        length - offset,
+        start + offset,
+      );
+      if (bytesRead <= 0) {
+        return undefined;
+      }
+      offset += bytesRead;
+    }
+    return createHash("sha256").update(body).digest("hex");
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+function createHistoricalValidation(
+  rolloutPath: string,
+  revision: RolloutRevision,
+): HistoricalCacheValidation | undefined {
+  const boundaryLength = Math.min(revision.size, HISTORICAL_BOUNDARY_BYTES);
+  if (boundaryLength <= 0) {
+    return undefined;
+  }
+  const boundaryStart = revision.size - boundaryLength;
+  const boundaryHash = hashRolloutRange(
+    rolloutPath,
+    boundaryStart,
+    boundaryLength,
+  );
+  if (!boundaryHash) {
+    return undefined;
+  }
+  return { revision, boundaryStart, boundaryLength, boundaryHash };
+}
+
+function canReuseHistoricalPage(
+  rolloutPath: string,
+  currentRevision: RolloutRevision,
+  validation: HistoricalCacheValidation | undefined,
+): boolean {
+  if (!validation) {
+    return false;
+  }
+  const cachedRevision = validation.revision;
+  if (
+    currentRevision.dev !== cachedRevision.dev ||
+    currentRevision.ino !== cachedRevision.ino ||
+    currentRevision.size < cachedRevision.size
+  ) {
+    return false;
+  }
+  if (
+    currentRevision.size === cachedRevision.size &&
+    currentRevision.mtimeMs !== cachedRevision.mtimeMs
+  ) {
+    return false;
+  }
+  return (
+    hashRolloutRange(
+      rolloutPath,
+      validation.boundaryStart,
+      validation.boundaryLength,
+    ) === validation.boundaryHash
+  );
 }
 
 function isTurnsPage(value: unknown): value is CodexAppServerTurnsPage {
@@ -91,6 +221,8 @@ function isCacheEnvelope(
     envelope.version === CACHE_VERSION &&
     envelope.cacheKey === cacheKey &&
     envelope.providerSessionId === providerSessionId &&
+    (envelope.historicalValidation === undefined ||
+      isHistoricalCacheValidation(envelope.historicalValidation)) &&
     isTurnsPage(envelope.page)
   );
 }
@@ -98,11 +230,12 @@ function isCacheEnvelope(
 /**
  * Cache for the official Codex `thread/turns/list` summary response.
  *
- * Every entry is bound to the exact rollout file identity. A growing or
- * replaced rollout therefore misses naturally, while repeated history opens,
- * Canvas reuse, and daemon restarts avoid asking app-server to reparse a huge
- * thread. The cache contains provider-native pages, so each caller still
- * materializes events with its own runtime session id.
+ * The newest page is bound to the exact rollout revision. Cursor-addressed
+ * historical pages are immutable under Codex's append-only rollout contract,
+ * so they survive ordinary growth after a boundary fingerprint confirms that
+ * the prior file tail is unchanged. Truncation, replacement, or in-place
+ * rewrites still miss. The cache contains provider-native pages, so each
+ * caller materializes events with its own runtime session id.
  */
 export class CodexTurnPageCache {
   private readonly rootDir: string;
@@ -112,18 +245,37 @@ export class CodexTurnPageCache {
   private readonly maxDiskBytes: number;
   private readonly maxDiskEntries: number;
   private readonly memory = new Map<string, MemoryEntry>();
-  private readonly inFlight = new Map<string, Promise<CodexAppServerTurnsPage>>();
+  private readonly inFlight = new Map<
+    string,
+    Promise<CodexAppServerTurnsPage>
+  >();
   private readonly generationByProvider = new Map<string, number>();
   private memoryBytes = 0;
 
   constructor(options: CodexTurnPageCacheOptions = {}) {
     this.rootDir =
-      options.rootDir ?? path.join(resolveRahRuntimeHome(), "conversation-page-cache", "codex");
-    this.maxEntryBytes = Math.max(1, options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES);
-    this.maxMemoryBytes = Math.max(1, options.maxMemoryBytes ?? DEFAULT_MAX_MEMORY_BYTES);
-    this.maxMemoryEntries = Math.max(1, options.maxMemoryEntries ?? DEFAULT_MAX_MEMORY_ENTRIES);
-    this.maxDiskBytes = Math.max(1, options.maxDiskBytes ?? DEFAULT_MAX_DISK_BYTES);
-    this.maxDiskEntries = Math.max(1, options.maxDiskEntries ?? DEFAULT_MAX_DISK_ENTRIES);
+      options.rootDir ??
+      path.join(resolveRahRuntimeHome(), "conversation-page-cache", "codex");
+    this.maxEntryBytes = Math.max(
+      1,
+      options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES,
+    );
+    this.maxMemoryBytes = Math.max(
+      1,
+      options.maxMemoryBytes ?? DEFAULT_MAX_MEMORY_BYTES,
+    );
+    this.maxMemoryEntries = Math.max(
+      1,
+      options.maxMemoryEntries ?? DEFAULT_MAX_MEMORY_ENTRIES,
+    );
+    this.maxDiskBytes = Math.max(
+      1,
+      options.maxDiskBytes ?? DEFAULT_MAX_DISK_BYTES,
+    );
+    this.maxDiskEntries = Math.max(
+      1,
+      options.maxDiskEntries ?? DEFAULT_MAX_DISK_ENTRIES,
+    );
   }
 
   async getOrLoad(args: {
@@ -135,23 +287,41 @@ export class CodexTurnPageCache {
     load(revision: RolloutRevision): Promise<CodexAppServerTurnsPage>;
   }): Promise<CodexAppServerTurnsPage> {
     const revision = readRolloutRevision(args.rolloutPath);
+    const historical = Boolean(args.cursor);
     const requestIdentity = {
       version: CACHE_VERSION,
       providerSessionId: args.providerSessionId,
-      revision,
+      revision: historical
+        ? { dev: revision.dev, ino: revision.ino }
+        : revision,
       cursor: args.cursor ?? null,
       limit: args.limit,
       sortDirection: "desc",
       itemsView: "summary",
       // Liveness reconciliation only affects the newest page.
-      sourceState: args.cursor ? "historical" : args.sourceSettled ? "settled" : "active",
+      sourceState: args.cursor
+        ? "historical"
+        : args.sourceSettled
+          ? "settled"
+          : "active",
     };
     const cacheKey = hash(JSON.stringify(requestIdentity));
-    const memoryPage = this.readMemory(cacheKey);
+    const memoryPage = this.readMemory(
+      cacheKey,
+      args.rolloutPath,
+      revision,
+      historical,
+    );
     if (memoryPage) {
       return memoryPage;
     }
-    const diskPage = this.readDisk(cacheKey, args.providerSessionId);
+    const diskPage = this.readDisk(
+      cacheKey,
+      args.providerSessionId,
+      args.rolloutPath,
+      revision,
+      historical,
+    );
     if (diskPage) {
       return diskPage;
     }
@@ -160,15 +330,29 @@ export class CodexTurnPageCache {
       return pending;
     }
 
-    const generation = this.generationByProvider.get(args.providerSessionId) ?? 0;
+    const generation =
+      this.generationByProvider.get(args.providerSessionId) ?? 0;
     const promise = args
       .load(revision)
       .then((page) => {
         if (!isTurnsPage(page)) {
           throw new Error("Codex thread/turns/list returned an invalid page.");
         }
-        if ((this.generationByProvider.get(args.providerSessionId) ?? 0) === generation) {
-          this.store(cacheKey, args.providerSessionId, page);
+        if (
+          (this.generationByProvider.get(args.providerSessionId) ?? 0) ===
+          generation
+        ) {
+          const historicalValidation = historical
+            ? createHistoricalValidation(args.rolloutPath, revision)
+            : undefined;
+          if (!historical || historicalValidation) {
+            this.store(
+              cacheKey,
+              args.providerSessionId,
+              page,
+              historicalValidation,
+            );
+          }
         }
         return page;
       })
@@ -195,7 +379,11 @@ export class CodexTurnPageCache {
     const prefix = `${providerPrefix(providerSessionId)}-`;
     try {
       for (const entry of readdirSync(this.rootDir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json")) {
+        if (
+          entry.isFile() &&
+          entry.name.startsWith(prefix) &&
+          entry.name.endsWith(".json")
+        ) {
           rmSync(path.join(this.rootDir, entry.name), { force: true });
         }
       }
@@ -205,12 +393,28 @@ export class CodexTurnPageCache {
   }
 
   private cachePath(cacheKey: string, providerSessionId: string): string {
-    return path.join(this.rootDir, `${providerPrefix(providerSessionId)}-${cacheKey}.json`);
+    return path.join(
+      this.rootDir,
+      `${providerPrefix(providerSessionId)}-${cacheKey}.json`,
+    );
   }
 
-  private readMemory(cacheKey: string): CodexAppServerTurnsPage | undefined {
+  private readMemory(
+    cacheKey: string,
+    rolloutPath: string,
+    revision: RolloutRevision,
+    historical: boolean,
+  ): CodexAppServerTurnsPage | undefined {
     const entry = this.memory.get(cacheKey);
     if (!entry) {
+      return undefined;
+    }
+    if (
+      historical &&
+      !canReuseHistoricalPage(rolloutPath, revision, entry.historicalValidation)
+    ) {
+      this.memory.delete(cacheKey);
+      this.memoryBytes -= entry.bytes;
       return undefined;
     }
     this.memory.delete(cacheKey);
@@ -221,6 +425,9 @@ export class CodexTurnPageCache {
   private readDisk(
     cacheKey: string,
     providerSessionId: string,
+    rolloutPath: string,
+    revision: RolloutRevision,
+    historical: boolean,
   ): CodexAppServerTurnsPage | undefined {
     const cachePath = this.cachePath(cacheKey, providerSessionId);
     try {
@@ -235,10 +442,24 @@ export class CodexTurnPageCache {
         rmSync(cachePath, { force: true });
         return undefined;
       }
+      if (
+        historical &&
+        !canReuseHistoricalPage(
+          rolloutPath,
+          revision,
+          parsed.historicalValidation,
+        )
+      ) {
+        rmSync(cachePath, { force: true });
+        return undefined;
+      }
       this.remember(cacheKey, {
         providerSessionId,
         bytes: Buffer.byteLength(body, "utf8"),
         page: parsed.page,
+        ...(parsed.historicalValidation
+          ? { historicalValidation: parsed.historicalValidation }
+          : {}),
       });
       return parsed.page;
     } catch {
@@ -250,26 +471,37 @@ export class CodexTurnPageCache {
     cacheKey: string,
     providerSessionId: string,
     page: CodexAppServerTurnsPage,
+    historicalValidation?: HistoricalCacheValidation,
   ): void {
     const envelope: CacheEnvelope = {
       version: CACHE_VERSION,
       cacheKey,
       providerSessionId,
       page,
+      ...(historicalValidation ? { historicalValidation } : {}),
     };
     const body = `${JSON.stringify(envelope)}\n`;
     const bytes = Buffer.byteLength(body, "utf8");
     if (bytes > this.maxEntryBytes) {
       return;
     }
-    this.remember(cacheKey, { providerSessionId, bytes, page });
+    this.remember(cacheKey, {
+      providerSessionId,
+      bytes,
+      page,
+      ...(historicalValidation ? { historicalValidation } : {}),
+    });
 
     let tempPath: string | undefined;
     try {
       mkdirSync(this.rootDir, { recursive: true, mode: 0o700 });
       const cachePath = this.cachePath(cacheKey, providerSessionId);
       tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
-      writeFileSync(tempPath, body, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      writeFileSync(tempPath, body, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
       renameSync(tempPath, cachePath);
       tempPath = undefined;
       this.pruneDisk();
@@ -314,7 +546,10 @@ export class CodexTurnPageCache {
         })
         .sort((left, right) => left.mtimeMs - right.mtimeMs);
       let totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
-      while (entries.length > this.maxDiskEntries || totalBytes > this.maxDiskBytes) {
+      while (
+        entries.length > this.maxDiskEntries ||
+        totalBytes > this.maxDiskBytes
+      ) {
         const oldest = entries.shift();
         if (!oldest) {
           break;

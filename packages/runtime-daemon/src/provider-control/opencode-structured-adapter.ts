@@ -43,6 +43,25 @@ import {
 import { toSessionSummary } from "../session-store";
 import { mergeManualProviderModels } from "../manual-provider-models";
 
+interface OpenCodeStartupModelCatalogSource {
+  getCached(options?: { cwd?: string }): ProviderModelCatalog | null;
+  listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog>;
+}
+
+export function readOpenCodeStartupModelCatalog(
+  source: OpenCodeStartupModelCatalogSource,
+  cwd: string,
+): ProviderModelCatalog {
+  const catalog = mergeManualProviderModels(
+    source.getCached({ cwd }) ?? buildOpenCodeFallbackModelCatalog(),
+  );
+  // A selected model and its provider-native option values are already part of
+  // the start/resume request. Catalog discovery enriches later UI controls but
+  // must never serialize provider probing into the interactive launch path.
+  void source.listModels({ cwd }).catch(() => undefined);
+  return catalog;
+}
+
 export class OpenCodeAdapter implements ProviderAdapter {
   readonly id = "opencode";
   readonly providers: Array<"opencode"> = ["opencode"];
@@ -57,13 +76,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
-    const modelCatalog =
-      request.model || request.optionValues !== undefined
-        ? mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: request.cwd }))
-        : mergeManualProviderModels(
-            this.modelCatalog.getCached({ cwd: request.cwd }) ?? buildOpenCodeFallbackModelCatalog(),
-          );
-    void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
+    const modelCatalog = readOpenCodeStartupModelCatalog(this.modelCatalog, request.cwd);
     const response = await startOpenCodeLiveSession({
       services: this.services,
       request,
@@ -114,14 +127,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
     try {
       const resumeCwd = request.cwd ?? record?.ref.cwd ?? record?.ref.rootDir ?? process.cwd();
-      const rawCachedModelCatalog = this.modelCatalog.getCached({ cwd: resumeCwd });
-      const cachedModelCatalog =
-        request.model || request.optionValues !== undefined
-          ? mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: resumeCwd }))
-          : rawCachedModelCatalog
-            ? mergeManualProviderModels(rawCachedModelCatalog)
-            : null;
-      void this.modelCatalog.listModels({ cwd: resumeCwd }).catch(() => undefined);
+      const cachedModelCatalog = readOpenCodeStartupModelCatalog(this.modelCatalog, resumeCwd);
       const response = await resumeOpenCodeLiveSession({
         services: this.services,
         providerSessionId: request.providerSessionId,
@@ -132,7 +138,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         ...(request.model ? { model: request.model } : {}),
         ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
         ...(request.historyReplay !== undefined ? { historyReplay: request.historyReplay } : {}),
-        ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
+        modelCatalog: cachedModelCatalog,
       });
       this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
       return { session: response.summary };

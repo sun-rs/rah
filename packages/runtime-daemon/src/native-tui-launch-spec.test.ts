@@ -49,6 +49,15 @@ function fakeBinary(name: string): { dir: string; path: string } {
   return { dir, path: binaryPath };
 }
 
+function fakeProviderArgs(
+  launch: { command: string; args: string[] },
+  binaryPath: string,
+): string[] {
+  assert.equal(launch.command, "/bin/sh");
+  assert.equal(launch.args[0], binaryPath);
+  return launch.args.slice(1);
+}
+
 function openCodeAgentMode(id: string, label = id): SessionModeDescriptor {
   return {
     id,
@@ -71,8 +80,7 @@ describe("native TUI launch specs", () => {
         liveBackend: "native_tui",
       });
 
-      assert.equal(start.command, fake.path);
-      assert.deepEqual(start.args, [
+      assert.deepEqual(fakeProviderArgs(start, fake.path), [
         "-c",
         "check_for_update_on_startup=false",
         "--cd",
@@ -86,7 +94,7 @@ describe("native TUI launch specs", () => {
         cwd: "/workspace/demo",
         liveBackend: "native_tui",
       });
-      assert.deepEqual(resume.args, [
+      assert.deepEqual(fakeProviderArgs(resume, fake.path), [
         "-c",
         "check_for_update_on_startup=false",
         "resume",
@@ -116,10 +124,10 @@ describe("native TUI launch specs", () => {
         modeId: "bypassPermissions",
       });
 
-      assert.equal(start.command, fake.path);
+      const startArgs = fakeProviderArgs(start, fake.path);
       assert.equal(start.provider, "claude");
       assert.match(start.providerSessionId ?? "", /^[0-9a-f-]{36}$/);
-      assert.deepEqual(start.args, [
+      assert.deepEqual(startArgs, [
         "--permission-mode",
         "bypassPermissions",
         "--dangerously-skip-permissions",
@@ -142,7 +150,7 @@ describe("native TUI launch specs", () => {
         liveBackend: "native_tui",
         modeId: "default",
       });
-      assert.deepEqual(resume.args, [
+      assert.deepEqual(fakeProviderArgs(resume, fake.path), [
         "--permission-mode",
         "default",
         "--resume",
@@ -224,7 +232,7 @@ describe("native TUI launch specs", () => {
         model: "aaa/wokao",
         optionValues: { model_reasoning_effort: "ultra" },
       });
-      assert.deepEqual(codexStart.args, [
+      assert.deepEqual(fakeProviderArgs(codexStart, codex.path), [
         "-c",
         "check_for_update_on_startup=false",
         "--cd",
@@ -275,9 +283,9 @@ describe("native TUI launch specs", () => {
           openCodeAgentMode("plan", "Plan"),
         ],
       });
-      assert.equal(start.command, fake.path);
+      const startArgs = fakeProviderArgs(start, fake.path);
       assert.equal(start.providerSessionId, undefined);
-      assert.deepEqual(start.args, [
+      assert.deepEqual(startArgs, [
         "--model",
         "deepseek/deepseek-v4-pro/high",
         "--agent",
@@ -297,7 +305,7 @@ describe("native TUI launch specs", () => {
         model: "anthropic/claude-sonnet-4-5",
         optionValues: { model_reasoning_variant: "default" },
       });
-      assert.deepEqual(resume.args, [
+      assert.deepEqual(fakeProviderArgs(resume, fake.path), [
         "--model",
         "anthropic/claude-sonnet-4-5",
         "--session",
@@ -316,11 +324,12 @@ describe("native TUI launch specs", () => {
           openCodeAgentMode("plan", "Plan"),
         ],
       });
+      const planArgs = fakeProviderArgs(planStart, fake.path);
       assert.equal(
-        planStart.args.includes("--agent"),
+        planArgs.includes("--agent"),
         true,
       );
-      assert.deepEqual(planStart.args.slice(0, 2), ["--agent", "plan"]);
+      assert.deepEqual(planArgs.slice(0, 2), ["--agent", "plan"]);
 
       const customStart = await nativeTuiStartLaunchSpec({
         provider: "opencode",
@@ -329,7 +338,10 @@ describe("native TUI launch specs", () => {
         modeId: "sisyfus",
         availableModes: [openCodeAgentMode("sisyfus")],
       });
-      assert.deepEqual(customStart.args.slice(0, 2), ["--agent", "sisyfus"]);
+      assert.deepEqual(
+        fakeProviderArgs(customStart, fake.path).slice(0, 2),
+        ["--agent", "sisyfus"],
+      );
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
     }
@@ -370,7 +382,10 @@ describe("native TUI launch specs", () => {
         liveBackend: "native_tui",
         modeId: "not-an-agent",
       });
-      assert.deepEqual(delegatedOpenCodeMode.args.slice(0, 2), ["--agent", "not-an-agent"]);
+      assert.deepEqual(
+        fakeProviderArgs(delegatedOpenCodeMode, opencode.path).slice(0, 2),
+        ["--agent", "not-an-agent"],
+      );
       await assert.rejects(
         nativeTuiStartLaunchSpec({
           provider: "opencode",

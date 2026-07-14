@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolveOpenCodeBinary } from "./opencode-api";
+import { providerBinaryArgv } from "./provider-binary-utils";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -75,7 +76,11 @@ export class OpenCodeAcpClient {
 
   async start(): Promise<void> {
     const binary = await resolveOpenCodeBinary();
-    const child = spawn(binary, ["acp", "--cwd", this.cwd], {
+    const [command, ...prefixArgs] = providerBinaryArgv(binary);
+    if (!command) {
+      throw new Error("OpenCode ACP command is empty.");
+    }
+    const child = spawn(command, [...prefixArgs, "acp", "--cwd", this.cwd], {
       cwd: this.cwd,
       env: process.env,
       detached: process.platform !== "win32",

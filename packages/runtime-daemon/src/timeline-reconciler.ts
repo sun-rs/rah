@@ -28,6 +28,7 @@ interface TimelineLedgerState {
 }
 
 const MAX_LEDGER_ITEMS_PER_SESSION = 50_000;
+const MAX_TURN_IDENTITIES_PER_SESSION = 50_000;
 const MAX_TERMINAL_LIFECYCLE_KEYS_PER_SESSION = 50_000;
 
 let statesByServices = new WeakMap<object, TimelineLedgerState>();
@@ -163,6 +164,13 @@ export function resetTimelineReconcilerForTests(): void {
   statesByServices = new WeakMap<object, TimelineLedgerState>();
 }
 
+export function releaseTimelineReconcilerSession(services: object, sessionId: string): void {
+  const state = statesByServices.get(stateKeyForServices(services));
+  state?.itemsBySession.delete(sessionId);
+  state?.turnIdentitiesBySession.delete(sessionId);
+  state?.terminalLifecycleKeysBySession.delete(sessionId);
+}
+
 function stateKeyForServices(services: object): object {
   const candidate = services as { eventBus?: unknown };
   if (candidate.eventBus && typeof candidate.eventBus === "object") {
@@ -246,10 +254,12 @@ function registerTimelineTurnIdentity(
   if (turnId === undefined || identity === undefined) {
     return;
   }
-  turnIdentitiesForServices(services, sessionId).set(
+  const turnIdentities = turnIdentitiesForServices(services, sessionId);
+  turnIdentities.set(
     turnId,
     timelineTurnIdentityFromTimelineIdentity(identity),
   );
+  pruneOldestMapItems(turnIdentities, MAX_TURN_IDENTITIES_PER_SESSION);
 }
 
 function turnIdentityForTurnId(
@@ -272,12 +282,16 @@ function timelineTurnIdentityFromTimelineIdentity(identity: TimelineIdentity): T
 }
 
 function pruneOldestLedgerItems(ledger: Map<string, TimelineLedgerEntry>): void {
-  while (ledger.size > MAX_LEDGER_ITEMS_PER_SESSION) {
-    const oldestKey = ledger.keys().next().value as string | undefined;
+  pruneOldestMapItems(ledger, MAX_LEDGER_ITEMS_PER_SESSION);
+}
+
+function pruneOldestMapItems<K, V>(map: Map<K, V>, max: number): void {
+  while (map.size > max) {
+    const oldestKey = map.keys().next().value as K | undefined;
     if (oldestKey === undefined) {
       return;
     }
-    ledger.delete(oldestKey);
+    map.delete(oldestKey);
   }
 }
 

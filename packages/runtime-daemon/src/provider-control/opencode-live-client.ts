@@ -19,7 +19,9 @@ import { applyProviderActivity, type ProviderActivity } from "../provider-activi
 import { toSessionSummary } from "../session-store";
 import {
   abortOpenCodeSession,
+  createOpenCodeMessageId,
   createOpenCodeSession,
+  getOpenCodeMessages,
   getOpenCodeSession,
   promptOpenCodeSession,
   respondOpenCodePermission,
@@ -38,10 +40,6 @@ import {
   type OpenCodeActivityState,
 } from "../opencode-activity";
 import type { OpenCodeMessageWithParts } from "../opencode-api";
-import {
-  findOpenCodeStoredSessionRecord,
-  loadOpenCodeStoredMessages,
-} from "../opencode-stored-sessions";
 import {
   normalizeOpenCodeOptionValues,
   normalizeOpenCodeReasoningId,
@@ -91,7 +89,10 @@ const SESSION_SOURCE = {
   authority: "authoritative" as const,
 };
 
-const OPENCODE_HISTORY_MIRROR_INTERVAL_MS = 750;
+const OPENCODE_HISTORY_MIRROR_INTERVAL_MS = 1_000;
+const OPENCODE_HISTORY_MIRROR_MESSAGE_LIMIT = 8;
+const OPENCODE_HISTORY_PRIME_MESSAGE_LIMIT = 16;
+const OPENCODE_HISTORY_MIRROR_REVISION_LIMIT = 64;
 
 export function runtimeDiagnosticsForOpenCodeServer(
   server: OpenCodeServerHandle,
@@ -238,12 +239,18 @@ function applyActivity(
 function markOpenCodeTurnLocallyCanceled(liveSession: LiveOpenCodeSession, turnId: string): void {
   const current = liveSession.locallyCanceledTurnIds ?? new Set<string>();
   current.add(turnId);
+  while (current.size > 128) {
+    const oldest = current.values().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    current.delete(oldest);
+  }
   liveSession.locallyCanceledTurnIds = current;
   liveSession.localCancelMirrorSuppressUntilMs = Date.now() + 10_000;
 }
 
 function clearOpenCodeLocalCancelSuppression(liveSession: LiveOpenCodeSession): void {
-  liveSession.locallyCanceledTurnIds?.clear();
   delete liveSession.localCancelMirrorSuppressUntilMs;
 }
 
@@ -251,13 +258,21 @@ function shouldSuppressMirroredOpenCodeActivity(
   liveSession: LiveOpenCodeSession,
   activity: ProviderActivity,
 ): boolean {
+  const activityTurnId = "turnId" in activity && typeof activity.turnId === "string"
+    ? activity.turnId
+    : undefined;
+  if (activityTurnId && liveSession.locallyCanceledTurnIds?.has(activityTurnId)) {
+    return !(
+      activity.type === "timeline_item" &&
+      activity.item.kind === "user_message"
+    );
+  }
   const withinLocalCancelWindow =
     liveSession.localCancelMirrorSuppressUntilMs !== undefined &&
     Date.now() <= liveSession.localCancelMirrorSuppressUntilMs;
   if (
     activity.type === "turn_canceled" &&
-    (liveSession.locallyCanceledTurnIds?.has(activity.turnId) === true ||
-      withinLocalCancelWindow)
+    withinLocalCancelWindow
   ) {
     return true;
   }
@@ -296,24 +311,47 @@ function openCodeMessageRevision(message: OpenCodeMessageWithParts): string {
   });
 }
 
-function drainOpenCodeHistoryMirror(
+function rememberOpenCodeHistoryMirrorRevision(
+  liveSession: LiveOpenCodeSession,
+  messageId: string,
+  revision: string,
+): boolean {
+  if (liveSession.mirroredMessageRevisions.get(messageId) === revision) {
+    return false;
+  }
+  liveSession.mirroredMessageRevisions.delete(messageId);
+  liveSession.mirroredMessageRevisions.set(messageId, revision);
+  while (liveSession.mirroredMessageRevisions.size > OPENCODE_HISTORY_MIRROR_REVISION_LIMIT) {
+    const oldest = liveSession.mirroredMessageRevisions.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    liveSession.mirroredMessageRevisions.delete(oldest);
+  }
+  return true;
+}
+
+async function drainOpenCodeHistoryMirror(
   services: RuntimeServices,
   liveSession: LiveOpenCodeSession,
-): void {
-  const record = findOpenCodeStoredSessionRecord(liveSession.providerSessionId);
-  if (!record) {
-    return;
-  }
-  const messages = loadOpenCodeStoredMessages(record, { limit: 1000 });
+  signal?: AbortSignal,
+): Promise<void> {
+  const messages = await getOpenCodeMessages(
+    liveSession.server,
+    liveSession.providerSessionId,
+    {
+      limit: OPENCODE_HISTORY_MIRROR_MESSAGE_LIMIT,
+      ...(signal ? { signal } : {}),
+    },
+  );
   for (const message of messages) {
     if (!isOpenCodeMessageReadyForHistoryMirror(message)) {
       continue;
     }
     const revision = openCodeMessageRevision(message);
-    if (liveSession.mirroredMessageRevisions.get(message.info.id) === revision) {
+    if (!rememberOpenCodeHistoryMirrorRevision(liveSession, message.info.id, revision)) {
       continue;
     }
-    liveSession.mirroredMessageRevisions.set(message.info.id, revision);
     for (const activity of normalizeOpenCodeLiveActivities(
       liveSession,
       translateOpenCodeMessage(liveSession.activityState, message),
@@ -334,7 +372,8 @@ export function primeOpenCodeHistoryMirrorState(
     if (!isOpenCodeMessageReadyForHistoryMirror(message)) {
       continue;
     }
-    liveSession.mirroredMessageRevisions.set(
+    rememberOpenCodeHistoryMirrorRevision(
+      liveSession,
       message.info.id,
       openCodeMessageRevision(message),
     );
@@ -346,14 +385,12 @@ export function primeOpenCodeHistoryMirrorState(
   delete liveSession.activityState.currentTurnId;
 }
 
-function primeOpenCodeHistoryMirror(liveSession: LiveOpenCodeSession): void {
-  const record = findOpenCodeStoredSessionRecord(liveSession.providerSessionId);
-  if (!record) {
-    return;
-  }
+async function primeOpenCodeHistoryMirror(liveSession: LiveOpenCodeSession): Promise<void> {
   primeOpenCodeHistoryMirrorState(
     liveSession,
-    loadOpenCodeStoredMessages(record, { limit: 1000 }),
+    await getOpenCodeMessages(liveSession.server, liveSession.providerSessionId, {
+      limit: OPENCODE_HISTORY_PRIME_MESSAGE_LIMIT,
+    }),
   );
 }
 
@@ -362,18 +399,36 @@ function startOpenCodeHistoryMirror(params: {
   liveSession: LiveOpenCodeSession;
 }): () => void {
   const { services, liveSession } = params;
-  const tick = () => {
+  const controller = new AbortController();
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = async () => {
     try {
-      drainOpenCodeHistoryMirror(services, liveSession);
+      await drainOpenCodeHistoryMirror(services, liveSession, controller.signal);
+      if (stopped) {
+        return;
+      }
       drainQueuedOpenCodeInput(services, liveSession);
     } catch (error) {
-      patchOpenCodeRuntimeError(services, liveSession, error);
+      if (!stopped) {
+        patchOpenCodeRuntimeError(services, liveSession, error);
+      }
+    } finally {
+      if (!stopped) {
+        timer = setTimeout(() => void tick(), OPENCODE_HISTORY_MIRROR_INTERVAL_MS);
+        timer.unref?.();
+      }
     }
   };
-  tick();
-  const timer = setInterval(tick, OPENCODE_HISTORY_MIRROR_INTERVAL_MS);
-  timer.unref?.();
-  return () => clearInterval(timer);
+  drainQueuedOpenCodeInput(services, liveSession);
+  void tick();
+  return () => {
+    stopped = true;
+    controller.abort();
+    if (timer) {
+      clearTimeout(timer);
+    }
+  };
 }
 
 function patchOpenCodeRuntimeError(
@@ -524,6 +579,7 @@ export async function startOpenCodeLiveSession(params: {
     activityState: createOpenCodeActivityState(providerSession.id, {
       userMessagesStartTurns: false,
       statusStartsTurns: false,
+      statusCompletesTurns: false,
     }),
     stopEvents: () => undefined,
     stopHistoryMirror: () => undefined,
@@ -678,6 +734,7 @@ export async function resumeOpenCodeLiveSession(params: {
     activityState: createOpenCodeActivityState(params.providerSessionId, {
       userMessagesStartTurns: false,
       statusStartsTurns: false,
+      statusCompletesTurns: false,
     }),
     stopEvents: () => undefined,
     stopHistoryMirror: () => undefined,
@@ -692,7 +749,7 @@ export async function resumeOpenCodeLiveSession(params: {
   };
   await applyOpenCodePermissionMode(liveSession, initialModeId);
   if (params.historyReplay === "skip") {
-    primeOpenCodeHistoryMirror(liveSession);
+    await primeOpenCodeHistoryMirror(liveSession);
   }
   liveSession.stopEvents = attachOpenCodeEventSink({ services, liveSession });
   liveSession.stopHistoryMirror = startOpenCodeHistoryMirror({ services, liveSession });
@@ -766,12 +823,14 @@ function submitOpenCodePrompt(params: {
   liveSession.providerReadyForInput = false;
   const { text } = request;
   const turnId = randomUUID();
+  const providerMessageId = createOpenCodeMessageId();
   for (const activity of startOpenCodeTurn(liveSession.activityState, turnId)) {
     applyActivity(services, liveSession.sessionId, activity);
   }
   recordOpenCodeSubmittedUserMessage(liveSession.activityState, {
     text,
     turnId,
+    providerMessageId,
     ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
     ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
   });
@@ -779,6 +838,7 @@ function submitOpenCodePrompt(params: {
     handle: liveSession.server,
     providerSessionId: liveSession.providerSessionId,
     text,
+    messageId: providerMessageId,
     ...(liveSession.model ? { model: liveSession.model } : {}),
     ...(liveSession.reasoningId && liveSession.reasoningId !== "default"
       ? { variant: liveSession.reasoningId }
