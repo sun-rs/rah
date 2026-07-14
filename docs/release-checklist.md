@@ -16,17 +16,15 @@ and authorized.
 These checks should pass in any normal development or release environment:
 
 ```bash
-npm run typecheck
-npm run test:protocol
-npm run test:auth
-npm run test:council-web
-npm run test:web
-npm run test:runtime
-npm run build:web
-npm audit --omit=dev
+npm run test:ci
 ```
 
 If any of these fail, stop the release.
+
+`test:ci` recursively discovers all protocol/Web/runtime test files and runs each file in an isolated
+Node test process, then builds the production Web client and runs `npm audit --omit=dev`. Auth and
+Council tests are therefore included through the runtime/Web discovery rather than maintained as a
+second hand-written list.
 
 ## 2. Provider Smoke Policy
 
@@ -124,11 +122,8 @@ Use this order unless there is a reason to narrow the scope:
 Suggested command flow:
 
 ```bash
-npm run typecheck
-npm run test:web
-npm run test:runtime
+npm run test:ci
 npm run test:smoke:stored-catalog-browser
-npm run build:web
 ```
 
 Then selectively run only the provider smokes that match the release environment and change scope.
@@ -165,8 +160,10 @@ Before release, verify these manually on:
 - old history is not replayed again after resume
 - initial bootstrap requests only bounded Recent metadata; opening All performs one authoritative catalog fetch, while clean reopen uses the stored revision/delta path
 - a large stopped session opens from a bounded turn page instead of transferring the raw provider transcript
+- `python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages 3` keeps initial and older-page transfer bounded; add `--resume` to verify the already rendered page is reused
 - new turns are not duplicated
 - `Stop` / `Close` really moves the running session to stopped without deleting provider history
+- the Closing layer disappears when the authoritative close response arrives; background metadata/catalog refresh does not keep the UI blocked
 - user-visible lifecycle copy uses `Running` / `Stopped`; `Live` / `Archive` only appears for provider technical names or stored-history archive/trash semantics
 
 ### 4.3 Provider presentation

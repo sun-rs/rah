@@ -1,6 +1,6 @@
 # client-web store ownership
 
-复核日期：2026-07-13
+复核日期：2026-07-15
 
 ## 原则
 
@@ -68,6 +68,7 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 ### `session-store-session-commands.ts`
 
 - input、interrupt、control、permission、rename、mode/model command。
+- Stop API 成功后立即应用 stopped summary 并解除 Closing UI；workbench/catalog metadata refresh 只在后台校准。
 
 ### `session-store-workspace.ts`
 
@@ -80,6 +81,14 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 - client/connection id。
 - initial load one-shot gate。
 - 最近历史选择恢复。
+
+## Model catalog 边界
+
+- daemon 拥有启动后 1 秒与每 30 分钟一次的三 provider 后台刷新；浏览器不在 startup/focus 建立全局定时器。
+- Web catalog key 必须是 `provider + cwd`，不同 workspace 的模型探测结果不能互相覆盖。
+- picker 只对当前 key 使用 5 分钟 on-demand freshness；Settings 的 force refresh 是显式用户操作。
+- 每次请求递增 generation，迟到的旧响应不得覆盖更新的 catalog。
+- catalog 失败保留 last-good；失败时间不冒充 successful updated time。
 
 ## Council store 边界
 

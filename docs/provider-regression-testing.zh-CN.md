@@ -24,12 +24,12 @@ npm run test:provider-contracts
 命令：
 
 ```bash
-npm run typecheck
-npm run test:web
-npm run test:runtime
+npm run test:ci
 ```
 
-这是提交前默认 gate。`test:provider-contracts` 是 provider 主链路的重点子集，不替代完整 runtime/web 测试。
+这是提交前默认 gate。它递归发现 protocol/Web/runtime 的 test/spec 文件，每个文件使用隔离 Node
+test 进程，然后执行 production Web build 和 production dependency audit。`test:provider-contracts` 是
+provider 主链路的重点子集，不替代该完整 gate。
 
 ### 3. 浏览器/主链路冒烟测试
 
@@ -48,6 +48,16 @@ npm run test:smoke:native-local-server
 - `test:smoke:provider-flows` 会依赖本机真实 Codex / Claude / OpenCode CLI、账号登录、API quota、网络状态，不应作为所有机器的强制 gate。
 - 真实 provider smoke 用来证明真实 agent 确实理解 plan/mode/model，真实工具调用能落到文件系统，真实权限行为符合 provider 当前版本。
 - 低频模型家族通过 OpenCode/API provider 验证。
+
+历史/Resume 性能回归使用：
+
+```bash
+python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages 3
+python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages 3 --resume
+```
+
+需要同时核对首个可读气泡、older-page 请求数量与 transfer bytes、Resume 是否复用已展示页面，以及 Stop
+成功后 Closing 是否立即消失。基准与大历史证据记录在 `history-browsing.zh-CN.md`。
 
 ## 覆盖矩阵
 

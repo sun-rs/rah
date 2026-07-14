@@ -1,6 +1,6 @@
 # Provider Adapter 协议与能力边界
 
-日期：2026-05-08
+日期：2026-07-15
 
 本文记录当前 provider runtime 主线下 provider adapter 的边界。公开 live 主路径只有 Codex/OpenCode native local server 与 Claude tmux/TUI fallback；`liveBackend: "structured"` 只作为测试注入 surface 保留。
 
@@ -44,7 +44,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 | native local server runtime | Codex app-server / OpenCode serve client | Codex/OpenCode 的 create/resume/send/interrupt/event 主链路。 |
 | TUI mux fallback | `TmuxMuxBackend` / `RuntimeTerminalCoordinator` | Claude 与无 native server provider 的 TUI 工作现场接管、归还、archive。 |
 | launch/resume spec | provider runtime/capability layer | 把 RAH 标准 start/resume request 翻译成 provider 启动参数或 server config。 |
-| mirror parser | provider 原厂 history/jsonl/db parser | 只读 provider 原始存储，输出 canonical provider activity，用于 backfill/audit。 |
+| mirror parser | provider 原厂 history/jsonl/db parser | 只读 provider 原始存储，输出 canonical provider activity，用于 stored-history/backfill/audit；OpenCode live catch-up 使用有界官方 message API，不轮询 SQLite 全历史。 |
 | minimal TUI control | runtime / provider handler | Claude fallback 的 Stop/interrupt、prompt dirty、surface lease，不复刻 provider 私有 live RPC。 |
 
 ## 3. Capability Slices
@@ -93,7 +93,8 @@ optionValues?: Record<string, SessionConfigValue>;
 - 不把所有 provider 参数强行叫成 `effort`。
 - Codex 的 reasoning effort、Claude 的 effort/max、OpenCode 的 variant 都是 provider-owned option。
 - 前端可以展示这些 option，但不能推断 provider-native wire shape。
-- `reasoningId` 只是兼容字段；新调用应优先使用 `optionValues`。
+- 公共 Start/Resume/SetModel HTTP 请求只接受 `optionValues`，`reasoningId` 已从网络协议移除。
+- daemon 内部仍可把 provider option 归一成名为 `reasoningId` 的 launch/live 字段；它是 adapter 实现细节，不能重新暴露给前端。
 
 OpenCode 边界：
 
@@ -126,7 +127,8 @@ RAH 统一把 session 操作建模为 action capability：
 ```ts
 actions: {
   info: boolean;
-  archive: boolean;
+  stop: boolean;
+  archive?: boolean;
   delete: boolean;
   rename: "none" | "local" | "native";
 }
@@ -134,7 +136,8 @@ actions: {
 
 语义：
 
-- `archive` / `close`：关闭 RAH 管理的 live 执行体，不删除 provider 历史。
+- `stop`：关闭 RAH 管理的 running 执行体，不删除 provider 历史。
+- `archive`：可选的 provider stored-history 归档能力；它不等于 Stop/Close，也不能用来表达 runtime 生命周期。
 - `delete`：删除或移入废纸篓 provider stored session。
 - `info`：显示 session/provider/workspace/source 信息。
 - `rename: native`：写入 provider 原生历史，使非 RAH TUI 的 resume list 也能看到。
@@ -171,7 +174,7 @@ ACP 可以作为某个 provider 的传输/控制实现，例如 OpenCode ACP。�
 - mirror failure 是否只进 diagnostics，不影响 PTY session。
 - `listModels` 是否准确声明 models/defaultModeId/modes/options。
 - `setSessionMode` / `setSessionModel` 是否和启动语义一致；不支持就不要暴露 mutable。
-- `actions.rename/delete/archive/info` 是否准确声明。
+- `actions.rename/delete/archive/info/stop` 是否准确声明，并保持 runtime Stop 与 stored-history archive 分离。
 - context usage 是否正确声明 `basis/precision/source`。
 - `livePermissions` 是否只表示 approval response，不混入 mode switching。
 
@@ -181,7 +184,7 @@ ACP 可以作为某个 provider 的传输/控制实现，例如 OpenCode ACP。�
 
 - Provider logo、颜色、显示名。
 - 当前选中的 provider。
-- 按 provider 分桶缓存 `ProviderModelCatalog`。
+- 按 `provider + cwd` 缓存 `ProviderModelCatalog`，并用 request generation 拒绝陈旧响应覆盖新 workspace 结果。
 - 按 provider 记住上次选择的模型和参数。
 - 按 provider/session id 查找同一个历史 session 或 live projection。
 

@@ -1,5 +1,7 @@
 # Session 入口与权限边界
 
+复核日期：2026-07-15
+
 本文锁定入口与权限边界。当前 `main` 已把 live 主链路收敛为 provider runtime 分层：
 
 - Codex / OpenCode 默认走 `native_local_server`，由 provider 官方本地 server 管 live session，RAH 通过结构化协议发送 turn、订阅事件、执行 stop/abort。
@@ -35,7 +37,7 @@
 | --- | --- | --- | --- |
 | Codex | `native_local_server`，Codex app-server + Web TUI client view | app-server event + rollout/session history backfill | mode/model 可走启动前和 next-turn/runtime config；具体能力以 runtime feature 为准 |
 | Claude | `tui_mux_fallback`，Claude TUI + tmux | `.claude/projects/**/*.jsonl` | permission/model/effort 尽量作为启动参数；运行中以原生 TUI 为准 |
-| OpenCode | `native_local_server`，OpenCode serve/session/attach | OpenCode server/session event + SQLite backfill | model/permission/variant 通过 OpenCode API/ACP 能力；UI 只能展示 capability 声明的可变项 |
+| OpenCode | `native_local_server`，OpenCode serve/session/attach | server/session event + 有界官方 message API catch-up；SQLite 只用于 stored history | model/permission/variant 通过 OpenCode API/ACP 能力；UI 只能展示 capability 声明的可变项 |
 
 ## 3. 权限 / 模型 / Plan 的当前定位
 

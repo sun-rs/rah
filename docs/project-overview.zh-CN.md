@@ -1,5 +1,7 @@
 # RAH 项目总览
 
+复核日期：2026-07-15
+
 ## 1. 项目定位
 
 RAH 是一个 **runtime-owned、本地优先、跨设备连续性** 的 AI 工作台。
@@ -251,7 +253,7 @@ packages/
 这一层的职责是把 provider-native 行为翻译成 canonical runtime surface。当前 live 主矩阵为
 Codex、Claude、OpenCode；Kimi CLI 一等支持仍移除，相关模型通过 OpenCode/API provider 承载。
 
-Provider 的 rename/delete/archive/info、权限 mode、plan mode、model list、model option/config 参数、permission response、历史解析和 workspace metadata recovery 都应通过显式 capability slice 暴露，而不是塞回一个大号 `ProviderAdapter`。前端只提交 `modeId/model/optionValues` 等 RAH 标准字段，不解释 provider-native 参数；旧 `reasoningId` 只是兼容别名。
+Provider 的 rename/delete/archive/info/stop、权限 mode、plan mode、model list、model option/config 参数、permission response、历史解析和 workspace metadata recovery 都应通过显式 capability slice 暴露，而不是塞回一个大号 `ProviderAdapter`。前端只提交 `modeId/model/optionValues` 等 RAH 标准字段，不解释 provider-native 参数；`reasoningId` 只允许作为 daemon adapter 内部归一值，公共 HTTP 请求已移除该字段。
 
 ### client-web
 

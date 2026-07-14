@@ -1,6 +1,6 @@
 # Conversation 历史浏览与分页边界
 
-复核日期：2026-07-13
+复核日期：2026-07-15
 
 ## 1. 唯一读取模型
 
@@ -109,7 +109,7 @@ Resume 不清空已展示的 history：
 | --- | --- | --- |
 | Codex | app-server turn/item page；adapter 内的 bounded rollout evidence | native cursor 或 frozen persisted cursor |
 | Claude | JSONL transcript | timestamp/frozen cursor |
-| OpenCode | server/SQLite message-part | provider cursor 或 frozen timestamp cursor |
+| OpenCode | live 使用 server event + 有界官方 message API；stored history 使用 session-scoped SQLite message/part | provider cursor 或 frozen timestamp + message id cursor |
 
 这些证据只在 daemon 内转换为 `ConversationEvidencePage`，随后进入 projector。浏览器不可直接读取。
 
@@ -122,6 +122,8 @@ Resume 不清空已展示的 history：
   失败只保留该 provider 的 last-good 快照，不阻断另外两个 provider，也不阻塞 Chat/WS。
 - Stop 成功是当前 runtime 已知事实：session 必须立即以 stopped/provider-history 记录进入 Recent，
   随后的子进程扫描只负责补齐 storage path、行数和 provider archive metadata。
+- Stop API 返回权威 closed summary 后，前端立即收口可见状态并关闭确认层；后续 workbench/catalog
+  refresh 在后台执行，不能把按钮或页面继续锁在 Closing。
 - 删除、归档和按 workspace 批量删除在执行前等待权威 catalog；普通启动、Resume、Chat 浏览和
   Recent 请求不得隐式等待完整 catalog。
 - resident settled turns 默认有界。
@@ -130,11 +132,45 @@ Resume 不清空已展示的 history：
 - tool output 只按需读取。
 - Codex 官方 `thread/turns/list` page 使用内存 LRU 和原子写入的持久化 cache；同一 rollout revision、cursor、limit 与 summary 模式必须复用同一 page，不重复扫描大 JSONL。
 - Codex page cache identity 包含 rollout 的 `dev`、`ino`、`size`、`mtime`。文件替换或增长会自然进入新 revision，旧 revision 只服务已经冻结的浏览 snapshot，不能污染新页。
+- Codex turn directory 在 worker thread 中增量扫描并持久化 byte-range 索引；大 rollout 的正文分页和
+  指定 turn hydration 只读取对应范围，不能回退到主事件循环全文件扫描。
+- OpenCode live catch-up 只串行请求官方 local-server message API 的最近 8 条 message，每秒最多一次；
+  Resume 用最近 16 条只建立 identity/revision baseline，不回放已经展示的 history。请求可取消，revision
+  ledger 上限为 64。live path 不允许每 750ms 同步扫描 SQLite 全历史。
+- OpenCode stored history 的 SQL 必须先按目标 `session_id` 过滤，summary page 不读取大
+  reasoning/tool payload；cursor 用 timestamp + message id 保证同毫秒记录稳定分页。
 - summary page 必须移除 provider event 的大 `raw` payload，只保留 canonical message、lifecycle 和 compact process metadata；展开 turn/item detail 时才读取完整 raw evidence。
 - HTTP 大 JSON 支持 gzip。
 - `approximateBytes` 用于诊断弱网 payload，不参与 UI 语义。
 
-## 10. 回归检查
+## 10. 性能验证
+
+真实浏览器基准命令：
+
+```bash
+python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages 3
+python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages 3 --resume
+```
+
+脚本测量首个可读气泡、向上分页、HTTP transfer/decoded bytes，以及 Resume 是否复用当前页面。它只关闭
+本次创建的 read-only replay/runtime，不扫描或删除 provider 历史。
+
+2026-07-14 在当前 Mac 的实测证据如下；这是回归基线，不是跨机器 SLA：
+
+| Provider | New 到可用 Chat | 普通 history 首个可读气泡 | Resume 到可用 Chat | Stop 到 UI 可操作 |
+| --- | ---: | ---: | ---: | ---: |
+| Codex | 4.15s | 0.45s | 0.41s | 0.17s |
+| OpenCode | 1.25s | 0.27s | 1.73s | 0.16s |
+| Claude | 0.16s | 0.34s | 0.42s | 0.18s |
+
+- Codex 2.36GB / 139,048 行 rollout：首个可读气泡约 0.65s；4 个 history request 合计约
+  112KB transfer / 314KB decoded。为避免恢复真实长期任务，本次只验证 history，没有 Resume 该线程。
+- OpenCode 18.4MB / 691 messages：首个可读气泡约 0.32s，Resume 约 1.42s；4 个 history request
+  合计约 92KB transfer / 293KB decoded。修复前同一 Resume 会被同步 SQLite mirror 阻塞约 45s。
+- 当前机器没有等量级 Claude 历史样本；Claude 的 New/History/Resume/Stop 与连续追问已做真实浏览器
+  验证，但不能据此声称超大 Claude JSONL 已达到同一数据量基线。
+
+## 11. 回归检查
 
 - 连续相同用户文本仍是两个 turns。
 - user/process/final 顺序在 live、刷新和 history 中一致。

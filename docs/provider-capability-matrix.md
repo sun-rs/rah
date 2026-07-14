@@ -2,7 +2,7 @@
 
 Status: current native runtime scope
 
-Date: 2026-05-19
+Date: 2026-07-15
 
 This document records the capability boundary for the current RAH branch. The maintained provider surface is Codex, Claude, and OpenCode. Other model families are accessed through OpenCode/API-provider configuration instead of separate CLI adapters.
 
@@ -20,7 +20,7 @@ RAH is a seamless workbench, not a provider session database replacement. The li
 |---|---|---|---|---|---|
 | Codex | `native_local_server` | Codex app-server events/control. RAH pre-creates a thread with `thread/start`, then attaches the official TUI with `codex --remote <endpoint> resume <threadId>`. Do not infer binding from rollout first messages. | Launch-time via Codex app-server `thread/start` when supported. | Launch-time via official app-server fields where supported; runtime changes only when Codex exposes stable server control. | Launch-time via app-server permission profile / sandbox fields; slash commands remain available in the official TUI. |
 | Claude | `tui_mux` / `tui_mux_fallback` | Claude Code TUI inside tmux is the work surface. Structured Chat mirrors Claude JSONL/history with best-effort canonical identity. | Launch-time best effort where Claude exposes stable args. Runtime changes should use the TUI. | Optional enhancement only; no fake native local server. | Trust folder and permission prompts are handled in the official TUI. |
-| OpenCode | `native_local_server` | OpenCode serve/session API events/control. The official TUI attaches with `opencode attach <url> --session <providerSessionId>`. | Launch-time through OpenCode session/create or TUI args. | `variant` / reasoning is provider-specific; pass only when OpenCode exposes stable API/config support. | Launch-time/prelaunch provider config where stable; runtime changes only when OpenCode exposes stable server control. |
+| OpenCode | `native_local_server` | OpenCode serve/session API events/control, plus a bounded recent-message API catch-up window. SQLite is stored-history evidence only. The official TUI attaches with `opencode attach <url> --session <providerSessionId>`. | Launch-time through OpenCode session/create or TUI args. | `variant` / reasoning is provider-specific; pass only when OpenCode exposes stable API/config support. | Launch-time/prelaunch provider config where stable; runtime changes only when OpenCode exposes stable server control. |
 
 ## Removed CLI Providers
 
@@ -52,11 +52,11 @@ RAH treats provider model catalogs as prelaunch capability metadata. Catalog pro
 
 Runtime behavior:
 
-- Web startup immediately prewarms the three core provider catalogs: Codex, Claude, and OpenCode.
-- The web client schedules a silent background refresh every 30 minutes. This is a fixed all-provider prewarm loop for Codex, Claude, and OpenCode. It is independent from picker TTLs and independent from Settings manual refresh.
-- Session Control and Council model pickers use the cached effective catalog. When a picker needs a provider catalog and the last request is older than 5 minutes, the client requests only that provider in the background. This 5 minute TTL is a single-provider, on-demand freshness guard; it does not mean "refresh all providers every 5 minutes".
+- The daemon owns global freshness. One second after production startup it force-refreshes Codex, Claude, and OpenCode in the background, then repeats every 30 minutes. Browser focus, reload, or the number of connected clients cannot multiply this work.
+- Session Control and Council model pickers use the cached effective catalog. When a picker needs a provider/workspace catalog and the last request is older than 5 minutes, the client requests only that key in the background. This is an on-demand freshness guard, not another all-provider timer.
+- The Web cache key is `provider + cwd`; request generations prevent an older response from overwriting a newer workspace-specific result.
 - Background refresh failures are logged and cooled down; existing cached catalogs remain usable. A failure does not replace a previously successful catalog and does not update the last-success timestamp.
-- Settings manual refresh is a third entry point. It force-refreshes only the selected provider, bypasses the 5 minute picker TTL, continues even if the Settings dialog is closed, and updates the daemon catalog cache plus the web global model store on success. It does not reset or reschedule the independent 30 minute all-provider prewarm loop.
+- Settings manual refresh force-refreshes only the selected provider, continues if Settings closes, and updates the daemon cache plus the matching Web cache entry on success. It does not own or reschedule the daemon's 30 minute timer.
 
 Settings behavior:
 
@@ -66,7 +66,7 @@ Settings behavior:
 - Manual supplement models are visually marked in every effective model picker/list. If a later native probe returns the same model id, the native entry wins and the manual entry is no longer marked as active in the effective list.
 - Each provider has an explicit refresh button. A refresh request continues in the background even if Settings is closed.
 - The UI shows the last successful refresh time. Failed probes and static/provisional fallbacks do not count as successful refreshes.
-- A successful Settings refresh updates three pieces of state: the Settings last-success timestamp, the daemon-side provider catalog cache and TTL, and the front-end global model catalog store used by Session Control and Council. The 30 minute background refresh timer is not reset by manual refresh.
+- A successful Settings refresh updates three pieces of state: the Settings last-success timestamp, the daemon-side provider catalog cache and TTL, and the front-end `provider + cwd` catalog entry used by Session Control and Council. The daemon's 30 minute background timer is not reset by manual refresh.
 - Users may manually supplement missing models per provider. Manual supplements are provider-wide, not workspace-scoped. The optional `cwd` on the API is used only to check duplicates against the provider-native catalog for that workspace.
 - Users enter model ids and provider-specific option values only. They do not enter backend option key names. RAH maps option values to fixed provider keys:
   - Codex: `model_reasoning_effort` / backend `reasoning_effort`
@@ -80,7 +80,6 @@ Settings behavior:
 
 - Provider capability drift must not break native runtime startup.
 - Unsupported model/permission/plan controls should disappear or degrade to diagnostics, not fail the session.
-- Codex `>=0.132.0` is recommended for RAH. Settings may surface the read-only `codex doctor --json`
-  summary, but RAH does not own Codex account tokens, quota, or subscription entitlement checks.
+- Provider diagnostics are optional and read-only. They may inspect binary/version/launch health, but they are not part of model catalog, session startup, or account entitlement truth.
 - If a provider adds a new slash command, RAH does not need immediate Web UI support; users can access it directly in the official TUI view.
 - `thread/loaded/list`-style loaded-session discovery is diagnostic/fallback only. It is not the default Codex binding strategy because shared servers can have concurrent clients.

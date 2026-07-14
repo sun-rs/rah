@@ -23,6 +23,10 @@ boundary is intentionally narrow:
   existing live session silently syncs the latest tail; only read-only replay or upward scrolling loads
   older history. See
   [`docs/history-browsing.zh-CN.md`](docs/history-browsing.zh-CN.md).
+- Large history is transferred as bounded canonical turn summaries. Resume keeps the already rendered
+  page in place and overlays the resident live projection instead of downloading the same history again.
+- OpenCode live catch-up uses its official local-server message API with a bounded recent window;
+  SQLite is reserved for stored-history discovery, paging, and audit rather than the live polling loop.
 - tmux screen output is only the native TUI view/control surface for Claude and fallback paths.
 - The Web/PWA `TUI` tab is the explicit handoff point for TUI surfaces.
 - provider adapters own launch specs, binding probes, mirror parsers, and optional capability catalogs.
@@ -130,6 +134,7 @@ npm run test:protocol
 npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
+npm run test:ci
 npm run test:regression:e2e-browser
 npm run test:native-tui
 npm run test:tui-mux-auto
@@ -155,11 +160,11 @@ npm run test:smoke:provider-flows
 RAH now uses four test tiers:
 
 - default gate
-  - `npm run typecheck`
-  - `npm run test:protocol`
-  - `npm run test:provider-contracts`
-  - `npm run test:web`
-  - `npm run test:runtime`
+  - `npm run test:ci`
+  - runs typecheck, all protocol/Web/runtime test files, the production Web build, and
+    `npm audit --omit=dev`
+  - Web/runtime tests are discovered recursively and each file runs in an isolated Node test process;
+    adding a test file no longer requires editing a hand-maintained package-script list
 - provider contracts
   - `npm run test:provider-contracts`
   - deterministic contract coverage for Codex, Claude, and OpenCode live paths

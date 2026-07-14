@@ -1,5 +1,7 @@
 # RAH 当前系统设计总览
 
+复核日期：2026-07-15
+
 本文记录当前已经锁定的 RAH 系统设计，作为后续维护和接入新 provider 的主参考。细节文档见 [docs 索引](./README.md)。
 
 ## 1. 项目定位
@@ -88,6 +90,7 @@ Timeline identity 的硬约束：
 - native TUI PTY runtime
 - stored history catalog
 - history snapshot paging
+- daemon-owned provider model catalog refresh（启动后 1 秒，随后每 30 分钟）
 
 HTTP 数据面有明确边界：static serving 只能读取构建产物目录；任意 host path 只能通过受设备认证保护的 file preview route 读取，并在磁盘读取、转换输出和响应大小三层限流。不能把 daemon 变成通用静态文件服务器。
 
@@ -125,6 +128,7 @@ HTTP 数据面有明确边界：static serving 只能读取构建产物目录；
 - 对长历史使用虚拟窗口和 measured row height，不把所有 DOM 一次性渲染。
 - 桌面宽容器的 ChatThread 提供按用户轮次派生的 `Turn Navigator`。每个刻度代表一条用户消息及其后续 assistant 处理过程/最终回答；Codex 后台 `Turn Directory` 可以提供尚未载入正文的完整 turn 列表，点击未加载刻度只请求对应 byte range。可见状态和已加载 turn 的定位只使用当前虚拟布局，不扫描整页 DOM。窄 pane 和 coarse-pointer 设备不展示该控件。
 - mode/model/config 的 provider 差异必须由 adapter 通过 `ProviderModelCatalog`、`SessionModeState`、`ManagedSession.model/config/modelProfile` 暴露，前端不能把 mode 翻译成 provider-native 启动参数。
+- 前端模型目录按 `provider + cwd` 缓存，并以 request generation 拒绝迟到响应；浏览器只做当前 picker 的 5 分钟按需 freshness，不拥有全局 30 分钟刷新循环。
 - 图片粘贴是 composer 能力：前端把剪贴板图片保存为 data image URL 附加到 outgoing text；provider adapter 负责把它映射到 provider 可接受的 image input。Chat feed 中只展示“Image xN”标识，不把 base64 展开成正文。
 - 回复中的本地文件链接不作为普通 HTTP 链接跳转，而是进入 Inspector file preview。Host file preview 不受当前 workspace scope 限制；workspace/session Inspector 文件树仍保持 workspace boundary。普通文本在磁盘读取阶段即执行有界 prefix read。图片 preview 按访问面分级：`localhost` / LAN private IP / `.local` 在 16 MiB inline 安全上限内可以返回原图；更大的本地图以及 Tailscale/公网访问只返回 bounded preview data，后端优先用系统图像能力生成缩略图，且远程请求不能通过 query 参数升级为原图。大 Notebook 通过有 timeout、cell/source/output 上限的隔离提取器生成预览，并丢弃图片输出；不能把“大图/大 Notebook”作为正常不可预览状态暴露给用户。
 - `ProviderLogo` 和 `CouncilLogo` 是标题栏、sidebar、Chats row、Canvas toolbar 的唯一图标入口。Session provider 标题图标默认是 card/pill；Council 标题图标也必须使用同样的 card/pill 外壳，小型 badge/button 再显式使用 `bare` 变体。左侧 sidebar 的 Council 图标使用黑色 glyph；其他 Council 图标默认使用橙色 glyph，并保持与同位置 provider 图标同规格。
@@ -247,7 +251,7 @@ Structured test running 的保留决策：
 | --- | --- | --- | --- | --- |
 | Codex | native local server | `codex app-server` + `codex --remote <endpoint> resume <threadId>` | app-server event + rollout/session backfill | model/mode/runtime config 按 Codex app-server 能力开放 |
 | Claude | tmux/TUI mux fallback | `claude --session-id <uuid>` / `claude --resume <id>` inside tmux | `~/.claude/projects/**/*.jsonl` | permission/model/effort 作为启动参数增强；运行中以原生 TUI 为准 |
-| OpenCode | native local server | OpenCode serve/session + `opencode attach <url> --session <id>` | OpenCode server/session event + SQLite backfill | model/variant 和原生 agent 按 OpenCode API 能力开放 |
+| OpenCode | native local server | OpenCode serve/session + `opencode attach <url> --session <id>` | server/session event + 有界官方 message API catch-up；SQLite 只用于 stored history | model/variant 和原生 agent 按 OpenCode API 能力开放 |
 
 默认权限策略见 [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)。当前默认统一偏向低摩擦最大权限：
 
@@ -373,6 +377,7 @@ JSONL、rollout 或 SQLite。
 - 首屏冻结 provider 历史 revision。
 - 后续 cursor 只能在同一个 frozen snapshot 内翻页。
 - Resume 保留已展示 turns，并以 resident live projection 覆盖重叠 turn 的 lifecycle。
+- Resume 不重新请求已经显示的 history page；live attach 与 resident projection 只补充新的 revision/delta。
 
 ### 7.1 Council 列表与消息同步
 
@@ -393,7 +398,7 @@ Council 的创建、改名、增删 agent 等显式 mutation 可以返回完整 
 硬约束：
 
 - live/native-mirror event 不能被 baseline 加载挡住。
-- Codex/OpenCode Chat 的当前回复来自 native local-server event/client push，不依赖 rollout/SQLite 全量回读。
+- Codex/OpenCode Chat 的当前回复来自 native local-server event/client push。OpenCode 只用串行、有界的官方 recent-message API 补齐事件缝隙，不在 live loop 扫描 SQLite。
 - Claude Chat 的当前回复来自 daemon transcript mirror，不从 ANSI 屏幕解析主内容。
 - provider history 文件/DB 是 backfill 和 read-only history 的依据，不是新 live turn 的唯一实时来源。
 
@@ -414,6 +419,8 @@ Conversation 正文。生产 daemon 的目录发现必须遵循：
 
 因此 Recent 的“快”不以牺牲一致性为代价，All 的“准”也不能成为启动、Resume 或 Chat 首屏的
 串行依赖。
+
+Stop 的前端收口也遵循同一边界：close API 成功即应用权威 stopped summary、关闭 Closing 层并允许继续操作；随后 workbench/catalog refresh 只做 fire-and-forget metadata 校准，不能延长用户等待时间。
 
 ## 8. Stop / Close 语义
 
@@ -555,15 +562,14 @@ rah restart --no-open
 验证命令：
 
 ```bash
-npm run typecheck
-npm run test:web
+npm run test:ci
 npm run test:provider-contracts
-npm run test:runtime
-npm run build:web
 npm run test:smoke:native-browser
 npm run test:smoke:native-browser-webkit
 git diff --check
 ```
+
+`test:ci` 递归发现 protocol/Web/runtime 的全部 test/spec 文件，并把每个文件放在独立 Node test 进程中运行，随后执行生产 Web build 和 `npm audit --omit=dev`。新增测试文件不需要再维护脚本白名单。
 
 Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行。当前主链路优先使用 native local server probe 验证 Codex/OpenCode 的 provider-server 能力，再用 browser smoke 验证 UI：
 

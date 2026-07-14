@@ -1,6 +1,6 @@
 # Conversation 架构收口审计
 
-复核日期：2026-07-12
+复核日期：2026-07-15
 
 ## 结论
 
@@ -79,6 +79,10 @@ turn/item identity，不读取第二份历史，不改变协议，也不按内�
   最低要求，协议不匹配会明确报错。
 - Web permission response 只接受 provider-neutral decision；Codex 的两种官方 approval response
   shape 只存在于 adapter 内。
+- OpenCode live mirror 使用 provider server event + 有界 recent-message API；SQLite 只参与 stored-history
+  discovery/paging/audit，不再以 750ms 轮询进入 live 主链路。
+- Resume 复用当前 canonical history page；Stop 在 close API 成功后立即收口 UI，二次 metadata refresh
+  不阻塞 Closing 层。
 
 ## 剩余工程债务
 
@@ -95,18 +99,15 @@ turn/item identity，不读取第二份历史，不改变协议，也不按内�
 
 ## 本次验证
 
-以下检查在 2026-07-12 的同一工作树上通过：
+以下检查在 2026-07-15 的同一工作树上通过：
 
-- `npm run typecheck`
-- `npm run test:protocol`：16/16
-- `npm run test:conversation`：69/69
-- `npm run test:history-directory`：19/19
-- `npm run test:web`：448/448
-- `npm run test:provider-contracts`：264/264
-- `npm run build:web`
+- `npm run test:ci`（typecheck、递归 protocol/Web/runtime tests、生产 Web build、production audit）
+- `npm run test:provider-contracts`
 - `git diff --check`
 - Codex 真实浏览器 smoke：连续输入、相同文本、interrupt、分页、Resume、TUI、Archive 和移动端断言通过。
 - Claude/OpenCode 真实浏览器 smoke：顺序、重复输入、interrupt 锚定、queue、Resume、TUI 和前台 catch-up 通过。
+- New/History/Resume/Stop 与超大历史的时间、transfer bytes 基线见
+  [Conversation 历史浏览与分页边界](./history-browsing.zh-CN.md#10-性能验证)。
 
 canonical Conversation 文件的精确扫描中不存在 `legacy` 或协议级 `fallback`。Markdown 的纯文本
 渲染样式、provider adapter 的静态 catalog 默认值和 Claude 的正式 TUI 承载不构成第二套
