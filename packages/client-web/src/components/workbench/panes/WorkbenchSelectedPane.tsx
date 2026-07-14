@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -20,7 +20,6 @@ import {
   Trash2,
 } from "lucide-react";
 import type { SessionProjection } from "../../../types";
-import { TerminalPane } from "../../../TerminalPane";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
 import { CouncilLogo } from "../../CouncilLogo";
@@ -78,6 +77,9 @@ import { providerLabel } from "../../../types";
 import { conversationTurnsToFeed } from "../../../conversation-feed";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
+const TerminalPane = lazy(async () => ({
+  default: (await import("../../../TerminalPane")).TerminalPane,
+}));
 
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
@@ -898,20 +900,28 @@ export function WorkbenchSelectedPane(props: {
 
       {effectiveSessionViewMode === "tui" && nativeTui ? (
         <div className="min-h-0 flex-1 bg-[var(--app-bg)] p-2 md:p-3">
-          <TerminalPane
-            key={nativeTui.terminalId}
-            terminalId={nativeTui.terminalId}
-            clientId={props.clientId}
-            hasControl={terminalHasControl}
-            tuiClientCloseEnabled
-            tuiClientActive={terminalTuiClientActive}
-            onTuiClientActiveChange={setTerminalTuiClientActive}
-            exclusiveNativeSurfaceControl={props.selectedSummary.session.liveBackend !== "native_local_server"}
-            initialReplay={terminalInitialReplay}
-            scrollback={SESSION_TUI_SCROLLBACK_LINES}
-            replayTailBytes={PROVIDER_TUI_REPLAY_TAIL_BYTES}
-            maxWriteBatchChars={128 * 1024}
-          />
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+                Loading terminal…
+              </div>
+            }
+          >
+            <TerminalPane
+              key={nativeTui.terminalId}
+              terminalId={nativeTui.terminalId}
+              clientId={props.clientId}
+              hasControl={terminalHasControl}
+              tuiClientCloseEnabled
+              tuiClientActive={terminalTuiClientActive}
+              onTuiClientActiveChange={setTerminalTuiClientActive}
+              exclusiveNativeSurfaceControl={props.selectedSummary.session.liveBackend !== "native_local_server"}
+              initialReplay={terminalInitialReplay}
+              scrollback={SESSION_TUI_SCROLLBACK_LINES}
+              replayTailBytes={PROVIDER_TUI_REPLAY_TAIL_BYTES}
+              maxWriteBatchChars={128 * 1024}
+            />
+          </Suspense>
         </div>
       ) : (
         <ChatThread

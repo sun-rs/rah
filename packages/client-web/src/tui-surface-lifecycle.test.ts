@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   activateSessionTuiTerminal,
@@ -13,6 +14,26 @@ import {
   touchCouncilTuiCache,
   warmCouncilTuiCache,
 } from "./tui-surface-lifecycle";
+
+function source(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
+
+test("terminal and Council implementation bundles stay out of the initial web entry", () => {
+  const mainSource = source("./main.tsx");
+  const appSource = source("./App.tsx");
+  const terminalPaneSource = source("./TerminalPane.tsx");
+  const terminalSurfaceSource = source("./components/terminal/TerminalSurface.tsx");
+  const selectedPaneSource = source("./components/workbench/panes/WorkbenchSelectedPane.tsx");
+
+  assert.doesNotMatch(mainSource, /@xterm\/xterm/);
+  assert.match(terminalPaneSource, /@xterm\/xterm\/css\/xterm\.css/);
+  assert.match(terminalSurfaceSource, /lazy\(async \(\) =>/);
+  assert.match(terminalSurfaceSource, /import\("\.\.\/\.\.\/TerminalPane"\)/);
+  assert.match(selectedPaneSource, /import\("\.\.\/\.\.\/\.\.\/TerminalPane"\)/);
+  assert.doesNotMatch(appSource, /import \{ CouncilPage \} from/);
+  assert.match(appSource, /import\("\.\/council\/CouncilPage"\)/);
+});
 
 test("session tui surface is active only after the current session TUI was opened and not detached", () => {
   const openedTerminalIds = new Set(["session-a"]);

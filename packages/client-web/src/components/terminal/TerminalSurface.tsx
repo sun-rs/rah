@@ -1,7 +1,11 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { TerminalPane, type TerminalPaneProps } from "../../TerminalPane";
+import type { TerminalPaneProps } from "../../TerminalPane";
+
+const TerminalPane = lazy(async () => ({
+  default: (await import("../../TerminalPane")).TerminalPane,
+}));
 
 type TerminalDialogFrameProps = {
   open: boolean;
@@ -59,10 +63,14 @@ export function TerminalDialogFrame(props: TerminalDialogFrameProps) {
                   {props.title}
                 </Dialog.Title>
                 {props.subtitle ? (
-                  <div className="truncate text-[11px] text-[var(--app-hint)]">
+                  <Dialog.Description className="truncate text-[11px] text-[var(--app-hint)]">
                     {props.subtitle}
-                  </div>
-                ) : null}
+                  </Dialog.Description>
+                ) : (
+                  <Dialog.Description className="sr-only">
+                    Interactive terminal session.
+                  </Dialog.Description>
+                )}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
@@ -190,12 +198,20 @@ export function TerminalPaneStack(props: TerminalPaneStackProps) {
               aria-hidden={!active}
               {...(!active ? ({ inert: "" } as Record<string, string>) : {})}
             >
-              <TerminalPane
-                terminalId={tab.terminalId}
-                clientId={props.clientId}
-                {...paneProps}
-                hasControl={hasControl}
-              />
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+                    Loading terminal…
+                  </div>
+                }
+              >
+                <TerminalPane
+                  terminalId={tab.terminalId}
+                  clientId={props.clientId}
+                  {...paneProps}
+                  hasControl={hasControl}
+                />
+              </Suspense>
             </div>
           );
         })}

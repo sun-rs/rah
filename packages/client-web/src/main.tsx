@@ -4,7 +4,6 @@ import { App } from "./App";
 import { DeviceAuthGate } from "./components/DeviceAuthGate";
 import "./index.css";
 import "./styles.css";
-import "@xterm/xterm/css/xterm.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
