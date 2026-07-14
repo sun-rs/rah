@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import type { IncomingMessage } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -370,6 +370,145 @@ describe("startRahDaemon", () => {
     assert.equal(streamedDelta?.revision, 1);
   });
 
+  test("filters the initial event replay before the websocket subscription frame", async () => {
+    const target = engine.eventBus.publish({
+      sessionId: "target-session",
+      turnId: "target-turn",
+      type: "turn.started",
+      source: {
+        provider: "custom",
+        channel: "structured_live",
+        authority: "authoritative",
+      },
+      payload: {},
+    });
+    engine.eventBus.publish({
+      sessionId: "other-session",
+      turnId: "other-turn",
+      type: "turn.started",
+      source: {
+        provider: "custom",
+        channel: "structured_live",
+        authority: "authoritative",
+      },
+      payload: {},
+    });
+
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}/api/events?sessionId=target-session&eventType=turn.started`,
+    );
+    const batch = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        socket.close();
+        reject(new Error("Timed out waiting for filtered initial replay."));
+      }, 1_000);
+      socket.once("message", (raw) => {
+        clearTimeout(timer);
+        resolve(JSON.parse(raw.toString("utf8")) as Record<string, unknown>);
+      });
+      socket.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    socket.close();
+
+    assert.equal(batch.initial, true);
+    const events = batch.events as Array<Record<string, unknown>>;
+    assert.deepEqual(events.map((event) => event.seq), [target.seq]);
+  });
+
+  test("can subscribe to live filtered events without replaying retained history", async () => {
+    engine.eventBus.publish({
+      sessionId: "council-1",
+      type: "council.message.created",
+      source: {
+        provider: "system",
+        channel: "system",
+        authority: "authoritative",
+      },
+      payload: {
+        council: {
+          id: "council-1",
+          title: "Council 1",
+          workspace: tempHome,
+          status: "running",
+          phase: "ready",
+          agents: [],
+          createdAt: "2026-07-14T00:00:00.000Z",
+          updatedAt: "2026-07-14T00:00:00.000Z",
+        },
+        message: {
+          id: 1,
+          councilId: "council-1",
+          actorId: "agent-1",
+          role: "agent",
+          parts: [{ kind: "text", text: "retained" }],
+          createdAt: "2026-07-14T00:00:00.000Z",
+        },
+      },
+    });
+
+    const socket = await openWebSocket(
+      `ws://127.0.0.1:${port}/api/events?eventType=council.message.created&initialReplay=false`,
+    );
+    const received = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for live event.")), 1_000);
+      socket.once("message", (raw) => {
+        clearTimeout(timer);
+        resolve(JSON.parse(raw.toString("utf8")) as Record<string, unknown>);
+      });
+    });
+    const live = engine.eventBus.publish({
+      sessionId: "council-1",
+      turnId: "live-turn",
+      type: "turn.started",
+      source: {
+        provider: "custom",
+        channel: "structured_live",
+        authority: "authoritative",
+      },
+      payload: {},
+    });
+    engine.eventBus.publish({
+      sessionId: "council-1",
+      type: "council.message.created",
+      source: {
+        provider: "system",
+        channel: "system",
+        authority: "authoritative",
+      },
+      payload: {
+        council: {
+          id: "council-1",
+          title: "Council 1",
+          workspace: tempHome,
+          status: "running",
+          phase: "ready",
+          agents: [],
+          createdAt: "2026-07-14T00:00:00.000Z",
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        },
+        message: {
+          id: 2,
+          councilId: "council-1",
+          actorId: "agent-1",
+          role: "agent",
+          parts: [{ kind: "text", text: "live" }],
+          createdAt: "2026-07-14T00:01:00.000Z",
+        },
+      },
+    });
+
+    const batch = await received;
+    socket.close();
+    assert.equal(batch.initial, undefined);
+    const events = batch.events as Array<Record<string, unknown>>;
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.type, "council.message.created");
+    assert.notEqual(events[0]?.seq, live.seq);
+  });
+
   test("closes promptly while an event websocket is still connected", async () => {
     const socket = await openWebSocket(`ws://127.0.0.1:${port}/api/events`);
     const socketClosed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
@@ -395,6 +534,79 @@ describe("startRahDaemon", () => {
 
     await socketClosed;
     assert.ok(Date.now() - startedAt < 3_000);
+  });
+
+  test("starts cleanup immediately and bounds draining for a stalled HTTP request", async () => {
+    await daemon!.close();
+    daemon = null;
+
+    port = await freePort();
+    engine = new RuntimeEngine();
+    let notifyShutdownStarted: (() => void) | undefined;
+    const shutdownStarted = new Promise<void>((resolve) => {
+      notifyShutdownStarted = resolve;
+    });
+    const originalShutdown = engine.shutdown.bind(engine);
+    engine.shutdown = async () => {
+      notifyShutdownStarted?.();
+      await originalShutdown();
+    };
+    daemon = await startRahDaemon({
+      port,
+      engine,
+      auth: false,
+      httpDrainTimeoutMs: 25,
+    });
+
+    let notifySocketAssigned: (() => void) | undefined;
+    const socketAssigned = new Promise<void>((resolve) => {
+      notifySocketAssigned = resolve;
+    });
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: "/api/sessions/start",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": "100",
+      },
+    });
+    request.on("error", () => undefined);
+    request.once("socket", (socket) => {
+      if (socket.readyState === "open") {
+        notifySocketAssigned?.();
+      } else {
+        socket.once("connect", () => notifySocketAssigned?.());
+      }
+    });
+    request.write("{");
+    await socketAssigned;
+
+    const startedAt = Date.now();
+    let shutdownTimeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.all([
+        daemon.close(),
+        Promise.race([
+          shutdownStarted,
+          new Promise<never>((_resolve, reject) => {
+            shutdownTimeout = setTimeout(
+              () => reject(new Error("Engine cleanup did not start promptly.")),
+              500,
+            );
+          }),
+        ]),
+      ]);
+    } finally {
+      if (shutdownTimeout) {
+        clearTimeout(shutdownTimeout);
+      }
+    }
+    daemon = null;
+    request.destroy();
+
+    assert.ok(Date.now() - startedAt < 1_000);
   });
 
   test("serves native TUI diagnostics", async () => {

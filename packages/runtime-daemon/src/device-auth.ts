@@ -38,6 +38,7 @@ const DEVICE_TOKEN_BYTES = 32;
 const PAIRING_CODE_TTL_MS = 10 * 60 * 1_000;
 const PAIRING_ATTEMPT_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_PAIRING_ATTEMPTS_PER_WINDOW = 8;
+const DEFAULT_MAX_PAIRING_ATTEMPT_KEYS = 1_024;
 const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1_000;
 const MAX_DEVICE_NAME_LENGTH = 64;
 const MAX_USER_AGENT_LENGTH = 256;
@@ -71,6 +72,7 @@ export type DeviceAuthPrincipal =
 export interface DeviceAuthManagerOptions {
   rootDir?: string;
   now?: () => number;
+  maxPairingAttemptKeys?: number;
 }
 
 function resolveRahHome(): string {
@@ -250,6 +252,7 @@ export class DeviceAuthManager {
   readonly managementTokenPath: string;
 
   private readonly now: () => number;
+  private readonly maxPairingAttemptKeys: number;
   private registry: StoredDeviceRegistry;
   private readonly managementToken: string;
   private pairingCode: PairingCodeState | null = null;
@@ -261,6 +264,10 @@ export class DeviceAuthManager {
     this.registryPath = path.join(this.rootDir, "devices.json");
     this.managementTokenPath = path.join(this.rootDir, "management-token");
     this.now = options.now ?? Date.now;
+    this.maxPairingAttemptKeys = Math.max(
+      1,
+      options.maxPairingAttemptKeys ?? DEFAULT_MAX_PAIRING_ATTEMPT_KEYS,
+    );
     mkdirSync(this.rootDir, { recursive: true, mode: 0o700 });
     chmodSync(this.rootDir, 0o700);
     this.registry = this.readRegistry();
@@ -309,18 +316,20 @@ export class DeviceAuthManager {
     const activeCode = this.pairingCode;
     if (activeCode && activeCode.expiresAtMs <= this.now()) {
       this.pairingCode = null;
+      this.pairingAttempts.clear();
       return { active: false };
     }
     return { active: activeCode?.id === id };
   }
 
   pair(req: IncomingMessage, input: PairDeviceRequest): { response: PairDeviceResponse; token: string } {
-    this.assertPairingAttemptAllowed(req);
     const activeCode = this.pairingCode;
     if (!activeCode || activeCode.expiresAtMs <= this.now()) {
       this.pairingCode = null;
+      this.pairingAttempts.clear();
       throw new Error("Pairing code is missing or expired.");
     }
+    this.assertPairingAttemptAllowed(req);
     if (!constantTimeEqual(activeCode.code, input.code)) {
       throw new Error("Pairing code is invalid.");
     }
@@ -447,8 +456,16 @@ export class DeviceAuthManager {
   private assertPairingAttemptAllowed(req: IncomingMessage): void {
     const key = remoteAttemptKey(req);
     const now = this.now();
+    for (const [attemptKey, state] of this.pairingAttempts) {
+      if (now - state.windowStartedAtMs >= PAIRING_ATTEMPT_WINDOW_MS) {
+        this.pairingAttempts.delete(attemptKey);
+      }
+    }
     const current = this.pairingAttempts.get(key);
-    if (!current || now - current.windowStartedAtMs >= PAIRING_ATTEMPT_WINDOW_MS) {
+    if (!current) {
+      if (this.pairingAttempts.size >= this.maxPairingAttemptKeys) {
+        throw new Error("Too many pairing attempts from distinct network sources. Try again later.");
+      }
       this.pairingAttempts.set(key, { windowStartedAtMs: now, attempts: 1 });
       return;
     }

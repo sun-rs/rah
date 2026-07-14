@@ -15,6 +15,8 @@ export interface RahDaemon {
   close(): Promise<void>;
 }
 
+const DEFAULT_HTTP_DRAIN_TIMEOUT_MS = 5_000;
+
 function readRootPackageVersion(rootDir: string): string | undefined {
   try {
     const raw = readFileSync(path.join(rootDir, "package.json"), "utf8");
@@ -73,11 +75,13 @@ export async function startRahDaemon(options?: {
   port?: number;
   engine?: RuntimeEngine;
   auth?: DeviceAuthManager | false;
+  httpDrainTimeoutMs?: number;
 }): Promise<RahDaemon> {
   const host = options?.host ?? "0.0.0.0";
   const port = options?.port ?? 43111;
   const engine = options?.engine ?? new RuntimeEngine();
   const auth = options?.auth === false ? undefined : options?.auth ?? new DeviceAuthManager();
+  const httpDrainTimeoutMs = options?.httpDrainTimeoutMs ?? DEFAULT_HTTP_DRAIN_TIMEOUT_MS;
   const postRoutes = createPostRoutes(engine);
   let runtimeIdentity: RuntimeIdentityResponse | undefined;
   let closePromise: Promise<void> | undefined;
@@ -108,24 +112,32 @@ export async function startRahDaemon(options?: {
             });
           });
 
+          const forceDrainTimer = setTimeout(() => {
+            server.closeAllConnections();
+          }, Math.max(0, httpDrainTimeoutMs));
+          forceDrainTimer.unref?.();
+
+          let engineShutdownError: unknown;
+          const engineShutdown = engine.shutdown().catch((error) => {
+            engineShutdownError = error;
+            console.error("[rah] engine shutdown failed", error);
+          });
+
           let webSocketCloseError: unknown;
           try {
             await websockets.close();
           } catch (error) {
             webSocketCloseError = error;
           }
-          await serverClosed;
+          await Promise.all([serverClosed, engineShutdown]);
+          clearTimeout(forceDrainTimer);
 
-          try {
-            await engine.shutdown();
-          } catch (error) {
-            console.error("[rah] engine shutdown failed", error);
-          }
-
-          if (serverCloseError || webSocketCloseError) {
+          if (serverCloseError || webSocketCloseError || engineShutdownError) {
             throw new AggregateError(
-              [serverCloseError, webSocketCloseError].filter((error) => error !== undefined),
-              "RAH transport shutdown failed.",
+              [serverCloseError, webSocketCloseError, engineShutdownError].filter(
+                (error) => error !== undefined,
+              ),
+              "RAH shutdown failed.",
             );
           }
         })();

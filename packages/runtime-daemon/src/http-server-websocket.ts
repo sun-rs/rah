@@ -171,24 +171,35 @@ export function attachWebSocketHandlers(
       : undefined;
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const replayFromSeq = url.searchParams.get("replayFromSeq");
+    const initialReplayEnabled = url.searchParams.get("initialReplay") !== "false";
     const sendEventFrame = (message: unknown): boolean => sendJsonWithBackpressure(socket, message, {
       closeReason: "Event client is too slow",
     });
     let filter: EventSubscriptionRequest = {};
+    const sessionIds = url.searchParams.getAll("sessionId");
+    const eventTypes = url.searchParams.getAll("eventType") as NonNullable<EventSubscriptionRequest["eventTypes"]>;
+    if (sessionIds.length > 0) {
+      filter.sessionIds = sessionIds;
+    }
+    if (eventTypes.length > 0) {
+      filter.eventTypes = eventTypes;
+    }
     if (replayFromSeq && Number.isFinite(Number.parseInt(replayFromSeq, 10))) {
       filter.replayFromSeq = Number.parseInt(replayFromSeq, 10);
     }
 
-    const initial = engine.listEvents(filter);
-    const initialReplayGap = replayGapForSubscription(engine, filter);
-    if (initial.length > 0 || initialReplayGap) {
-      const conversationDeltas = conversationDeltasForEvents(engine, initial);
-      sendEventFrame({
-        events: initial,
-        ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
-        initial: true,
-        ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
-      });
+    if (initialReplayEnabled) {
+      const initial = engine.listEvents(filter);
+      const initialReplayGap = replayGapForSubscription(engine, filter);
+      if (initial.length > 0 || initialReplayGap) {
+        const conversationDeltas = conversationDeltasForEvents(engine, initial);
+        sendEventFrame({
+          events: initial,
+          ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
+          initial: true,
+          ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
+        });
+      }
     }
 
     let unsubscribe: () => void = () => undefined;

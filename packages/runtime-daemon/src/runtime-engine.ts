@@ -1059,7 +1059,9 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    this.assertAcceptingWork();
     await this.waitForStartupMaintenance();
+    this.assertAcceptingWork();
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
@@ -1097,7 +1099,9 @@ export class RuntimeEngine {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.assertAcceptingWork();
     await this.waitForStartupMaintenance();
+    this.assertAcceptingWork();
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
@@ -1180,7 +1184,9 @@ export class RuntimeEngine {
     parentSessionId: string,
     request: ForkSessionRequest,
   ): Promise<ForkSessionResponse> {
+    this.assertAcceptingWork();
     await this.waitForStartupMaintenance();
+    this.assertAcceptingWork();
     const operationId = request.operationId.trim();
     if (!operationId) {
       throw new Error("Fork session operationId must not be empty.");
@@ -1469,6 +1475,7 @@ export class RuntimeEngine {
   }
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
+    this.assertAcceptingWork();
     if (
       this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text, {
         ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
@@ -2192,6 +2199,12 @@ export class RuntimeEngine {
       }
     });
     await runShutdownStep("workbench state flush", () => this.workbenchState.flush());
+  }
+
+  private assertAcceptingWork(): void {
+    if (this.shuttingDown) {
+      throw new Error("RAH is shutting down and cannot accept new work.");
+    }
   }
 
   private registerAdapter(adapter: ProviderAdapter): void {

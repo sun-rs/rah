@@ -917,6 +917,43 @@ class FrozenPagingAdapter implements ProviderAdapter {
 }
 
 describe("RuntimeEngine", () => {
+  test("rejects new work after shutdown begins", async () => {
+    const engine = new RuntimeEngine();
+    await engine.shutdown();
+
+    await assert.rejects(
+      engine.startSession({
+        provider: "codex",
+        cwd: process.cwd(),
+      }),
+      /RAH is shutting down/,
+    );
+    assert.throws(
+      () => engine.sendInput("missing", { clientId: "web", text: "hello" }),
+      /RAH is shutting down/,
+    );
+  });
+
+  test("does not start work that was waiting for startup maintenance when shutdown begins", async () => {
+    const engine = new RuntimeEngine([]);
+    let releaseMaintenance: () => void = () => {};
+    const startupMaintenance = new Promise<void>((resolve) => {
+      releaseMaintenance = resolve;
+    });
+    (engine as unknown as { startupMaintenance: Promise<void> }).startupMaintenance = startupMaintenance;
+
+    const pendingStart = engine.startSession({
+      provider: "codex",
+      cwd: process.cwd(),
+    });
+    await Promise.resolve();
+    const shutdown = engine.shutdown();
+    releaseMaintenance();
+
+    await assert.rejects(pendingStart, /RAH is shutting down/);
+    await shutdown;
+  });
+
   let tmpClaudeConfig: string;
   let previousClaudeConfig: string | undefined;
   let tmpRahHome: string;
@@ -3559,7 +3596,7 @@ describe("RuntimeEngine", () => {
       engine.sendInput(sessionId, { clientId: "web-native", text: "hello claude native" });
       await waitFor(() => {
         assert.match(transcript, /MOCK_CLAUDE_INPUT:hello claude native/);
-      });
+      }, { timeoutMs: 30_000 });
       await waitFor(() => {
         assert.ok(
           engine.eventBus

@@ -350,4 +350,55 @@ describe("device authentication", () => {
     });
     assert.equal(paired.status, 200);
   });
+
+  test("keeps pairing attempt tracking bounded and limited to active codes", () => {
+    let now = 1_000;
+    const boundedAuth = new DeviceAuthManager({
+      rootDir: path.join(tempHome, "bounded-auth"),
+      now: () => now,
+      maxPairingAttemptKeys: 2,
+    });
+    const attempts = () => (
+      boundedAuth as unknown as { pairingAttempts: Map<string, unknown> }
+    ).pairingAttempts;
+    const input = { code: "99999999", name: "Untrusted browser" };
+
+    assert.throws(
+      () => boundedAuth.pair(authRequest({ remoteAddress: "192.0.2.1", host: "rah" }), input),
+      /missing or expired/,
+    );
+    assert.equal(attempts().size, 0);
+
+    boundedAuth.createPairingCode();
+    assert.throws(
+      () => boundedAuth.pair(authRequest({ remoteAddress: "192.0.2.1", host: "rah" }), input),
+      /invalid/,
+    );
+    assert.throws(
+      () => boundedAuth.pair(authRequest({ remoteAddress: "192.0.2.2", host: "rah" }), input),
+      /invalid/,
+    );
+    assert.equal(attempts().size, 2);
+    assert.throws(
+      () => boundedAuth.pair(authRequest({ remoteAddress: "192.0.2.3", host: "rah" }), input),
+      /distinct network sources/,
+    );
+    assert.equal(attempts().size, 2);
+
+    now += 10 * 60 * 1_000;
+    assert.deepEqual(boundedAuth.pairingCodeStatus("missing"), { active: false });
+    assert.equal(attempts().size, 0);
+    assert.throws(
+      () => boundedAuth.pair(authRequest({ remoteAddress: "192.0.2.3", host: "rah" }), input),
+      /missing or expired/,
+    );
+    assert.equal(attempts().size, 0);
+
+    boundedAuth.createPairingCode();
+    assert.throws(
+      () => boundedAuth.pair(authRequest({ remoteAddress: "192.0.2.3", host: "rah" }), input),
+      /invalid/,
+    );
+    assert.deepEqual([...attempts().keys()], ["192.0.2.3"]);
+  });
 });
