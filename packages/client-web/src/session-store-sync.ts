@@ -2,6 +2,7 @@ import type {
   ConversationProjectionDelta,
   EventBatch,
   RahEvent,
+  StoredSessionRef,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { isReadOnlyReplay } from "./session-capabilities";
@@ -20,6 +21,8 @@ type SessionSyncState = {
   workspaceVisibilityVersion: number;
   sessionTopologyVersion: number;
   eventStreamOpenRevision: number;
+  storedSessions: StoredSessionRef[];
+  recentSessions: StoredSessionRef[];
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
@@ -217,17 +220,22 @@ export async function recoverFromReplayGapCommand(args: {
     > & {
       workspaceDir: string;
       hiddenWorkspaceDirs: Set<string>;
+      storedSessions: StoredSessionRef[];
+      recentSessions: StoredSessionRef[];
     },
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
-    options?: { workspaceVisibilityVersionAtRequest?: number },
+    options?: {
+      workspaceVisibilityVersionAtRequest?: number;
+      preserveStoredSessionCatalog?: boolean;
+    },
   ) => {
     projections: Map<string, SessionProjection>;
     selectedSessionId: string | null;
     workspaceDir: string;
     hiddenWorkspaceDirs: Set<string>;
     workspaceVisibilityVersion: number;
-    storedSessions: unknown;
-    recentSessions: unknown;
+    storedSessions: StoredSessionRef[];
+    recentSessions: StoredSessionRef[];
     workspaceDirs: string[];
   };
   applyEventsToMap: (
@@ -245,7 +253,7 @@ export async function recoverFromReplayGapCommand(args: {
   }
   const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
   const sessionTopologyVersionAtRequest = args.get().sessionTopologyVersion;
-  const sessionsResponse = await api.listSessions();
+  const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
   args.set((state) => {
     if (shouldSkipSessionsResponse(state, sessionTopologyVersionAtRequest)) {
       const projectionState = applyProjectionEventsToSyncState({
@@ -262,6 +270,7 @@ export async function recoverFromReplayGapCommand(args: {
     }
     const nextState = args.replaceSessionsResponse(state as never, sessionsResponse, {
       workspaceVisibilityVersionAtRequest,
+      preserveStoredSessionCatalog: true,
     });
     const projectionState = applyProjectionEventsToSyncState({
       state: { ...state, ...nextState } as SessionSyncState,
@@ -478,8 +487,8 @@ export async function recoverTransportCommand(args: {
     workspaceDir: string;
     hiddenWorkspaceDirs: Set<string>;
     workspaceVisibilityVersion: number;
-    storedSessions: unknown;
-    recentSessions: unknown;
+    storedSessions: StoredSessionRef[];
+    recentSessions: StoredSessionRef[];
     workspaceDirs: string[];
   };
   restartTransport: () => void;
@@ -519,8 +528,8 @@ async function recoverTransportCommandInner(args: {
     workspaceDir: string;
     hiddenWorkspaceDirs: Set<string>;
     workspaceVisibilityVersion: number;
-    storedSessions: unknown;
-    recentSessions: unknown;
+    storedSessions: StoredSessionRef[];
+    recentSessions: StoredSessionRef[];
     workspaceDirs: string[];
   };
   restartTransport: () => void;

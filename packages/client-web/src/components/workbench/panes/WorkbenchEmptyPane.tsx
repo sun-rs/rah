@@ -23,7 +23,6 @@ export function WorkbenchEmptyPane(props: {
   inspectorToggleOpen: boolean;
   showInspectorToggle?: boolean;
   inspectorToggleClassName?: string;
-  reserveRightPanelToggleSpace?: boolean;
   emptyStateComposerRef: RefObject<HTMLTextAreaElement | null>;
   emptyStateDraft: string;
   emptyStateImageUrls?: readonly string[] | undefined;
@@ -61,21 +60,16 @@ export function WorkbenchEmptyPane(props: {
 }) {
   const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
   return (
-    <>
-      <header
-        className={`h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-2 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0 ${
-          props.reserveRightPanelToggleSpace
-            ? "md:pr-11"
-            : ""
-        }`}
-      >
-        <div className="flex items-center gap-1.5 min-w-0">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="pointer-events-none absolute inset-x-2 top-3 z-20 flex items-center justify-between">
+        <div className="flex min-w-0 items-center">
           {showLeftSidebarControls ? (
             <button
               type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} md:hidden`}
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} pointer-events-auto md:hidden`}
               onClick={props.onOpenLeft}
               aria-label="Open sidebar"
+              title="Open sidebar"
             >
               <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
             </button>
@@ -83,7 +77,7 @@ export function WorkbenchEmptyPane(props: {
           {showLeftSidebarControls && !props.sidebarOpen ? (
             <button
               type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden md:inline-flex`}
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} pointer-events-auto hidden md:inline-flex`}
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
@@ -91,19 +85,11 @@ export function WorkbenchEmptyPane(props: {
               <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
             </button>
           ) : null}
-          {showLeftSidebarControls ? (
-            <div className="min-w-0 md:hidden">
-            <div className="text-sm font-medium text-[var(--app-fg)]">RAH</div>
-            <div className="text-[11px] text-[var(--app-hint)]">
-              Open the sidebar
-            </div>
-            </div>
-          ) : null}
         </div>
         {props.showInspectorToggle !== false ? (
           <button
             type="button"
-            className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS}${props.inspectorToggleClassName ? ` ${props.inspectorToggleClassName}` : ""}`}
+            className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS} pointer-events-auto${props.inspectorToggleClassName ? ` ${props.inspectorToggleClassName}` : ""}`}
             onClick={props.onToggleInspector}
             aria-label={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
             title={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
@@ -111,7 +97,7 @@ export function WorkbenchEmptyPane(props: {
             <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
           </button>
         ) : null}
-      </header>
+      </div>
       <NewSessionComposer
         composerRef={props.emptyStateComposerRef}
         draft={props.emptyStateDraft}
@@ -166,6 +152,6 @@ export function WorkbenchEmptyPane(props: {
           </div>
         }
       />
-    </>
+    </div>
   );
 }

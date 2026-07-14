@@ -50,7 +50,10 @@ function estimateTimelineHeight(entry: Extract<FeedEntry, { kind: "timeline" }>)
     case "reasoning": {
       const text =
         "text" in entry.item && typeof entry.item.text === "string" ? entry.item.text : "";
-      return Math.max(84, Math.min(320, 68 + Math.ceil(text.length / 80) * 24));
+      const estimatedLines = text
+        .split(/\r?\n/)
+        .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / 56)), 0);
+      return Math.max(84, Math.min(12_000, 68 + estimatedLines * 24));
     }
     case "plan":
       return 144;

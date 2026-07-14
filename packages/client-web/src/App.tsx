@@ -16,7 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
-import { useSessionStore } from "./useSessionStore";
+import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
 import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
 import { SessionHistoryDialog } from "./components/SessionHistoryDialog";
@@ -1400,8 +1400,12 @@ export function App() {
     pendingSessionTransition,
   });
   const activeOpeningSession = primaryPaneState.openingSession;
+  const sidebarWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const emptyStateAvailableWorkspaceDir =
+    pendingNewSessionWorkspaceDir ?? sidebarWorkspaceDir;
   const currentProvider = newSessionProvider as ProviderChoice;
-  const currentModelCatalogState = modelCatalogs[currentProvider];
+  const currentModelCatalogState =
+    modelCatalogs[providerModelCatalogKey(currentProvider, emptyStateAvailableWorkspaceDir)];
   const startModeControl = resolveSessionModeControlState({
     provider: currentProvider,
     draft: startModeDrafts[currentProvider],
@@ -1435,7 +1439,12 @@ export function App() {
           })
         : undefined;
   const selectedModelCatalogState = selectedSummary
-    ? modelCatalogs[selectedSummary.session.provider as ProviderChoice]
+    ? modelCatalogs[
+        providerModelCatalogKey(
+          selectedSummary.session.provider as ProviderChoice,
+          selectedSummary.session.cwd,
+        )
+      ]
     : undefined;
   const resumeModelDraft = selectedSummary ? resumeModelDrafts[selectedSummary.session.id] : undefined;
   const resumeDraftModelId = draftModelIdForCatalog(
@@ -1462,9 +1471,6 @@ export function App() {
         catalog: selectedModelCatalogState?.catalog ?? null,
       })
     : null;
-  const sidebarWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
-  const emptyStateAvailableWorkspaceDir =
-    pendingNewSessionWorkspaceDir ?? sidebarWorkspaceDir;
   useEffect(() => {
     const previousWorkspaceDir = previousWorkspaceDirRef.current;
     previousWorkspaceDirRef.current = workspaceDir;
@@ -1517,22 +1523,6 @@ export function App() {
   });
 
   useEffect(() => {
-    void loadProviderModels(currentProvider, {
-      background: true,
-      reason: "new-session-current-provider",
-    }).catch(() => undefined);
-  }, [currentProvider, loadProviderModels]);
-
-  useEffect(() => {
-    if (selectedSummary?.session.provider !== undefined && selectedSummary.session.provider !== "custom") {
-      void loadProviderModels(selectedSummary.session.provider as ProviderChoice, {
-        background: true,
-        reason: "selected-session-provider",
-      }).catch(() => undefined);
-    }
-  }, [loadProviderModels, selectedSummary?.session.provider]);
-
-  useEffect(() => {
     if (workbenchMode !== "canvas") {
       return;
     }
@@ -1543,42 +1533,14 @@ export function App() {
   }, [activeCanvasSummary?.session.id, selectedSessionId, setSelectedSessionId, workbenchMode]);
 
   useEffect(() => {
-    if (workbenchMode !== "canvas") {
-      return;
-    }
-    const providers = new Set<ProviderChoice>();
-    for (const paneId of visibleCanvasPaneIds) {
-      if (canvasPaneTargets[paneId].kind === "new") {
-        providers.add(canvasNewSessionDrafts[paneId].provider);
-      }
-      const provider = resolveCanvasProjection(paneId)?.summary.session.provider;
-      if (provider && provider !== "custom") {
-        providers.add(provider as ProviderChoice);
-      }
-    }
-    for (const provider of providers) {
-      void loadProviderModels(provider, {
-        background: true,
-        reason: "canvas-session-provider",
-      }).catch(() => undefined);
-    }
-  }, [
-    canvasNewSessionDrafts,
-    canvasPaneTargets,
-    loadProviderModels,
-    projections,
-    visibleCanvasPaneKey,
-    workbenchMode,
-  ]);
-
-  useEffect(() => {
     const pruneProviderDrafts = (
       drafts: Record<ProviderChoice, ModelDraft>,
+      cwd?: string,
     ): Record<ProviderChoice, ModelDraft> => {
       let changed = false;
       const next = { ...drafts };
       for (const provider of PROVIDER_CHOICES) {
-        const catalog = modelCatalogs[provider]?.catalog;
+        const catalog = modelCatalogs[providerModelCatalogKey(provider, cwd)]?.catalog;
         if (!catalog) {
           continue;
         }
@@ -1591,12 +1553,16 @@ export function App() {
       return changed ? next : drafts;
     };
 
-    setStartModelDrafts((current) => pruneProviderDrafts(current));
+    setStartModelDrafts((current) =>
+      pruneProviderDrafts(current, emptyStateAvailableWorkspaceDir || undefined));
     setCanvasNewSessionDrafts((current) => {
       let changed = false;
       const next = { ...current };
       for (const paneId of CANVAS_PANE_IDS) {
-        const prunedModelDrafts = pruneProviderDrafts(current[paneId].modelDrafts);
+        const prunedModelDrafts = pruneProviderDrafts(
+          current[paneId].modelDrafts,
+          emptyStateAvailableWorkspaceDir || undefined,
+        );
         if (prunedModelDrafts !== current[paneId].modelDrafts) {
           next[paneId] = {
             ...current[paneId],
@@ -1611,11 +1577,14 @@ export function App() {
       let changed = false;
       const next = { ...current };
       for (const [sessionId, draft] of Object.entries(current)) {
-        const provider = projections.get(sessionId)?.summary.session.provider;
+        const session = projections.get(sessionId)?.summary.session;
+        const provider = session?.provider;
         if (!provider || provider === "custom") {
           continue;
         }
-        const catalog = modelCatalogs[provider as ProviderChoice]?.catalog;
+        const catalog = modelCatalogs[
+          providerModelCatalogKey(provider as ProviderChoice, session.cwd)
+        ]?.catalog;
         if (!catalog) {
           continue;
         }
@@ -1633,11 +1602,14 @@ export function App() {
     });
 
     const remembered = readRememberedModelDrafts();
-    const prunedRemembered = pruneProviderDrafts(remembered);
+    const prunedRemembered = pruneProviderDrafts(
+      remembered,
+      emptyStateAvailableWorkspaceDir || undefined,
+    );
     if (prunedRemembered !== remembered) {
       writeRememberedModelDrafts(prunedRemembered);
     }
-  }, [modelCatalogs, projections]);
+  }, [emptyStateAvailableWorkspaceDir, modelCatalogs, projections]);
 
   const handlePermissionResponse = async (
     requestId: string,
@@ -1867,7 +1839,8 @@ export function App() {
   const renderSideSessionPane = (projection: typeof sideSessionEntries[number]) => {
     const summary = projection.summary;
     const provider = summary.session.provider as ProviderChoice;
-    const modelCatalogState = modelCatalogs[provider];
+    const modelCatalogState =
+      modelCatalogs[providerModelCatalogKey(provider, summary.session.cwd)];
     return (
       <CanvasSessionPane
         variant="compact"
@@ -1890,7 +1863,7 @@ export function App() {
         onRequestModelCatalogRefresh={() => {
           if (summary.session.provider !== "custom") {
             void loadProviderModels(provider, {
-              background: true,
+              cwd: summary.session.cwd,
               reason: "side-session-control",
             }).catch(() => undefined);
           }
@@ -2366,7 +2339,9 @@ export function App() {
                   if (target.kind === "new") {
                     const paneDraft = canvasNewSessionDrafts[typedPaneId];
                     const paneProvider = paneDraft.provider;
-                    const paneModelCatalogState = modelCatalogs[paneProvider];
+                    const paneWorkspaceDir = emptyStateAvailableWorkspaceDir || undefined;
+                    const paneModelCatalogState =
+                      modelCatalogs[providerModelCatalogKey(paneProvider, paneWorkspaceDir)];
                     const paneModeControl = resolveSessionModeControlState({
                       provider: paneProvider,
                       draft: paneDraft.modeDrafts[paneProvider],
@@ -2412,7 +2387,7 @@ export function App() {
                         selectedReasoningId={paneStartReasoningId}
                         onRequestCatalogRefresh={() => {
                           void loadProviderModels(paneProvider, {
-                            background: true,
+                            ...(paneWorkspaceDir ? { cwd: paneWorkspaceDir } : {}),
                             reason: "session-control",
                           }).catch(() => undefined);
                         }}
@@ -2424,6 +2399,7 @@ export function App() {
                         onProviderChange={(provider) => {
                           void loadProviderModels(provider, {
                             background: true,
+                            ...(paneWorkspaceDir ? { cwd: paneWorkspaceDir } : {}),
                             reason: "canvas-provider-change",
                           }).catch(() => undefined);
                           setCanvasNewSessionDrafts((current) => ({
@@ -2623,7 +2599,8 @@ export function App() {
 
                 const summary = projection.summary;
                 const provider = summary.session.provider as ProviderChoice;
-                const modelCatalogState = modelCatalogs[provider];
+                const modelCatalogState =
+                  modelCatalogs[providerModelCatalogKey(provider, summary.session.cwd)];
                 return (
                   <CanvasSessionPane
                     variant={paneExpanded ? "expanded" : "compact"}
@@ -2696,7 +2673,7 @@ export function App() {
                       const provider = summary.session.provider;
                       if (provider !== "custom") {
                         void loadProviderModels(provider as ProviderChoice, {
-                          background: true,
+                          cwd: summary.session.cwd,
                           reason: "session-control",
                         }).catch(() => undefined);
                       }
@@ -3089,7 +3066,7 @@ export function App() {
                 const provider = selectedSummary.session.provider;
                 if (provider !== "custom") {
                   void loadProviderModels(provider as ProviderChoice, {
-                    background: true,
+                    cwd: selectedSummary.session.cwd,
                     reason: "session-control",
                   }).catch(() => undefined);
                 }
@@ -3188,7 +3165,6 @@ export function App() {
               inspectorToggleOpen={inspectorToggleOpen}
               showInspectorToggle={!rightOpen && !rightSidebarOpen}
               inspectorToggleClassName="md:hidden"
-              reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
               emptyStateComposerRef={emptyStateComposerRef}
               emptyStateDraft={emptyStateDraft}
               emptyStateImageUrls={emptyStateImageDataUrls}
@@ -3219,7 +3195,9 @@ export function App() {
               selectedReasoningId={startReasoningId}
               onRequestCatalogRefresh={() => {
                 void loadProviderModels(currentProvider, {
-                  background: true,
+                  ...(emptyStateAvailableWorkspaceDir
+                    ? { cwd: emptyStateAvailableWorkspaceDir }
+                    : {}),
                   reason: "session-control",
                 }).catch(() => undefined);
               }}

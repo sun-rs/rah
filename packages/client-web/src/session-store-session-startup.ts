@@ -135,9 +135,14 @@ type SessionStartupDeps = {
       | "selectedSessionId"
       | "hiddenWorkspaceDirs"
       | "workspaceVisibilityVersion"
+      | "storedSessions"
+      | "recentSessions"
     >,
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
-    options?: { workspaceVisibilityVersionAtRequest?: number },
+    options?: {
+      workspaceVisibilityVersionAtRequest?: number;
+      preserveStoredSessionCatalog?: boolean;
+    },
   ) => Pick<
     SessionStartupState,
     | "projections"
@@ -433,7 +438,7 @@ export async function resumeStoredSessionCommand(
     }
     if (ref.source === "previous_running") {
       const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.listSessions();
+      const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
       const running = sessionsResponse.sessions.find(
         (summary) =>
           !isReadOnlyReplay(summary) &&
@@ -445,6 +450,7 @@ export async function resumeStoredSessionCommand(
           ...(() => {
             const next = deps.applySessionsResponse(state, sessionsResponse, {
               workspaceVisibilityVersionAtRequest,
+              preserveStoredSessionCatalog: true,
             });
             if (!provisionalSessionId) {
               return next;
@@ -520,7 +526,7 @@ export async function resumeStoredSessionCommand(
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
       const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.listSessions();
+      const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
       const running = sessionsResponse.sessions.find(
         (summary) =>
           summary.session.provider === ref.provider &&
@@ -530,6 +536,7 @@ export async function resumeStoredSessionCommand(
         deps.set((state) => {
           const next = deps.applySessionsResponse(state, sessionsResponse, {
             workspaceVisibilityVersionAtRequest,
+            preserveStoredSessionCatalog: true,
           });
           const projections = new Map(next.projections);
           if (provisionalSessionId) {
@@ -794,7 +801,6 @@ export async function resumeHistorySessionCommand(
         options?.modelId &&
         session.session.model?.mutable &&
         (session.session.model.currentModelId !== options.modelId ||
-          options.optionValues !== undefined ||
           (options.reasoningId !== undefined &&
             session.session.model.currentReasoningId !== options.reasoningId))
       ) {
@@ -815,7 +821,7 @@ export async function resumeHistorySessionCommand(
   } catch (error) {
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
-      const sessionsResponse = await api.listSessions();
+      const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
       const running = sessionsResponse.sessions.find(
         (candidate) =>
           !isReadOnlyReplay(candidate) &&

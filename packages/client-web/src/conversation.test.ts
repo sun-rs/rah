@@ -483,6 +483,31 @@ test("Conversation keeps active work visible even when completed tools are hidde
   }
 });
 
+test("Conversation keeps settled Worked details available when completed tools are hidden", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-settled", [
+      timelineItem("user-settled", "turn-settled", "user", "question"),
+      observationItem("search-settled", "turn-settled", false),
+      timelineItem("final-settled", "turn-settled", "final", "answer"),
+    ]),
+    status: "completed",
+    finalAnswerItemId: "final-settled",
+  };
+  const allEntries = conversationTurnsToFeed([projectedTurn]);
+  const filteredEntries = allEntries.filter((entry) => entry.kind !== "observation");
+  const rows = conversationDisplayRows([projectedTurn], filteredEntries, allEntries);
+  const process = rows[1];
+
+  assert.equal(process?.kind, "assistant_process_group");
+  if (process?.kind === "assistant_process_group") {
+    assert.equal(process.completed, true);
+    assert.equal(process.active, false);
+    assert.deepEqual(process.entries.map((entry) => entry.key), [
+      "conversation:search-settled",
+    ]);
+  }
+});
+
 test("Conversation renders a lazy process placeholder for native summary turns", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-summary", [

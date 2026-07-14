@@ -1,12 +1,18 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { RahEvent, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type {
+  ProviderModelCatalog,
+  RahEvent,
+  SessionSummary,
+  StoredSessionRef,
+} from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
   applyStoredSessionsDeltaToRecent,
   coerceSelectedSessionId,
   computeUnreadSessionIds,
   findDaemonRunningSessionForStoredRef,
+  providerModelCatalogKey,
   readOrCreateClientId,
   readOrCreateConnectionId,
   reconcileVisibleWorkspaceSelection,
@@ -23,6 +29,31 @@ import { type SessionProjection } from "./types";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+
+async function waitForCondition(predicate: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  assert.fail(message);
+}
+
+function providerCatalog(
+  provider: "opencode",
+  modelId: string,
+  fetchedAt: string,
+): ProviderModelCatalog {
+  return {
+    provider,
+    currentModelId: modelId,
+    models: [{ id: modelId, name: modelId }],
+    fetchedAt,
+    source: "native",
+    freshness: "authoritative",
+  };
+}
 
 test("stored-session discovery deltas keep the bounded Recent catalog current", () => {
   const current = Array.from({ length: 15 }, (_, index): StoredSessionRef => ({
@@ -46,6 +77,95 @@ test("stored-session discovery deltas keep the bounded Recent catalog current", 
   assert.equal(next.length, 15);
   assert.equal(next[0]?.providerSessionId, "newest");
   assert.ok(!next.some((session) => session.providerSessionId === "existing-14"));
+});
+
+describe("provider model catalog isolation", () => {
+  test("keeps independently discovered catalogs scoped to provider and workspace", async () => {
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const cwd = url.searchParams.get("cwd") ?? "default";
+      const modelId = cwd.endsWith("/a") ? "model-a" : "model-b";
+      return new Response(
+        JSON.stringify({
+          catalog: providerCatalog("opencode", modelId, "2026-07-14T00:00:00.000Z"),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    useSessionStore.setState({ modelCatalogs: {} });
+
+    try {
+      await Promise.all([
+        useSessionStore.getState().loadProviderModels("opencode", {
+          cwd: "/workspace/a",
+          forceRefresh: true,
+        }),
+        useSessionStore.getState().loadProviderModels("opencode", {
+          cwd: "/workspace/b",
+          forceRefresh: true,
+        }),
+      ]);
+
+      const catalogs = useSessionStore.getState().modelCatalogs;
+      assert.equal(
+        catalogs[providerModelCatalogKey("opencode", "/workspace/a")]?.catalog?.currentModelId,
+        "model-a",
+      );
+      assert.equal(
+        catalogs[providerModelCatalogKey("opencode", "/workspace/b")]?.catalog?.currentModelId,
+        "model-b",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState({ modelCatalogs: {} });
+    }
+  });
+
+  test("does not let an older request overwrite a newer authoritative catalog", async () => {
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    let resolveResponse: ((response: Response) => void) | undefined;
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        resolveResponse = resolve;
+      })) as typeof fetch;
+    useSessionStore.setState({ modelCatalogs: {} });
+
+    try {
+      const pending = useSessionStore.getState().loadProviderModels("opencode", {
+        cwd: "/workspace/a",
+        forceRefresh: true,
+      });
+      await Promise.resolve();
+      useSessionStore.getState().rememberProviderModelCatalog(
+        "opencode",
+        providerCatalog("opencode", "new-model", "2026-07-14T00:01:00.000Z"),
+        { cwd: "/workspace/a" },
+      );
+      assert.ok(resolveResponse);
+      resolveResponse(
+        new Response(
+          JSON.stringify({
+            catalog: providerCatalog("opencode", "stale-model", "2026-07-14T00:00:00.000Z"),
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+      await pending;
+
+      assert.equal(
+        useSessionStore.getState().modelCatalogs[
+          providerModelCatalogKey("opencode", "/workspace/a")
+        ]?.catalog?.currentModelId,
+        "new-model",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState({ modelCatalogs: {} });
+    }
+  });
 });
 
 function installLocalStorageMock() {
@@ -778,11 +898,12 @@ describe("workspace response reconciliation", () => {
 
       await useSessionStore.getState().closeSession("live-created-session");
       assert.deepEqual(
-        useSessionStore.getState().recentSessions.map((session) => [
-          session.providerSessionId,
-          session.historyMeta?.lines,
-        ]),
-        [["provider-created-session", 12]],
+        useSessionStore.getState().recentSessions.map((session) => session.providerSessionId),
+        ["provider-created-session"],
+      );
+      await waitForCondition(
+        () => useSessionStore.getState().recentSessions[0]?.historyMeta?.lines === 12,
+        "stopped session metadata refresh did not complete",
       );
 
       await useSessionStore.getState().loadStoredSessionsCatalog();

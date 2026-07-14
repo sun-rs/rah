@@ -36,7 +36,7 @@ import { OverlayScrollArea } from "./OverlayScrollArea";
 import { useChatPreferences } from "../hooks/useChatPreferences";
 import { useBrowserNotificationSettings } from "../browser-notifications";
 import type { ProviderChoice } from "./ProviderSelector";
-import { useSessionStore } from "../useSessionStore";
+import { providerModelCatalogKey, useSessionStore } from "../useSessionStore";
 import { TrustedDevicesSettings } from "./TrustedDevicesSettings";
 
 type SettingsTab = "chat" | "models" | "devices" | "status" | "appearance" | "version" | "about";
@@ -272,7 +272,9 @@ export function SettingsPane() {
 
   function rememberModelCatalog(provider: ProviderChoice, catalog: ProviderModelCatalog): void {
     setModelCatalogs((current) => ({ ...current, [provider]: catalog }));
-    rememberProviderModelCatalog(provider, catalog);
+    rememberProviderModelCatalog(provider, catalog, {
+      ...(workspaceDir ? { cwd: workspaceDir } : {}),
+    });
   }
 
   function setProviderRefreshState(provider: ProviderChoice, state: ModelRefreshState): void {
@@ -663,7 +665,8 @@ export function SettingsPane() {
   }
 
   function renderModelProviderCard(provider: ProviderChoice) {
-    const storeCatalogState = storeModelCatalogs[provider];
+    const storeCatalogState =
+      storeModelCatalogs[providerModelCatalogKey(provider, workspaceDir)];
     const catalog = newestModelCatalog(modelCatalogs[provider], storeCatalogState?.catalog);
     const manual = manualModels[provider] ?? [];
     const refreshState = modelRefreshStates[provider] ?? { status: "idle" as const };

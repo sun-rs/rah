@@ -486,6 +486,8 @@ export const ChatThread = memo(function ChatThread(props: {
   const topHistoryLoadRafRef = useRef<number | null>(null);
   const latestReplyStartTargetRef = useRef<ReturnType<typeof resolveLatestReplyStartTarget>>(null);
   const turnNavigationRafRef = useRef<number | null>(null);
+  const turnNavigationReleaseRafRef = useRef<number | null>(null);
+  const turnNavigationActiveRef = useRef(false);
   const pendingTurnNavigationIdRef = useRef<string | null>(null);
   const ensureTurnDirectoryRef = useRef(props.onEnsureTurnDirectory);
   const latestReplyAutoNavigationRef = useRef<LatestReplyAutoNavigationState>({
@@ -825,6 +827,7 @@ export const ChatThread = memo(function ChatThread(props: {
       !props.onLoadOlderHistory ||
       props.historyLoading ||
       loadingOlderRef.current ||
+      turnNavigationActiveRef.current ||
       textSelectionDragActiveRef.current ||
       !topHistoryAutoLoadArmedRef.current ||
       !isInTopHistoryLoadZone(node)
@@ -894,6 +897,11 @@ export const ChatThread = memo(function ChatThread(props: {
       cancelAnimationFrame(turnNavigationRafRef.current);
       turnNavigationRafRef.current = null;
     }
+    if (turnNavigationReleaseRafRef.current !== null) {
+      cancelAnimationFrame(turnNavigationReleaseRafRef.current);
+      turnNavigationReleaseRafRef.current = null;
+    }
+    turnNavigationActiveRef.current = false;
     latestReplyAutoNavigationRef.current = createLatestReplyAutoNavigationState({
       latestUserKey: latestVisibleUserKey,
       latestReplyKey: latestNavigableReplyKey,
@@ -929,6 +937,11 @@ export const ChatThread = memo(function ChatThread(props: {
         cancelAnimationFrame(turnNavigationRafRef.current);
         turnNavigationRafRef.current = null;
       }
+      if (turnNavigationReleaseRafRef.current !== null) {
+        cancelAnimationFrame(turnNavigationReleaseRafRef.current);
+        turnNavigationReleaseRafRef.current = null;
+      }
+      turnNavigationActiveRef.current = false;
       textSelectionListenerCleanupRef.current?.();
       textSelectionListenerCleanupRef.current = null;
       latestReplyAutoNavigationRef.current.pendingReplyKey = null;
@@ -1430,11 +1443,25 @@ export const ChatThread = memo(function ChatThread(props: {
     consumePendingAutoLatestReplyScroll();
   }, [consumePendingAutoLatestReplyScroll, latestReplyStartTarget]);
 
+  const releaseTurnNavigationAfterLayout = useCallback(() => {
+    if (turnNavigationReleaseRafRef.current !== null) {
+      cancelAnimationFrame(turnNavigationReleaseRafRef.current);
+    }
+    turnNavigationReleaseRafRef.current = requestAnimationFrame(() => {
+      turnNavigationReleaseRafRef.current = requestAnimationFrame(() => {
+        turnNavigationReleaseRafRef.current = null;
+        turnNavigationActiveRef.current = false;
+      });
+    });
+  }, []);
+
   const navigateToLoadedTurn = useCallback((item: ConversationTurnNavigationItem) => {
     const node = containerRef.current;
     if (!node || !item.anchorEntryKey || item.startOffset === undefined) {
+      turnNavigationActiveRef.current = false;
       return;
     }
+    turnNavigationActiveRef.current = true;
     detachBottomFollowing();
     prependAnchorRef.current = null;
     const findTargetNode = () =>
@@ -1449,6 +1476,7 @@ export const ChatThread = memo(function ChatThread(props: {
       lastScrollTopRef.current = node.scrollTop;
       setShowScrollToBottom(node.scrollHeight > node.clientHeight);
       syncViewport();
+      releaseTurnNavigationAfterLayout();
     };
     const mountedTarget = findTargetNode();
     if (mountedTarget) {
@@ -1467,6 +1495,7 @@ export const ChatThread = memo(function ChatThread(props: {
     const settle = () => {
       turnNavigationRafRef.current = null;
       if (containerRef.current !== node) {
+        turnNavigationActiveRef.current = false;
         return;
       }
       const targetNode = findTargetNode();
@@ -1477,19 +1506,23 @@ export const ChatThread = memo(function ChatThread(props: {
       attemptsRemaining -= 1;
       if (attemptsRemaining > 0) {
         turnNavigationRafRef.current = requestAnimationFrame(settle);
+      } else {
+        releaseTurnNavigationAfterLayout();
       }
     };
     turnNavigationRafRef.current = requestAnimationFrame(settle);
-  }, [detachBottomFollowing, syncViewport, viewport.contentTopOffset]);
+  }, [detachBottomFollowing, releaseTurnNavigationAfterLayout, syncViewport, viewport.contentTopOffset]);
 
   const handleNavigateToTurn = useCallback(
     (item: ConversationTurnNavigationItem) => {
+      turnNavigationActiveRef.current = true;
       if (item.anchorEntryKey && item.startOffset !== undefined) {
         pendingTurnNavigationIdRef.current = null;
         navigateToLoadedTurn(item);
         return;
       }
       if (!item.turnId || !props.onLoadTurnHistory) {
+        turnNavigationActiveRef.current = false;
         return;
       }
       detachBottomFollowing();
@@ -1498,6 +1531,7 @@ export const ChatThread = memo(function ChatThread(props: {
         if (pendingTurnNavigationIdRef.current === item.turnId) {
           pendingTurnNavigationIdRef.current = null;
         }
+        turnNavigationActiveRef.current = false;
       });
     },
     [detachBottomFollowing, navigateToLoadedTurn, props.onLoadTurnHistory],

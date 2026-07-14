@@ -590,7 +590,7 @@ describe("session startup model and mode requests", () => {
           cwd?: string;
           modeId?: string;
           model?: string;
-          reasoningId?: string | null;
+          optionValues?: { model_reasoning_effort?: string };
         };
         return {
           session: summary({
@@ -600,7 +600,7 @@ describe("session startup model and mode requests", () => {
             cwd: body.cwd,
             modeId: body.modeId,
             modelId: body.model,
-            reasoningId: body.reasoningId,
+            reasoningId: body.optionValues?.model_reasoning_effort,
           }),
         };
       }
@@ -672,13 +672,10 @@ describe("session startup model and mode requests", () => {
       cwd: "/tmp/rah",
     });
 
-    const modelRequest = requests.find((request) =>
+    const redundantModelRequest = requests.find((request) =>
       request.url.endsWith("/api/sessions/claimed/model"),
     );
-    assert.deepEqual(modelRequest?.body, {
-      modelId: "gpt-5.5",
-      optionValues: { model_reasoning_effort: "xhigh" },
-    });
+    assert.equal(redundantModelRequest, undefined);
   });
 
   test("resume history removes the read-only replay projection for the same provider session", async () => {
@@ -983,7 +980,7 @@ describe("session startup model and mode requests", () => {
             providerSessionId: "thread-1",
             cwd: "/tmp/rah",
             modelId: "gpt-5.5",
-            reasoningId: "xhigh",
+            reasoningId: "low",
           }),
         };
       }
@@ -1515,7 +1512,7 @@ describe("session startup model and mode requests", () => {
           { status: 500, headers: { "content-type": "application/json" } },
         );
       }
-      if (request.url.endsWith("/api/sessions")) {
+      if (request.url.endsWith("/api/sessions?storedSessions=recent")) {
         return {
           sessions: [runningSummary],
           storedSessions: [],
@@ -1555,7 +1552,7 @@ describe("session startup model and mode requests", () => {
       [
         "/api/fs/list?path=%2Ftmp%2Frah",
         "/api/sessions/resume",
-        "/api/sessions",
+        "/api/sessions?storedSessions=recent",
         "/api/sessions/live/attach",
       ],
     );
@@ -1795,7 +1792,7 @@ describe("session startup model and mode requests", () => {
           { status: 500, headers: { "content-type": "application/json" } },
         );
       }
-      if (request.url.endsWith("/api/sessions")) {
+      if (request.url.endsWith("/api/sessions?storedSessions=recent")) {
         return {
           sessions: [runningSummary],
           storedSessions: [],
@@ -1882,7 +1879,7 @@ describe("session startup model and mode requests", () => {
           { status: 500, headers: { "content-type": "application/json" } },
         );
       }
-      if (request.url.endsWith("/api/sessions")) {
+      if (request.url.endsWith("/api/sessions?storedSessions=recent")) {
         return {
           sessions: [replaySummary],
           storedSessions: [],
@@ -1917,7 +1914,7 @@ describe("session startup model and mode requests", () => {
       [
         "/api/fs/list?path=%2Ftmp%2Frah",
         "/api/sessions/resume",
-        "/api/sessions",
+        "/api/sessions?storedSessions=recent",
       ],
     );
   });

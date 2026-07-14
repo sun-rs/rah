@@ -16,8 +16,17 @@ let eventsSocket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let storedSessionsRefreshTimer: number | null = null;
 let pendingStoredSessionEvents: RahEvent[] = [];
-let suppressNextSocketCloseReconnect = false;
 let reconnectAttempt = 0;
+
+export function sessionStoreSocketCloseDecision(
+  isCurrentSocket: boolean,
+  closeCode: number,
+): "ignore" | "stop" | "reconnect" {
+  if (!isCurrentSocket) {
+    return "ignore";
+  }
+  return closeCode === 4001 ? "stop" : "reconnect";
+}
 
 function nextReconnectDelayMs(): number {
   const delay = Math.min(30_000, 750 * 2 ** reconnectAttempt);
@@ -87,13 +96,13 @@ export function connectSessionStoreTransport(
         nextCallbacks.onOpen();
       },
       onClose: (event) => {
-        const shouldReconnect = event.code !== 4001 && !suppressNextSocketCloseReconnect;
-        suppressNextSocketCloseReconnect = false;
-        if (eventsSocket === socket) {
-          eventsSocket = null;
+        const decision = sessionStoreSocketCloseDecision(eventsSocket === socket, event.code);
+        if (decision === "ignore") {
+          return;
         }
+        eventsSocket = null;
         clearReconnectTimer();
-        if (shouldReconnect && callbacks) {
+        if (decision === "reconnect" && callbacks) {
           const delayMs = nextReconnectDelayMs();
           reconnectTimer = window.setTimeout(() => {
             reconnectTimer = null;
@@ -108,9 +117,8 @@ export function connectSessionStoreTransport(
   eventsSocket = socket;
 
   if (!nextCallbacks.isInitialLoaded()) {
-    suppressNextSocketCloseReconnect = true;
-    eventsSocket.close();
     eventsSocket = null;
+    socket.close();
   }
 }
 
@@ -120,7 +128,6 @@ export function restartSessionStoreTransport() {
   const socket = eventsSocket;
   eventsSocket = null;
   if (socket && socket.readyState < WebSocket.CLOSING) {
-    suppressNextSocketCloseReconnect = true;
     socket.close();
   }
   if (callbacks) {

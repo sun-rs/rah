@@ -302,7 +302,9 @@ describe("sidebar layout contract", () => {
 
     assert.match(headerSource, /md:pr-11/);
     assert.match(headerSource, /min-\[900px\]:pr-11/);
-    assert.match(emptyPaneSource, /md:pr-11/);
+    assert.doesNotMatch(emptyPaneSource, /<header/);
+    assert.doesNotMatch(emptyPaneSource, /border-b/);
+    assert.match(emptyPaneSource, /absolute inset-x-2 top-3/);
     assert.match(openingPaneSource, /md:pr-11/);
     assert.match(appSource, /pr-11/);
     assert.match(councilSource, /pr-11/);

@@ -260,7 +260,10 @@ export function conversationDisplayRows(
         ? turn.items.find((item) => item.id === turn.finalAnswerItemId)
         : undefined) ?? [...turn.items].reverse().find((item) => item.role === "final");
     const processSettled = turn.status !== "in_progress" || finalItem !== undefined;
-    const processEntryByKey = processSettled ? entryByKey : activeEntryByKey;
+    // Process groups are already collapsed once a turn settles. Keep their
+    // complete entry set available so an explicit Worked expansion cannot
+    // disappear merely because completed tool cards are hidden globally.
+    const processEntryByKey = activeEntryByKey;
     const processEntries = turn.items
       .filter((item) => item.role === "process")
       .map((item) => processEntryByKey.get(conversationItemFeedKey(item.id)))

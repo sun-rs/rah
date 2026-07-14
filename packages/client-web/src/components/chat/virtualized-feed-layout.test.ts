@@ -138,4 +138,11 @@ describe("virtualized feed layout", () => {
       null,
     );
   });
+
+  test("does not collapse an unmeasured long reply into a short placeholder", () => {
+    const entry = messageEntry("long", "x".repeat(8_000));
+    const layout = buildVirtualFeedLayout([entry], new Map());
+
+    assert.ok(layout.rows[0]!.height > 3_000);
+  });
 });

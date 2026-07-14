@@ -149,6 +149,10 @@ type ModelCatalogLoadState = {
   lastSuccessfulFetchedAt: string | null;
 };
 
+type RememberProviderModelCatalogOptions = {
+  cwd?: string;
+};
+
 type LoadProviderModelsOptions = {
   cwd?: string;
   forceRefresh?: boolean;
@@ -181,7 +185,7 @@ interface SessionState {
   eventStreamOpenRevision: number;
   visibleSessionIds: Set<string>;
   debugScenarios: DebugScenarioDescriptor[];
-  modelCatalogs: Partial<Record<ProviderChoice, ModelCatalogLoadState>>;
+  modelCatalogs: Record<string, ModelCatalogLoadState>;
   selectedSessionId: string | null;
   workspaceDir: string;
   newSessionProvider: ProviderChoice;
@@ -214,6 +218,7 @@ interface SessionState {
   rememberProviderModelCatalog: (
     provider: ProviderChoice,
     catalog: ProviderModelCatalog,
+    options?: RememberProviderModelCatalogOptions,
   ) => void;
   startSession: (options?: StartSessionOptions) => Promise<string | null>;
   forkSession: (parentSessionId: string, options: ForkSessionOptions) => Promise<string>;
@@ -282,10 +287,8 @@ const MODEL_CATALOG_PROVIDERS = new Set<ProviderChoice>([
 ]);
 const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
 const MODEL_CATALOG_FAILURE_RETRY_MS = 10 * 1000;
-const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1_000;
 const modelCatalogBackgroundInFlight = new Map<string, Promise<void>>();
-let modelCatalogBackgroundRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-let modelCatalogFocusListenerInstalled = false;
+const modelCatalogRequestGenerations = new Map<string, number>();
 const conversationRefreshInFlight = new Map<string, Promise<boolean>>();
 
 function logModelCatalog(message: string, details?: Record<string, unknown>): void {
@@ -296,62 +299,18 @@ function logModelCatalog(message: string, details?: Record<string, unknown>): vo
   console.info(`[rah] model catalog ${message}`);
 }
 
-function modelCatalogBackgroundKey(provider: ProviderChoice, cwd?: string): string {
+export function providerModelCatalogKey(provider: ProviderChoice, cwd?: string): string {
   return `${provider}:${cwd?.trim() || "default"}`;
+}
+
+function nextModelCatalogRequestGeneration(key: string): number {
+  const generation = (modelCatalogRequestGenerations.get(key) ?? 0) + 1;
+  modelCatalogRequestGenerations.set(key, generation);
+  return generation;
 }
 
 function isSuccessfulModelCatalog(catalog: ProviderModelCatalog): boolean {
   return catalog.source === "native" && catalog.freshness === "authoritative";
-}
-
-function prewarmProviderModelCatalogs(
-  getState: () => SessionState,
-  reason: string,
-): void {
-  const providers = Array.from(MODEL_CATALOG_PROVIDERS);
-  logModelCatalog("background refresh queued", {
-    reason,
-    providers,
-  });
-  for (const provider of providers) {
-    void getState()
-      .loadProviderModels(provider, {
-        background: true,
-        reason,
-      })
-      .catch(() => undefined);
-  }
-}
-
-function scheduleModelCatalogBackgroundRefresh(getState: () => SessionState): void {
-  if (modelCatalogBackgroundRefreshTimer !== null) {
-    return;
-  }
-  const scheduleNext = () => {
-    modelCatalogBackgroundRefreshTimer = setTimeout(() => {
-      modelCatalogBackgroundRefreshTimer = null;
-      prewarmProviderModelCatalogs(getState, "periodic");
-      scheduleNext();
-    }, MODEL_CATALOG_BACKGROUND_REFRESH_MS);
-    (modelCatalogBackgroundRefreshTimer as { unref?: () => void }).unref?.();
-  };
-  scheduleNext();
-  if (
-    modelCatalogFocusListenerInstalled ||
-    typeof window === "undefined" ||
-    typeof document === "undefined"
-  ) {
-    return;
-  }
-  modelCatalogFocusListenerInstalled = true;
-  window.addEventListener("focus", () => {
-    prewarmProviderModelCatalogs(getState, "window-focus");
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      prewarmProviderModelCatalogs(getState, "visibility");
-    }
-  });
 }
 
 function createProjectionReplayHandling() {
@@ -390,6 +349,7 @@ function applySessionsResponse(
   options?: {
     workspaceVisibilityVersionAtRequest?: number;
     preserveWorkspaceNavigation?: boolean;
+    preserveStoredSessionCatalog?: boolean;
     preserveLocalStoppedHistory?: boolean;
     excludeLocalStoppedHistoryKeys?: ReadonlySet<string>;
   },
@@ -414,15 +374,24 @@ function applySessionsResponse(
     createProjectionReplayHandling(),
     options,
   );
-  if (!options?.preserveWorkspaceNavigation || state.workspaceDirs === undefined) {
-    return next;
-  }
   return {
     ...next,
-    workspaceDirs: state.workspaceDirs,
-    hiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
-    workspaceVisibilityVersion: state.workspaceVisibilityVersion,
-    workspaceDir: state.workspaceDir,
+    ...(options?.preserveStoredSessionCatalog && state.storedSessions
+      ? {
+          storedSessions: mergeStoredSessionCatalogRefs(
+            state.storedSessions,
+            next.storedSessions,
+          ),
+        }
+      : {}),
+    ...(options?.preserveWorkspaceNavigation && state.workspaceDirs !== undefined
+      ? {
+          workspaceDirs: state.workspaceDirs,
+          hiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
+          workspaceVisibilityVersion: state.workspaceVisibilityVersion,
+          workspaceDir: state.workspaceDir,
+        }
+      : {}),
   };
 }
 
@@ -628,10 +597,14 @@ function replaceSessionsResponse(
     | "selectedSessionId"
     | "hiddenWorkspaceDirs"
     | "workspaceVisibilityVersion"
-  >,
+  > & {
+    storedSessions?: StoredSessionRef[];
+    recentSessions?: StoredSessionRef[];
+  },
   sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
   options?: {
     workspaceVisibilityVersionAtRequest?: number;
+    preserveStoredSessionCatalog?: boolean;
   },
 ): Pick<
   SessionState,
@@ -645,7 +618,14 @@ function replaceSessionsResponse(
   | "selectedSessionId"
 > {
   rememberSessionsResponseEventSeq(sessionsResponse);
-  return replaceSessionsResponseImpl(state, sessionsResponse, options);
+  const next = replaceSessionsResponseImpl(state, sessionsResponse, options);
+  if (!options?.preserveStoredSessionCatalog || !state.storedSessions) {
+    return next;
+  }
+  return {
+    ...next,
+    storedSessions: mergeStoredSessionCatalogRefs(state.storedSessions, next.storedSessions),
+  };
 }
 
 function applyEventsToMap(
@@ -1012,22 +992,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setNewSessionProvider: (provider) => {
     set({ newSessionProvider: provider });
     if (MODEL_CATALOG_PROVIDERS.has(provider)) {
+      const cwd = get().workspaceDir.trim() || undefined;
       void get().loadProviderModels(provider, {
+        ...(cwd ? { cwd } : {}),
         background: true,
         reason: "new-session-provider",
       }).catch(() => undefined);
     }
   },
 
-  rememberProviderModelCatalog: (provider, catalog) => {
+  rememberProviderModelCatalog: (provider, catalog, options) => {
     if (!MODEL_CATALOG_PROVIDERS.has(provider)) {
       return;
     }
+    const catalogKey = providerModelCatalogKey(provider, options?.cwd);
+    nextModelCatalogRequestGeneration(catalogKey);
     const now = Date.now();
     set((state) => ({
       modelCatalogs: {
         ...state.modelCatalogs,
-        [provider]: {
+        [catalogKey]: {
           catalog,
           loading: false,
           error: null,
@@ -1035,18 +1019,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           lastAttemptedAt: now,
           lastSuccessfulFetchedAt: isSuccessfulModelCatalog(catalog)
             ? catalog.fetchedAt
-            : state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
+            : state.modelCatalogs[catalogKey]?.lastSuccessfulFetchedAt ?? null,
         },
       },
     }));
   },
 
   loadProviderModels: async (provider, options) => {
+    const catalogKey = providerModelCatalogKey(provider, options?.cwd);
     if (!MODEL_CATALOG_PROVIDERS.has(provider)) {
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
-          [provider]: {
+          [catalogKey]: {
             catalog: null,
             loading: false,
             error: null,
@@ -1058,7 +1043,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }));
       return;
     }
-    const current = get().modelCatalogs[provider];
+    const current = get().modelCatalogs[catalogKey];
     const staleMs = options?.staleMs ?? MODEL_CATALOG_TTL_MS;
     if (current?.loading) {
       return;
@@ -1082,7 +1067,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     const backgroundInFlightKey = options?.background
-      ? modelCatalogBackgroundKey(provider, options.cwd)
+      ? catalogKey
       : null;
     if (backgroundInFlightKey) {
       const inFlight = modelCatalogBackgroundInFlight.get(backgroundInFlightKey);
@@ -1092,11 +1077,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
     }
     const startedAt = Date.now();
+    const requestGeneration = nextModelCatalogRequestGeneration(catalogKey);
     if (!options?.background) {
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
-          [provider]: {
+          [catalogKey]: {
             catalog: current?.catalog ?? null,
             loading: true,
             error: null,
@@ -1130,6 +1116,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         modelCatalogBackgroundInFlight.set(backgroundInFlightKey, backgroundRequest);
       }
       const catalog = await catalogRequest;
+      if (modelCatalogRequestGenerations.get(catalogKey) !== requestGeneration) {
+        return;
+      }
       const loadedAt = Date.now();
       const lastSuccessfulFetchedAt = isSuccessfulModelCatalog(catalog)
         ? catalog.fetchedAt
@@ -1137,7 +1126,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
-          [provider]: {
+          [catalogKey]: {
             catalog,
             loading: false,
             error: null,
@@ -1170,12 +1159,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           reason: options.reason ?? "background",
           error: readErrorMessage(error),
         });
+        if (modelCatalogRequestGenerations.get(catalogKey) !== requestGeneration) {
+          return;
+        }
         set((state) => {
-          const currentState = state.modelCatalogs[provider];
+          const currentState = state.modelCatalogs[catalogKey];
           return {
             modelCatalogs: {
               ...state.modelCatalogs,
-              [provider]: {
+              [catalogKey]: {
                 catalog: currentState?.catalog ?? null,
                 loading: false,
                 error: null,
@@ -1188,16 +1180,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
         return;
       }
+      if (modelCatalogRequestGenerations.get(catalogKey) !== requestGeneration) {
+        return;
+      }
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
-          [provider]: {
-            catalog: state.modelCatalogs[provider]?.catalog ?? null,
+          [catalogKey]: {
+            catalog: state.modelCatalogs[catalogKey]?.catalog ?? null,
             loading: false,
             error: readErrorMessage(error),
-            loadedAt: state.modelCatalogs[provider]?.loadedAt ?? null,
+            loadedAt: state.modelCatalogs[catalogKey]?.loadedAt ?? null,
             lastAttemptedAt: startedAt,
-            lastSuccessfulFetchedAt: state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
+            lastSuccessfulFetchedAt: state.modelCatalogs[catalogKey]?.lastSuccessfulFetchedAt ?? null,
           },
         },
       }));
@@ -1306,8 +1301,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       await get().refreshWorkbenchState({ storedSessions: "recent" });
       set({ isInitialLoaded: true });
       connectStoreTransport();
-      prewarmProviderModelCatalogs(get, "startup");
-      scheduleModelCatalogBackgroundRefresh(get);
     } catch (error) {
       resetSessionStoreInit();
       set({
