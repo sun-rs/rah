@@ -21,7 +21,7 @@
 - Claude 不显示独立 `Plan` toggle；`Plan` 是 `Session Mode` 下拉中的一个互斥选项，和 `Default / Accept Edits / Bypass Permissions` 同级。
 - Claude `Session Mode` 优先从本机 `claude --help` 的 `--permission-mode <mode>` choices 解析；`auto` 和 `dontAsk` 不进入主 UI。
 - OpenCode 不显示权限菜单，也不显示独立 `Plan` toggle；这里显示的是 `Agent` 选择，优先从 OpenCode server `/agent` 获取，过滤 `hidden === true` 和 `mode === "subagent"`，fallback 为 `build / plan`。
-- OpenCode 自定义 agent label 按 provider 原样展示，不套用旧权限文案；native TUI 启动路径会拒绝未知 agent，避免把任意字符串传给 `--agent`。
+- OpenCode 自定义 agent label 按 provider 原样展示，不套用旧权限文案；native TUI 启动若已携带权威 `availableModes`，会在本地拒绝不属于 catalog 的 agent。若 catalog 尚未就绪，则直接把非空 `modeId` 作为独立 `--agent` 参数交给 OpenCode CLI 校验，绝不为了前置校验同步拉起临时 server 或阻塞 session 创建。
 - Chat 页面和历史页面继续使用 `Session Control` 图标入口；new session 大屏空间足够时展开，空间不足时折叠成同一个图标入口。
 - 当前通用控件的无障碍文案使用 `Session mode`，避免把 OpenCode agent 选择误称为 `Access mode`。
 

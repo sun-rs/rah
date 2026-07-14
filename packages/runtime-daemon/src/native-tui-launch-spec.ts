@@ -22,7 +22,6 @@ import {
 } from "./provider-diagnostics";
 import {
   buildOpenCodeProviderModelId,
-  fetchOpenCodeModelCatalog,
   normalizeOpenCodeOptionValues,
   normalizeOpenCodeReasoningId,
 } from "./opencode-model-catalog";
@@ -357,29 +356,11 @@ function appendClaudeArgs(
   args.push(mode === "resume" ? "--resume" : "--session-id", providerSessionId);
 }
 
-async function resolveOpenCodeLaunchModes(request: {
-  cwd: string;
-  modeId?: string;
-  availableModes?: readonly SessionModeDescriptor[];
-}): Promise<readonly SessionModeDescriptor[] | undefined> {
-  if (!request.modeId) {
-    return request.availableModes;
-  }
-  if (request.availableModes && request.availableModes.length > 0) {
-    return request.availableModes;
-  }
-  try {
-    return (await fetchOpenCodeModelCatalog({ cwd: request.cwd })).modes;
-  } catch {
-    return undefined;
-  }
-}
-
-async function appendOpenCodeArgs(
+function appendOpenCodeArgs(
   args: string[],
   request: { cwd: string; initialPrompt?: string; modeId?: string; availableModes?: readonly SessionModeDescriptor[] } & ModelRequest,
   providerSessionId?: string,
-): Promise<void> {
+): void {
   if (request.model) {
     args.push("--model", buildOpenCodeProviderModelId({
       modelId: request.model,
@@ -392,8 +373,8 @@ async function appendOpenCodeArgs(
     args.push("--session", providerSessionId);
   }
   if (request.modeId) {
-    const availableModes = await resolveOpenCodeLaunchModes(request);
-    if (!isOpenCodeModeId(request.modeId, availableModes)) {
+    const hasAuthoritativeModes = Boolean(request.availableModes?.length);
+    if (hasAuthoritativeModes && !isOpenCodeModeId(request.modeId, request.availableModes)) {
       throw new Error(`Unsupported OpenCode launch agent '${request.modeId}'.`);
     }
     args.push("--agent", request.modeId);
@@ -450,7 +431,7 @@ export async function nativeTuiStartLaunchSpec(
   }
   if (request.provider === "opencode") {
     const { command, args } = splitLaunchArgv(await opencodeLaunchSpec(), "opencode");
-    await appendOpenCodeArgs(args, request);
+    appendOpenCodeArgs(args, request);
     const env = openCodeEnvForRequest(request);
     return {
       provider: "opencode",
@@ -511,7 +492,7 @@ export async function nativeTuiResumeLaunchSpec(
   }
   if (request.provider === "opencode") {
     const { command, args } = splitLaunchArgv(await opencodeLaunchSpec(), "opencode");
-    await appendOpenCodeArgs(args, { ...request, cwd: request.cwd }, request.providerSessionId);
+    appendOpenCodeArgs(args, { ...request, cwd: request.cwd }, request.providerSessionId);
     const env = openCodeEnvForRequest(request);
     return {
       provider: "opencode",

@@ -335,7 +335,7 @@ describe("native TUI launch specs", () => {
     }
   });
 
-  test("rejects native TUI launch modes that cannot be applied by CLI args", async () => {
+  test("rejects native TUI launch modes only against an authoritative supplied catalog", async () => {
     const codex = fakeBinary("codex");
     const claude = fakeBinary("claude");
     const opencode = fakeBinary("opencode");
@@ -364,15 +364,13 @@ describe("native TUI launch specs", () => {
         }),
         /Unsupported Claude launch mode/,
       );
-      await assert.rejects(
-        nativeTuiStartLaunchSpec({
-          provider: "opencode",
-          cwd: workspace,
-          liveBackend: "native_tui",
-          modeId: "not-an-agent",
-        }),
-        /Unsupported OpenCode launch agent/,
-      );
+      const delegatedOpenCodeMode = await nativeTuiStartLaunchSpec({
+        provider: "opencode",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        modeId: "not-an-agent",
+      });
+      assert.deepEqual(delegatedOpenCodeMode.args.slice(0, 2), ["--agent", "not-an-agent"]);
       await assert.rejects(
         nativeTuiStartLaunchSpec({
           provider: "opencode",
