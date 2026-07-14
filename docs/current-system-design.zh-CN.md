@@ -321,7 +321,7 @@ RAH 对“一退全退”的设计目标是：正常退出时尽量在事前同�
 - RAH 启动且带有 `RAH_NATIVE_SERVER_OWNER=rah` 标记的 Codex/OpenCode native local server 进程。
 - `~/.rah/council/councils.json` 中 Council/agent 的持久化运行状态。
 
-正常退出路径是 `SIGINT` / `SIGTERM` -> `daemon.close()` -> `RuntimeEngine.shutdown()`。`daemon.close()` 先停止 HTTP listener 接受新连接，移除 upgrade handler，并向 event/PTY WebSocket client 发送 `1001` shutdown；500 ms 内未完成 close handshake 的 socket 会被 terminate。随后等待现有 HTTP 请求 drain，再进入 runtime 清理。这个顺序避免 `server.close()` 反过来等待仍由自己持有的 WebSocket，导致每次正常退出都撞到 watchdog。daemon 入口在收到信号后最多等待 30 秒再强制退出；`rah stop` 最多等待 35 秒再 `SIGKILL`，给 provider close、tmux kill、状态落盘留出时间。
+正常退出路径是 `SIGINT` / `SIGTERM` -> `daemon.close()` -> `RuntimeEngine.shutdown()`。`daemon.close()` 首先停止 HTTP listener 接受新连接，同时立即启动 runtime 清理，而不是先等待现有 HTTP 请求 drain；进入 shutdown 后，新的 start/resume/fork/input 请求会被 runtime 拒绝。event/PTY WebSocket client 会收到 `1001` shutdown，500 ms 内未完成 close handshake 的 socket 会被 terminate。HTTP drain 最多等待 5 秒，超过后关闭剩余连接；HTTP drain、WebSocket close 和 runtime cleanup 并行收敛。这样卡住的上传或长请求不会阻止 Council、terminal 和 provider runtime 在退出窗口内开始清理。daemon 入口在收到信号后最多等待 30 秒再强制退出；`rah stop` 最多等待 35 秒再 `SIGKILL`，给 provider close、tmux kill、状态落盘留出时间。
 
 `RuntimeEngine.shutdown()` 的顺序是：
 
@@ -373,6 +373,22 @@ JSONL、rollout 或 SQLite。
 - 首屏冻结 provider 历史 revision。
 - 后续 cursor 只能在同一个 frozen snapshot 内翻页。
 - Resume 保留已展示 turns，并以 resident live projection 覆盖重叠 turn 的 lifecycle。
+
+### 7.1 Council 列表与消息同步
+
+Council 使用“摘要目录 + 显式消息窗口 + 单条实时增量”，不把完整消息窗口混入全局目录：
+
+- `GET /api/council` 只返回 `CouncilSummary`：标题、workspace、生命周期、agents 和 message meta，不返回 `messages`、message window 或 storage 路径。
+- 打开具体 Council 后，前端通过消息分页接口按需读取最近 100 条；向上滚动再使用 `nextBeforeMessageId` 请求更早内容。
+- `council.message.created` 只携带一条新消息和更新后的 Council summary，不附带最近 100 条消息快照。
+- `App` 是 Council transport 的唯一 owner，只维持一条按 event type 过滤的 WebSocket。普通 Council 页面和 Canvas pane 都消费同一份 Council store，不建立私有 socket 或 5 秒轮询。
+- 所有 Council 写入都必须经过 `App` 的原子 updater；受控 `CouncilPage` 只能提交 updater，不能把从旧 render 捕获的整份数组写回全局 store。
+- Council socket 不回放 event retention 中的旧消息；连接建立并进入实时订阅后，再刷新一次摘要目录作为基线。这样连接与 HTTP refresh 之间没有事件缺口，也不会在每次重连重复传输旧事件。
+- socket 重连或页面回到前台时只刷新一次摘要目录；并发 refresh 会合并为同一个请求。已加载的消息窗口按 message id 保留并与增量合并，较旧的 HTTP summary 不得覆盖较新的 live summary。
+- 摘要中的 `meta.lastMessage.id` 是最近窗口是否陈旧的判据；即使本地已经装满 100 条，只要尾消息 id 不一致，选中该 Council 时仍要重取最近窗口。
+- WebSocket client 会把 session/event filter 放在 upgrade URL 中，daemon 在发送首次 replay 前即应用过滤；连接建立后的相同 subscription frame 不触发第二次 replay。
+
+Council 的创建、改名、增删 agent 等显式 mutation 可以返回完整 snapshot，因为它们是低频、用户触发的事务响应；该例外不能扩展到持续列表或消息广播。
 
 硬约束：
 

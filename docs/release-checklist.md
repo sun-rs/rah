@@ -17,10 +17,13 @@ These checks should pass in any normal development or release environment:
 
 ```bash
 npm run typecheck
+npm run test:protocol
 npm run test:auth
+npm run test:council-web
 npm run test:web
 npm run test:runtime
 npm run build:web
+npm audit --omit=dev
 ```
 
 If any of these fail, stop the release.

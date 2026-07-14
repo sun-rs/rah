@@ -81,6 +81,20 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 - initial load one-shot gate。
 - 最近历史选择恢复。
 
+## Council store 边界
+
+Council 不在每个页面实例内维护一套 transport：
+
+- `App.tsx` 持有唯一的 Council summary store、初始 refresh 和一条 `council.message.created` WebSocket。
+- `useCouncilTransport.ts` 只负责 socket 生命周期、前台恢复和重连，不拥有 Council 数据。
+- `council-message-window.ts` 负责 summary/snapshot/message page 的幂等合并；消息唯一性只看持久化 message id。
+- `CouncilPage` 是受控视图。普通页面和 Canvas pane 都读取 `App` 的同一数组；选中 Council 时才按需 hydrate 最近消息窗口。
+- 全局写入必须通过 `App` 的 updater 作用于最新 ref；页面不能回写从旧 render 捕获的整份 Council 数组。
+- 最近窗口除数量外还要核对 `meta.lastMessage.id`，避免“已满 100 条但尾部已经陈旧”时跳过 hydrate。
+- Council list refresh 不得覆盖已经加载的消息，也不得因 Canvas pane 数量增加而增加 HTTP polling 或 WebSocket 数量。
+
+持续同步禁止发送 `CouncilSnapshot[]`。列表只能发送 `CouncilSummary[]`，消息事件只能发送 `CouncilSummary + CouncilMessage`。
+
 ## Chats catalog 边界
 
 Chats catalog 与左侧 running workspace state 是两套不同投影，不能互相覆盖：
