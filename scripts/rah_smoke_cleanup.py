@@ -60,6 +60,20 @@ def is_temp_workspace(path_value: str | pathlib.Path) -> bool:
     return bool(relative_parts) and relative_parts[0].startswith("rah-")
 
 
+def is_workspace_below_allowed_root(
+    path_value: str | pathlib.Path,
+    allowed_root: str | pathlib.Path,
+) -> bool:
+    try:
+        candidate = _resolve_path(path_value)
+        root = _resolve_path(allowed_root)
+    except Exception:
+        return False
+    if candidate == root or os.path.commonpath([str(candidate), str(root)]) != str(root):
+        return False
+    return candidate.name.startswith("rah-")
+
+
 def _close_live_sessions_for_workspace(base_url: str, workspace: str) -> None:
     try:
         sessions = _request_json(base_url, "/api/sessions").get("sessions", [])
@@ -136,6 +150,7 @@ def cleanup_smoke_workspace(
     workspace: str | pathlib.Path,
     *,
     remove_physical: bool = True,
+    allowed_workspace_root: str | pathlib.Path | None = None,
 ) -> None:
     workspace_path = pathlib.Path(workspace)
     workspace_str = str(workspace_path)
@@ -150,7 +165,11 @@ def cleanup_smoke_workspace(
     except Exception:
         pass
     if remove_physical:
-        if not is_temp_workspace(workspace_path):
+        allowed_below_root = (
+            allowed_workspace_root is not None
+            and is_workspace_below_allowed_root(workspace_path, allowed_workspace_root)
+        )
+        if not is_temp_workspace(workspace_path) and not allowed_below_root:
             raise RuntimeError(f"Refusing to remove non-temp RAH smoke workspace: {workspace_path}")
         move_path_to_trash(workspace_path)
 

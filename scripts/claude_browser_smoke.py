@@ -45,6 +45,11 @@ def close_live_sessions(base_url: str) -> None:
         summary = session.get("session") if isinstance(session, dict) else None
         if not isinstance(summary, dict) or summary.get("provider") != "claude":
             continue
+        cwd = summary.get("cwd")
+        if not isinstance(cwd, str) or not pathlib.Path(cwd).name.startswith(
+            "rah-claude-browser-"
+        ):
+            continue
         session_id = summary.get("id")
         if not isinstance(session_id, str):
             continue
@@ -192,6 +197,46 @@ def assert_composer_ready(page, *, timeout_s: int = 45) -> None:
     composer = visible_composer(page)
     expect(composer).to_be_visible(timeout=timeout_s * 1000)
     expect(composer).to_be_enabled(timeout=timeout_s * 1000)
+
+
+def elapsed_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 1)
+
+
+def wait_for_new_session_chat(page, title: str, *, timeout_s: int = 90) -> None:
+    session_button = page.locator("button").filter(has_text=title).first
+    expect(session_button).to_be_visible(timeout=timeout_s * 1000)
+    session_button.click()
+    expect(page.get_by_role("button", name="Stop session")).to_be_visible(
+        timeout=timeout_s * 1000
+    )
+    composer = page.locator("textarea:visible").last
+    expect(composer).to_be_visible(timeout=timeout_s * 1000)
+    expect(composer).to_be_enabled(timeout=timeout_s * 1000)
+
+
+def stop_session_from_header(page, *, timeout_s: int = 90) -> float:
+    started_at = time.perf_counter()
+    stop_button = page.get_by_role("button", name="Stop session")
+    expect(stop_button).to_be_visible(timeout=timeout_s * 1000)
+    expect(stop_button).to_be_enabled(timeout=timeout_s * 1000)
+    stop_button.click()
+
+    dialog = page.get_by_role("dialog").filter(has_text="Stop session?")
+    expect(dialog).to_be_visible(timeout=timeout_s * 1000)
+    dialog.get_by_role("button", name="Stop", exact=True).click()
+    expect(dialog).not_to_be_visible(timeout=timeout_s * 1000)
+    expect(stop_button).not_to_be_visible(timeout=timeout_s * 1000)
+    duration_ms = elapsed_ms(started_at)
+
+    chats_button = page.locator('button[aria-label="Chats"]:visible').first
+    expect(chats_button).to_be_enabled(timeout=timeout_s * 1000)
+    chats_button.click()
+    expect(page.get_by_role("tab", name="Recent", exact=True)).to_be_visible(
+        timeout=timeout_s * 1000
+    )
+    page.keyboard.press("Escape")
+    return duration_ms
 
 
 def send_chat_message(page, text: str) -> None:
@@ -437,7 +482,18 @@ def main() -> int:
     base_url = os.environ.get("RAH_BASE_URL", "http://127.0.0.1:43111")
     close_live_sessions(base_url)
 
-    workspace = pathlib.Path(tempfile.mkdtemp(prefix="rah-claude-browser-"))
+    # Claude intentionally pauses for an interactive trust decision in a new
+    # filesystem root. Keep the provider smoke inside this already-trusted repo
+    # so it measures RAH lifecycle behavior instead of bypassing that boundary.
+    smoke_workspace_root = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "test-results"
+        / "provider-smoke-workspaces"
+    )
+    smoke_workspace_root.mkdir(parents=True, exist_ok=True)
+    workspace = pathlib.Path(
+        tempfile.mkdtemp(prefix="rah-claude-browser-", dir=smoke_workspace_root)
+    )
     token = str(int(time.time()))
     first_marker = f"CLAUDE-BROWSER-1-{token}"
     second_marker = f"CLAUDE-BROWSER-2-{token}"
@@ -483,6 +539,8 @@ def main() -> int:
         "Do not use tools. This is the next queued user turn. "
         f"Reply with exactly this marker and no extra text: {rapid2_marker}"
     )
+    session_title = f"RAH claude browser smoke {token}"
+    timings_ms: dict[str, float] = {}
 
     request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
     request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
@@ -531,12 +589,14 @@ def main() -> int:
             page.reload(wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
 
+            new_session_started_at = time.perf_counter()
             seeded = request_json(
                 base_url,
                 "/api/sessions/start",
                 {
                     "provider": "claude",
                     "cwd": str(workspace),
+                    "title": session_title,
                     "liveBackend": "tui_mux",
                     "modeId": "bypassPermissions",
                     "attach": {
@@ -551,6 +611,8 @@ def main() -> int:
                 },
             )["session"]
             live_session_id = seeded["session"]["id"]
+            wait_for_new_session_chat(page, session_title)
+            timings_ms["newSessionToChatReady"] = elapsed_ms(new_session_started_at)
             input_client_id = resolve_control_client_id(base_url, live_session_id, client_id)
             request_json(
                 base_url,
@@ -585,6 +647,7 @@ def main() -> int:
 
             page.locator('button[aria-label="Chats"]:visible').first.click()
             page.get_by_role("tab", name="Recent", exact=True).click()
+            history_open_started_at = time.perf_counter()
             page.locator(
                 f'button[data-provider-session-id="{provider_session_id}"]:visible'
             ).first.click()
@@ -599,10 +662,12 @@ def main() -> int:
             replay_session_id = replay["session"]["id"]
             expect(page.get_by_text("History only", exact=True)).to_be_visible(timeout=60_000)
             body_after_replay = wait_for_chat_contains(page, first_marker, timeout_s=90)
+            timings_ms["historyOpenToReadable"] = elapsed_ms(history_open_started_at)
             if count_text(body_after_replay, first_marker) < 1:
                 raise AssertionError("Claude history replay did not show the first turn marker in the UI.")
 
             resume_request_start = len(api_request_urls)
+            resume_started_at = time.perf_counter()
             page.get_by_role("button", name="Resume").click()
             composer = page.locator("textarea:visible").last
             expect(composer).to_be_visible(timeout=90_000)
@@ -649,6 +714,8 @@ def main() -> int:
             old_turn_count_before = count_text(chat_text(page), first_marker)
             if old_turn_count_before < 1:
                 raise AssertionError("Claude Resume hid the already-visible history turn.")
+            assert_composer_ready(page, timeout_s=90)
+            timings_ms["resumeToUsableChat"] = elapsed_ms(resume_started_at)
 
             composer.fill(second_prompt)
             page.keyboard.press("Enter")
@@ -805,6 +872,7 @@ def main() -> int:
                     f"user={rapid2_user_count} assistant={rapid2_assistant_count}."
                 )
             old_turn_count_after = count_text(body_after_second, first_marker)
+            timings_ms["stopToUsableUi"] = stop_session_from_header(page)
 
             result = {
                 "ok": True,
@@ -812,6 +880,7 @@ def main() -> int:
                 "provider": "claude",
                 "browser": "chromium",
                 "headless": True,
+                "timingsMs": timings_ms,
                 "caseIds": REAL_BROWSER_CASE_IDS,
                 "asserted": [
                     "real Claude provider path was used; no fake provider is created by this script",
@@ -859,7 +928,6 @@ def main() -> int:
                     "secondAssistantCount": rapid2_assistant_count,
                 },
             }
-            print(json.dumps(result, ensure_ascii=False, indent=2))
             assert_no_chat_noise(body_after_recovery2)
             assert_text_order(
                 body_after_recovery2,
@@ -872,6 +940,7 @@ def main() -> int:
                 recovery2_prompt,
                 recovery2_marker,
             )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         except Exception as exc:
             try:
@@ -931,7 +1000,11 @@ def main() -> int:
                 close_session(base_url, replay_session_id, client_id)
             if live_session_id:
                 close_session(base_url, live_session_id)
-            cleanup_smoke_workspace(base_url, workspace)
+        cleanup_smoke_workspace(
+            base_url,
+            workspace,
+            allowed_workspace_root=smoke_workspace_root,
+        )
 
 
 if __name__ == "__main__":

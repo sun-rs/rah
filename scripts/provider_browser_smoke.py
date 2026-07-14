@@ -9,7 +9,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib import request
+from urllib import error, request
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
@@ -27,6 +27,8 @@ class ProviderSmokeConfig:
     first_marker_prefix: str
     second_marker_prefix: str
     prompt_language: str
+    model_id: str | None = None
+    reasoning_id: str | None = None
     exercise_file_tools: bool = True
     require_file_outputs: bool = True
     require_tool_event: bool = True
@@ -43,6 +45,8 @@ CONFIGS = {
         first_marker_prefix="CODEX-BROWSER-1",
         second_marker_prefix="CODEX-BROWSER-2",
         prompt_language="english",
+        model_id="gpt-5.6-sol",
+        reasoning_id="low",
     ),
     "opencode": ProviderSmokeConfig(
         provider="opencode",
@@ -103,8 +107,12 @@ def request_json(base_url: str, path: str, payload: dict[str, Any] | None = None
             data=json.dumps(payload).encode(),
             headers={"content-type": "application/json"},
         )
-    with request.urlopen(req, timeout=240) as response:
-        return json.load(response)
+    try:
+        with request.urlopen(req, timeout=240) as response:
+            return json.load(response)
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{path} returned HTTP {exc.code}: {body}") from exc
 
 
 def close_live_sessions(base_url: str, provider: str) -> None:
@@ -112,6 +120,11 @@ def close_live_sessions(base_url: str, provider: str) -> None:
     for session in sessions:
         summary = session.get("session") if isinstance(session, dict) else None
         if not isinstance(summary, dict) or summary.get("provider") != provider:
+            continue
+        cwd = summary.get("cwd")
+        if not isinstance(cwd, str) or not pathlib.Path(cwd).name.startswith(
+            f"rah-{provider}-browser-"
+        ):
             continue
         session_id = summary.get("id")
         if not isinstance(session_id, str):
@@ -345,14 +358,15 @@ def summarize_conversation_snapshot(snapshot: dict[str, Any]) -> list[dict[str, 
 
 def assert_canonical_turn_sequence(
     snapshot: dict[str, Any],
-    expected: list[tuple[str, str]],
+    expected: list[tuple[str, str, str | None]],
 ) -> None:
     turns = snapshot.get("turns")
     if not isinstance(turns, list):
         raise AssertionError("Conversation snapshot did not contain turns.")
 
     cursor = -1
-    for expected_user, expected_status in expected:
+    all_markers = [marker for _, _, marker in expected if marker is not None]
+    for expected_user, expected_status, expected_assistant_marker in expected:
         matching_indexes: list[int] = []
         for index, turn in enumerate(turns):
             if not isinstance(turn, dict):
@@ -393,6 +407,38 @@ def assert_canonical_turn_sequence(
             raise AssertionError(
                 f"Canonical turn for {expected_user!r} has status {turn.get('status')!r}; "
                 f"expected {expected_status!r}."
+            )
+        assistant_texts: list[str] = []
+        items = turn.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, dict) or content.get("kind") != "timeline":
+                    continue
+                timeline = content.get("item")
+                if (
+                    isinstance(timeline, dict)
+                    and timeline.get("kind") == "assistant_message"
+                    and isinstance(timeline.get("text"), str)
+                ):
+                    assistant_texts.append(timeline["text"])
+        assistant_text = "\n".join(assistant_texts)
+        if expected_assistant_marker is not None and assistant_text.count(expected_assistant_marker) != 1:
+            raise AssertionError(
+                f"Canonical turn for {expected_user!r} did not contain exactly one matching assistant marker "
+                f"{expected_assistant_marker!r}; assistants={assistant_texts!r}."
+            )
+        foreign_markers = [
+            marker
+            for marker in all_markers
+            if marker != expected_assistant_marker and marker in assistant_text
+        ]
+        if foreign_markers:
+            raise AssertionError(
+                f"Canonical turn for {expected_user!r} contains assistant output from another turn: "
+                f"{foreign_markers!r}; assistants={assistant_texts!r}."
             )
         cursor = index
 
@@ -549,6 +595,46 @@ def assert_composer_ready(page, *, timeout_s: int = 45) -> None:
     expect(composer).to_be_enabled(timeout=timeout_s * 1000)
 
 
+def elapsed_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 1)
+
+
+def wait_for_new_session_chat(page, title: str, *, timeout_s: int = 90) -> None:
+    session_button = page.locator("button").filter(has_text=title).first
+    expect(session_button).to_be_visible(timeout=timeout_s * 1000)
+    session_button.click()
+    expect(page.get_by_role("button", name="Stop session")).to_be_visible(
+        timeout=timeout_s * 1000
+    )
+    composer = page.locator("textarea:visible").last
+    expect(composer).to_be_visible(timeout=timeout_s * 1000)
+    expect(composer).to_be_enabled(timeout=timeout_s * 1000)
+
+
+def stop_session_from_header(page, *, timeout_s: int = 90) -> float:
+    started_at = time.perf_counter()
+    stop_button = page.get_by_role("button", name="Stop session")
+    expect(stop_button).to_be_visible(timeout=timeout_s * 1000)
+    expect(stop_button).to_be_enabled(timeout=timeout_s * 1000)
+    stop_button.click()
+
+    dialog = page.get_by_role("dialog").filter(has_text="Stop session?")
+    expect(dialog).to_be_visible(timeout=timeout_s * 1000)
+    dialog.get_by_role("button", name="Stop", exact=True).click()
+    expect(dialog).not_to_be_visible(timeout=timeout_s * 1000)
+    expect(stop_button).not_to_be_visible(timeout=timeout_s * 1000)
+    duration_ms = elapsed_ms(started_at)
+
+    chats_button = page.locator('button[aria-label="Chats"]:visible').first
+    expect(chats_button).to_be_enabled(timeout=timeout_s * 1000)
+    chats_button.click()
+    expect(page.get_by_role("tab", name="Recent", exact=True)).to_be_visible(
+        timeout=timeout_s * 1000
+    )
+    page.keyboard.press("Escape")
+    return duration_ms
+
+
 def send_chat_message(page, text: str) -> None:
     composer = visible_composer(page)
     expect(composer).to_be_visible(timeout=90_000)
@@ -607,6 +693,7 @@ def wait_for_idle_with_auto_permissions(
     page,
     base_url: str,
     session_id: str,
+    prompt_text: str,
     *,
     timeout_s: int = 300,
 ) -> tuple[dict[str, Any], list[str]]:
@@ -617,6 +704,10 @@ def wait_for_idle_with_auto_permissions(
 
     while time.time() - started < timeout_s:
         socket_messages = page.evaluate("window.__rahSocketMessages")
+        matching_user_count, _turn_id = gather_matching_user_events(
+            socket_messages,
+            prompt_text,
+        )
         for batch in socket_messages:
             events = batch.get("events") if isinstance(batch, dict) else None
             if not isinstance(events, list):
@@ -649,11 +740,39 @@ def wait_for_idle_with_auto_permissions(
                 seen_request_ids.append(request_id)
 
         last = request_json(base_url, f"/api/sessions/{session_id}")["session"]
-        if last["session"]["runtimeState"] in ("idle", "failed", "stopped"):
+        if (
+            matching_user_count > 0
+            and last["session"]["runtimeState"] in ("idle", "failed", "stopped")
+        ):
             return last, seen_request_ids
         time.sleep(1)
 
-    raise TimeoutError(f"Timed out waiting for {session_id}; last={last}")
+    try:
+        canonical = request_json(
+            base_url,
+            f"/api/sessions/{session_id}/conversation/turns?limit=20",
+        )
+    except Exception as error:
+        canonical = {"error": str(error)}
+    socket_summary = summarize_conversation_events(
+        page.evaluate("window.__rahSocketMessages")
+    )
+    raise TimeoutError(
+        f"Timed out waiting for {session_id}; last={last}; "
+        f"canonical={summarize_conversation_snapshot(canonical)}; "
+        f"socketEvents={socket_summary}"
+    )
+
+
+def deterministic_session_config(config: ProviderSmokeConfig) -> dict[str, Any]:
+    return {
+        **({"model": config.model_id} if config.model_id else {}),
+        **(
+            {"optionValues": {"model_reasoning_effort": config.reasoning_id}}
+            if config.reasoning_id
+            else {}
+        ),
+    }
 
 
 def first_prompt(config: ProviderSmokeConfig, marker: str) -> str:
@@ -731,6 +850,8 @@ def main() -> int:
     recovery2_text = recovery_prompt(config, recovery2_marker)
     rapid1_text = recovery_prompt(config, rapid1_marker)
     rapid2_text = recovery_prompt(config, rapid2_marker)
+    session_title = f"RAH {config.provider} browser smoke {token}"
+    timings_ms: dict[str, float] = {}
 
     request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
     request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
@@ -780,14 +901,17 @@ def main() -> int:
             page.reload(wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
 
+            new_session_started_at = time.perf_counter()
             seeded = request_json(
                 base_url,
                 "/api/sessions/start",
                 {
                     "provider": config.provider,
                     "cwd": str(workspace),
+                    "title": session_title,
                     "liveBackend": live_backend_for_provider(config.provider),
                     "modeId": config.mode_id,
+                    **deterministic_session_config(config),
                     "attach": {
                         "client": {
                             "id": client_id,
@@ -800,6 +924,8 @@ def main() -> int:
                 },
             )["session"]
             live_session_id = seeded["session"]["id"]
+            wait_for_new_session_chat(page, session_title)
+            timings_ms["newSessionToChatReady"] = elapsed_ms(new_session_started_at)
             input_client_id = resolve_control_client_id(base_url, live_session_id, client_id)
             request_json(
                 base_url,
@@ -810,6 +936,7 @@ def main() -> int:
                 page,
                 base_url,
                 live_session_id,
+                first_text,
             )
             if first_done["session"]["runtimeState"] == "failed":
                 raise AssertionError(f"{config.provider} seed flow failed: {first_done['session']}")
@@ -836,6 +963,7 @@ def main() -> int:
 
             page.locator('button[aria-label="Chats"]:visible').first.click()
             page.get_by_role("tab", name="Recent", exact=True).click()
+            history_open_started_at = time.perf_counter()
             page.locator(
                 f'button[data-provider-session-id="{provider_session_id}"]:visible'
             ).first.click()
@@ -850,6 +978,7 @@ def main() -> int:
             replay_session_id = replay["session"]["id"]
             expect(page.get_by_text("History only", exact=True)).to_be_visible(timeout=60_000)
             body_after_replay = wait_for_chat_contains(page, first_marker, timeout_s=90)
+            timings_ms["historyOpenToReadable"] = elapsed_ms(history_open_started_at)
             if count_text(body_after_replay, first_marker) < 1:
                 raise AssertionError(f"{config.provider} history replay did not show the first turn marker.")
             assert_no_environment_leak(body_after_replay)
@@ -860,6 +989,7 @@ def main() -> int:
             expect(claim_button).to_be_visible(timeout=30_000)
             expect(claim_button).to_be_enabled(timeout=30_000)
             resume_request_start = len(api_request_urls)
+            resume_started_at = time.perf_counter()
             with page.expect_response(
                 lambda response: response.url.endswith("/api/sessions/resume"),
                 timeout=30_000,
@@ -895,6 +1025,12 @@ def main() -> int:
             resumed_session_id = resumed["session"]["id"]
 
             old_turn_count_before = count_text(chat_text(page), first_text)
+            if old_turn_count_before < 1:
+                raise AssertionError(
+                    f"{config.provider} Resume hid the already-visible history turn."
+                )
+            assert_composer_ready(page, timeout_s=90)
+            timings_ms["resumeToUsableChat"] = elapsed_ms(resume_started_at)
 
             composer.fill(second_text)
             page.keyboard.press("Enter")
@@ -903,6 +1039,7 @@ def main() -> int:
                 page,
                 base_url,
                 resumed_session_id,
+                second_text,
             )
             if second_done["session"]["runtimeState"] == "failed":
                 raise AssertionError(f"{config.provider} claim flow failed: {second_done['session']}")
@@ -933,6 +1070,7 @@ def main() -> int:
                 page,
                 base_url,
                 resumed_session_id,
+                interrupt_text,
                 timeout_s=180,
             )
             if interrupt_done["session"]["runtimeState"] in ("failed", "stopped"):
@@ -955,6 +1093,7 @@ def main() -> int:
                 page,
                 base_url,
                 resumed_session_id,
+                recovery_text,
                 timeout_s=240,
             )
             if recovery_done["session"]["runtimeState"] == "failed":
@@ -987,6 +1126,7 @@ def main() -> int:
                 page,
                 base_url,
                 resumed_session_id,
+                interrupt2_text,
                 timeout_s=180,
             )
             if second_interrupt_done["session"]["runtimeState"] in ("failed", "stopped"):
@@ -1009,6 +1149,7 @@ def main() -> int:
                 page,
                 base_url,
                 resumed_session_id,
+                recovery2_text,
                 timeout_s=240,
             )
             if second_recovery_done["session"]["runtimeState"] == "failed":
@@ -1047,6 +1188,7 @@ def main() -> int:
                     page,
                     base_url,
                     resumed_session_id,
+                    rapid2_text,
                     timeout_s=180,
                 )
                 rapid_body = chat_text(page)
@@ -1084,6 +1226,7 @@ def main() -> int:
             old_turn_count_after = count_text(body_after_second, first_text)
 
             gamma_content = gamma.read_text(encoding="utf-8") if gamma.exists() else None
+            timings_ms["stopToUsableUi"] = stop_session_from_header(page)
 
             result = {
                 "ok": True,
@@ -1091,6 +1234,7 @@ def main() -> int:
                 "provider": config.provider,
                 "browser": "chromium",
                 "headless": True,
+                "timingsMs": timings_ms,
                 "caseIds": REAL_BROWSER_CASE_IDS,
                 "asserted": [
                     "real provider binary/server path was used; no fake provider is created by this script",
@@ -1134,22 +1278,20 @@ def main() -> int:
                 },
                 **({"rapidFlow": rapid_flow} if rapid_flow is not None else {}),
             }
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-
             assert_no_environment_leak(body_after_recovery2)
             assert_no_chat_noise(body_after_recovery2)
             expected_turns = [
-                (second_text, "completed"),
-                (interrupt_text, "interrupted"),
-                (recovery_text, "completed"),
-                (interrupt2_text, "interrupted"),
-                (recovery2_text, "completed"),
+                (second_text, "completed", second_marker),
+                (interrupt_text, "interrupted", None),
+                (recovery_text, "completed", recovery_marker),
+                (interrupt2_text, "interrupted", None),
+                (recovery2_text, "completed", recovery2_marker),
             ]
             if config.provider == "opencode":
                 expected_turns.extend(
                     [
-                        (rapid1_text, "completed"),
-                        (rapid2_text, "completed"),
+                        (rapid1_text, "completed", rapid1_marker),
+                        (rapid2_text, "completed", rapid2_marker),
                     ]
                 )
             assert_canonical_turn_sequence(canonical_snapshot, expected_turns)
@@ -1172,6 +1314,7 @@ def main() -> int:
             if old_turn_count_after > old_turn_count_before:
                 raise AssertionError(f"Resuming {config.provider} history replayed older history into the UI.")
 
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         except (AssertionError, PlaywrightTimeoutError) as exc:
             try:
