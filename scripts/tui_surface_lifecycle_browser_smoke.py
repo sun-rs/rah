@@ -86,6 +86,7 @@ def main() -> int:
                 "CODEX_HOME": str(codex_home),
                 "RAH_CODEX_BINARY": str(fake_codex),
                 "MOCK_CODEX_SESSION_ID": base_provider_session_id,
+                "MOCK_CODEX_SESSION_ID_PER_PROCESS": "1",
             },
             port,
         )
@@ -126,7 +127,7 @@ def main() -> int:
             expect_inactive_overlay_absent(page)
             save_browser_screenshot(page, artifact_dir, "session-chat-toggle-keeps-tui-active")
 
-            page.locator('button[aria-label="Open settings"]:visible').first.click(timeout=30_000)
+            page.locator('button[aria-label="Settings"]:visible').first.click(timeout=30_000)
             settings_dialog = page.get_by_role("dialog").filter(has_text="Settings")
             expect(settings_dialog).to_be_visible(timeout=10_000)
             settings_dialog.get_by_label("Close").click(timeout=10_000)
@@ -178,6 +179,17 @@ def main() -> int:
         )
         return 0
     except Exception as exc:
+        daemon_exit_code = daemon.poll() if daemon else None
+        daemon_stdout = (
+            daemon.stdout.read()
+            if daemon and daemon_exit_code is not None and daemon.stdout
+            else ""
+        )
+        daemon_stderr = (
+            daemon.stderr.read()
+            if daemon and daemon_exit_code is not None and daemon.stderr
+            else ""
+        )
         print(
             json.dumps(
                 {
@@ -187,6 +199,9 @@ def main() -> int:
                     "baseUrl": base_url,
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),
+                    "daemonExitCode": daemon_exit_code,
+                    "daemonStdout": daemon_stdout[-4_000:],
+                    "daemonStderr": daemon_stderr[-8_000:],
                 },
                 ensure_ascii=False,
                 indent=2,

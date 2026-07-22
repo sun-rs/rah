@@ -660,6 +660,9 @@ def assert_opencode_mirror_details(page) -> None:
     expect(reasoning_button).to_be_visible(timeout=10_000)
     reasoning_button.click()
     expect(page.get_by_text("OpenCode native browser reasoning trace")).to_be_visible(timeout=10_000)
+    command_button = page.get_by_role("button", name="Ran 1 command").last
+    expect(command_button).to_be_visible(timeout=10_000)
+    command_button.click()
     expect(page.get_by_text("OpenCode browser tool")).to_be_visible(timeout=10_000)
     assert_page_text_absent(page, "Step 1")
     assert_page_text_absent(page, "Step 2")

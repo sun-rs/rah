@@ -127,7 +127,7 @@ def wait_for_absent(base_url: str, token: str, session_id: str, timeout_s: int =
 
 
 def open_live_session(page, session_id: str) -> None:
-    page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+    page.get_by_role("button", name="Chats", exact=True).first.click(timeout=30_000)
     page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
     page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(timeout=30_000)
 
@@ -139,8 +139,14 @@ def open_session_actions(page) -> None:
 def remembered_canvas_state(session_id: str) -> str:
     return json.dumps(
         {
-            "layout": "two-horizontal",
-            "ratios": [1, 1],
+            "layout": {
+                "kind": "split",
+                "id": "browser-smoke-two-horizontal",
+                "axis": "horizontal",
+                "ratio": 0.5,
+                "first": {"kind": "pane", "paneId": "canvas-1"},
+                "second": {"kind": "pane", "paneId": "canvas-2"},
+            },
             "activePaneId": "canvas-1",
             "targets": {
                 "canvas-1": {"kind": "session", "sessionId": session_id},
@@ -241,19 +247,19 @@ def main() -> int:
             ).to_be_visible()
             progress(f"Side created: {side_id}")
 
-            page.locator('button[aria-label="Chats"]:visible').first.click()
+            page.get_by_role("button", name="Chats", exact=True).first.click()
             page.get_by_role("tab", name="Recent", exact=True).click()
             expect(page.locator(f'button[data-session-id="{side_id}"]')).to_have_count(0)
             page.keyboard.press("Escape")
 
             page.evaluate(
                 "([key, value]) => window.localStorage.setItem(key, value)",
-                ["rah-canvas-state-v1", remembered_canvas_state(parent_id)],
+                ["rah-canvas-state-v2", remembered_canvas_state(parent_id)],
             )
             page.set_viewport_size({"width": 390, "height": 844})
             page.reload(wait_until="domcontentloaded")
             page.get_by_role("button", name="Open sidebar", exact=True).first.click(timeout=30_000)
-            page.get_by_role("button", name="Open canvas", exact=True).click(timeout=30_000)
+            page.get_by_role("button", name="Canvas", exact=True).click(timeout=30_000)
             page.get_by_role("button", name="Maximize pane", exact=True).first.click(timeout=30_000)
             expect(page.get_by_role("button", name="Main", exact=True)).to_be_visible()
             side_tab = page.get_by_role(
@@ -277,7 +283,7 @@ def main() -> int:
 
             page.set_viewport_size({"width": 1440, "height": 960})
             page.reload(wait_until="domcontentloaded")
-            page.get_by_role("button", name="Open canvas", exact=True).click(timeout=30_000)
+            page.get_by_role("button", name="Canvas", exact=True).click(timeout=30_000)
             expect(page.locator('[title="1 open Side task"]')).to_be_visible(timeout=20_000)
             page.get_by_role("button", name="Maximize pane", exact=True).first.click()
             expect(page.get_by_text("1 Side task", exact=True)).to_be_visible(timeout=20_000)
@@ -294,7 +300,7 @@ def main() -> int:
             page.screenshot(path=str(artifact_dir / "desktop-side-columns.png"), full_page=False)
             progress("desktop Canvas Side layout verified")
 
-            page.get_by_role("button", name="Exit canvas", exact=True).click()
+            page.get_by_role("button", name="Close canvas view", exact=True).click()
             open_live_session(page, parent_id)
             open_session_actions(page)
             page.get_by_role("button", name="Continue in new task", exact=True).click()
@@ -302,10 +308,10 @@ def main() -> int:
             fork_id = fork["id"]
             progress(f"persistent fork created: {fork_id}")
             expect(
-                page.get_by_title("Fork Side Browser Parent (fork)", exact=True).last
+                page.get_by_title("Fork Side Browser Parent (2)", exact=True).last
             ).to_be_visible(timeout=20_000)
 
-            page.locator('button[aria-label="Chats"]:visible').first.click()
+            page.get_by_role("button", name="Chats", exact=True).first.click()
             page.get_by_role("tab", name="Recent", exact=True).click()
             expect(page.locator(f'button[data-session-id="{fork_id}"]:visible')).to_have_count(1)
             expect(page.locator(f'button[data-session-id="{side_id}"]')).to_have_count(0)
@@ -323,6 +329,24 @@ def main() -> int:
                 for session in session_rows(base_url, management_token)
             )
             progress("parent close removed Side and preserved persistent fork")
+
+            request_json(
+                base_url,
+                f"/api/sessions/{fork_id}/close",
+                management_token,
+                {"clientId": "web-user"},
+            )
+            wait_for_absent(base_url, management_token, fork_id)
+            page.get_by_role("button", name="Chats", exact=True).first.click(timeout=30_000)
+            page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
+            stopped_fork_row = page.locator(
+                f'button[data-provider-session-id="{fork["providerSessionId"]}"]:visible'
+            )
+            expect(stopped_fork_row).to_have_count(1, timeout=20_000)
+            expect(stopped_fork_row).to_have_attribute(
+                "title", "Fork Side Browser Parent (2)"
+            )
+            progress("stopped Fork remained in Chats with its numbered title")
             desktop.close()
 
         requests = [json.loads(line) for line in request_log.read_text().splitlines() if line]
@@ -338,6 +362,12 @@ def main() -> int:
         )
         assert side_fork["params"]["threadSource"] == "sideConversation"
         assert persistent_fork["params"]["threadSource"] == "fork"
+        assert any(
+            request["method"] == "thread/name/set"
+            and request["params"].get("threadId") == fork["providerSessionId"]
+            and request["params"].get("name") == "Fork Side Browser Parent (2)"
+            for request in requests
+        )
         succeeded = True
         print(f"PASS fork/side browser smoke; artifacts={artifact_dir}")
         return 0

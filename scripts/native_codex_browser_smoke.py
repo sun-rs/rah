@@ -168,6 +168,7 @@ def write_fake_codex(path: pathlib.Path) -> None:
         "\n".join(
             [
                 "#!/usr/bin/env node",
+                "const crypto = require('node:crypto');",
                 "const fs = require('node:fs');",
                 "const path = require('node:path');",
                 "const readline = require('node:readline');",
@@ -219,7 +220,7 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "  });",
                 "} else {",
                 "const resumeIndex = process.argv.indexOf('resume');",
-                "const providerSessionId = resumeIndex >= 0 && process.argv[resumeIndex + 1] ? process.argv[resumeIndex + 1] : baseProviderSessionId;",
+                "const providerSessionId = resumeIndex >= 0 && process.argv[resumeIndex + 1] ? process.argv[resumeIndex + 1] : process.env.MOCK_CODEX_SESSION_ID_PER_PROCESS === '1' ? crypto.randomUUID() : baseProviderSessionId;",
                 "const rolloutPath = path.join(codexHome, 'sessions', `rollout-native-browser-${providerSessionId}.jsonl`);",
                 "fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });",
                 "function append(row) { fs.appendFileSync(rolloutPath, JSON.stringify(row) + '\\n'); }",
@@ -1545,7 +1546,7 @@ def main() -> int:
             )
             page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
 
-            page.locator('button[aria-label="Open settings"]:visible').first.click(timeout=30_000)
+            page.locator('button[aria-label="Settings"]:visible').first.click(timeout=30_000)
             settings_dialog = page.get_by_role("dialog").filter(has_text="Settings")
             expect(settings_dialog).to_be_visible(timeout=10_000)
             page.get_by_role("button", name="Status", exact=True).click(timeout=10_000)
@@ -1566,39 +1567,21 @@ def main() -> int:
             settings_dialog.get_by_label("Close").click(timeout=10_000)
             expect(settings_dialog).to_be_hidden(timeout=10_000)
 
-            if page.get_by_text("Canvas", exact=True).count() == 0:
-                canvas_toggle = page.locator('button[aria-label="Open canvas"]:visible').first
-                try:
-                    canvas_toggle.click(timeout=30_000)
-                except Exception as exc:
-                    body_text = page.locator("body").inner_text(timeout=5_000)
-                    pointer_debug = page.evaluate(
-                        """() => {
-                            const button = document.querySelector('button[aria-label="Open canvas"]');
-                            const rect = button instanceof HTMLElement ? button.getBoundingClientRect() : null;
-                            const x = rect ? rect.left + rect.width / 2 : 0;
-                            const y = rect ? rect.top + rect.height / 2 : 0;
-                            return {
-                              bodyInline: document.body.style.pointerEvents,
-                              bodyComputed: getComputedStyle(document.body).pointerEvents,
-                              htmlInline: document.documentElement.style.pointerEvents,
-                              htmlComputed: getComputedStyle(document.documentElement).pointerEvents,
-                              buttonRect: rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null,
-                              elementsAtButton: document.elementsFromPoint(x, y).slice(0, 6).map((element) => ({
-                                tag: element.tagName,
-                                aria: element.getAttribute('aria-label'),
-                                title: element.getAttribute('title'),
-                                cls: element.getAttribute('class'),
-                                pointerEvents: getComputedStyle(element).pointerEvents,
-                              })),
-                            };
-                        }"""
-                    )
-                    raise AssertionError(
-                        f"could not open canvas after Settings health check; "
-                        f"pointer={pointer_debug} body={body_text[-2000:]}"
-                    ) from exc
-            expect(page.get_by_text("Canvas", exact=True)).to_be_visible(timeout=10_000)
+            canvas_toggle = page.locator('button[aria-label="Canvas"]:visible').first
+            canvas_toggle.click(timeout=30_000)
+            canvas_workbench = page.locator("[data-canvas-pane-count]").first
+            expect(canvas_workbench).to_be_visible(timeout=10_000)
+            canvas_workbench.get_by_role("button", name="Chats", exact=True).first.click(
+                timeout=10_000
+            )
+            canvas_session = page.locator(
+                f'button[data-session-id="{session_id}"]:visible'
+            ).first
+            expect(canvas_session).to_be_visible(timeout=10_000)
+            canvas_session.click(timeout=10_000)
+            expect(
+                canvas_workbench.get_by_role("button", name="TUI", exact=True).first
+            ).to_be_visible(timeout=20_000)
             page.get_by_role("button", name="TUI", exact=True).last.click(timeout=30_000)
             canvas_panel = page.locator(".terminal-panel").last
             expect(canvas_panel).to_be_visible(timeout=10_000)
@@ -1747,7 +1730,9 @@ def main() -> int:
                     )
                 except Exception:
                     pass
-                mobile_page.locator('button[aria-label="Home"]:visible').first.click(timeout=30_000)
+                mobile_page.locator('button[aria-label="New task"]:visible').first.click(
+                    timeout=30_000
+                )
                 expect(
                     mobile_page.get_by_text("What would you like to build?", exact=True),
                 ).to_be_visible(timeout=10_000)

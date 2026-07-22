@@ -77,6 +77,11 @@ REAL_BROWSER_CASE_IDS = [
     "REAL-SECOND-TURN-001",
 ]
 
+CODEX_BROWSER_CASE_IDS = [
+    "REAL-QUEUE-EDIT-WITHDRAW-001",
+    "REAL-TURN-FILE-CHANGES-001",
+]
+
 SCREENSHOTS: list[str] = []
 INTERRUPT_NOTICE_PREFIX = "Interrupted after "
 
@@ -652,6 +657,14 @@ def interrupt_prompt(config: ProviderSmokeConfig, marker: str) -> str:
     )
 
 
+def queue_anchor_prompt(marker: str) -> str:
+    return (
+        "Use the available shell tool to run a command that sleeps for 30 seconds. "
+        f"Only after the sleep finishes, reply exactly {marker}. "
+        "This turn keeps the real provider busy while queued browser input is tested."
+    )
+
+
 def recovery_prompt(config: ProviderSmokeConfig, marker: str) -> str:
     return (
         "The previous interrupted instruction is canceled and must not be resumed. "
@@ -842,6 +855,10 @@ def main() -> int:
     recovery2_marker = f"{config.second_marker_prefix}-RECOVERY2-{token}"
     rapid1_marker = f"{config.first_marker_prefix}-RAPID1-{token}"
     rapid2_marker = f"{config.second_marker_prefix}-RAPID2-{token}"
+    queue_anchor_marker = f"{config.first_marker_prefix}-QUEUE-ACTIVE-{token}"
+    queue_original_marker = f"{config.first_marker_prefix}-QUEUE-ORIGINAL-{token}"
+    queue_edited_marker = f"{config.first_marker_prefix}-QUEUE-EDITED-{token}"
+    queue_withdraw_marker = f"{config.first_marker_prefix}-QUEUE-WITHDRAW-{token}"
     first_text = first_prompt(config, first_marker)
     second_text = second_prompt(config, second_marker)
     interrupt_text = interrupt_prompt(config, interrupt_marker)
@@ -850,6 +867,10 @@ def main() -> int:
     recovery2_text = recovery_prompt(config, recovery2_marker)
     rapid1_text = recovery_prompt(config, rapid1_marker)
     rapid2_text = recovery_prompt(config, rapid2_marker)
+    queue_anchor_text = queue_anchor_prompt(queue_anchor_marker)
+    queue_original_text = recovery_prompt(config, queue_original_marker)
+    queue_edited_text = recovery_prompt(config, queue_edited_marker)
+    queue_withdraw_text = recovery_prompt(config, queue_withdraw_marker)
     session_title = f"RAH {config.provider} browser smoke {token}"
     timings_ms: dict[str, float] = {}
 
@@ -1059,6 +1080,117 @@ def main() -> int:
                 assert_visible_once(body_after_second, second_text, f"{config.provider} second user prompt")
                 wait_for_assistant_event_for_prompt(page, second_text, timeout_s=90)
 
+            file_changes_flow: dict[str, Any] | None = None
+            queue_flow: dict[str, Any] | None = None
+            if config.provider == "codex":
+                file_changes_card = page.get_by_test_id(
+                    "conversation-turn-file-changes"
+                ).last
+                expect(file_changes_card).to_be_visible(timeout=60_000)
+                file_changes_summary = file_changes_card.get_by_role("button").first.inner_text()
+                if "Changed" not in file_changes_summary or "+" not in file_changes_summary:
+                    raise AssertionError(
+                        f"Codex turn file-change summary is incomplete: {file_changes_summary!r}"
+                    )
+                file_changes_card.get_by_role("button").first.click()
+                expect(file_changes_card).to_contain_text("gamma.txt", timeout=30_000)
+                file_changes_flow = {
+                    "summary": file_changes_summary,
+                    "expandedFileVisible": "gamma.txt" in file_changes_card.inner_text(),
+                }
+                file_changes_card.get_by_role("button").first.click()
+
+                send_chat_message(page, queue_anchor_text)
+                expect(stop_button(page)).to_be_visible(timeout=60_000)
+                send_chat_message(page, queue_original_text)
+
+                queue_original_row = page.get_by_test_id("chat-user-message").filter(
+                    has_text=queue_original_marker
+                ).last
+                expect(queue_original_row).to_be_visible(timeout=30_000)
+                expect(queue_original_row.get_by_test_id("queued-message-status")).to_contain_text(
+                    "Queued", timeout=30_000
+                )
+                expect(page.get_by_test_id("queued-message-status")).to_have_count(1)
+
+                queue_original_row.get_by_role(
+                    "button", name="Edit queued message", exact=True
+                ).click()
+                queue_editor = queue_original_row.get_by_role(
+                    "textbox", name="Edit queued message", exact=True
+                )
+                expect(queue_editor).to_be_visible(timeout=15_000)
+                queue_editor.fill(queue_edited_text)
+                page.get_by_role(
+                    "button", name="Save queued message", exact=True
+                ).last.click()
+
+                queue_edited_row = page.get_by_test_id("chat-user-message").filter(
+                    has_text=queue_edited_marker
+                ).last
+                expect(queue_edited_row).to_be_visible(timeout=30_000)
+                expect(
+                    page.get_by_test_id("chat-user-message").filter(
+                        has_text=queue_original_marker
+                    )
+                ).to_have_count(0)
+
+                send_chat_message(page, queue_withdraw_text)
+                queue_withdraw_row = page.get_by_test_id("chat-user-message").filter(
+                    has_text=queue_withdraw_marker
+                ).last
+                expect(queue_withdraw_row).to_be_visible(timeout=30_000)
+                expect(page.get_by_test_id("queued-message-status")).to_have_count(2)
+                queue_withdraw_row.get_by_role(
+                    "button", name="Withdraw queued message", exact=True
+                ).click()
+                expect(
+                    page.get_by_test_id("chat-user-message").filter(
+                        has_text=queue_withdraw_marker
+                    )
+                ).to_have_count(0)
+                expect(page.get_by_test_id("queued-message-status")).to_have_count(1)
+                save_screenshot(page, screenshots_dir, "codex-real-queued-input")
+
+                queue_done, queue_permission_ids = wait_for_idle_with_auto_permissions(
+                    page,
+                    base_url,
+                    resumed_session_id,
+                    queue_edited_text,
+                    timeout_s=300,
+                )
+                if queue_done["session"]["runtimeState"] == "failed":
+                    raise AssertionError(f"Codex queued turn failed: {queue_done['session']}")
+                queue_body = wait_for_chat_text_count(
+                    page, queue_edited_marker, 2, timeout_s=240
+                )
+                wait_for_chat_text_count(page, queue_anchor_marker, 2, timeout_s=240)
+                expect(page.get_by_test_id("queued-message-status")).to_have_count(0)
+                if queue_original_marker in queue_body or queue_withdraw_marker in queue_body:
+                    raise AssertionError(
+                        "Edited or withdrawn queued input leaked into the completed conversation."
+                    )
+                queue_socket_messages = page.evaluate("window.__rahSocketMessages")
+                queue_user_count, queue_turn_id = gather_matching_user_events(
+                    queue_socket_messages, queue_edited_text
+                )
+                queue_assistant_count = gather_assistant_events_for_turn(
+                    queue_socket_messages, queue_turn_id
+                )
+                if (queue_user_count, queue_assistant_count) != (1, 1):
+                    raise AssertionError(
+                        "Edited queued Codex turn was not unique: "
+                        f"user={queue_user_count} assistant={queue_assistant_count}."
+                    )
+                queue_flow = {
+                    "editedTurnId": queue_turn_id,
+                    "editedUserCount": queue_user_count,
+                    "editedAssistantCount": queue_assistant_count,
+                    "permissionCount": len(queue_permission_ids),
+                    "withdrawnPromptVisible": queue_withdraw_marker in queue_body,
+                    "originalPromptVisible": queue_original_marker in queue_body,
+                }
+
             send_chat_message(page, interrupt_text)
             expect(stop_button(page)).to_be_visible(timeout=60_000)
             stop_button(page).last.click()
@@ -1235,7 +1367,8 @@ def main() -> int:
                 "browser": "chromium",
                 "headless": True,
                 "timingsMs": timings_ms,
-                "caseIds": REAL_BROWSER_CASE_IDS,
+                "caseIds": REAL_BROWSER_CASE_IDS
+                + (CODEX_BROWSER_CASE_IDS if config.provider == "codex" else []),
                 "asserted": [
                     "real provider binary/server path was used; no fake provider is created by this script",
                     "history replay shows the first real turn",
@@ -1245,6 +1378,14 @@ def main() -> int:
                     "interrupt notice appears once",
                     "recovery turn after interrupt reaches the provider",
                     "marker counts reject duplicate user/assistant bubbles",
+                    *(
+                        [
+                            "queued input is visible, editable, withdrawable, and drains in FIFO order",
+                            "the official Codex turn diff renders an expandable changed-files card",
+                        ]
+                        if config.provider == "codex"
+                        else []
+                    ),
                 ],
                 "providerSessionId": provider_session_id,
                 "screenshots": SCREENSHOTS,
@@ -1276,12 +1417,26 @@ def main() -> int:
                     "recoveryMarkerVisibleCount": count_text(body_after_recovery2, recovery_marker),
                     "recovery2MarkerVisibleCount": count_text(body_after_recovery2, recovery2_marker),
                 },
+                **({"queueFlow": queue_flow} if queue_flow is not None else {}),
+                **(
+                    {"fileChangesFlow": file_changes_flow}
+                    if file_changes_flow is not None
+                    else {}
+                ),
                 **({"rapidFlow": rapid_flow} if rapid_flow is not None else {}),
             }
             assert_no_environment_leak(body_after_recovery2)
             assert_no_chat_noise(body_after_recovery2)
             expected_turns = [
                 (second_text, "completed", second_marker),
+                *(
+                    [
+                        (queue_anchor_text, "completed", queue_anchor_marker),
+                        (queue_edited_text, "completed", queue_edited_marker),
+                    ]
+                    if config.provider == "codex"
+                    else []
+                ),
                 (interrupt_text, "interrupted", None),
                 (recovery_text, "completed", recovery_marker),
                 (interrupt2_text, "interrupted", None),
