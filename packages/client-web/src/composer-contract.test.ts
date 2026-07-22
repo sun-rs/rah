@@ -5,9 +5,6 @@ import type { SessionSummary } from "@rah/runtime-protocol";
 import {
   COMPOSER_LAYOUT,
   EMPTY_STATE_COMPOSER_LAYOUT,
-  EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX,
-  EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX,
-  EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX,
   canSubmitComposerInput,
   deriveComposerSurface,
   shouldCompactEmptyStateSessionControls,
@@ -52,7 +49,7 @@ function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
 }
 
 describe("composer contract", () => {
-  test("derives history resume surface for read-only replay sessions", () => {
+  test("derives an implicit-resume composer for unarchived read-only replay sessions", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({
         providerSessionId: "provider-1",
@@ -68,10 +65,29 @@ describe("composer contract", () => {
     });
 
     assert.deepEqual(surface, {
-      kind: "resume_history",
-      actionLabel: "Resume",
-      actionPending: false,
+      kind: "compose",
+      showStopButton: false,
+      resumeOnSend: true,
     });
+  });
+
+  test("keeps archived history read-only", () => {
+    const surface = deriveComposerSurface({
+      selectedSummary: summary({
+        providerSessionId: "provider-1",
+        capabilities: {
+          ...summary().session.capabilities,
+          steerInput: false,
+          livePermissions: false,
+        },
+      }),
+      historyArchived: true,
+      hasControl: false,
+      isGenerating: false,
+      pendingSessionAction: null,
+    });
+
+    assert.deepEqual(surface, { kind: "unavailable" });
   });
 
   test("derives unavailable surface for observe-only sessions", () => {
@@ -172,22 +188,38 @@ describe("composer contract", () => {
   });
 
   test("sizes best-effort Esc controls to the same outer box as send", () => {
-    assert.match(COMPOSER_LAYOUT.stopWrapperClassName, /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/);
-    assert.match(COMPOSER_LAYOUT.sendButtonClassName, /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/);
+    assert.match(
+      COMPOSER_LAYOUT.stopWrapperClassName,
+      /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/,
+    );
+    assert.match(
+      COMPOSER_LAYOUT.sendButtonClassName,
+      /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/,
+    );
     assert.match(COMPOSER_LAYOUT.stopWarningButtonClassName, /inset-0/);
-    assert.doesNotMatch(COMPOSER_LAYOUT.stopWarningButtonClassName, /inset-\[3px\]/);
+    assert.doesNotMatch(
+      COMPOSER_LAYOUT.stopWarningButtonClassName,
+      /inset-\[3px\]/,
+    );
   });
 
   test("keeps composer workspace selection separate from sidebar workspace add", () => {
-    const composerSource = readSource("./components/workbench/panes/NewSessionComposer.tsx");
-    const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
+    const composerSource = readSource(
+      "./components/workbench/panes/NewSessionComposer.tsx",
+    );
+    const emptyPaneSource = readSource(
+      "./components/workbench/panes/WorkbenchEmptyPane.tsx",
+    );
     const appSource = readSource("./App.tsx");
 
     assert.match(composerSource, /onChooseNewWorkspace/);
     assert.doesNotMatch(composerSource, /onAddWorkspace/);
     assert.match(emptyPaneSource, /onChooseNewWorkspace/);
     assert.match(appSource, /pendingNewSessionWorkspaceDir/);
-    assert.match(appSource, /availableWorkspaceDir: emptyStateAvailableWorkspaceDir/);
+    assert.match(
+      appSource,
+      /availableWorkspaceDir: emptyStateAvailableWorkspaceDir/,
+    );
   });
 
   test("derives compose surface and preserves stop visibility while generating", () => {
@@ -212,7 +244,7 @@ describe("composer contract", () => {
     );
   });
 
-  test("reflects pending resume actions in button label and disabled state", () => {
+  test("reflects pending live resume actions and keeps history on the composer", () => {
     assert.deepEqual(
       deriveComposerSurface({
         selectedSummary: summary(),
@@ -248,9 +280,9 @@ describe("composer contract", () => {
         },
       }),
       {
-        kind: "resume_history",
-        actionLabel: "Resuming…",
-        actionPending: true,
+        kind: "compose",
+        showStopButton: false,
+        resumeOnSend: true,
       },
     );
   });
@@ -263,16 +295,16 @@ describe("composer contract", () => {
       COMPOSER_LAYOUT.composeGridWithoutStopClassName,
       /grid-cols-\[auto_auto_1fr_auto\]/,
     );
-    assert.match(COMPOSER_LAYOUT.composeGridWithoutStopClassName, /\bgap-1\.5\b/);
+    assert.match(
+      COMPOSER_LAYOUT.composeGridWithoutStopClassName,
+      /\bgap-1\.5\b/,
+    );
     assert.match(
       COMPOSER_LAYOUT.composeGridWithStopClassName,
       /grid-cols-\[auto_auto_1fr_auto_auto\]/,
     );
     assert.match(COMPOSER_LAYOUT.composeGridWithStopClassName, /\bgap-1\.5\b/);
-    assert.equal(
-      COMPOSER_LAYOUT.controlsGapClassName,
-      "gap-1.5 md:gap-2",
-    );
+    assert.equal(COMPOSER_LAYOUT.controlsGapClassName, "gap-1.5 md:gap-2");
     assert.match(COMPOSER_LAYOUT.stopSpinnerClassName, /animate-\[spin_/);
     assert.match(COMPOSER_LAYOUT.stopButtonClassName, /inset-\[3px\]/);
     assert.match(COMPOSER_LAYOUT.stopWarningButtonClassName, /amber/);
@@ -281,16 +313,54 @@ describe("composer contract", () => {
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bmax-w-full\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\boverflow-x-hidden\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\brah-scroll-textarea\b/);
-    assert.doesNotMatch(COMPOSER_LAYOUT.textareaClassName, /\brah-scroll-panel-y\b/);
+    assert.doesNotMatch(
+      COMPOSER_LAYOUT.textareaClassName,
+      /\brah-scroll-panel-y\b/,
+    );
     assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-10/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\btext-base\b/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\bleading-6\b/);
+    assert.match(
+      COMPOSER_LAYOUT.textareaClassName,
+      /placeholder:text-\[var\(--app-hint\)\]/,
+    );
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /placeholder:opacity-60/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /focus:outline-none/);
+    assert.doesNotMatch(COMPOSER_LAYOUT.textareaClassName, /focus:ring-/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName, /h-10/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName, /h-10/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\bgap-1\b/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\boverflow-visible\b/);
-    assert.equal(EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName, "max-w-full");
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName, /min-h-\[7\.5rem\]/);
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName,
+      /\bgap-1\b/,
+    );
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName,
+      /\boverflow-visible\b/,
+    );
+    assert.equal(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName,
+      "max-w-full",
+    );
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName,
+      /min-h-\[7\.5rem\]/,
+    );
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName,
+      /focus:outline-none/,
+    );
+    assert.doesNotMatch(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName,
+      /focus:ring-/,
+    );
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName,
+      /\bleading-6\b/,
+    );
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /bottom-3/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.configRowClassName, /\bgap-2\b/);
+    assert.equal(shouldCompactEmptyStateSessionControls(null), true);
+    assert.equal(shouldCompactEmptyStateSessionControls(619), true);
+    assert.equal(shouldCompactEmptyStateSessionControls(620), false);
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingBottom,
       "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
@@ -316,72 +386,237 @@ describe("composer contract", () => {
     assert.match(source, /wrapperClassName/);
     assert.doesNotMatch(source, /queueMicrotask\(adjustHeight\)/);
     assert.doesNotMatch(source, /el\.style\.height = "auto"/);
-    assert.doesNotMatch(source, /el\.style\.height = `\\$\\{collapsedHeight\\}px`/);
+    assert.doesNotMatch(
+      source,
+      /el\.style\.height = `\\$\\{collapsedHeight\\}px`/,
+    );
   });
 
-  test("compacts empty-state session controls based on actual composer width", () => {
-    assert.ok(
-      EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX,
+  test("keeps provider, mode, plan, and model controls independently visible", () => {
+    const source = readSource(
+      "./components/workbench/panes/NewSessionComposer.tsx",
     );
-    assert.ok(
-      EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX >= 176,
+    const providerSource = readSource("./components/ProviderSelector.tsx");
+    const popoverSource = readSource("./components/SessionControlPopover.tsx");
+
+    assert.match(source, /<SessionControlPopover/);
+    assert.match(source, /<SessionModeControls/);
+    assert.match(source, /<SessionModelControls/);
+    assert.match(source, /<ProviderSelector/);
+    assert.match(source, /ResizeObserver/);
+    assert.doesNotMatch(source, /triggerTitle="New task settings"/);
+    assert.doesNotMatch(source, /rah-new-session-settings-label/);
+    assert.doesNotMatch(popoverSource, /<ProviderSelector/);
+    assert.doesNotMatch(popoverSource, /mode="segmented"/);
+    assert.match(providerSource, /max-w-none[\s\S]*sm:max-w-\[24rem\]/);
+    assert.match(
+      providerSource,
+      /translateX\(\$\{selectedOptionIndex \* 100\}%\)/,
     );
-    assert.ok(
-      EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX <= 200,
-    );
-    assert.ok(
-      EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX,
+    assert.match(providerSource, /hidden truncate sm:inline/);
+  });
+
+  test("keeps live working controls read only and history resume controls editable", () => {
+    const source = readSource("./components/SessionControlPopover.tsx");
+    const selectedPaneSource = readSource(
+      "./components/workbench/panes/WorkbenchSelectedPane.tsx",
     );
 
+    assert.match(source, /"Working configuration"/);
+    assert.match(source, /"Session control"/);
+    assert.match(source, /locked\s*\? "View working configuration"/);
+    assert.match(
+      source,
+      /disabled=\{locked \|\| props\.disabled \|\| \(props\.modeDisabled \?\? false\)\}/,
+    );
+    assert.match(
+      source,
+      /disabled=\{locked \|\| props\.disabled \|\| \(props\.modelDisabled \?\? false\)\}/,
+    );
+    assert.doesNotMatch(
+      source,
+      /Session controls are locked while this session is busy/,
+    );
+    assert.match(
+      selectedPaneSource,
+      /const resumeSessionControlPending =\s*props\.resumeModePending \|\| props\.sendPending \|\| composerActionPending;/,
+    );
+    assert.doesNotMatch(
+      selectedPaneSource,
+      /const resumeSessionControlPending =[\s\S]{0,160}(?:sessionControlBusy|modelChangePending)/,
+    );
+    assert.match(
+      selectedPaneSource,
+      /locked=\{!resumeOnSend && sessionControlBusy\}/,
+    );
+    assert.match(
+      selectedPaneSource,
+      /selectedModelId=\{[\s\S]*resumeOnSend[\s\S]*props\.selectedResumeModelId/,
+    );
+    assert.match(
+      source,
+      /props\.showModel && Boolean\(props\.modelCatalog \|\| props\.modelCatalogLoading \|\| props\.onOpen\)/,
+    );
+    assert.match(
+      selectedPaneSource,
+      /showModel=\{resumeOnSend \|\| showLiveModelControl\}/,
+    );
+    assert.doesNotMatch(
+      selectedPaneSource,
+      /resumeOnSend\s*\?\s*Boolean\(props\.modelCatalog \|\| props\.modelCatalogLoading\)/,
+    );
+    assert.doesNotMatch(selectedPaneSource, /lockedMessage=/);
+  });
+
+  test("keeps workspace selection inside the original composer control row", () => {
+    const appSource = readSource("./App.tsx");
+    const source = readSource(
+      "./components/workbench/panes/NewSessionComposer.tsx",
+    );
+    const styles = readSource("./styles.css");
+    const controlsStart = source.indexOf("ref={controlsRowRef}");
+    const workspaceControl = source.indexOf(
+      "props.workspaceDirs.length === 0",
+      controlsStart,
+    );
+    const sessionControl = source.indexOf(
+      "<SessionControlPopover",
+      controlsStart,
+    );
+
+    assert.doesNotMatch(source, /NewSessionWorkspaceContext/);
+    assert.match(source, /What would you like to build\?/);
+    assert.doesNotMatch(source, /workspaceStripTriggerClassName/);
+    assert.doesNotMatch(source, /className="relative z-0 -mb-3"/);
+    assert.ok(controlsStart >= 0);
+    assert.ok(workspaceControl > controlsStart);
+    assert.ok(sessionControl > workspaceControl);
+    assert.match(source, /EMPTY_STATE_COMPOSER_LAYOUT\.pillClassName/);
+    assert.match(source, /shouldUseIconOnlyEmptyStateWorkspace/);
+    assert.match(source, /<Folder size=\{iconOnlyWorkspace \? 18 : 12\}/);
+    assert.match(source, /<ChevronDown[\s\S]*size=\{11\}/);
+    assert.match(source, /<ProviderSelector/);
+    assert.match(source, /<OverlayScrollArea/);
+    assert.match(source, /Add workspace…/);
+    assert.match(source, /<WorkspacePicker/);
+    assert.match(source, /<SessionControlPopover/);
+    assert.match(source, /<SessionModeControls/);
+    assert.match(source, /<SessionModelControls/);
+    assert.match(
+      source,
+      /<SessionControlPopover[\s\S]*<SessionModeControls[\s\S]*<SessionModelControls[\s\S]*aria-label="Start session"/,
+    );
+    assert.match(styles, /\.rah-marquee\s*\{/);
+    assert.doesNotMatch(styles, /rah-new-session-workspace-trigger/);
+    assert.doesNotMatch(styles, /rah-new-session-workspace-menu/);
+    assert.doesNotMatch(styles, /rah-new-session-composer/);
+    assert.match(appSource, /reason:\s*"new-session-visible"/);
+    assert.match(
+      appSource,
+      /primaryPaneState\.kind !== "empty"[\s\S]*background:\s*true[\s\S]*reason:\s*"new-session-visible"/,
+    );
+  });
+
+  test("compacts empty-state controls in ordered stages", () => {
     assert.equal(shouldCompactEmptyStateSessionControls(null), true);
-    assert.equal(
-      shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX - 1),
-      true,
-    );
-    assert.equal(
-      shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX),
-      false,
-    );
-
+    assert.equal(shouldCompactEmptyStateSessionControls(619), true);
+    assert.equal(shouldCompactEmptyStateSessionControls(620), false);
     assert.equal(shouldUseIconOnlyEmptyStateWorkspace(null), false);
-    assert.equal(
-      shouldUseIconOnlyEmptyStateWorkspace(EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX - 1),
-      true,
-    );
-    assert.equal(
-      shouldUseIconOnlyEmptyStateWorkspace(EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX),
-      false,
-    );
-
+    assert.equal(shouldUseIconOnlyEmptyStateWorkspace(379), true);
+    assert.equal(shouldUseIconOnlyEmptyStateWorkspace(380), false);
     assert.equal(shouldHideEmptyStateSessionControl(null), false);
-    assert.equal(
-      shouldHideEmptyStateSessionControl(EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX - 1),
-      true,
-    );
-    assert.equal(
-      shouldHideEmptyStateSessionControl(EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX),
-      false,
-    );
+    assert.equal(shouldHideEmptyStateSessionControl(359), true);
+    assert.equal(shouldHideEmptyStateSessionControl(360), false);
   });
 
-  test("styles pasted image attachments as working-tone pills", () => {
-    const source = readSource("./components/ComposerImageAttachmentBadge.tsx");
+  test("styles uploaded attachments as working-tone pills", () => {
+    const source = readSource("./components/ComposerAttachmentBadge.tsx");
 
     assert.match(source, /border-2/);
     assert.match(source, /border-sky-500\/35/);
     assert.match(source, /bg-sky-500\/10/);
-    assert.match(source, /rounded-xl/);
-    assert.match(source, /overflow-visible/);
+    assert.match(source, /rounded-lg/);
+    assert.match(source, /overflow-x-auto/);
     assert.match(source, /relative z-0/);
-    assert.match(source, /absolute -right-1\.5 -top-1\.5 z-10/);
     assert.match(source, /h-4 w-4/);
     assert.match(source, /rounded-full bg-sky-100/);
-    assert.match(source, /ring-sky-500\/25/);
     assert.match(source, /<X size=\{9\}/);
-    assert.doesNotMatch(source, /overflow-hidden/);
     assert.doesNotMatch(source, /border-primary/);
     assert.doesNotMatch(source, /bg-primary/);
     assert.doesNotMatch(source, /text-primary-foreground/);
+  });
+
+  test("stacks PWA attachments and exposes an explicit upload progress state", () => {
+    const badgeSource = readSource("./components/ComposerAttachmentBadge.tsx");
+    const controlSource = readSource(
+      "./components/ComposerAttachmentControl.tsx",
+    );
+    const newSessionSource = readSource(
+      "./components/workbench/panes/NewSessionComposer.tsx",
+    );
+    const selectedSessionSource = readSource(
+      "./components/workbench/panes/WorkbenchSelectedPane.tsx",
+    );
+
+    assert.match(badgeSource, /layout\?: "row" \| "stack"/);
+    assert.match(badgeSource, /layout === "stack"/);
+    assert.match(badgeSource, /flex-col/);
+    assert.match(badgeSource, /overflow-y-auto/);
+    assert.match(controlSource, /LoaderCircle/);
+    assert.match(controlSource, /animate-spin/);
+    assert.match(controlSource, /aria-busy=\{uploadInProgress\}/);
+    assert.match(controlSource, /Uploading attachments/);
+    assert.match(
+      newSessionSource,
+      /layout=\{\s*isPwaDisplayMode && draftAttachments\.length > 1\s*\? "stack"\s*: "row"\s*\}/,
+    );
+    assert.match(
+      selectedSessionSource,
+      /layout=\{\s*isPwaDisplayMode && draftAttachments\.length > 1\s*\? "stack"\s*: "row"\s*\}/,
+    );
+  });
+
+  test("keeps the mobile attachment menu platform-neutral and preserves workspace references", () => {
+    const source = readSource("./components/ComposerAttachmentControl.tsx");
+
+    assert.match(source, />Reference workspace file</);
+    assert.match(source, />Choose from device</);
+    assert.match(source, /multiple/);
+    assert.match(source, /isPwa \|\| compactTouchViewport/);
+    assert.match(source, /htmlFor=\{deviceInputId\}/);
+    assert.match(source, /className="sr-only"/);
+    assert.doesNotMatch(source, />Take photo</);
+    assert.doesNotMatch(source, /capture="environment"/);
+    assert.doesNotMatch(source, /\.current\?\.click\(\)/);
+    assert.doesNotMatch(source, /Mac|macOS/);
+  });
+
+  test("reuses the unified attachment control across new, session, and Canvas composers", () => {
+    const newSessionSource = readSource(
+      "./components/workbench/panes/NewSessionComposer.tsx",
+    );
+    const selectedSessionSource = readSource(
+      "./components/workbench/panes/WorkbenchSelectedPane.tsx",
+    );
+    const canvasSessionSource = readSource(
+      "./components/workbench/canvas/CanvasSessionPane.tsx",
+    );
+    const canvasNewSessionSource = readSource(
+      "./components/workbench/canvas/CanvasNewSessionPane.tsx",
+    );
+
+    assert.match(newSessionSource, /<ComposerAttachmentControl/);
+    assert.match(selectedSessionSource, /<ComposerAttachmentControl/);
+    assert.match(canvasSessionSource, /<WorkbenchSelectedPane/);
+    assert.match(
+      canvasSessionSource,
+      /onOpenFileReference=\{\(\) => setFileReferenceOpen\(true\)\}/,
+    );
+    assert.match(canvasNewSessionSource, /<NewSessionComposer/);
+    assert.match(
+      canvasNewSessionSource,
+      /onOpenFileReference=\{\(\) => setFileReferenceOpen\(true\)\}/,
+    );
   });
 
   test("allows native TUI Chat composer submission while the provider prompt is dirty", () => {

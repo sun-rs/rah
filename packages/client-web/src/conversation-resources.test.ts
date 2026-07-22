@@ -9,6 +9,7 @@ import {
   collectConversationResources,
   mergeConversationOutputs,
   mergeConversationSources,
+  mergeConversationTurnResources,
 } from "./conversation-resources";
 
 const output = (overrides: Partial<ConversationOutputProjection> = {}): ConversationOutputProjection => ({
@@ -80,4 +81,46 @@ test("session resource aggregation deduplicates resources across turns", () => {
   assert.equal(aggregated.outputs[0]?.activity, "updated");
   assert.equal(aggregated.sources.length, 1);
   assert.deepEqual(aggregated.sources[0]?.activities, ["read", "searched"]);
+});
+
+test("turn resource merge preserves hydrated resources across resume summaries", () => {
+  const fileChanges = {
+    files: [{ path: "src/main.ts", additions: 12, deletions: 3 }],
+    totalAdditions: 12,
+    totalDeletions: 3,
+  };
+  const resources = mergeConversationTurnResources(
+    {
+      outputs: [output({ confidence: "authoritative" })],
+      sources: [source()],
+      fileChanges,
+    },
+    {},
+  );
+
+  assert.equal(resources.outputs?.length, 1);
+  assert.equal(resources.sources?.length, 1);
+  assert.deepEqual(resources.fileChanges, fileChanges);
+});
+
+test("turn resource merge accepts a newer authoritative file-change snapshot", () => {
+  const resources = mergeConversationTurnResources(
+    {
+      fileChanges: {
+        files: [{ path: "src/main.ts", additions: 1, deletions: 0 }],
+        totalAdditions: 1,
+        totalDeletions: 0,
+      },
+    },
+    {
+      fileChanges: {
+        files: [{ path: "src/main.ts", additions: 4, deletions: 2 }],
+        totalAdditions: 4,
+        totalDeletions: 2,
+      },
+    },
+  );
+
+  assert.equal(resources.fileChanges?.totalAdditions, 4);
+  assert.equal(resources.fileChanges?.totalDeletions, 2);
 });

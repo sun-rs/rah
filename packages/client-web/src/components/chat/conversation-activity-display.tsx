@@ -1,9 +1,14 @@
 import React from "react";
-import type { ConversationActivityKind } from "@rah/runtime-protocol";
+import type {
+  ConversationActivityAction,
+  ConversationActivityKind,
+} from "@rah/runtime-protocol";
 import {
   Bot,
+  BookOpen,
   FilePenLine,
   FileSearch,
+  Folder,
   GitBranch,
   Globe2,
   ListChecks,
@@ -12,6 +17,41 @@ import {
   Workflow,
   Wrench,
 } from "lucide-react";
+
+export function ConversationActivityActionIcon(props: {
+  action: ConversationActivityAction;
+  size?: number;
+}) {
+  const size = props.size ?? 13;
+  switch (props.action) {
+    case "command":
+      return <Terminal size={size} />;
+    case "file_read":
+      return <BookOpen size={size} />;
+    case "file_list":
+      return <Folder size={size} />;
+    case "file_search":
+      return <Search size={size} />;
+    case "file_create":
+    case "file_edit":
+    case "file_delete":
+      return <FilePenLine size={size} />;
+    case "web_search":
+    case "web_fetch":
+    case "browser":
+      return <Globe2 size={size} />;
+    case "git":
+      return <GitBranch size={size} />;
+    case "subagent":
+      return <Bot size={size} />;
+    case "plan":
+      return <ListChecks size={size} />;
+    case "automation":
+      return <Workflow size={size} />;
+    default:
+      return <Wrench size={size} />;
+  }
+}
 
 export function ConversationActivityIcon(props: {
   kind: ConversationActivityKind;

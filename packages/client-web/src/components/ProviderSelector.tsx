@@ -54,6 +54,10 @@ export function ProviderSelector(props: {
     }
     return map;
   }, [diagnostics]);
+  const selectedOptionIndex = Math.max(
+    0,
+    PROVIDER_OPTIONS.findIndex((option) => option.value === value),
+  );
 
   if (mode === "rail") {
     return (
@@ -133,13 +137,20 @@ export function ProviderSelector(props: {
   const isDialog = mode === "dialog";
 
   if (!isDialog) {
-    /* Empty state selector: one compact mobile row, fuller cards on larger screens */
+    /* Empty state selector: a centered, compact segmented rail. */
     return (
       <div
-        className="grid grid-cols-3 gap-1.5 sm:gap-3"
+        className="relative mx-auto grid h-10 w-full max-w-none grid-cols-3 rounded-xl bg-[var(--app-subtle-bg)] p-1 sm:max-w-[24rem]"
         role="radiogroup"
         aria-label="Provider selection"
       >
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(33.333333%_-_0.166667rem)] rounded-[8px] border border-[var(--app-border)] bg-[var(--app-bg)] transition-transform duration-200 ease-out dark:bg-[var(--app-subtle-bg)]"
+          style={{
+            transform: `translateX(${selectedOptionIndex * 100}%)`,
+          }}
+        />
         {PROVIDER_OPTIONS.map((option) => {
           const selected = value === option.value;
           const diagnostic = diagnosticsMap.get(option.value);
@@ -152,39 +163,26 @@ export function ProviderSelector(props: {
               aria-checked={selected}
               onClick={() => onChange(option.value)}
               className={`
-                group relative inline-flex items-center justify-center gap-2.5
-                rounded-xl transition-all duration-300 ease-out
-                min-h-[44px] px-1.5 py-2 sm:px-4 sm:py-3
+                group relative z-10 inline-flex min-w-0 items-center justify-center gap-1.5
+                rounded-lg px-1.5 text-[13px] font-medium leading-none
+                transition-colors duration-200 ease-out
                 ${
                   selected
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] border border-[var(--app-border)] shadow-sm -translate-y-px dark:bg-[var(--app-subtle-bg)] dark:shadow-none dark:border-[var(--app-border)] dark:translate-y-0"
-                    : "bg-[var(--app-bg)] sm:bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] hover:shadow-sm hover:-translate-y-px hover:border hover:border-[var(--app-border)] dark:hover:bg-[var(--app-subtle-bg)]/80 dark:hover:shadow-none dark:hover:translate-y-0"
+                    ? "text-[var(--app-fg)]"
+                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
                 }
               `}
             >
-              {/* Left accent indicator when selected */}
-              {selected && (
-                <span
-                  className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-full dark:!bg-[var(--app-muted)]"
-                  style={{ backgroundColor: option.accentColor }}
-                />
-              )}
-
-              {/* Logo */}
               <ProviderLogo
                 provider={option.value}
                 variant="bare"
-                className="h-5 w-5 sm:h-5.5 sm:w-5.5"
+                className="h-4 w-4 shrink-0"
               />
 
-              {/* Label - hidden on mobile */}
-              <span className="hidden sm:inline text-sm font-medium leading-none tracking-tight">
-                {option.label}
-              </span>
+              <span className="hidden truncate sm:inline">{option.label}</span>
 
-              {/* Status dot - hidden on mobile */}
               {!selected && diagnostic ? (
-                <span className="hidden sm:inline">
+                <span className="hidden shrink-0 scale-75 sm:inline">
                   <StatusDot status={diagnostic.status} />
                 </span>
               ) : null}

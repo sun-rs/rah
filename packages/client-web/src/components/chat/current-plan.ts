@@ -1,21 +1,33 @@
+import type { ConversationTurnProjection, TimelineItem } from "@rah/runtime-protocol";
+import { conversationItemFeedKey } from "../../conversation-feed";
 import type { FeedEntry } from "../../types";
-import type { TimelineItem } from "@rah/runtime-protocol";
 
 export type CurrentPlan = {
   key: string;
-  turnId?: string;
+  turn: ConversationTurnProjection;
   item: Extract<TimelineItem, { kind: "plan" }>;
 };
 
-export function latestCurrentPlan(entries: readonly FeedEntry[]): CurrentPlan | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry?.kind === "timeline" && entry.item.kind === "plan") {
-      const turnId = entry.providerTurnId ?? entry.canonicalTurnId ?? entry.turnId;
+function turnHasFinalAnswer(turn: ConversationTurnProjection): boolean {
+  return Boolean(
+    turn.finalAnswerItemId || turn.items.some((item) => item.role === "final"),
+  );
+}
+
+export function latestCurrentPlan(
+  turns: readonly ConversationTurnProjection[],
+): CurrentPlan | null {
+  const turn = turns.at(-1);
+  if (!turn || turn.status !== "in_progress" || turnHasFinalAnswer(turn)) {
+    return null;
+  }
+  for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = turn.items[itemIndex];
+    if (item?.content.kind === "timeline" && item.content.item.kind === "plan") {
       return {
-        key: entry.key,
-        ...(turnId ? { turnId } : {}),
-        item: entry.item,
+        key: conversationItemFeedKey(item.id),
+        turn,
+        item: item.content.item,
       };
     }
   }

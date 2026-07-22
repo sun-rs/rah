@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import { SlidersHorizontal } from "lucide-react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
@@ -19,7 +25,6 @@ export function SessionControlPopover(props: {
   modelDisabled?: boolean;
   disabled?: boolean;
   locked?: boolean;
-  lockedMessage?: string;
   unavailableMessage?: string;
   allowProviderDefault?: boolean;
   showModel: boolean;
@@ -49,12 +54,6 @@ export function SessionControlPopover(props: {
       setOpen(false);
     }
   }, [props.disabled]);
-
-  useEffect(() => {
-    if (locked) {
-      setOpen(false);
-    }
-  }, [locked]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -131,10 +130,6 @@ export function SessionControlPopover(props: {
         type="button"
         disabled={!enabled}
         onClick={() => {
-          if (locked) {
-            showNotice(props.lockedMessage ?? "Session controls are locked while this session is busy.");
-            return;
-          }
           if (unavailable) {
             showNotice(props.unavailableMessage ?? "Session controls are unavailable for this session.");
             return;
@@ -149,19 +144,23 @@ export function SessionControlPopover(props: {
         className={`${props.buttonClassName} ${
           !enabled
             ? "cursor-not-allowed opacity-35 grayscale hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-hint)]"
-            : locked || unavailable
+            : unavailable
               ? "cursor-not-allowed opacity-45 grayscale hover:bg-[var(--app-subtle-bg)]"
               : ""
         }`}
         title={
           locked
-            ? props.lockedMessage ?? "Session controls are locked."
+            ? "View working configuration"
             : unavailable
               ? props.unavailableMessage
               : "Session control"
         }
-        aria-label="Session control"
-        aria-disabled={locked || unavailable || undefined}
+        aria-label={
+          locked
+            ? "View working configuration"
+            : "Session control"
+        }
+        aria-disabled={unavailable || undefined}
         aria-expanded={open}
       >
         <SlidersHorizontal size={16} />
@@ -186,10 +185,22 @@ export function SessionControlPopover(props: {
               className="rah-popover-panel fixed z-50 overflow-visible rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl"
               style={panelStyle}
             >
-              <div className="border-b border-[var(--app-border)] px-3 py-2 text-xs font-semibold text-[var(--app-fg)]">
-                Session control
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--app-border)] px-3 py-2 text-xs font-semibold text-[var(--app-fg)]">
+                <span>
+                  {locked ? "Working configuration" : "Session control"}
+                </span>
+                {locked ? (
+                  <span className="font-medium text-[var(--app-hint)]">Read only</span>
+                ) : null}
               </div>
-              <div className="space-y-1.5 p-2">
+              <div
+                className={`space-y-1.5 p-2 ${
+                  locked
+                    ? "grayscale opacity-70 [&_button:disabled]:cursor-default [&_button:disabled]:opacity-100"
+                    : ""
+                }`}
+                aria-readonly={locked || undefined}
+              >
                 {hasModes ? (
                   <SessionModeControls
                     compact
@@ -197,7 +208,7 @@ export function SessionControlPopover(props: {
                     selectedAccessModeId={props.selectedAccessModeId}
                     planModeAvailable={props.planModeAvailable}
                     planModeEnabled={props.planModeEnabled}
-                    disabled={props.disabled || (props.modeDisabled ?? false)}
+                    disabled={locked || props.disabled || (props.modeDisabled ?? false)}
                     onOpen={props.onOpen}
                     onAccessModeChange={props.onAccessModeChange}
                     onPlanModeToggle={props.onPlanModeToggle}
@@ -210,7 +221,7 @@ export function SessionControlPopover(props: {
                     selectedModelId={props.selectedModelId}
                     selectedReasoningId={props.selectedReasoningId}
                     loading={props.modelCatalogLoading}
-                    disabled={props.disabled || (props.modelDisabled ?? false)}
+                    disabled={locked || props.disabled || (props.modelDisabled ?? false)}
                     {...(props.allowProviderDefault !== undefined
                       ? { allowProviderDefault: props.allowProviderDefault }
                       : {})}

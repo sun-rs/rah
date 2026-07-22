@@ -58,8 +58,12 @@ function runtimeModelFromEntry(entry: FeedEntry): TimelineRuntimeModel | undefin
   return entry.item.runtimeModel;
 }
 
-export function buildAssistantTurnHeaders(entries: FeedEntry[]): AssistantTurnHeaders {
+export function buildAssistantTurnHeaders(
+  entries: FeedEntry[],
+  preferredEntryKeys: ReadonlySet<string> = new Set(),
+): AssistantTurnHeaders {
   const firstEntryKeyBySegment = new Map<string, string>();
+  const preferredEntryKeyBySegment = new Map<string, string>();
   const runtimeModelBySegment = new Map<string, TimelineRuntimeModel>();
   let segmentIndex = 0;
   let segmentKey = "segment:prelude";
@@ -76,6 +80,12 @@ export function buildAssistantTurnHeaders(entries: FeedEntry[]): AssistantTurnHe
     if (!firstEntryKeyBySegment.has(segmentKey)) {
       firstEntryKeyBySegment.set(segmentKey, entry.key);
     }
+    if (
+      preferredEntryKeys.has(entry.key) &&
+      !preferredEntryKeyBySegment.has(segmentKey)
+    ) {
+      preferredEntryKeyBySegment.set(segmentKey, entry.key);
+    }
     const runtimeModel = runtimeModelFromEntry(entry);
     if (runtimeModel && !runtimeModelBySegment.has(segmentKey)) {
       runtimeModelBySegment.set(segmentKey, runtimeModel);
@@ -84,7 +94,10 @@ export function buildAssistantTurnHeaders(entries: FeedEntry[]): AssistantTurnHe
 
   const headers: AssistantTurnHeaders = new Map();
   for (const [segmentKey, entryKey] of firstEntryKeyBySegment) {
-    headers.set(entryKey, runtimeModelBySegment.get(segmentKey));
+    headers.set(
+      preferredEntryKeyBySegment.get(segmentKey) ?? entryKey,
+      runtimeModelBySegment.get(segmentKey),
+    );
   }
   return headers;
 }

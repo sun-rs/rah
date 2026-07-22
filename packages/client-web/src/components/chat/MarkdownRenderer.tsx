@@ -1,27 +1,32 @@
 import {
   default as React,
-  Suspense,
   isValidElement,
-  lazy,
   memo,
+  useEffect,
   useMemo,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react";
 import type { Components } from "react-markdown";
+import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { copyTextToClipboard } from "../../clipboard";
-import { importWithStaleReload } from "../../lazy-module-reload";
+import { useTheme } from "../../hooks/useTheme";
+import {
+  ensureHighlighterLanguage,
+  extractHighlightedCodeHtml,
+  getHighlighter,
+  highlight,
+  normalizeShikiLanguage,
+} from "../../lib/shiki";
 import { splitMarkdownBlocks } from "./markdown-blocks";
 import { resolveLocalFileLinkPath } from "./local-file-link";
 import { FileResourceIcon } from "./FileResourceIcon";
-
-const ReactMarkdown = lazy(async () => ({
-  default: (await importWithStaleReload(() => import("react-markdown"))).default,
-}));
+import { LocalImageResource } from "./LocalImageResource";
+import { codexShikiThemeForColorScheme } from "../../lib/codex-shiki-themes";
 
 function textFromNode(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") {
@@ -50,6 +55,43 @@ type MarkdownExtraProps = {
   node?: unknown;
 };
 
+function useHighlightedCodeHtml(code: string, language: string | null): string | null {
+  const { colorScheme } = useTheme();
+  const normalizedLanguage = normalizeShikiLanguage(language);
+  const renderKey = `${colorScheme}:${normalizedLanguage ?? "plain"}:${code}`;
+  const [highlighted, setHighlighted] = useState<{ key: string; html: string } | null>(null);
+
+  useEffect(() => {
+    if (!normalizedLanguage) {
+      setHighlighted(null);
+      return;
+    }
+    let cancelled = false;
+    void getHighlighter()
+      .then(() => ensureHighlighterLanguage(normalizedLanguage))
+      .then((loaded) => {
+        if (!loaded || cancelled) return;
+        const rendered = highlight(
+          code,
+          normalizedLanguage,
+          codexShikiThemeForColorScheme(colorScheme),
+        );
+        const html = extractHighlightedCodeHtml(rendered);
+        if (!cancelled && html !== null) {
+          setHighlighted({ key: renderKey, html });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setHighlighted(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [code, colorScheme, normalizedLanguage, renderKey]);
+
+  return highlighted?.key === renderKey ? highlighted.html : null;
+}
+
 function MarkdownPre({
   children,
   node: _node,
@@ -58,6 +100,8 @@ function MarkdownPre({
   const [copied, setCopied] = useState(false);
   const code = useMemo(() => textFromNode(children), [children]);
   const language = useMemo(() => languageFromNode(children), [children]);
+  const normalizedLanguage = useMemo(() => normalizeShikiLanguage(language), [language]);
+  const highlightedHtml = useHighlightedCodeHtml(code, language);
 
   const copyCode = async () => {
     if (!code) {
@@ -89,7 +133,16 @@ function MarkdownPre({
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
       )}
-      <pre {...preProps}>{children}</pre>
+      <pre {...preProps} data-syntax-highlighted={highlightedHtml !== null ? "true" : undefined}>
+        {highlightedHtml !== null ? (
+          <code
+            className={normalizedLanguage ? `language-${normalizedLanguage}` : undefined}
+            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+          />
+        ) : (
+          children
+        )}
+      </pre>
     </div>
   );
 }
@@ -98,6 +151,19 @@ export function createMarkdownComponents(
   onOpenLocalFile: ((path: string) => void) | undefined,
 ): Components {
   return {
+    img({ node: _node, src, alt }) {
+      const imageSource = typeof src === "string" ? src : undefined;
+      const localFilePath = resolveLocalFileLinkPath(imageSource);
+      return (
+        <LocalImageResource
+          mode="inline"
+          {...(localFilePath ? { path: localFilePath } : {})}
+          {...(!localFilePath && imageSource ? { url: imageSource } : {})}
+          {...(alt ? { alt } : {})}
+          {...(onOpenLocalFile ? { onOpenLocalFile } : {})}
+        />
+      );
+    },
     a({ node: _node, href, children, ...anchorProps }) {
       const localFilePath = resolveLocalFileLinkPath(href);
       if (localFilePath) {
@@ -194,29 +260,9 @@ const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock(props: {
   );
 });
 
-function PlainMarkdownFallback(props: { blocks: string[]; className?: string }) {
-  return (
-    <div className={props.className}>
-      {props.blocks.map((block, index) => (
-        <div
-          key={`${index}:${block.length}`}
-          className={
-            index < props.blocks.length - 1
-              ? "mb-3 whitespace-pre-wrap"
-              : "whitespace-pre-wrap"
-          }
-        >
-          {block}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function MarkdownRenderer(props: {
   className?: string;
   content: string;
-  fallbackClassName?: string;
   onOpenLocalFile?: (path: string) => void;
 }) {
   const blocks = useMemo(
@@ -228,27 +274,15 @@ export function MarkdownRenderer(props: {
     [props.onOpenLocalFile],
   );
   return (
-    <Suspense
-      fallback={
-        <PlainMarkdownFallback
-          blocks={blocks}
-          className={
-            props.fallbackClassName ??
-            "whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
-          }
-        />
-      }
-    >
-      <div className={props.className}>
-        {blocks.map((block, index) => (
-          <div
-            key={`${index}:${block.length}`}
-            className={index < blocks.length - 1 ? "prose-chat-block" : undefined}
-          >
-            <MemoizedMarkdownBlock content={block} components={components} />
-          </div>
-        ))}
-      </div>
-    </Suspense>
+    <div className={props.className}>
+      {blocks.map((block, index) => (
+        <div
+          key={`${index}:${block.length}`}
+          className={index < blocks.length - 1 ? "prose-chat-block" : undefined}
+        >
+          <MemoizedMarkdownBlock content={block} components={components} />
+        </div>
+      ))}
+    </div>
   );
 }

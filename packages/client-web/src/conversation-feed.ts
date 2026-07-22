@@ -2,6 +2,7 @@ import type {
   ConversationItemProjection,
   ConversationItemStatus,
   ConversationTurnProjection,
+  SessionQueuedInput,
   TimelineRuntimeModel,
 } from "@rah/runtime-protocol";
 import type { FeedEntry } from "./types";
@@ -166,6 +167,19 @@ export function conversationTurnsToFeed(
   return feed;
 }
 
+/**
+ * Keeps the runtime-owned input queue out of the conversation timeline. Queue
+ * items are rendered by the composer queue and enter the transcript only when
+ * they are actually sent or guided into a provider turn.
+ */
+export function conversationFeedWithInputQueue(
+  feed: readonly FeedEntry[],
+  inputQueue: readonly SessionQueuedInput[],
+): FeedEntry[] {
+  void inputQueue;
+  return [...feed];
+}
+
 function runtimeModelFromEntries(entries: readonly FeedEntry[]): TimelineRuntimeModel | undefined {
   for (const entry of entries) {
     if (
@@ -269,21 +283,34 @@ export function conversationDisplayRows(
       .map((item) => processEntryByKey.get(conversationItemFeedKey(item.id)))
       .filter((entry): entry is FeedEntry => entry !== undefined);
     const firstProcessItemId = turn.items.find((item) => item.role === "process")?.id;
+    const processCompletedAt =
+      turn.completedAt ??
+      (finalItem ? itemTimestamp(turn, finalItem) : undefined);
+    const durationMs =
+      turn.durationMs ?? durationBetween(turn.startedAt, processCompletedAt);
     let processInserted = false;
+    let outputsInserted = false;
+    let fileChangesInserted = false;
     const insertProcessGroup = () => {
-      const lifecycleNeedsRow = turn.status !== "completed";
+      const hasProcessEvidence =
+        processEntries.length > 0 || turn.activities.length > 0;
+      const completedSummaryNeedsRow =
+        turn.itemsView === "summary" &&
+        turn.status === "completed" &&
+        finalItem !== undefined &&
+        durationMs !== undefined;
+      const lifecycleNeedsRow =
+        turn.status === "failed" ||
+        turn.status === "interrupted" ||
+        (turn.status === "in_progress" && finalItem === undefined) ||
+        completedSummaryNeedsRow;
       if (
         processInserted ||
-        (processEntries.length === 0 && turn.itemsView !== "summary" && !lifecycleNeedsRow)
+        (!hasProcessEvidence && !lifecycleNeedsRow)
       ) {
         return;
       }
       const runtimeModel = runtimeModelFromEntries(processEntries);
-      const processCompletedAt =
-        turn.completedAt ??
-        (finalItem ? itemTimestamp(turn, finalItem) : undefined);
-      const durationMs =
-        turn.durationMs ?? durationBetween(turn.startedAt, processCompletedAt);
       rows.push({
         kind: "assistant_process_group",
         key: `conversation-process:${turn.id}`,
@@ -301,9 +328,43 @@ export function conversationDisplayRows(
         ...(runtimeModel ? { runtimeModel } : {}),
         turnStatus: turn.status,
         turnId: turn.id,
-        ...(turn.itemsView === "summary" ? { detailsAvailable: true } : {}),
+        ...(turn.itemsView === "summary" &&
+        (hasProcessEvidence || completedSummaryNeedsRow)
+          ? { detailsAvailable: true }
+          : {}),
       });
       processInserted = true;
+    };
+
+    const insertTurnArtifacts = () => {
+      // Canonical outputs can arrive with the native final answer before the
+      // provider lifecycle completion. File changes describe the completed
+      // turn snapshot and stay hidden until that lifecycle is settled.
+      if (
+        !outputsInserted &&
+        (turn.outputs?.length ?? 0) > 0 &&
+        (turn.status !== "in_progress" || finalItem !== undefined)
+      ) {
+        rows.push({
+          kind: "turn_outputs",
+          key: `conversation-outputs:${turn.id}`,
+          outputs: turn.outputs ?? [],
+        });
+        outputsInserted = true;
+      }
+      if (
+        !fileChangesInserted &&
+        turn.status !== "in_progress" &&
+        (turn.fileChanges?.files.length ?? 0) > 0
+      ) {
+        rows.push({
+          kind: "turn_file_changes",
+          key: `conversation-file-changes:${turn.id}`,
+          turnId: turn.id,
+          fileChanges: turn.fileChanges!,
+        });
+        fileChangesInserted = true;
+      }
     };
 
     for (const item of turn.items) {
@@ -320,15 +381,12 @@ export function conversationDisplayRows(
       if (entry) {
         rows.push({ kind: "feed_entry", key: entry.key, entry });
       }
-      if (item.role === "final" && (turn.outputs?.length ?? 0) > 0) {
-        rows.push({
-          kind: "turn_outputs",
-          key: `conversation-outputs:${turn.id}`,
-          outputs: turn.outputs ?? [],
-        });
+      if (item.id === finalItem?.id) {
+        insertTurnArtifacts();
       }
     }
     insertProcessGroup();
+    insertTurnArtifacts();
   }
 
   for (; pendingUserIndex < pendingUserEntries.length; pendingUserIndex += 1) {

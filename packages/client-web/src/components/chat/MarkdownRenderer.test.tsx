@@ -5,10 +5,25 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { fileResourceKind } from "./FileResourceIcon";
-import { createMarkdownComponents } from "./MarkdownRenderer";
+import { FileResourceIcon, fileResourceKind } from "./FileResourceIcon";
+import { createMarkdownComponents, MarkdownRenderer } from "./MarkdownRenderer";
 
 describe("MarkdownRenderer", () => {
+  test("renders formatted Markdown on the first render without a plain-text suspense phase", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownRenderer
+        className="prose-chat"
+        content={"| Name | Value |\n| --- | --- |\n| RAH | Stable |"}
+      />,
+    );
+
+    assert.match(html, /class="prose-chat-table-wrapper"/);
+    assert.match(html, /<table>/);
+    assert.match(html, /<th>Name<\/th>/);
+    assert.match(html, /<td>Stable<\/td>/);
+    assert.doesNotMatch(html, /<!--\$!-->/);
+  });
+
   test("preserves visible text for external autolinks", () => {
     const url = "https://www.chinamoney.com.cn/chinese/bkcurvfxhis/?cfgItemType=72&curveType=FR007";
     const html = renderToStaticMarkup(
@@ -44,11 +59,63 @@ describe("MarkdownRenderer", () => {
     assert.match(html, /data-file-resource-kind="image"/);
   });
 
+  test("renders local Markdown images as lazy Inspector previews", () => {
+    const localPath = "/Volumes/Data/reports/equity-curve.png";
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(() => undefined)}
+      >
+        {`![Equity curve](${localPath})`}
+      </ReactMarkdown>,
+    );
+
+    assert.match(html, /data-testid="conversation-inline-image"/);
+    assert.match(
+      html,
+      /title="Open in Inspector: \/Volumes\/Data\/reports\/equity-curve\.png"/,
+    );
+    assert.match(html, /aria-label="Equity curve"/);
+    assert.doesNotMatch(html, /src="\/Volumes\/Data\/reports\/equity-curve\.png"/);
+  });
+
+  test("renders remote Markdown images as clickable browser previews", () => {
+    const url = "https://example.com/chart.png";
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(undefined)}
+      >
+        {`![Remote chart](${url})`}
+      </ReactMarkdown>,
+    );
+
+    assert.match(html, /data-testid="conversation-inline-image"/);
+    assert.match(html, /src="https:\/\/example\.com\/chart\.png"/);
+    assert.match(html, /alt="Remote chart"/);
+  });
+
   test("classifies resource icons from stable file extensions", () => {
     assert.equal(fileResourceKind("src/main.rs"), "code");
     assert.equal(fileResourceKind("report.csv"), "spreadsheet");
     assert.equal(fileResourceKind("chart.PNG"), "image");
     assert.equal(fileResourceKind("README.md"), "document");
+  });
+
+  test("renders format-specific Inspector file badges", () => {
+    const html = renderToStaticMarkup(
+      <div>
+        <FileResourceIcon path="bin/rah.mjs" />
+        <FileResourceIcon path="src/App.tsx" />
+        <FileResourceIcon path="docs/design.md" />
+      </div>,
+    );
+
+    assert.match(html, /data-file-extension="mjs"/);
+    assert.match(html, />JS<\/span>/);
+    assert.match(html, /data-file-extension="tsx"/);
+    assert.match(html, /data-file-extension="md"/);
+    assert.match(html, />M↓<\/span>/);
   });
 
   test("does not link ordinary inline code spans", () => {

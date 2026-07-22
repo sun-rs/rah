@@ -11,7 +11,7 @@ import type { ConversationTurnNavigationItem } from "./conversation-turn-navigat
 import { conversationTurnIndexAtScrollableRailPosition } from "./conversation-turn-navigation";
 import { FileResourceIcon } from "./FileResourceIcon";
 
-const MIN_NAVIGATION_TURNS = 4;
+const MIN_NAVIGATION_TURNS = 1;
 const MARKER_ROW_HEIGHT_PX = 10;
 const PREVIEW_EDGE_GUARD_PX = 94;
 
@@ -20,27 +20,28 @@ type ScrubState = {
   targetIndex: number;
 };
 
-function markerWidth(index: number, activeIndex: number, interactionIndex: number | null): number {
+function markerWidth(index: number, interactionIndex: number | null): number {
   const interactionDistance = interactionIndex === null
     ? Number.POSITIVE_INFINITY
     : Math.abs(interactionIndex - index);
-  if (interactionDistance === 0) return 30;
-  if (index === activeIndex) return 26;
-  if (interactionDistance === 1) return 20;
-  if (interactionDistance === 2) return 13;
-  if (interactionDistance === 3) return 10;
-  return 7;
+  if (interactionDistance === 0) return 24;
+  if (interactionDistance === 1) return 15;
+  if (interactionDistance === 2) return 10;
+  if (interactionDistance === 3) return 7;
+  return 5;
 }
 
 export const ConversationTurnNavigator = memo(function ConversationTurnNavigator(props: {
   items: readonly ConversationTurnNavigationItem[];
   activeKeys: ReadonlySet<string>;
   onNavigate: (item: ConversationTurnNavigationItem) => void;
+  onEnsureItems?: () => void | Promise<void>;
 }) {
   const hostRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const markerRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const scrubRef = useRef<ScrubState | null>(null);
+  const ensureItemsRequestedRef = useRef(false);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [keyboardIndex, setKeyboardIndex] = useState<number | null>(null);
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
@@ -56,6 +57,20 @@ export const ConversationTurnNavigator = memo(function ConversationTurnNavigator
   useEffect(() => {
     markerRefs.current.length = props.items.length;
   }, [props.items.length]);
+
+  useEffect(() => {
+    ensureItemsRequestedRef.current = false;
+  }, [props.onEnsureItems]);
+
+  const ensureItems = () => {
+    if (ensureItemsRequestedRef.current || !props.onEnsureItems) {
+      return;
+    }
+    ensureItemsRequestedRef.current = true;
+    void Promise.resolve(props.onEnsureItems()).catch(() => {
+      ensureItemsRequestedRef.current = false;
+    });
+  };
 
   const ensureIndexVisible = (index: number) => {
     const list = listRef.current;
@@ -138,6 +153,9 @@ export const ConversationTurnNavigator = memo(function ConversationTurnNavigator
       className="chat-turn-navigator absolute z-[20] outline-none"
       aria-label={`Conversation turns, ${props.items.length} total`}
       tabIndex={0}
+      onFocus={ensureItems}
+      onPointerEnter={ensureItems}
+      onTouchStart={ensureItems}
       onKeyDown={handleKeyDown}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -209,7 +227,7 @@ export const ConversationTurnNavigator = memo(function ConversationTurnNavigator
                 }}
                 type="button"
                 className="chat-turn-navigator-marker"
-                style={{ width: `${markerWidth(index, activeIndex, interactionIndex)}px` }}
+                style={{ width: `${markerWidth(index, interactionIndex)}px` }}
                 data-active={active ? "true" : undefined}
                 data-target={target ? "true" : undefined}
                 aria-current={active ? "step" : undefined}

@@ -1,12 +1,11 @@
 import React, { useState } from "react";
-import type { ConversationTurnProjection } from "@rah/runtime-protocol";
 import { Check, ChevronDown, ChevronUp, Circle, ListChecks, LoaderCircle } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ConversationActivityIcon, conversationActivityLabel } from "./conversation-activity-display";
 import { currentPlanProgress, type CurrentPlan } from "./current-plan";
 
-function turnStatusLabel(turn: ConversationTurnProjection | undefined): string | null {
-  switch (turn?.status) {
+function turnStatusLabel(status: CurrentPlan["turn"]["status"]): string {
+  switch (status) {
     case "in_progress":
       return "Working";
     case "completed":
@@ -15,21 +14,18 @@ function turnStatusLabel(turn: ConversationTurnProjection | undefined): string |
       return "Interrupted";
     case "failed":
       return "Failed";
-    default:
-      return null;
   }
 }
 
 export function TaskSummaryDock(props: {
   plan: CurrentPlan;
-  turn?: ConversationTurnProjection;
   onOpenLocalFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const progress = currentPlanProgress(props.plan);
   const planTitle = props.plan.item.text.match(/^#\s+(.+)$/m)?.[1]?.trim() || "Plan";
-  const status = turnStatusLabel(props.turn);
-  const activities = props.turn?.activities.filter((activity) => activity.totalCount > 0) ?? [];
+  const status = turnStatusLabel(props.plan.turn.status);
+  const activities = props.plan.turn.activities.filter((activity) => activity.totalCount > 0);
 
   return (
     <section
@@ -46,7 +42,7 @@ export function TaskSummaryDock(props: {
           <ListChecks size={15} className="shrink-0 text-[var(--app-hint)]" />
           <span className="shrink-0 font-medium">Task summary</span>
           <span className="min-w-0 truncate text-xs text-[var(--app-hint)]">
-            {status ? `${status} · ` : ""}
+            {`${status} · `}
             {progress ? `${progress.completed}/${progress.total}` : planTitle}
             {progress?.activeStep ? ` · ${progress.activeStep}` : ""}
           </span>
@@ -91,7 +87,6 @@ export function TaskSummaryDock(props: {
               <MarkdownRenderer
                 className="prose-chat text-sm leading-relaxed"
                 content={props.plan.item.text}
-                fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed"
                 {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
               />
             )}

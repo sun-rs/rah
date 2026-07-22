@@ -97,6 +97,25 @@ export function mergeConversationSources(
   );
 }
 
+type ConversationTurnResourceFields = Pick<
+  ConversationTurnProjection,
+  "outputs" | "sources" | "fileChanges"
+>;
+
+export function mergeConversationTurnResources(
+  current: ConversationTurnResourceFields,
+  incoming: ConversationTurnResourceFields,
+): ConversationTurnResourceFields {
+  const outputs = mergeConversationOutputs(current.outputs, incoming.outputs);
+  const sources = mergeConversationSources(current.sources, incoming.sources);
+  const fileChanges = incoming.fileChanges ?? current.fileChanges;
+  return {
+    ...(outputs.length > 0 ? { outputs } : {}),
+    ...(sources.length > 0 ? { sources } : {}),
+    ...(fileChanges ? { fileChanges } : {}),
+  };
+}
+
 export function collectConversationResources(turns: readonly ConversationTurnProjection[]): {
   outputs: ConversationOutputProjection[];
   sources: ConversationSourceProjection[];

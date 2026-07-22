@@ -38,7 +38,7 @@ describe("conversation turn navigation", () => {
 
     assert.match(styles, /\.chat-turn-navigator\s*{\s*display:\s*flex;/);
     assert.doesNotMatch(styles, /\.chat-turn-navigator\s*{\s*display:\s*none;/);
-    assert.match(styles, /\.chat-thread-scroll-container\s*{\s*padding-left:\s*2\.25rem/);
+    assert.match(styles, /\.chat-thread-scroll-container\s*{\s*padding-left:\s*2rem/);
     assert.match(chatThread, /const isPwaDisplayMode = usePwaDisplayMode\(\)/);
     assert.match(chatThread, /data-turn-navigation=\{isPwaDisplayMode \? "hidden" : "visible"\}/);
     assert.match(chatThread, /\{!isPwaDisplayMode \? \(/);
@@ -60,7 +60,7 @@ describe("conversation turn navigation", () => {
     assert.doesNotMatch(component, /<svg\b/);
     assert.match(component, /conversationTurnIndexAtScrollableRailPosition/);
     assert.match(component, /props\.items\.map/);
-    assert.match(component, /MIN_NAVIGATION_TURNS = 4/);
+    assert.match(component, /MIN_NAVIGATION_TURNS = 1/);
     assert.match(component, /setPointerCapture\(event\.pointerId\)/);
     assert.match(component, /ensureIndexVisible\(index\)/);
     assert.doesNotMatch(component, /scrollIntoView/);
@@ -70,6 +70,27 @@ describe("conversation turn navigation", () => {
     assert.match(styles, /overflow-y:\s*auto/);
     assert.match(styles, /\.chat-turn-navigator-row/);
     assert.doesNotMatch(styles, /\.chat-turn-navigator-svg/);
+  });
+
+  test("keeps the dormant navigator subtle and expands markers only around interaction", () => {
+    const component = readFileSync(
+      new URL("./ConversationTurnNavigator.tsx", import.meta.url),
+      "utf8",
+    );
+    const styles = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
+
+    assert.match(component, /if \(interactionDistance === 0\) return 24/);
+    assert.match(component, /if \(interactionDistance === 1\) return 15/);
+    assert.match(component, /return 5/);
+    assert.doesNotMatch(component, /index === activeIndex/);
+    assert.match(styles, /\.chat-turn-navigator-marker\s*\{[^}]*height:\s*1px/s);
+    assert.match(styles, /\.chat-turn-navigator-marker\s*\{[^}]*opacity:\s*0\.22/s);
+    assert.match(
+      styles,
+      /\.chat-turn-navigator-marker\[data-active="true"\]\s*\{[^}]*background:\s*var\(--app-hint\)[^}]*opacity:\s*0\.36/s,
+    );
+    assert.match(component, /const previewItem = interactionIndex === null \? undefined/);
+    assert.match(component, /\{previewItem \? \([\s\S]*chat-turn-navigator-preview/);
   });
 
   test("maps the visible rail and its scroll position to the exact turn", () => {

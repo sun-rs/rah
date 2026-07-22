@@ -36,6 +36,9 @@ import { AssistantTurnHeader } from "./AssistantTurnHeader";
 import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
 import { TaskSummaryDock } from "./TaskSummaryDock";
 import { ConversationOutputsCard } from "./ConversationOutputsCard";
+import { ConversationFileChangesCard } from "./ConversationFileChangesCard";
+import { ReviewDialog } from "../../inspector/ReviewDialog";
+import type { ReviewScope } from "../../inspector/ReviewSurface";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
 import { ObservationCard } from "./ObservationCard";
@@ -69,6 +72,7 @@ import {
   resolveVirtualFeedWindow,
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
+import { resolvePrependAnchorScrollTop } from "./prepend-scroll-anchor";
 import { visibleFeedEntries } from "./chat-feed-filtering";
 import { latestCurrentPlan, withoutInlinePlans } from "./current-plan";
 import { usePwaDisplayMode } from "../../hooks/usePwaDisplayMode";
@@ -102,8 +106,14 @@ function chatDisplayRowGapPx(
   if (row.kind === "assistant_process_group" && nextRow?.kind === "feed_entry") {
     return 14;
   }
-  if (row.kind === "feed_entry" && nextRow?.kind === "turn_outputs") {
+  if (
+    row.kind === "feed_entry" &&
+    (nextRow?.kind === "turn_outputs" || nextRow?.kind === "turn_file_changes")
+  ) {
     return 10;
+  }
+  if (row.kind === "turn_outputs" && nextRow?.kind === "turn_file_changes") {
+    return 8;
   }
   return VIRTUAL_FEED_ROW_GAP_PX;
 }
@@ -114,6 +124,9 @@ function estimateChatDisplayRowHeight(row: ChatDisplayRow): number {
   }
   if (row.kind === "turn_outputs") {
     return 54 + Math.min(row.outputs.length, 4) * 58;
+  }
+  if (row.kind === "turn_file_changes") {
+    return 50;
   }
   return estimateFeedEntryHeight(row.entry);
 }
@@ -155,7 +168,15 @@ function renderTimelineItem(item: TimelineItem, options: {
 } = {}) {
   switch (item.kind) {
     case "user_message":
-      return <UserMessage content={item.text} imageCount={item.imageCount} entryKey={options.entryKey} />;
+      return (
+        <UserMessage
+          content={item.text}
+          imageCount={item.imageCount}
+          attachments={item.attachments}
+          entryKey={options.entryKey}
+          onOpenLocalFile={options.onOpenLocalFile}
+        />
+      );
     case "assistant_message":
       return (
         <AssistantMessage
@@ -185,7 +206,6 @@ function renderTimelineItem(item: TimelineItem, options: {
           <MarkdownRenderer
             className="prose-chat text-sm leading-relaxed"
             content={item.text}
-            fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed"
             {...(options.onOpenLocalFile ? { onOpenLocalFile: options.onOpenLocalFile } : {})}
           />
         </TimelineCard>
@@ -292,12 +312,17 @@ function renderTimelineItem(item: TimelineItem, options: {
           </div>
         </TimelineCard>
       );
-    case "compaction":
+    case "compaction": {
+      const countSuffix = item.count && item.count > 1 ? ` · ${item.count} passes` : "";
+      const triggerSuffix = item.trigger ? ` · ${item.trigger}` : "";
       return (
         <SystemNotice
-          content={`Compaction ${item.status}${item.trigger ? ` (${item.trigger})` : ""}`}
+          content={`${
+            item.status === "started" ? "Compacting context" : "Context compacted"
+          }${countSuffix}${triggerSuffix}`}
         />
       );
+    }
   }
 }
 
@@ -429,6 +454,7 @@ function MeasuredFeedEntry(props: {
 
 export const ChatThread = memo(function ChatThread(props: {
   sessionId: string;
+  navigationRevision?: number;
   feed: FeedEntry[];
   conversationTurns: readonly ConversationTurnProjection[];
   hideToolCalls?: boolean;
@@ -452,13 +478,13 @@ export const ChatThread = memo(function ChatThread(props: {
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
+  onOpenTurnFileChange?: (turnId: string, path: string) => void;
 }) {
   type PrependAnchor = {
     scrollHeight: number;
     scrollTop: number;
     entryKey: string | null;
     offsetTop: number | null;
-    settlePassesRemaining: number;
   };
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -484,6 +510,7 @@ export const ChatThread = memo(function ChatThread(props: {
   const bottomFollowRafRef = useRef<number | null>(null);
   const measuredHeightsRafRef = useRef<number | null>(null);
   const topHistoryLoadRafRef = useRef<number | null>(null);
+  const prependAnchorRestoreRafRef = useRef<number | null>(null);
   const latestReplyStartTargetRef = useRef<ReturnType<typeof resolveLatestReplyStartTarget>>(null);
   const turnNavigationRafRef = useRef<number | null>(null);
   const turnNavigationReleaseRafRef = useRef<number | null>(null);
@@ -509,17 +536,19 @@ export const ChatThread = memo(function ChatThread(props: {
   const [loadingProcessTurnIds, setLoadingProcessTurnIds] = useState(
     () => new Set<string>(),
   );
+  const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
+  const projectedFeed = props.feed;
   const visibleEntriesWithPlans = useMemo(
     () =>
       visibleFeedEntries(
-        props.feed,
+        projectedFeed,
         props.hideToolCalls ?? false,
         props.hideOpenCodeReasoning ?? false,
         props.provider,
       ),
     [
-      props.feed,
+      projectedFeed,
       props.hideToolCalls,
       props.hideOpenCodeReasoning,
       props.provider,
@@ -528,25 +557,16 @@ export const ChatThread = memo(function ChatThread(props: {
   const activeVisibleEntriesWithPlans = useMemo(
     () =>
       visibleFeedEntries(
-        props.feed,
+        projectedFeed,
         false,
         props.hideOpenCodeReasoning ?? false,
         props.provider,
       ),
-    [props.feed, props.hideOpenCodeReasoning, props.provider],
+    [projectedFeed, props.hideOpenCodeReasoning, props.provider],
   );
   const currentPlan = useMemo(
-    () => latestCurrentPlan(visibleEntriesWithPlans),
-    [visibleEntriesWithPlans],
-  );
-  const currentPlanTurn = useMemo(
-    () =>
-      currentPlan?.turnId
-        ? props.conversationTurns.find(
-            (turn) => turn.id === currentPlan.turnId || turn.providerTurnId === currentPlan.turnId,
-          )
-        : undefined,
-    [currentPlan, props.conversationTurns],
+    () => latestCurrentPlan(props.conversationTurns),
+    [props.conversationTurns],
   );
   const entries = useMemo(
     () => withoutInlinePlans(visibleEntriesWithPlans),
@@ -556,13 +576,13 @@ export const ChatThread = memo(function ChatThread(props: {
     () => withoutInlinePlans(activeVisibleEntriesWithPlans),
     [activeVisibleEntriesWithPlans],
   );
-  const assistantTurnHeaders = useMemo(
-    () => buildAssistantTurnHeaders(entries),
-    [entries],
-  );
   const copyableAssistantKeys = useMemo(
     () => conversationFinalAssistantKeys(props.conversationTurns),
     [props.conversationTurns],
+  );
+  const assistantTurnHeaders = useMemo(
+    () => buildAssistantTurnHeaders(entries, copyableAssistantKeys),
+    [copyableAssistantKeys, entries],
   );
   const latestVisibleUserKey = useMemo(
     () => latestVisibleUserMessageKey(entries),
@@ -655,15 +675,9 @@ export const ChatThread = memo(function ChatThread(props: {
     [copyableAssistantKeys, entries, measuredHeightsVersion, virtualLayout, viewport.contentTopOffset, viewport.height, viewport.scrollTop],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     ensureTurnDirectoryRef.current = props.onEnsureTurnDirectory;
   }, [props.onEnsureTurnDirectory]);
-
-  useEffect(() => {
-    if (!isPwaDisplayMode) {
-      void ensureTurnDirectoryRef.current?.();
-    }
-  }, [isPwaDisplayMode, props.sessionId]);
 
   useEffect(() => {
     latestReplyStartTargetRef.current = latestReplyStartTarget;
@@ -804,9 +818,67 @@ export const ChatThread = memo(function ChatThread(props: {
       scrollTop: node.scrollTop,
       entryKey: visibleNode?.dataset.feedEntryKey ?? null,
       offsetTop: visibleNode ? visibleNode.getBoundingClientRect().top - containerTop : null,
-      settlePassesRemaining: 3,
     };
   }, []);
+
+  const restoreVisiblePrependAnchor = useCallback((): boolean => {
+    const node = containerRef.current;
+    const anchor = prependAnchorRef.current;
+    if (!node || !anchor) {
+      return false;
+    }
+
+    const containerTop = node.getBoundingClientRect().top;
+    const anchorNode =
+      anchor.entryKey === null
+        ? null
+        : Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
+            (entryNode) => entryNode.dataset.feedEntryKey === anchor.entryKey,
+          ) ?? null;
+    const nextScrollTop = resolvePrependAnchorScrollTop({
+      currentScrollTop: node.scrollTop,
+      anchorScrollTop: anchor.scrollTop,
+      currentScrollHeight: node.scrollHeight,
+      anchorScrollHeight: anchor.scrollHeight,
+      currentViewportOffset: anchorNode
+        ? anchorNode.getBoundingClientRect().top - containerTop
+        : null,
+      anchorViewportOffset: anchor.offsetTop,
+    });
+
+    if (Math.abs(node.scrollTop - nextScrollTop) >= 0.5) {
+      node.scrollTop = nextScrollTop;
+    }
+    prependAnchorRef.current = {
+      ...anchor,
+      scrollHeight: node.scrollHeight,
+      scrollTop: node.scrollTop,
+    };
+    lastScrollTopRef.current = node.scrollTop;
+    syncViewport();
+    return true;
+  }, [syncViewport]);
+
+  const schedulePrependAnchorRestore = useCallback(() => {
+    if (prependAnchorRestoreRafRef.current !== null) {
+      return;
+    }
+    prependAnchorRestoreRafRef.current = requestAnimationFrame(() => {
+      prependAnchorRestoreRafRef.current = null;
+      restoreVisiblePrependAnchor();
+    });
+  }, [restoreVisiblePrependAnchor]);
+
+  const releaseSettledPrependAnchor = useCallback(() => {
+    if (props.historyLoading || loadingOlderRef.current) {
+      return;
+    }
+    prependAnchorRef.current = null;
+    if (prependAnchorRestoreRafRef.current !== null) {
+      cancelAnimationFrame(prependAnchorRestoreRafRef.current);
+      prependAnchorRestoreRafRef.current = null;
+    }
+  }, [props.historyLoading]);
 
   const isInTopHistoryLoadZone = useCallback((node: HTMLElement): boolean => {
     return (
@@ -860,7 +932,7 @@ export const ChatThread = memo(function ChatThread(props: {
     });
   }, [requestOlderHistoryLoad]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     previousEntryCountRef.current = 0;
     loadingOlderRef.current = false;
     stickToBottomRef.current = true;
@@ -893,6 +965,10 @@ export const ChatThread = memo(function ChatThread(props: {
       cancelAnimationFrame(topHistoryLoadRafRef.current);
       topHistoryLoadRafRef.current = null;
     }
+    if (prependAnchorRestoreRafRef.current !== null) {
+      cancelAnimationFrame(prependAnchorRestoreRafRef.current);
+      prependAnchorRestoreRafRef.current = null;
+    }
     if (turnNavigationRafRef.current !== null) {
       cancelAnimationFrame(turnNavigationRafRef.current);
       turnNavigationRafRef.current = null;
@@ -913,7 +989,12 @@ export const ChatThread = memo(function ChatThread(props: {
     setViewport({ scrollTop: 0, height: 0, contentTopOffset: 0 });
     setShowScrollToBottom(false);
     setProcessGroupExpansionOverrides(new Map());
-  }, [props.sessionId]);
+    const node = containerRef.current;
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+      lastScrollTopRef.current = node.scrollTop;
+    }
+  }, [props.navigationRevision, props.sessionId]);
 
   useEffect(() => {
     return () => {
@@ -1095,12 +1176,30 @@ export const ChatThread = memo(function ChatThread(props: {
       return;
     }
     const handleWheel = (event: WheelEvent) => {
+      releaseSettledPrependAnchor();
       if (event.deltaY < 0) {
         detachBottomFollowing();
       }
     };
     const handleTouchStart = (event: TouchEvent) => {
+      releaseSettledPrependAnchor();
       touchScrollYRef.current = event.touches[0]?.clientY ?? null;
+    };
+    const handlePointerDown = () => {
+      releaseSettledPrependAnchor();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === "ArrowUp" ||
+        event.key === "ArrowDown" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === " "
+      ) {
+        releaseSettledPrependAnchor();
+      }
     };
     const handleTouchMove = (event: TouchEvent) => {
       const nextY = event.touches[0]?.clientY ?? null;
@@ -1119,14 +1218,18 @@ export const ChatThread = memo(function ChatThread(props: {
     node.addEventListener("touchmove", handleTouchMove, { passive: true });
     node.addEventListener("touchend", handleTouchEnd, { passive: true });
     node.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    node.addEventListener("pointerdown", handlePointerDown, { passive: true });
+    node.addEventListener("keydown", handleKeyDown);
     return () => {
       node.removeEventListener("wheel", handleWheel);
       node.removeEventListener("touchstart", handleTouchStart);
       node.removeEventListener("touchmove", handleTouchMove);
       node.removeEventListener("touchend", handleTouchEnd);
       node.removeEventListener("touchcancel", handleTouchEnd);
+      node.removeEventListener("pointerdown", handlePointerDown);
+      node.removeEventListener("keydown", handleKeyDown);
     };
-  }, [detachBottomFollowing]);
+  }, [detachBottomFollowing, releaseSettledPrependAnchor]);
 
   useEffect(() => {
     const rememberHiddenStickiness = () => {
@@ -1211,6 +1314,7 @@ export const ChatThread = memo(function ChatThread(props: {
 
     const observer = new ResizeObserver(() => {
       if (prependAnchorRef.current) {
+        schedulePrependAnchorRestore();
         return;
       }
       if (textSelectionDragActiveRef.current) {
@@ -1233,7 +1337,12 @@ export const ChatThread = memo(function ChatThread(props: {
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [props.historyLoading, props.sessionId, scheduleScrollToBottom]);
+  }, [
+    props.historyLoading,
+    props.sessionId,
+    schedulePrependAnchorRestore,
+    scheduleScrollToBottom,
+  ]);
 
   useLayoutEffect(() => {
     const node = containerRef.current;
@@ -1246,55 +1355,17 @@ export const ChatThread = memo(function ChatThread(props: {
     }
     const anchor = prependAnchorRef.current;
     if (anchor) {
-      const containerTop = node.getBoundingClientRect().top;
-      const anchorNode =
-        anchor.entryKey === null
-          ? null
-          : Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
-              (entryNode) => entryNode.dataset.feedEntryKey === anchor.entryKey,
-            ) ?? null;
-      if (anchorNode && anchor.offsetTop !== null) {
-        const currentOffsetTop = anchorNode.getBoundingClientRect().top - containerTop;
-        node.scrollTop += currentOffsetTop - anchor.offsetTop;
-      } else {
-        const nextScrollTop =
-          anchor.scrollTop + (node.scrollHeight - anchor.scrollHeight);
-        node.scrollTop = nextScrollTop;
-      }
-      lastScrollTopRef.current = node.scrollTop;
-      if (
-        node.scrollTop > TOP_HISTORY_REARM_PX ||
-        hasTooLittleHistoryContent(node)
-      ) {
-        topHistoryAutoLoadArmedRef.current = true;
-      }
-      if (!props.historyLoading) {
-        topHistoryAutoLoadArmedRef.current = true;
-      }
+      restoreVisiblePrependAnchor();
       if (
         !props.historyLoading &&
         props.canLoadOlderHistory &&
         props.onLoadOlderHistory &&
-        isInTopHistoryLoadZone(node)
+        hasTooLittleHistoryContent(node)
       ) {
         topHistoryAutoLoadArmedRef.current = true;
         scheduleTopHistoryLoad();
       }
-      const nextSettlePassesRemaining = props.historyLoading
-        ? anchor.settlePassesRemaining
-        : anchor.settlePassesRemaining - 1;
       if (!props.historyLoading) {
-        loadingOlderRef.current = false;
-      }
-      if (props.historyLoading || nextSettlePassesRemaining > 0) {
-        prependAnchorRef.current = {
-          ...anchor,
-          scrollHeight: node.scrollHeight,
-          scrollTop: node.scrollTop,
-          settlePassesRemaining: nextSettlePassesRemaining,
-        };
-      } else {
-        prependAnchorRef.current = null;
         loadingOlderRef.current = false;
       }
       previousEntryCountRef.current = displayRows.length;
@@ -1335,6 +1406,7 @@ export const ChatThread = memo(function ChatThread(props: {
     props.historyLoading,
     props.onLoadOlderHistory,
     props.sessionId,
+    restoreVisiblePrependAnchor,
     scrollToBottomNow,
     scheduleTopHistoryLoad,
   ]);
@@ -1675,6 +1747,12 @@ export const ChatThread = memo(function ChatThread(props: {
                         );
                       }
                     }}
+                    {...(props.onLoadConversationItemDetail
+                      ? { onLoadConversationItemDetail: props.onLoadConversationItemDetail }
+                      : {})}
+                    {...(props.onOpenLocalFile
+                      ? { onOpenLocalFile: props.onOpenLocalFile }
+                      : {})}
                     renderEntry={(entry) =>
                       renderEntry(
                         entry,
@@ -1691,6 +1769,28 @@ export const ChatThread = memo(function ChatThread(props: {
                     outputs={row.outputs}
                     {...(props.onOpenLocalFile
                       ? { onOpenLocalFile: props.onOpenLocalFile }
+                      : {})}
+                  />
+                ) : row.kind === "turn_file_changes" ? (
+                  <ConversationFileChangesCard
+                    fileChanges={row.fileChanges}
+                    onReview={() =>
+                      setReviewScope({
+                        kind: "turn",
+                        sessionId: props.sessionId,
+                        turnId: row.turnId,
+                        workspaceRoot: "",
+                        files: row.fileChanges.files,
+                        totalAdditions: row.fileChanges.totalAdditions,
+                        totalDeletions: row.fileChanges.totalDeletions,
+                        truncated: false,
+                      })
+                    }
+                    {...(props.onOpenTurnFileChange
+                      ? {
+                          onOpenFile: (path: string) =>
+                            props.onOpenTurnFileChange?.(row.turnId, path),
+                        }
                       : {})}
                   />
                 ) : (
@@ -1722,6 +1822,7 @@ export const ChatThread = memo(function ChatThread(props: {
             items={turnNavigationItems}
             activeKeys={activeTurnNavigationKeys}
             onNavigate={handleNavigateToTurn}
+            onEnsureItems={() => ensureTurnDirectoryRef.current?.()}
           />
         ) : null}
 
@@ -1756,8 +1857,13 @@ export const ChatThread = memo(function ChatThread(props: {
         <TaskSummaryDock
           key={currentPlan.key}
           plan={currentPlan}
-          {...(currentPlanTurn ? { turn: currentPlanTurn } : {})}
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
+        />
+      ) : null}
+      {reviewScope ? (
+        <ReviewDialog
+          scope={reviewScope}
+          onClose={() => setReviewScope(null)}
         />
       ) : null}
     </div>

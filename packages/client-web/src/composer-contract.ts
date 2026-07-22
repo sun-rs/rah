@@ -1,12 +1,15 @@
-import type { NativeTuiPromptState, SessionSummary } from "@rah/runtime-protocol";
+import type {
+  NativeTuiPromptState,
+  SessionSummary,
+} from "@rah/runtime-protocol";
 import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
 
 export type ComposerSurface =
-  | { kind: "resume_history"; actionLabel: string; actionPending: boolean }
   | { kind: "claim_control"; actionLabel: string; actionPending: boolean }
   | {
       kind: "compose";
       showStopButton: boolean;
+      resumeOnSend?: boolean;
       stopDisabled?: boolean;
       stopTitle?: string;
       stopTone?: "danger" | "warning";
@@ -16,14 +19,13 @@ export type ComposerSurface =
   | { kind: "unavailable" };
 
 /* ── Unified sizing tokens ── */
-/*  iOS (<768px) 40px | iPad (768–1023px) 36px | Desktop (≥1024px) 32px  */
+/* compact (<700px) 40px | medium (700–899px) 36px | wide (>=900px) 32px */
 const BTN = "h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8";
 const GAP = "gap-1.5 md:gap-2";
 const ROUNDED = "rounded-xl";
 
 /* ── Base textarea ── */
-const TEXTAREA_BASE =
-  `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)]`;
+const TEXTAREA_BASE = `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-6 placeholder:text-[var(--app-hint)] placeholder:opacity-60 focus:outline-none`;
 
 export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {
@@ -36,21 +38,16 @@ export const COMPOSER_LAYOUT = {
   controlsGapClassName: GAP,
 
   /* Grid: [attach] [settings] [textarea] [stop?] [send] */
-  composeGridWithoutStopClassName:
-    `grid items-end grid-cols-[auto_auto_1fr_auto] ${GAP}`,
-  composeGridWithStopClassName:
-    `grid items-end grid-cols-[auto_auto_1fr_auto_auto] ${GAP}`,
+  composeGridWithoutStopClassName: `grid items-end grid-cols-[auto_auto_1fr_auto] ${GAP}`,
+  composeGridWithStopClassName: `grid items-end grid-cols-[auto_auto_1fr_auto_auto] ${GAP}`,
 
   /* Attach button (left of textarea) */
-  attachButtonClassName:
-    `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors`,
+  attachButtonClassName: `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors`,
 
-  settingsButtonClassName:
-    `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors`,
+  settingsButtonClassName: `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors`,
 
   /* Send button (right of textarea) */
-  sendButtonClassName:
-    `shrink-0 self-end ${BTN} rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors`,
+  sendButtonClassName: `shrink-0 self-end ${BTN} rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors`,
 
   /* Stop / generating spinner */
   stopWrapperClassName: `relative shrink-0 self-end ${BTN}`,
@@ -61,21 +58,16 @@ export const COMPOSER_LAYOUT = {
   stopWarningButtonClassName:
     "absolute inset-0 rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
 
-  textareaClassName:
-    `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-[9px] md:px-3 md:py-[7px] lg:py-[5px] max-h-[280px]`,
-  textareaContentClassName:
-    `px-3 py-[9px] md:px-3 md:py-[7px] lg:py-[5px] text-base leading-5`,
+  textareaClassName: `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] max-h-[280px]`,
+  textareaContentClassName: `px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] text-base leading-6`,
 } as const;
 
 export const EMPTY_STATE_COMPOSER_LAYOUT = {
-  textareaWrapperClassName:
-    "max-w-full",
+  textareaWrapperClassName: "max-w-full",
 
   /* Landing textarea — generous bottom padding so the inline controls never overlap typed text */
-  textareaClassName:
-    `${TEXTAREA_BASE} rounded-2xl px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 min-h-[7.5rem] md:min-h-[8rem] max-h-[50vh]`,
-  textareaContentClassName:
-    `px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 text-base leading-5 min-h-[7.5rem] md:min-h-[8rem]`,
+  textareaClassName: `${TEXTAREA_BASE} rounded-2xl px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 min-h-[7.5rem] md:min-h-[8rem] max-h-[50vh]`,
+  textareaContentClassName: `px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 text-base leading-6 min-h-[7.5rem] md:min-h-[8rem]`,
 
   /* Controls row — anchored to the bottom edge of the textarea card */
   controlsRowClassName:
@@ -85,38 +77,39 @@ export const EMPTY_STATE_COMPOSER_LAYOUT = {
     "flex min-w-0 flex-1 flex-nowrap items-center gap-1 md:gap-2 overflow-visible",
 
   /* Secondary pills */
-  pillClassName:
-    `inline-flex h-10 md:h-9 lg:h-8 w-[5.5rem] md:w-[7rem] lg:w-[7.25rem] shrink-0 min-w-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2 md:px-3 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]`,
+  pillClassName: `inline-flex h-10 md:h-9 lg:h-8 w-[5.5rem] md:w-[7rem] lg:w-[7.25rem] shrink-0 min-w-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2 md:px-3 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]`,
 
   /* Attach button */
-  attachButtonClassName:
-    `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors`,
+  attachButtonClassName: `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors`,
 
   /* Send button */
-  sendButtonClassName:
-    `shrink-0 self-end ${BTN} rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors`,
-
-  /* Provider / model config row — sits *outside* the textarea, directly beneath it */
-  configRowClassName:
-    `flex flex-wrap items-center gap-2 mt-3 md:mt-4`,
+  sendButtonClassName: `shrink-0 self-end ${BTN} rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors`,
 } as const;
 
 export const EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX = 620;
 export const EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX = 380;
-// Last-resort collapse: once the workspace picker is already icon-only, the
-// mobile row can still fit + / workspace / session-control / send at about 176px.
-export const EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX = 184;
+export const EMPTY_STATE_HIDE_SESSION_CONTROL_WIDTH_PX = 360;
 
-export function shouldCompactEmptyStateSessionControls(widthPx: number | null): boolean {
-  return widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX;
+export function shouldCompactEmptyStateSessionControls(
+  widthPx: number | null,
+): boolean {
+  return (
+    widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX
+  );
 }
 
-export function shouldUseIconOnlyEmptyStateWorkspace(widthPx: number | null): boolean {
+export function shouldUseIconOnlyEmptyStateWorkspace(
+  widthPx: number | null,
+): boolean {
   return widthPx !== null && widthPx < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX;
 }
 
-export function shouldHideEmptyStateSessionControl(widthPx: number | null): boolean {
-  return widthPx !== null && widthPx < EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX;
+export function shouldHideEmptyStateSessionControl(
+  widthPx: number | null,
+): boolean {
+  return (
+    widthPx !== null && widthPx < EMPTY_STATE_HIDE_SESSION_CONTROL_WIDTH_PX
+  );
 }
 
 function bestEffortEscTuiProviderLabel(provider: string): string | undefined {
@@ -147,16 +140,21 @@ export function canSubmitComposerInput(args: {
 
 export function deriveComposerSurface(args: {
   selectedSummary: SessionSummary | null;
+  historyArchived?: boolean;
   hasControl: boolean;
   isGenerating: boolean;
-  pendingSessionAction:
-    | {
-        kind: "attach_session" | "claim_control" | "resume_history";
-        sessionId: string;
-      }
-    | null;
+  pendingSessionAction: {
+    kind: "attach_session" | "claim_control" | "resume_history";
+    sessionId: string;
+  } | null;
 }): ComposerSurface {
-  const { selectedSummary, hasControl, isGenerating, pendingSessionAction } = args;
+  const {
+    selectedSummary,
+    historyArchived = false,
+    hasControl,
+    isGenerating,
+    pendingSessionAction,
+  } = args;
   if (!selectedSummary) {
     return { kind: "unavailable" };
   }
@@ -164,21 +162,21 @@ export function deriveComposerSurface(args: {
   const isResumingControl =
     pendingSessionAction?.kind === "claim_control" &&
     pendingSessionAction.sessionId === selectedSummary.session.id;
-  const isResumingHistory =
-    pendingSessionAction?.kind === "resume_history" &&
-    pendingSessionAction.sessionId === selectedSummary.session.id;
-
   if (!canSessionSendInput(selectedSummary)) {
-    return isReadOnlyReplay(selectedSummary) && selectedSummary.session.providerSessionId
-	      ? {
-	          kind: "resume_history",
-	          actionLabel: isResumingHistory ? "Resuming…" : "Resume",
-	          actionPending: isResumingHistory,
-	        }
+    return isReadOnlyReplay(selectedSummary) &&
+      selectedSummary.session.providerSessionId &&
+      !historyArchived
+      ? {
+          kind: "compose",
+          showStopButton: false,
+          resumeOnSend: true,
+        }
       : { kind: "unavailable" };
   }
 
-  const bestEffortEscLabel = bestEffortEscTuiProviderLabel(selectedSummary.session.provider);
+  const bestEffortEscLabel = bestEffortEscTuiProviderLabel(
+    selectedSummary.session.provider,
+  );
   if (bestEffortEscLabel) {
     return {
       kind: "compose",
@@ -198,11 +196,11 @@ export function deriveComposerSurface(args: {
         stopTitle: "Interrupt the native TUI turn from Web.",
       };
     }
-	    return {
-	      kind: "claim_control",
-	      actionLabel: isResumingControl ? "Resuming…" : "Resume",
-	      actionPending: isResumingControl,
-	    };
+    return {
+      kind: "claim_control",
+      actionLabel: isResumingControl ? "Resuming…" : "Resume",
+      actionPending: isResumingControl,
+    };
   }
 
   return {

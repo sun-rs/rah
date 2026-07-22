@@ -25,7 +25,6 @@ export function AssistantMessage(props: {
         <MarkdownRenderer
           className="prose-chat prose-chat-final max-w-none text-[var(--app-fg)]"
           content={props.content}
-          fallbackClassName="prose-chat-final whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
         />
       ) : (
@@ -33,7 +32,6 @@ export function AssistantMessage(props: {
           <MarkdownRenderer
             className="prose-chat prose-chat-process max-w-none text-[14px] leading-relaxed text-[var(--app-muted)]"
             content={props.content}
-            fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[14px] leading-relaxed text-[var(--app-muted)]"
             {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
           />
         </div>

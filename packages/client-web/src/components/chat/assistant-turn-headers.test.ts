@@ -84,6 +84,30 @@ describe("assistant turn headers", () => {
     assert.deepEqual(headers.get("reasoning-1"), runtimeModel);
   });
 
+  test("moves the completed turn header to the canonical final reply", () => {
+    const runtimeModel: TimelineRuntimeModel = {
+      modelId: "gpt-5.6-sol",
+      optionId: "xhigh",
+      optionKind: "reasoning_effort",
+      source: "native",
+    };
+    const entries = [
+      userEntry("user-1", "Analyze this"),
+      reasoningEntry("reasoning-1", "Working", "turn-1", runtimeModel),
+      assistantEntry("assistant-final", "Final answer", {
+        turnId: "turn-1",
+        runtimeModel,
+      }),
+    ];
+    const headers = buildAssistantTurnHeaders(
+      entries,
+      new Set(["assistant-final"]),
+    );
+
+    assert.deepEqual(Array.from(headers.keys()), ["assistant-final"]);
+    assert.deepEqual(headers.get("assistant-final"), runtimeModel);
+  });
+
   test("uses user-message fallback grouping when provider turn ids are absent", () => {
     const headers = buildAssistantTurnHeaders([
       userEntry("user-1", "First"),

@@ -1,14 +1,17 @@
 import type {
+  ConversationActivityBatchSummary,
+  ConversationActivityDescriptor,
   ConversationActivityKind,
   ConversationActivitySummary,
   ConversationOutputProjection,
+  ConversationTurnFileChangesProjection,
   ConversationTurnStatus,
   TimelineRuntimeModel,
 } from "@rah/runtime-protocol";
 import {
-  conversationActivityKindForMessagePart,
-  conversationActivityKindForObservation,
-  conversationActivityKindForToolFamily,
+  deriveConversationActivityForObservation,
+  deriveConversationActivityForToolCall,
+  summarizeConversationActivityBatch,
 } from "@rah/runtime-protocol";
 import type { FeedEntry } from "../../types";
 
@@ -35,6 +38,12 @@ export type ChatDisplayRow =
       kind: "turn_outputs";
       key: string;
       outputs: ConversationOutputProjection[];
+    }
+  | {
+      kind: "turn_file_changes";
+      key: string;
+      turnId: string;
+      fileChanges: ConversationTurnFileChangesProjection;
     };
 
 type ReasoningFeedEntry = Extract<FeedEntry, { kind: "timeline" }> & {
@@ -48,6 +57,7 @@ export type ProcessDetailRow =
       kind: "activity_batch";
       key: string;
       activityKind: ConversationActivityKind;
+      summary: ConversationActivityBatchSummary;
       entries: FeedEntry[];
       runningCount: number;
       interruptedCount: number;
@@ -68,16 +78,54 @@ export function formatAssistantProcessDuration(durationMs: number | undefined): 
   return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function entryActivityKind(entry: FeedEntry): ConversationActivityKind | null {
+export function entryActivityKind(entry: FeedEntry): ConversationActivityKind | null {
+  return entryActivityDescriptor(entry)?.kind ?? null;
+}
+
+export function entryActivityDescriptor(
+  entry: FeedEntry,
+): ConversationActivityDescriptor | null {
   switch (entry.kind) {
     case "tool_call":
-      return conversationActivityKindForToolFamily(entry.toolCall.family);
+      return entry.toolCall.activity ?? deriveConversationActivityForToolCall(entry.toolCall);
     case "observation":
-      return conversationActivityKindForObservation(entry.observation.kind);
+      return entry.observation.activity ??
+        deriveConversationActivityForObservation(entry.observation);
     case "operation":
-      return entry.operation.kind === "automation" ? "automation" : "tool";
+      return {
+        kind: entry.operation.kind === "automation" ? "automation" : "tool",
+        action: entry.operation.kind === "automation" ? "automation" : "tool",
+        label: `${entry.operation.name}${entry.operation.target ? ` ${entry.operation.target}` : ""}`,
+      };
     case "message_part":
-      return conversationActivityKindForMessagePart(entry.part.kind);
+      // Reasoning/text parts are visible narrative boundaries inside Worked,
+      // never executable activity. Only provider parts that represent an
+      // actual operation participate in an activity disclosure.
+      switch (entry.part.kind) {
+        case "patch":
+        case "file":
+        case "media":
+          return {
+            kind: "file_change",
+            action: "file_edit",
+            ...(entry.part.text ? { label: entry.part.text } : {}),
+          };
+        case "agent":
+        case "subtask":
+          return {
+            kind: "subagent",
+            action: "subagent",
+            ...(entry.part.text ? { label: entry.part.text } : {}),
+          };
+        case "step":
+          return {
+            kind: "plan",
+            action: "plan",
+            ...(entry.part.text ? { label: entry.part.text } : {}),
+          };
+        default:
+          return null;
+      }
     default:
       return null;
   }
@@ -125,22 +173,26 @@ function activityBatchCounts(entries: readonly FeedEntry[]) {
 
 export function buildProcessDetailRows(entries: readonly FeedEntry[]): ProcessDetailRow[] {
   const rows: ProcessDetailRow[] = [];
-  let pendingActivityKind: ConversationActivityKind | null = null;
   let pendingActivityEntries: FeedEntry[] = [];
   let pendingReasoning: ReasoningFeedEntry[] = [];
 
   const flushActivity = () => {
-    if (!pendingActivityKind || pendingActivityEntries.length === 0) {
+    if (pendingActivityEntries.length === 0) {
       return;
     }
+    const descriptors = pendingActivityEntries
+      .map((entry) => entryActivityDescriptor(entry))
+      .filter((activity): activity is ConversationActivityDescriptor => activity !== null);
+    const summary = summarizeConversationActivityBatch(descriptors);
+    const activityKind = summary.primaryKind;
     rows.push({
       kind: "activity_batch",
-      key: `activity-batch:${pendingActivityKind}:${pendingActivityEntries[0]!.key}`,
-      activityKind: pendingActivityKind,
+      key: `activity-batch:${activityKind}:${pendingActivityEntries[0]!.key}`,
+      activityKind,
+      summary,
       entries: pendingActivityEntries,
       ...activityBatchCounts(pendingActivityEntries),
     });
-    pendingActivityKind = null;
     pendingActivityEntries = [];
   };
 
@@ -166,12 +218,8 @@ export function buildProcessDetailRows(entries: readonly FeedEntry[]): ProcessDe
 
   for (const entry of entries) {
     const activityKind = entryActivityKind(entry);
-    if (activityKind && activityKind !== "tool") {
+    if (activityKind) {
       flushReasoning();
-      if (pendingActivityKind !== activityKind) {
-        flushActivity();
-        pendingActivityKind = activityKind;
-      }
       pendingActivityEntries.push(entry);
       continue;
     }

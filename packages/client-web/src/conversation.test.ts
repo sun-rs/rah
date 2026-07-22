@@ -168,10 +168,12 @@ function delta(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 test("Conversation feed uses explicit process/final roles and canonical detail ids", () => {
@@ -437,6 +439,111 @@ test("Conversation places canonical outputs directly after the final answer", ()
   }
 });
 
+test("Conversation places authoritative file changes after the owning final answer", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-changes", [
+      timelineItem("user-changes", "turn-changes", "user", "question"),
+      timelineItem("final-changes", "turn-changes", "final", "done"),
+    ]),
+    finalAnswerItemId: "final-changes",
+    outputs: [
+      {
+        id: "output-report",
+        kind: "file",
+        label: "report.md",
+        path: "/workspace/report.md",
+        activity: "written",
+        confidence: "authoritative",
+        sourceItemIds: ["tool-output"],
+      },
+    ],
+    fileChanges: {
+      files: [
+        { path: "src/main.ts", additions: 12, deletions: 3 },
+        { path: "src/main.test.ts", additions: 8, deletions: 0 },
+      ],
+      totalAdditions: 20,
+      totalDeletions: 3,
+    },
+  };
+  const rows = conversationDisplayRows(
+    [projectedTurn],
+    conversationTurnsToFeed([projectedTurn]),
+  );
+
+  assert.deepEqual(rows.map((row) => row.kind), [
+    "feed_entry",
+    "feed_entry",
+    "turn_outputs",
+    "turn_file_changes",
+  ]);
+  const fileChanges = rows[3];
+  assert.equal(fileChanges?.kind, "turn_file_changes");
+  if (fileChanges?.kind === "turn_file_changes") {
+    assert.equal(fileChanges.turnId, "turn-changes");
+    assert.equal(fileChanges.fileChanges.files.length, 2);
+    assert.equal(fileChanges.fileChanges.totalAdditions, 20);
+  }
+});
+
+test("Conversation does not expose an in-progress turn diff as a completed file card", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-live-changes", [
+      timelineItem("user-live-changes", "turn-live-changes", "user", "question"),
+      timelineItem("process-live-changes", "turn-live-changes", "process", "editing"),
+    ]),
+    status: "in_progress",
+    fileChanges: {
+      files: [{ path: "src/main.ts", additions: 4, deletions: 1 }],
+      totalAdditions: 4,
+      totalDeletions: 1,
+    },
+  };
+  const rows = conversationDisplayRows(
+    [projectedTurn],
+    conversationTurnsToFeed([projectedTurn]),
+  );
+
+  assert.equal(rows.some((row) => row.kind === "turn_file_changes"), false);
+});
+
+test("Conversation exposes final outputs without prematurely exposing an in-progress turn diff", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-live-final", [
+      timelineItem("user-live-final", "turn-live-final", "user", "question"),
+      timelineItem("final-live-final", "turn-live-final", "final", "done"),
+    ]),
+    status: "in_progress",
+    finalAnswerItemId: "final-live-final",
+    outputs: [
+      {
+        id: "output-live-report",
+        kind: "file",
+        label: "report.md",
+        path: "/workspace/report.md",
+        activity: "written",
+        confidence: "authoritative",
+        sourceItemIds: ["final-live-final"],
+      },
+    ],
+    fileChanges: {
+      files: [{ path: "src/main.ts", additions: 4, deletions: 1 }],
+      totalAdditions: 4,
+      totalDeletions: 1,
+    },
+  };
+  const rows = conversationDisplayRows(
+    [projectedTurn],
+    conversationTurnsToFeed([projectedTurn]),
+  );
+
+  assert.deepEqual(rows.map((row) => row.kind), [
+    "feed_entry",
+    "feed_entry",
+    "turn_outputs",
+  ]);
+});
+
 test("Conversation settles work as soon as the native final answer arrives", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-live", [
@@ -508,7 +615,7 @@ test("Conversation keeps settled Worked details available when completed tools a
   }
 });
 
-test("Conversation renders a lazy process placeholder for native summary turns", () => {
+test("Conversation restores a lazy Worked row from native summary lifecycle timing", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-summary", [
       timelineItem("user-summary", "turn-summary", "user", "question"),
@@ -533,6 +640,8 @@ test("Conversation renders a lazy process placeholder for native summary turns",
   if (process?.kind === "assistant_process_group") {
     assert.equal(process.turnId, "turn-summary");
     assert.equal(process.detailsAvailable, true);
+    assert.equal(process.completed, true);
+    assert.equal(process.active, false);
     assert.deepEqual(process.entries, []);
     assert.equal(process.durationMs, 60_000);
   }
@@ -560,6 +669,140 @@ test("Conversation store pages older turns, refreshes newer turns, and preserves
   ]);
   assert.equal(conversation?.nextCursor, null);
   assert.deepEqual(testHarness.requests, [{}, { cursor: "older-cursor" }, {}]);
+});
+
+test("Conversation foreground refresh promotes a stale working reply to the server final state", async () => {
+  const staleReply = timelineItem("assistant-reply", "turn-reconnect", "process", "answer");
+  staleReply.status = "running";
+  const staleTurn: ConversationTurnProjection = {
+    ...turn("turn-reconnect", [
+      timelineItem("user-reconnect", "turn-reconnect", "user", "question"),
+      staleReply,
+    ]),
+    status: "in_progress",
+    finalAnswerItemId: undefined,
+  };
+  const finalReply: ConversationItemProjection = {
+    ...staleReply,
+    role: "final",
+    status: "completed",
+    revision: 2,
+  };
+  const completedTurn: ConversationTurnProjection = {
+    ...turn("turn-reconnect", [
+      timelineItem("user-reconnect", "turn-reconnect", "user", "question"),
+      finalReply,
+    ]),
+    finalAnswerItemId: finalReply.id,
+    revision: 2,
+  };
+  const testHarness = harness([
+    page([staleTurn], undefined, 1),
+    page([completedTurn], undefined, 2),
+  ]);
+
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+  assert.deepEqual(testHarness.requests, [{}]);
+
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+  const recovered = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
+  assert.equal(recovered?.status, "completed");
+  assert.equal(recovered?.finalAnswerItemId, "assistant-reply");
+  assert.deepEqual(
+    recovered?.items.map((item) => [item.id, item.role, item.status]),
+    [
+      ["user-reconnect", "user", "completed"],
+      ["assistant-reply", "final", "completed"],
+    ],
+  );
+  assert.deepEqual(testHarness.requests, [{}, {}]);
+});
+
+test("Conversation replacement refresh owns loading state and ignores the aborted late response", async () => {
+  const staleResponse = deferred<ConversationTurnsPageResponse>();
+  const finalResponse = deferred<ConversationTurnsPageResponse>();
+  const staleTurn = turn("turn-stale", [
+    timelineItem("final-stale", "turn-stale", "final", "stale"),
+  ]);
+  const finalTurn = turn("turn-final", [
+    timelineItem("final-current", "turn-final", "final", "current"),
+  ]);
+  const testHarness = harness([staleResponse.promise, finalResponse.promise]);
+
+  const staleRefresh = refreshConversationCommand(testHarness.deps, "session-1");
+  const replacementRefresh = refreshConversationCommand(testHarness.deps, "session-1", {
+    replaceActive: true,
+  });
+
+  staleResponse.resolve(page([staleTurn], undefined, 1));
+  assert.equal(await staleRefresh, false);
+  assert.equal(
+    testHarness.state().projections.get("session-1")?.conversation?.phase,
+    "loading",
+  );
+
+  finalResponse.resolve(page([finalTurn], undefined, 2));
+  assert.equal(await replacementRefresh, true);
+  assert.deepEqual(
+    testHarness.state().projections.get("session-1")?.conversation?.turns.map((value) => value.id),
+    ["turn-final"],
+  );
+  assert.equal(
+    testHarness.state().projections.get("session-1")?.conversation?.phase,
+    "ready",
+  );
+});
+
+test("suppressed foreground refresh failures preserve the readable conversation", async () => {
+  const failedResponse = deferred<ConversationTurnsPageResponse>();
+  const existingTurn = turn("turn-existing", [
+    timelineItem("final-existing", "turn-existing", "final", "existing"),
+  ]);
+  const testHarness = harness([
+    page([existingTurn], undefined, 1),
+    failedResponse.promise,
+  ]);
+
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+  const refresh = refreshConversationCommand(testHarness.deps, "session-1", {
+    suppressError: true,
+  });
+  failedResponse.reject(new Error("network route unavailable"));
+
+  assert.equal(await refresh, false);
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
+  assert.equal(conversation?.phase, "ready");
+  assert.equal(conversation?.lastError, null);
+  assert.deepEqual(conversation?.turns.map((value) => value.id), ["turn-existing"]);
+});
+
+test("unchanged foreground refresh keeps the ready conversation structurally stable", async () => {
+  const pendingRefresh = deferred<ConversationTurnsPageResponse>();
+  const existingTurn = turn("turn-existing", [
+    timelineItem("final-existing", "turn-existing", "final", "existing"),
+  ]);
+  const testHarness = harness([
+    page([existingTurn], undefined, 7),
+    pendingRefresh.promise,
+  ]);
+
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+  const before = testHarness.state().projections.get("session-1")?.conversation;
+  const refresh = refreshConversationCommand(testHarness.deps, "session-1", {
+    suppressError: true,
+  });
+
+  assert.equal(
+    testHarness.state().projections.get("session-1")?.conversation?.phase,
+    "ready",
+  );
+  pendingRefresh.resolve(page([existingTurn], undefined, 7));
+  assert.equal(await refresh, true);
+  assert.equal(
+    testHarness.state().projections.get("session-1")?.conversation,
+    before,
+  );
 });
 
 test("new live sessions initialize from the resident projection without history paging", async () => {
@@ -725,6 +968,7 @@ test("Conversation detail request uses opaque native ids and replaces only the c
     {
       sessionId: "session-1",
       itemId: "observation",
+      turnId: "turn-1",
       providerTurnId: "provider-turn-1",
       providerItemId: "provider-observation",
     },
@@ -823,6 +1067,70 @@ test("Conversation turn detail hydrates process items without replacing the visi
       : null,
     "answer refreshed",
   );
+});
+
+test("Conversation turn detail replaces stale summary resources authoritatively", async () => {
+  const user = timelineItem("user", "turn-1", "user", "question");
+  const final = timelineItem("final", "turn-1", "final", "answer");
+  const summaryTurn: ConversationTurnProjection = {
+    ...turn("turn-1", [user, final]),
+    itemsView: "summary",
+    finalAnswerItemId: "final",
+    outputs: [
+      {
+        id: "stale-output",
+        kind: "file",
+        label: "main.rs",
+        path: "/workspace/src/main.rs",
+        confidence: "authoritative",
+        sourceItemIds: ["edit-main"],
+        activity: "updated",
+      },
+    ],
+    sources: [
+      {
+        id: "stale-source",
+        kind: "file",
+        label: "SELECT",
+        path: "SELECT",
+        confidence: "authoritative",
+        sourceItemIds: ["read-query"],
+        activities: ["read"],
+      },
+    ],
+    fileChanges: {
+      files: [{ path: "src/main.rs", additions: 1, deletions: 0 }],
+      totalAdditions: 1,
+      totalDeletions: 0,
+    },
+  };
+  const testHarness = harness([page([summaryTurn])]);
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
+
+  const loaded = await loadConversationTurnDetailCommand(
+    {
+      ...testHarness.deps,
+      readTurnDetail: async () => ({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        turn: {
+          ...summaryTurn,
+          itemsView: "full",
+          outputs: [],
+          sources: [],
+          revision: 2,
+        },
+      }),
+    },
+    "session-1",
+    "turn-1",
+  );
+
+  assert.equal(loaded, true);
+  const hydrated = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
+  assert.equal(hydrated?.outputs, undefined);
+  assert.equal(hydrated?.sources, undefined);
+  assert.deepEqual(hydrated?.fileChanges, summaryTurn.fileChanges);
 });
 
 test("Conversation loads an unloaded directory turn directly into the canonical projection", async () => {

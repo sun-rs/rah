@@ -12,11 +12,13 @@ import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
-import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { shouldSubmitComposerOnEnter } from "../../../composer-keyboard";
 import { WorkspacePicker } from "../../WorkspacePicker";
-import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
+import { OverlayScrollArea } from "../../OverlayScrollArea";
+import { ComposerAttachmentBadge } from "../../ComposerAttachmentBadge";
+import { ComposerAttachmentControl } from "../../ComposerAttachmentControl";
+import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import {
   EMPTY_STATE_COMPOSER_LAYOUT,
   shouldCompactEmptyStateSessionControls,
@@ -24,19 +26,26 @@ import {
   shouldUseIconOnlyEmptyStateWorkspace,
 } from "../../../composer-contract";
 import type { SessionModeChoice } from "../../../session-mode-ui";
+import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
 
-function MarqueeText(props: { text: string; enabled: boolean }) {
+function MarqueeText(props: { text: string; shouldMarquee: boolean }) {
   return (
     <span
-      className="rah-marquee min-w-0 flex-1 text-left"
-      data-marquee={props.enabled ? "true" : "false"}
+      className="rah-marquee min-w-0"
+      data-marquee={props.shouldMarquee ? "true" : "false"}
     >
-      <span className={props.enabled ? "rah-marquee-track" : "block truncate"}>
-        <span>{props.text}</span>
-        {props.enabled ? <span aria-hidden="true">{props.text}</span> : null}
+      <span className="rah-marquee-track">
+        <span className="truncate">{props.text}</span>
+        {props.shouldMarquee ? (
+          <span aria-hidden="true">{props.text}</span>
+        ) : null}
       </span>
     </span>
   );
+}
+
+function workspaceBasename(dir: string): string {
+  return dir.split("/").filter(Boolean).pop() ?? dir;
 }
 
 export function NewSessionComposer(props: {
@@ -45,13 +54,16 @@ export function NewSessionComposer(props: {
   titleClassName?: string;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
-  draftImageUrls?: readonly string[] | undefined;
-  draftImageCount?: number | undefined;
+  draftAttachments?: readonly ComposerAttachmentItem[] | undefined;
+  draftAttachmentCount?: number | undefined;
+  attachmentUploadPending?: boolean | undefined;
+  attachmentError?: string | null | undefined;
   onDraftChange: (value: string) => void;
   onComposerPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
-  onClearDraftImages?: (() => void) | undefined;
-  onRemoveDraftImage?: ((index: number) => void) | undefined;
-  onRemoveLastDraftImage?: (() => void) | undefined;
+  onUploadFiles?:
+    ((files: readonly File[]) => void | Promise<void>) | undefined;
+  onRemoveDraftAttachment?: ((index: number) => void) | undefined;
+  onRemoveLastDraftAttachment?: (() => void) | undefined;
   onSend: () => void;
   canSend: boolean;
   sendPending?: boolean;
@@ -86,21 +98,24 @@ export function NewSessionComposer(props: {
   const [controlsRowWidth, setControlsRowWidth] = useState<number | null>(null);
   const [surfaceWidth, setSurfaceWidth] = useState<number | null>(null);
   const [addWorkspacePickerOpen, setAddWorkspacePickerOpen] = useState(false);
-  const workspaceLabel = props.availableWorkspaceDir
-    ? props.availableWorkspaceDir.split("/").filter(Boolean).pop() ?? props.availableWorkspaceDir
-    : "Workspace";
-  const workspaceShouldMarquee = workspaceLabel.length > 6;
-  const compactSessionControls = shouldCompactEmptyStateSessionControls(controlsRowWidth);
-  const iconOnlyWorkspace = shouldUseIconOnlyEmptyStateWorkspace(controlsRowWidth);
-  const hideSessionControl = shouldHideEmptyStateSessionControl(controlsRowWidth);
+  const isPwaDisplayMode = usePwaDisplayMode();
+  const draftAttachments = props.draftAttachments ?? [];
+  const compactSessionControls =
+    shouldCompactEmptyStateSessionControls(controlsRowWidth);
+  const hideSessionControl =
+    shouldHideEmptyStateSessionControl(controlsRowWidth);
+  const iconOnlyWorkspace =
+    shouldUseIconOnlyEmptyStateWorkspace(controlsRowWidth);
   const providerSelectorMode =
     props.providerSelectorMode === "auto"
       ? surfaceWidth !== null && surfaceWidth < 560
         ? "icons"
         : "grid"
-      : props.providerSelectorMode ?? "grid";
-  const draftImageUrls = props.draftImageUrls ?? [];
-  const textareaHasImages = draftImageUrls.length > 0;
+      : (props.providerSelectorMode ?? "grid");
+  const workspaceLabel = props.availableWorkspaceDir
+    ? workspaceBasename(props.availableWorkspaceDir)
+    : "Workspace";
+  const workspaceShouldMarquee = workspaceLabel.length > 6;
 
   useLayoutEffect(() => {
     const nodes = [
@@ -111,14 +126,18 @@ export function NewSessionComposer(props: {
     const cleanupListeners: Array<() => void> = [];
 
     for (const { node, setWidth } of nodes) {
-      if (!node) continue;
+      if (!node) {
+        continue;
+      }
       const updateWidth = () => {
         setWidth(Math.floor(node.getBoundingClientRect().width));
       };
       updateWidth();
       if (typeof ResizeObserver === "undefined") {
         window.addEventListener("resize", updateWidth);
-        cleanupListeners.push(() => window.removeEventListener("resize", updateWidth));
+        cleanupListeners.push(() =>
+          window.removeEventListener("resize", updateWidth),
+        );
       } else {
         const observer = new ResizeObserver(updateWidth);
         observer.observe(node);
@@ -137,7 +156,9 @@ export function NewSessionComposer(props: {
   }, []);
 
   const submit = () => {
-    if (!props.canSend) return;
+    if (!props.canSend) {
+      return;
+    }
     props.onSend();
   };
 
@@ -149,7 +170,7 @@ export function NewSessionComposer(props: {
       }
     >
       <WorkspacePicker
-        currentDir=""
+        currentDir={props.availableWorkspaceDir}
         hideTrigger
         open={addWorkspacePickerOpen}
         onOpenChange={setAddWorkspacePickerOpen}
@@ -158,6 +179,7 @@ export function NewSessionComposer(props: {
           setAddWorkspacePickerOpen(false);
         }}
       />
+
       <div
         ref={surfaceRef}
         className={
@@ -165,25 +187,35 @@ export function NewSessionComposer(props: {
           "w-full min-w-0 max-w-[min(42rem,100%)] -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6"
         }
       >
-        <div className="text-center">
-          <h1 className={props.titleClassName ?? "text-2xl font-semibold text-[var(--app-fg)]"}>
-            What would you like to build?
-          </h1>
-        </div>
+        <h1
+          className={
+            props.titleClassName ??
+            "text-center text-2xl font-semibold text-[var(--app-fg)]"
+          }
+        >
+          What would you like to build?
+        </h1>
 
         <div className="relative">
-          <ComposerImageAttachmentBadge
-            imageUrls={draftImageUrls}
-            onRemove={props.onRemoveDraftImage}
+          <ComposerAttachmentBadge
+            items={draftAttachments}
+            onRemove={props.onRemoveDraftAttachment}
+            layout={
+              isPwaDisplayMode && draftAttachments.length > 1 ? "stack" : "row"
+            }
             className="pointer-events-auto absolute left-4 top-3 z-20 md:left-5 md:top-4"
           />
           <TokenizedTextarea
             ref={props.composerRef}
-            wrapperClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName}
+            wrapperClassName={
+              EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName
+            }
             textareaClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName} ${
-              textareaHasImages ? "pt-16 md:pt-[4.5rem]" : ""
+              draftAttachments.length > 0 ? "pt-16 md:pt-[4.5rem]" : ""
             }`}
-            contentClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName}
+            contentClassName={
+              EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName
+            }
             placeholder="Message…"
             rows={3}
             value={props.draft}
@@ -194,10 +226,10 @@ export function NewSessionComposer(props: {
               if (
                 event.key === "Backspace" &&
                 props.draft.length === 0 &&
-                draftImageUrls.length > 0
+                draftAttachments.length > 0
               ) {
                 event.preventDefault();
-                props.onRemoveLastDraftImage?.();
+                props.onRemoveLastDraftAttachment?.();
                 return;
               }
               if (shouldSubmitComposerOnEnter(event)) {
@@ -207,14 +239,29 @@ export function NewSessionComposer(props: {
             }}
           />
 
-          <div ref={controlsRowRef} className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}>
+          <div
+            ref={controlsRowRef}
+            className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}
+          >
             <div className={EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName}>
-              {props.onOpenFileReference ? (
+              {props.onOpenFileReference && props.onUploadFiles ? (
+                <ComposerAttachmentControl
+                  buttonClassName={
+                    EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
+                  }
+                  onReferenceWorkspaceFile={props.onOpenFileReference}
+                  onUploadFiles={props.onUploadFiles}
+                  {...(props.attachmentUploadPending !== undefined
+                    ? { uploadPending: props.attachmentUploadPending }
+                    : {})}
+                />
+              ) : props.onOpenFileReference ? (
                 <button
                   type="button"
-                  onClick={props.onOpenFileReference}
                   className={EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName}
-                  title="Insert file or folder reference"
+                  onClick={props.onOpenFileReference}
+                  aria-label="Reference workspace file"
+                  title="Reference workspace file"
                 >
                   <Plus size={18} />
                 </button>
@@ -224,9 +271,15 @@ export function NewSessionComposer(props: {
                 <WorkspacePicker
                   currentDir={props.availableWorkspaceDir}
                   triggerLabel={
-                    iconOnlyWorkspace ? "" : props.availableWorkspaceDir ? workspaceLabel : "Workspace"
+                    iconOnlyWorkspace
+                      ? ""
+                      : props.availableWorkspaceDir
+                        ? workspaceLabel
+                        : "Workspace"
                   }
-                  triggerIcon={<FolderPlus size={iconOnlyWorkspace ? 18 : 12} />}
+                  triggerIcon={
+                    <FolderPlus size={iconOnlyWorkspace ? 18 : 12} />
+                  }
                   triggerAriaLabel="Select workspace"
                   triggerClassName={
                     iconOnlyWorkspace
@@ -236,7 +289,10 @@ export function NewSessionComposer(props: {
                   onSelect={props.onChooseNewWorkspace}
                 />
               ) : (
-                <div className="relative shrink-0" ref={props.workspacePickerRef}>
+                <div
+                  className="relative shrink-0"
+                  ref={props.workspacePickerRef}
+                >
                   <button
                     type="button"
                     onClick={props.onToggleWorkspacePicker}
@@ -251,15 +307,20 @@ export function NewSessionComposer(props: {
                     <Folder size={iconOnlyWorkspace ? 18 : 12} />
                     {iconOnlyWorkspace ? null : (
                       <>
-                        <MarqueeText text={workspaceLabel} enabled={workspaceShouldMarquee} />
+                        <MarqueeText
+                          text={workspaceLabel}
+                          shouldMarquee={workspaceShouldMarquee}
+                        />
                         <ChevronDown
                           size={11}
-                          className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
+                          className={`shrink-0 transition-transform ${
+                            props.workspacePickerOpen ? "rotate-180" : ""
+                          }`}
                         />
                       </>
                     )}
                   </button>
-                  {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
+                  {props.workspacePickerOpen ? (
                     <div className="rah-popover-panel absolute bottom-full left-0 z-50 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg">
                       <OverlayScrollArea
                         className="max-h-[min(18rem,calc(100dvh-12rem))]"
@@ -275,7 +336,10 @@ export function NewSessionComposer(props: {
                           }}
                           className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
                         >
-                          <FolderPlus size={13} className="shrink-0 text-[var(--app-hint)]" />
+                          <FolderPlus
+                            size={13}
+                            className="shrink-0 text-[var(--app-hint)]"
+                          />
                           <span className="truncate">Add workspace…</span>
                         </button>
                         <div className="my-1 h-px bg-[var(--app-border)]" />
@@ -291,10 +355,18 @@ export function NewSessionComposer(props: {
                                 : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
                             }`}
                           >
-                            <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
-                            <MarqueeText text={dir} enabled={dir.length > 34} />
+                            <Folder
+                              size={13}
+                              className="shrink-0 text-[var(--app-hint)]"
+                            />
+                            <MarqueeText
+                              text={dir}
+                              shouldMarquee={dir.length > 34}
+                            />
                             {dir === props.availableWorkspaceDir ? (
-                              <span className="shrink-0 text-[10px] text-[var(--app-hint)]">●</span>
+                              <span className="shrink-0 text-[10px] text-[var(--app-hint)]">
+                                ●
+                              </span>
                             ) : null}
                           </button>
                         ))}
@@ -325,18 +397,20 @@ export function NewSessionComposer(props: {
                 onReasoningChange={props.onReasoningChange}
               />
 
-              <div className={`items-center gap-2 ${compactSessionControls ? "hidden" : "flex"}`}>
+              <div
+                className={`items-center gap-2 ${
+                  compactSessionControls ? "hidden" : "flex"
+                }`}
+              >
                 <SessionModeControls
                   variant="toolbar"
                   accessModes={props.accessModes}
                   selectedAccessModeId={props.selectedAccessModeId}
                   planModeAvailable={props.planModeAvailable}
                   planModeEnabled={props.planModeEnabled}
-                  onOpen={props.onRequestCatalogRefresh}
                   onAccessModeChange={props.onAccessModeChange}
                   onPlanModeToggle={props.onPlanModeToggle}
                 />
-
                 <SessionModelControls
                   catalog={props.modelCatalog}
                   selectedModelId={props.selectedModelId}
@@ -356,7 +430,7 @@ export function NewSessionComposer(props: {
               disabled={!props.canSend}
               onClick={submit}
               aria-label="Start session"
-              title={props.sendPending ? "Starting..." : "Start session"}
+              title={props.sendPending ? "Starting…" : "Start session"}
               className={EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName}
             >
               <ArrowUp size={18} />
@@ -364,15 +438,24 @@ export function NewSessionComposer(props: {
           </div>
         </div>
 
-        <div className="w-full max-w-3xl mx-auto">
+        {props.attachmentError ? (
+          <div
+            className="px-2 text-xs text-red-600 dark:text-red-400"
+            role="status"
+          >
+            {props.attachmentError}
+          </div>
+        ) : null}
+
+        <div className="space-y-4">
           <ProviderSelector
             value={props.provider}
             onChange={props.onChangeProvider}
             mode={providerSelectorMode}
           />
-        </div>
 
-        {props.footer}
+          {props.footer}
+        </div>
       </div>
     </div>
   );
