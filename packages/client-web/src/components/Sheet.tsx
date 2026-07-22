@@ -20,6 +20,8 @@ export function Sheet(props: {
   floatingClose?: "panel" | "x";
   floatingCloseLabel?: string;
   viewportClassName?: string;
+  bodyClassName?: string;
+  fullScreen?: boolean;
 }) {
   const closePlacement = props.closePlacement ?? "end";
   const closeButton = (
@@ -40,12 +42,23 @@ export function Sheet(props: {
       <Dialog.Portal>
         <Dialog.Overlay className={`fixed inset-0 bg-black/40 z-50 ${props.viewportClassName ?? ""}`} />
         <Dialog.Content
-          className={`fixed top-0 bottom-0 z-50 w-80 max-w-[85vw] border-[var(--app-border)] shadow-xl outline-none pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
-            props.side === "left"
-              ? "left-0 border-r bg-[var(--app-subtle-bg)]"
-              : "right-0 border-l bg-[var(--app-bg)]"
+          className={`fixed z-50 shadow-xl outline-none pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
+            props.fullScreen
+              ? `inset-0 h-[100dvh] w-screen max-w-none border-0 ${
+                  props.side === "left" ? "bg-[var(--app-subtle-bg)]" : "bg-[var(--app-bg)]"
+                }`
+              : `top-0 bottom-0 w-80 max-w-[85vw] border-[var(--app-border)] ${
+                  props.side === "left"
+                    ? "left-0 border-r bg-[var(--app-subtle-bg)]"
+                    : "right-0 border-l bg-[var(--app-bg)]"
+                }`
           } flex flex-col ${props.viewportClassName ?? ""}`}
         >
+          <Dialog.Description className="sr-only">
+            {props.side === "left"
+              ? "Navigation and workspace controls."
+              : "Contextual details and controls."}
+          </Dialog.Description>
           {props.hideHeader ? (
             <>
               <Dialog.Title className="sr-only">{props.title}</Dialog.Title>
@@ -53,7 +66,7 @@ export function Sheet(props: {
                 <Dialog.Close asChild>
                   <button
                     type="button"
-                    className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} absolute right-2 top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[60] bg-[var(--app-bg)]/90 backdrop-blur`}
+                    className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} absolute right-2 top-[calc(env(safe-area-inset-top,0px)+0.5rem)] z-[60] bg-[var(--app-bg)]/90 backdrop-blur`}
                     aria-label={props.floatingCloseLabel ?? "Close"}
                     title={props.floatingCloseLabel ?? "Close"}
                   >
@@ -88,7 +101,12 @@ export function Sheet(props: {
               </div>
             </div>
           )}
-          <div className="flex-1 overflow-y-auto overscroll-y-contain rah-scroll-panel rah-scroll-panel-y pb-[env(safe-area-inset-bottom)]">
+          <div
+            className={
+              props.bodyClassName ??
+              "flex-1 overflow-y-auto overscroll-y-contain rah-scroll-panel rah-scroll-panel-y pb-[env(safe-area-inset-bottom)]"
+            }
+          >
             {props.children}
           </div>
         </Dialog.Content>

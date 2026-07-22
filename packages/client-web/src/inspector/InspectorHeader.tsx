@@ -1,5 +1,7 @@
 import { SquareTerminal } from "lucide-react";
 import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "../components/SegmentedControl";
+import { SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS } from "../components/segmented-control-styles";
+import { ConversationHeaderPanelToggleButton } from "../components/workbench/shells/ConversationHeader";
 import type { InspectorTab } from "./shared";
 
 export function InspectorHeader(props: {
@@ -8,12 +10,16 @@ export function InspectorHeader(props: {
   changeCount: number;
   outputCount: number;
   sourceCount: number;
+  resourceIndexing: boolean;
   onTabChange: (tab: InspectorTab) => void;
   onOpenTerminal?: () => void;
+  onClosePanel?: () => void;
 }) {
+  const resourceCount = (count: number) =>
+    props.resourceIndexing ? (count > 0 ? `${count}+` : "…") : String(count);
   return (
     <>
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-border)] px-4 pr-11">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--app-border)] px-4">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
           <div className="truncate text-xs text-[var(--app-hint)]" title={props.workspaceRoot}>
@@ -31,60 +37,74 @@ export function InspectorHeader(props: {
             <SquareTerminal size={16} />
           </button>
         ) : null}
+        {props.onClosePanel ? (
+          <ConversationHeaderPanelToggleButton
+            onClick={props.onClosePanel}
+            ariaLabel="Collapse inspector"
+            title="Collapse inspector"
+            open
+          />
+        ) : null}
       </div>
       <div className="shrink-0 px-3 py-2">
-        <div className="overflow-x-auto rah-scroll-panel scrollbar-stable">
+        <div className="min-w-0">
           <SegmentedControl
-            size="panel"
-            className="grid min-w-[21rem] grid-cols-4 gap-1"
+            size="compact"
+            className="!grid w-full grid-cols-4 gap-0.5"
             role="tablist"
             ariaLabel="Inspector sections"
           >
             <SegmentedButton
-              size="panel"
+              size="compact"
               selected={props.activeTab === "changes"}
-              className="min-w-[5.5rem] overflow-hidden text-ellipsis whitespace-nowrap"
+              selectedClassName={SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS}
+              className="min-w-0 px-1.5"
               onClick={() => props.onTabChange("changes")}
               role="tab"
               aria-selected={props.activeTab === "changes"}
             >
-              <SegmentedButtonLabel size="panel">
+              <SegmentedButtonLabel size="compact" className="block truncate">
                 Changes {props.changeCount > 0 ? `(${props.changeCount})` : ""}
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton
-              size="panel"
+              size="compact"
               selected={props.activeTab === "outputs"}
-              className="min-w-[5rem] overflow-hidden text-ellipsis whitespace-nowrap"
+              selectedClassName={SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS}
+              className="min-w-0 px-1.5"
               onClick={() => props.onTabChange("outputs")}
               role="tab"
               aria-selected={props.activeTab === "outputs"}
+              title="Files and media explicitly generated or delivered by this conversation"
             >
-              <SegmentedButtonLabel size="panel">
-                Outputs {props.outputCount > 0 ? `(${props.outputCount})` : ""}
+              <SegmentedButtonLabel size="compact" className="block truncate">
+                Outputs ({resourceCount(props.outputCount)})
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton
-              size="panel"
+              size="compact"
               selected={props.activeTab === "sources"}
-              className="min-w-[5rem] overflow-hidden text-ellipsis whitespace-nowrap"
+              selectedClassName={SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS}
+              className="min-w-0 px-1.5"
               onClick={() => props.onTabChange("sources")}
               role="tab"
               aria-selected={props.activeTab === "sources"}
+              title="Attachments, web pages, and external references recorded in provider history; the session does not need to run in RAH"
             >
-              <SegmentedButtonLabel size="panel">
-                Sources {props.sourceCount > 0 ? `(${props.sourceCount})` : ""}
+              <SegmentedButtonLabel size="compact" className="block truncate">
+                Sources ({resourceCount(props.sourceCount)})
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton
-              size="panel"
+              size="compact"
               selected={props.activeTab === "files"}
-              className="min-w-[5.5rem] overflow-hidden text-ellipsis whitespace-nowrap"
+              selectedClassName={SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS}
+              className="min-w-0 px-1.5"
               onClick={() => props.onTabChange("files")}
               role="tab"
               aria-selected={props.activeTab === "files"}
             >
-              <SegmentedButtonLabel size="panel">Files</SegmentedButtonLabel>
+              <SegmentedButtonLabel size="compact" className="block truncate">Files</SegmentedButtonLabel>
             </SegmentedButton>
           </SegmentedControl>
         </div>

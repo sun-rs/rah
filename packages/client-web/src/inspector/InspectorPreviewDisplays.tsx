@@ -16,12 +16,19 @@ import {
   SegmentedButtonLabel,
   SegmentedControl,
 } from "../components/SegmentedControl";
+import { SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS } from "../components/segmented-control-styles";
 import {
   buildImageDataUrl,
   parseDelimitedTable,
   parseNotebookPreview,
 } from "./file-preview-utils";
-import { buildDiffRows, resolveCodeLanguage } from "./shared";
+import {
+  buildDiffRows,
+  buildSplitDiffRows,
+  resolveCodeLanguage,
+  type DiffLayout,
+  type SplitDiffCell,
+} from "./shared";
 import { useHighlightedLineHtml } from "./useHighlightedLineHtml";
 
 function highlightedLineClassName(wrapLines: boolean): string {
@@ -36,22 +43,51 @@ export function DiffDisplay(props: {
   rows: ReturnType<typeof buildDiffRows>;
   path: string;
   wrapLines: boolean;
+  layout: DiffLayout;
+  fillAvailable?: boolean;
 }) {
   const language = useMemo(() => resolveCodeLanguage(props.path), [props.path]);
+  const splitRows = useMemo(() => buildSplitDiffRows(props.rows), [props.rows]);
+  const totalRowCount = props.layout === "split" ? splitRows.length : props.rows.length;
   const [visibleRowCount, setVisibleRowCount] = useState(() =>
-    getInitialVisibleCount(props.rows.length, DIFF_PROGRESSIVE_RENDER),
+    getInitialVisibleCount(totalRowCount, DIFF_PROGRESSIVE_RENDER),
   );
 
   useEffect(() => {
-    setVisibleRowCount(getInitialVisibleCount(props.rows.length, DIFF_PROGRESSIVE_RENDER));
-  }, [props.rows]);
+    setVisibleRowCount(getInitialVisibleCount(totalRowCount, DIFF_PROGRESSIVE_RENDER));
+  }, [props.layout, props.rows, totalRowCount]);
 
-  const visibleRows = useMemo(() => props.rows.slice(0, visibleRowCount), [props.rows, visibleRowCount]);
-  const highlightableLines = useMemo(
-    () => visibleRows.filter((row) => row.kind !== "hunk").map((row) => row.text),
-    [visibleRows],
+  const visibleUnifiedRows = useMemo(
+    () => props.rows.slice(0, visibleRowCount),
+    [props.rows, visibleRowCount],
   );
-  const highlightableContent = useMemo(() => highlightableLines.join("\n"), [highlightableLines]);
+  const visibleSplitRows = useMemo(
+    () => splitRows.slice(0, visibleRowCount),
+    [splitRows, visibleRowCount],
+  );
+  const highlightableEntries = useMemo(
+    () =>
+      props.layout === "unified"
+        ? visibleUnifiedRows.flatMap((row) =>
+            row.kind === "hunk" ? [] : [{ key: row.key, text: row.text }],
+          )
+        : visibleSplitRows.flatMap((row) =>
+            row.kind === "hunk"
+              ? []
+              : [row.before, row.after].flatMap((cell) =>
+                  cell ? [{ key: cell.key, text: cell.text }] : [],
+                ),
+          ),
+    [props.layout, visibleSplitRows, visibleUnifiedRows],
+  );
+  const highlightableLines = useMemo(
+    () => highlightableEntries.map((entry) => entry.text),
+    [highlightableEntries],
+  );
+  const highlightableContent = useMemo(
+    () => highlightableLines.join("\n"),
+    [highlightableLines],
+  );
   const shouldHighlight = shouldHighlightPreview(
     language,
     highlightableLines.length,
@@ -62,64 +98,157 @@ export function DiffDisplay(props: {
     shouldHighlight ? highlightableContent : null,
     shouldHighlight ? language : null,
   );
-  const canUseHighlightedRows = highlightedHtml.length === highlightableLines.length;
-  const progressive = shouldUseProgressiveRender(props.rows.length, DIFF_PROGRESSIVE_RENDER);
-  const remainingRows = Math.max(0, props.rows.length - visibleRows.length);
+  const highlightedByKey = useMemo(() => {
+    if (highlightedHtml.length !== highlightableEntries.length) {
+      return new Map<string, string>();
+    }
+    return new Map(
+      highlightableEntries.map((entry, index) => [entry.key, highlightedHtml[index] ?? ""]),
+    );
+  }, [highlightableEntries, highlightedHtml]);
+  const progressive = shouldUseProgressiveRender(totalRowCount, DIFF_PROGRESSIVE_RENDER);
+  const visibleRowsLength =
+    props.layout === "split" ? visibleSplitRows.length : visibleUnifiedRows.length;
+  const remainingRows = Math.max(0, totalRowCount - visibleRowsLength);
 
-  let highlightedIndex = 0;
+  const renderCodeText = (key: string, text: string) => {
+    const highlightedRowHtml = highlightedByKey.get(key);
+    return highlightedRowHtml ? (
+      <span
+        className={highlightedLineClassName(props.wrapLines)}
+        dangerouslySetInnerHTML={{ __html: highlightedRowHtml }}
+      />
+    ) : (
+      <span className={props.wrapLines ? "whitespace-pre-wrap break-words" : "whitespace-pre"}>
+        {text || " "}
+      </span>
+    );
+  };
+
+  const renderSplitCell = (cell: SplitDiffCell | null, side: "before" | "after") => {
+    if (!cell) {
+      return (
+        <div
+          className={`diff-split-empty min-h-[1.5rem] border-[var(--diff-border)] ${
+            side === "before" ? "border-r" : ""
+          }`}
+          aria-hidden="true"
+        />
+      );
+    }
+    const toneClassName =
+      cell.kind === "add"
+        ? "diff-row-add bg-[var(--diff-add-bg)]"
+        : cell.kind === "remove"
+          ? "diff-row-remove bg-[var(--diff-remove-bg)]"
+          : "bg-[var(--app-bg)]";
+    const markerClassName =
+      cell.kind === "add"
+        ? "bg-[var(--diff-add-gutter-bg)] text-[var(--diff-add-text)]"
+        : cell.kind === "remove"
+          ? "bg-[var(--diff-remove-gutter-bg)] text-[var(--diff-remove-text)]"
+          : "text-[var(--diff-gutter-text)]";
+    return (
+      <div
+        className={`grid min-w-0 ${
+          props.wrapLines
+            ? "grid-cols-[3.5rem_minmax(0,1fr)]"
+            : "grid-cols-[3.5rem_max-content]"
+        } ${toneClassName} ${side === "before" ? "border-r border-[var(--diff-border)]" : ""}`}
+      >
+        <div
+          className={`select-none border-r border-[var(--diff-border)] px-2 py-0.5 text-right text-xs font-mono ${markerClassName}`}
+        >
+          {cell.lineNumber}
+        </div>
+        <div className="px-3 py-0.5 text-xs font-mono text-[var(--diff-context-text)]">
+          {renderCodeText(cell.key, cell.text)}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="space-y-2">
-      <div className="overflow-hidden rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]">
-        <div>
-          {visibleRows.map((row) => {
-            const toneClassName =
-              row.kind === "add"
-                ? "bg-[var(--diff-add-bg)] text-[var(--diff-add-text)]"
-                : row.kind === "remove"
-                  ? "bg-[var(--diff-remove-bg)] text-[var(--diff-remove-text)]"
-                  : row.kind === "hunk"
-                    ? "bg-[var(--diff-header-bg)] text-[var(--app-hint)] font-semibold"
-                    : "bg-[var(--app-bg)] text-[var(--diff-context-text)]";
-            const highlightedRowHtml =
-              row.kind === "hunk" || !canUseHighlightedRows
-                ? null
-                : highlightedHtml[highlightedIndex++] ?? null;
+    <div className={props.fillAvailable ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-2"}>
+      <div
+        className={`${props.fillAvailable ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"} overscroll-contain rah-scroll-code scrollbar-stable rounded-md border border-[var(--diff-border)] bg-[var(--app-bg)]`}
+        data-testid="inspector-diff-scroll"
+        data-diff-layout={props.layout}
+      >
+        {props.layout === "split" ? (
+          <div
+            className={`grid grid-cols-2 ${
+              props.wrapLines ? "w-full min-w-full" : "w-max min-w-[44rem]"
+            }`}
+            data-testid="inspector-split-diff-grid"
+          >
+            {visibleSplitRows.map((row) =>
+              row.kind === "hunk" ? (
+                <div
+                  key={row.key}
+                  className="col-span-2 border-y border-[var(--diff-border)] bg-[var(--diff-header-bg)] px-3 py-1 text-xs font-mono font-semibold text-[var(--diff-gutter-text)] first:border-t-0"
+                >
+                  {row.text}
+                </div>
+              ) : (
+                <div key={row.key} className="contents">
+                  {renderSplitCell(row.before, "before")}
+                  {renderSplitCell(row.after, "after")}
+                </div>
+              ),
+            )}
+          </div>
+        ) : (
+          <div className={props.wrapLines ? "min-w-full" : "w-max min-w-full"}>
+            {visibleUnifiedRows.map((row) => {
+              const toneClassName =
+                row.kind === "add"
+                  ? "diff-row-add bg-[var(--diff-add-bg)]"
+                  : row.kind === "remove"
+                    ? "diff-row-remove bg-[var(--diff-remove-bg)]"
+                    : row.kind === "hunk"
+                      ? "bg-[var(--diff-header-bg)] text-[var(--diff-gutter-text)] font-semibold"
+                      : "bg-[var(--app-bg)] text-[var(--diff-context-text)]";
+              const markerClassName =
+                row.kind === "add"
+                  ? "bg-[var(--diff-add-gutter-bg)] text-[var(--diff-add-text)]"
+                  : row.kind === "remove"
+                    ? "bg-[var(--diff-remove-gutter-bg)] text-[var(--diff-remove-text)]"
+                    : "text-[var(--diff-gutter-text)]";
 
-            return (
-              <div key={row.key} className={`grid grid-cols-[4rem_2rem_minmax(0,1fr)] ${toneClassName}`}>
-                <div className="select-none border-r border-[var(--app-border)] px-3 py-0.5 text-right text-xs font-mono opacity-70">
-                  {row.lineNumber ?? ""}
+              return (
+                <div
+                  key={row.key}
+                  className={`grid min-w-full ${
+                    props.wrapLines
+                      ? "grid-cols-[4rem_2rem_minmax(0,1fr)]"
+                      : "grid-cols-[4rem_2rem_max-content]"
+                  } ${toneClassName}`}
+                >
+                  <div className={`select-none border-r border-[var(--diff-border)] px-3 py-0.5 text-right text-xs font-mono ${markerClassName}`}>
+                    {row.lineNumber ?? ""}
+                  </div>
+                  <div className={`select-none border-r border-[var(--diff-border)] px-2 py-0.5 text-center text-xs font-mono ${markerClassName}`}>
+                    {row.sign || " "}
+                  </div>
+                  <div className="px-3 py-0.5 text-xs font-mono text-[var(--diff-context-text)]">
+                    {row.kind === "hunk" ? row.text : renderCodeText(row.key, row.text)}
+                  </div>
                 </div>
-                <div className="select-none border-r border-[var(--app-border)] px-2 py-0.5 text-center text-xs font-mono">
-                  {row.sign || " "}
-                </div>
-                <div className="px-3 py-0.5 text-xs font-mono">
-                  {highlightedRowHtml ? (
-                    <span
-                      className={highlightedLineClassName(props.wrapLines)}
-                      dangerouslySetInnerHTML={{ __html: highlightedRowHtml }}
-                    />
-                  ) : (
-                    <span className={props.wrapLines ? "whitespace-pre-wrap break-words" : "whitespace-pre"}>
-                      {row.text || " "}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
       {progressive && remainingRows > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
           <span>
-            Showing {visibleRows.length.toLocaleString()} of {props.rows.length.toLocaleString()} diff lines.
+            Showing {visibleRowsLength.toLocaleString()} of {totalRowCount.toLocaleString()} diff rows.
           </span>
           <button
             type="button"
             onClick={() =>
-              setVisibleRowCount((current) => getNextVisibleCount(current, props.rows.length, DIFF_PROGRESSIVE_RENDER))
+              setVisibleRowCount((current) => getNextVisibleCount(current, totalRowCount, DIFF_PROGRESSIVE_RENDER))
             }
             className="rounded-md bg-[var(--app-bg)] px-2.5 py-1 text-[var(--app-fg)] transition-colors hover:bg-[var(--app-border)]"
           >
@@ -131,7 +260,12 @@ export function DiffDisplay(props: {
   );
 }
 
-export function FileContentDisplay(props: { content: string; path: string; wrapLines: boolean }) {
+export function FileContentDisplay(props: {
+  content: string;
+  path: string;
+  wrapLines: boolean;
+  fillAvailable?: boolean;
+}) {
   const lines = useMemo(() => props.content.split("\n"), [props.content]);
   const language = useMemo(() => resolveCodeLanguage(props.path), [props.path]);
   const [visibleLineCount, setVisibleLineCount] = useState(() =>
@@ -159,9 +293,16 @@ export function FileContentDisplay(props: { content: string; path: string; wrapL
   const remainingLines = Math.max(0, lines.length - visibleLines.length);
 
   return (
-    <div className="space-y-2">
-      <div className="overflow-auto rah-scroll-code scrollbar-stable rounded-md border border-[var(--app-border)] bg-[var(--app-code-bg)]">
-        <div className="grid grid-cols-[4rem_minmax(0,1fr)]">
+    <div className={props.fillAvailable ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-2"}>
+      <div className={`${props.fillAvailable ? "min-h-0 flex-1" : ""} overflow-auto rah-scroll-code scrollbar-stable rounded-md border border-[var(--app-border)] bg-[var(--app-code-bg)]`}>
+        <div
+          className={`grid min-w-full ${
+            props.wrapLines
+              ? "grid-cols-[4rem_minmax(0,1fr)]"
+              : "w-max grid-cols-[4rem_max-content]"
+          }`}
+          data-testid="inspector-file-content-grid"
+        >
           {visibleLines.map((line, index) => (
             <div key={`${index}-${line}`} className="contents">
               <div className="select-none border-r border-[var(--app-border)] px-3 py-0.5 text-right text-xs font-mono text-[var(--app-hint)]">
@@ -323,6 +464,7 @@ export function MarkdownFilePreview(props: {
           <SegmentedButton
             size="compact"
             selected={mode === "preview"}
+            selectedClassName={SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS}
             onClick={() => setMode("preview")}
             role="tab"
             aria-selected={mode === "preview"}
@@ -332,6 +474,7 @@ export function MarkdownFilePreview(props: {
           <SegmentedButton
             size="compact"
             selected={mode === "source"}
+            selectedClassName={SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS}
             onClick={() => setMode("source")}
             role="tab"
             aria-selected={mode === "source"}

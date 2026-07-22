@@ -1,6 +1,10 @@
-import type { LanguageRegistration, ThemeRegistration } from "@shikijs/types";
+import type { LanguageRegistration } from "@shikijs/types";
+import {
+  CODEX_SHIKI_THEMES,
+  type CodexShikiThemeName,
+} from "./codex-shiki-themes";
 
-type ShikiThemeName = "dark-plus" | "light-plus";
+type ShikiThemeName = CodexShikiThemeName;
 type ShikiLanguageName =
   | "typescript"
   | "javascript"
@@ -23,12 +27,9 @@ type MinimalHighlighter = {
 };
 
 let highlighter: MinimalHighlighter | null = null;
+let highlighterPromise: Promise<MinimalHighlighter> | null = null;
 const loadedLanguages = new Set<string>();
-
-const THEME_LOADERS: Record<ShikiThemeName, () => Promise<{ default: ThemeRegistration }>> = {
-  "dark-plus": () => import("@shikijs/themes/dark-plus"),
-  "light-plus": () => import("@shikijs/themes/light-plus"),
-};
+const languageLoadPromises = new Map<string, Promise<boolean>>();
 
 const LANGUAGE_LOADERS: Record<ShikiLanguageName, () => Promise<{ default: LanguageRegistration[] }>> = {
   typescript: () => import("@shikijs/langs/typescript"),
@@ -49,36 +50,86 @@ const LANGUAGE_LOADERS: Record<ShikiLanguageName, () => Promise<{ default: Langu
 
 export async function getHighlighter() {
   if (highlighter) return highlighter;
-  const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, themeModules] =
-    await Promise.all([
+  if (!highlighterPromise) {
+    highlighterPromise = Promise.all([
       import("shiki/core"),
       import("shiki/engine/javascript"),
-      Promise.all(Object.values(THEME_LOADERS).map((load) => load())),
-    ]);
-  highlighter = await createHighlighterCore({
-    engine: createJavaScriptRegexEngine(),
-    themes: themeModules.map((module) => module.default),
-    langs: [],
-  });
-  return highlighter;
+    ])
+      .then(([{ createHighlighterCore }, { createJavaScriptRegexEngine }]) =>
+        createHighlighterCore({
+          engine: createJavaScriptRegexEngine(),
+          themes: [...CODEX_SHIKI_THEMES],
+          langs: [],
+        }),
+      )
+      .then((instance) => {
+        highlighter = instance;
+        return instance;
+      })
+      .catch((error) => {
+        highlighterPromise = null;
+        throw error;
+      });
+  }
+  return highlighterPromise;
 }
 
-function isKnownLanguage(language: string): language is ShikiLanguageName {
-  return language in LANGUAGE_LOADERS;
+const LANGUAGE_ALIASES: Readonly<Record<string, ShikiLanguageName>> = {
+  ts: "typescript",
+  typescript: "typescript",
+  js: "javascript",
+  javascript: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  json: "json",
+  jsonc: "json",
+  bash: "bash",
+  sh: "bash",
+  shell: "bash",
+  zsh: "bash",
+  md: "markdown",
+  markdown: "markdown",
+  py: "python",
+  python: "python",
+  diff: "diff",
+  patch: "diff",
+  tsx: "tsx",
+  rs: "rust",
+  rust: "rust",
+  toml: "toml",
+  yaml: "yaml",
+  yml: "yaml",
+  html: "html",
+  htm: "html",
+  css: "css",
+  sql: "sql",
+};
+
+export function normalizeShikiLanguage(language: string | null | undefined): ShikiLanguageName | null {
+  if (!language) return null;
+  return LANGUAGE_ALIASES[language.trim().toLocaleLowerCase()] ?? null;
 }
 
 export async function ensureHighlighterLanguage(language: string): Promise<boolean> {
-  if (!isKnownLanguage(language)) {
+  const normalized = normalizeShikiLanguage(language);
+  if (!normalized) {
     return false;
   }
-  if (loadedLanguages.has(language)) {
+  if (loadedLanguages.has(normalized)) {
     return true;
   }
-  const instance = await getHighlighter();
-  const languageModule = await LANGUAGE_LOADERS[language]();
-  await instance.loadLanguage(...languageModule.default);
-  loadedLanguages.add(language);
-  return true;
+  const existing = languageLoadPromises.get(normalized);
+  if (existing) return existing;
+  const loadPromise = getHighlighter()
+    .then(async (instance) => {
+      const languageModule = await LANGUAGE_LOADERS[normalized]();
+      await instance.loadLanguage(...languageModule.default);
+      loadedLanguages.add(normalized);
+      return true;
+    })
+    .finally(() => languageLoadPromises.delete(normalized));
+  languageLoadPromises.set(normalized, loadPromise);
+  return loadPromise;
 }
 
 function hasLineClass(spanTag: string): boolean {
@@ -116,18 +167,25 @@ export function extractHighlightedLines(html: string): string[] {
   return lines;
 }
 
-export function highlight(code: string, lang: string, theme: ShikiThemeName = "dark-plus") {
-  if (!highlighter || !loadedLanguages.has(lang)) return code;
-  return highlighter.codeToHtml(code, { lang, theme });
+export function highlight(code: string, lang: string, theme: ShikiThemeName = "codex-light") {
+  const normalized = normalizeShikiLanguage(lang);
+  if (!highlighter || !normalized || !loadedLanguages.has(normalized)) return code;
+  return highlighter.codeToHtml(code, { lang: normalized, theme });
 }
 
 export function highlightLines(
   code: string,
   lang: string,
-  theme: ShikiThemeName = "dark-plus",
+  theme: ShikiThemeName = "codex-light",
 ): string[] {
-  if (!highlighter || !loadedLanguages.has(lang)) {
+  const normalized = normalizeShikiLanguage(lang);
+  if (!highlighter || !normalized || !loadedLanguages.has(normalized)) {
     return code.split("\n");
   }
-  return extractHighlightedLines(highlighter.codeToHtml(code || " ", { lang, theme }));
+  return extractHighlightedLines(highlighter.codeToHtml(code || " ", { lang: normalized, theme }));
+}
+
+export function extractHighlightedCodeHtml(html: string): string | null {
+  const match = /<code\b[^>]*>([\s\S]*?)<\/code>/.exec(html);
+  return match?.[1] ?? null;
 }

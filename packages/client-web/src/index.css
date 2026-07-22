@@ -3,8 +3,12 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --breakpoint-sm: 43.75rem;
+  --breakpoint-md: 43.75rem;
+  --breakpoint-lg: 56.25rem;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
   --color-border: var(--border);
   --color-input: var(--input);
@@ -41,16 +45,18 @@
 @layer base {
   :root {
     --radius: 0.75rem;
+    /* Codex Desktop's Electron surface uses the variable SF system font at 445. */
+    --app-font-weight: 445;
 
     /* Light mode (default) */
     --background: #ffffff;
-    --foreground: #09090b;
+    --foreground: #1a1c1f;
 
     --card: #ffffff;
-    --card-foreground: #09090b;
+    --card-foreground: #1a1c1f;
 
     --popover: #ffffff;
-    --popover-foreground: #09090b;
+    --popover-foreground: #1a1c1f;
 
     --primary: #18181b;
     --primary-foreground: #fafafa;
@@ -73,13 +79,16 @@
 
     /* App semantic tokens - light */
     --app-bg: #ffffff;
-    --app-fg: #09090b;
+    --app-fg: #1a1c1f;
     --app-hint: #5f5f67;
     --app-muted: #71717a;
     --app-link: #18181b;
     --app-resource-link: #1473e6;
     --app-border: #e4e4e7;
     --app-subtle-bg: #f4f4f5;
+    --app-sidebar-bg: #f8f8f9;
+    --app-sidebar-divider: rgba(24, 24, 27, 0.08);
+    --app-sidebar-shadow: rgba(24, 24, 27, 0.18);
     --app-code-bg: #fafafa;
     --app-inline-code-bg: rgba(0, 0, 0, 0.06);
     --app-success: #16a34a;
@@ -87,6 +96,9 @@
     --app-danger: #dc2626;
     --app-warning-bg: #fff4db;
     --app-danger-bg: #fee7e7;
+    --chat-font-size: 14px;
+    --chat-line-height: calc(var(--chat-font-size) + 8px);
+    --chat-code-font-size: 12px;
     --terminal-font-family: "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", "Noto Sans Mono CJK SC", "Microsoft YaHei UI", ui-monospace, monospace;
     --terminal-bg: #ffffff;
     --terminal-fg: #18181b;
@@ -96,15 +108,22 @@
 
     /* User bubble */
     --user-bubble-bg: #f4f4f5;
-    --user-bubble-fg: #09090b;
+    --user-bubble-fg: #1a1c1f;
 
     /* Diff */
-    --diff-header-bg: rgba(0, 0, 0, 0.04);
-    --diff-add-text: #166534;
-    --diff-add-bg: rgba(34, 197, 94, 0.14);
-    --diff-remove-text: #991b1b;
-    --diff-remove-bg: rgba(239, 68, 68, 0.12);
-    --diff-context-text: #3f3f46;
+    --diff-header-bg: #f4f4f4;
+    --diff-border: #e8e8e8;
+    --diff-empty-stripe: #e8e8e8;
+    --diff-gutter-text: #585858;
+    --diff-add-text: #00a241;
+    --diff-add-bg: #e7f4e7;
+    --diff-add-gutter-bg: #edf7ed;
+    --diff-add-gutter: #00a241;
+    --diff-remove-text: #ba2722;
+    --diff-remove-bg: #fce7e2;
+    --diff-remove-gutter-bg: #fdece9;
+    --diff-remove-gutter: #ba2722;
+    --diff-context-text: #585858;
 
     /* Code block */
     --code-block-text: #18181b;
@@ -148,6 +167,9 @@
     --app-resource-link: #69a9ff;
     --app-border: #27272a;
     --app-subtle-bg: #18181b;
+    --app-sidebar-bg: #111113;
+    --app-sidebar-divider: rgba(255, 255, 255, 0.08);
+    --app-sidebar-shadow: rgba(0, 0, 0, 0.55);
     --app-code-bg: #09090b;
     --app-inline-code-bg: rgba(255, 255, 255, 0.08);
     --app-success: #22c55e;
@@ -166,11 +188,18 @@
     --user-bubble-fg: #fafafa;
 
     /* Diff */
-    --diff-header-bg: rgba(255, 255, 255, 0.04);
-    --diff-add-text: #bbf7d0;
-    --diff-add-bg: rgba(34, 197, 94, 0.12);
-    --diff-remove-text: #fecaca;
-    --diff-remove-bg: rgba(239, 68, 68, 0.1);
+    --diff-header-bg: rgba(255, 255, 255, 0.055);
+    --diff-border: #27272a;
+    --diff-empty-stripe: rgba(255, 255, 255, 0.12);
+    --diff-gutter-text: #a1a1aa;
+    --diff-add-text: #86efac;
+    --diff-add-bg: rgba(22, 163, 74, 0.17);
+    --diff-add-gutter-bg: rgba(22, 163, 74, 0.1);
+    --diff-add-gutter: #22c55e;
+    --diff-remove-text: #fca5a5;
+    --diff-remove-bg: rgba(220, 38, 38, 0.15);
+    --diff-remove-gutter-bg: rgba(220, 38, 38, 0.09);
+    --diff-remove-gutter: #ef4444;
     --diff-context-text: #d4d4d8;
 
     /* Code block */
@@ -199,6 +228,7 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
+    font-weight: var(--app-font-weight);
     overflow-x: hidden;
     overflow-y: hidden;
   }
@@ -277,28 +307,68 @@
 }
 
 @layer utilities {
-  body:has([role="dialog"]:not([data-state="closed"])) .workbench-fixed-sidebar-toggle {
+  body:has([role="dialog"]:not([data-state="closed"]):not([data-inspector-file-viewer])) .workbench-fixed-sidebar-toggle {
     display: none !important;
+  }
+
+  .diff-row-add {
+    box-shadow: inset 3px 0 0 var(--diff-add-gutter);
+  }
+
+  .diff-row-remove {
+    box-shadow: inset 3px 0 0 var(--diff-remove-gutter);
+  }
+
+  .diff-split-empty {
+    background-color: var(--app-bg);
+    background-image: repeating-linear-gradient(
+      135deg,
+      transparent 0,
+      transparent 7px,
+      var(--diff-empty-stripe) 7px,
+      var(--diff-empty-stripe) 9px
+    );
   }
 
   .rah-sidebar-header {
     container: rah-sidebar-header / inline-size;
-    --rah-sidebar-header-gap: clamp(0px, calc((var(--rah-sidebar-width, 288px) - 208px) / 20), 4px);
-    gap: var(--rah-sidebar-header-gap);
   }
 
   .rah-sidebar-content {
     container: rah-sidebar-content / inline-size;
   }
 
-  .rah-sidebar-header-actions {
-    gap: var(--rah-sidebar-header-gap);
+  .canvas-conversation-surface,
+  .conversation-panel-surface {
+    container: canvas-conversation / inline-size;
   }
 
-  @container rah-sidebar-header (max-width: 224px) {
-    .rah-sidebar-header-actions {
-      justify-content: flex-start;
-      margin-left: 0;
+  .conversation-contained-panel-divider {
+    display: none;
+  }
+
+  .conversation-contained-panel {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 40;
+    display: flex;
+    width: min(var(--conversation-contained-panel-width), 100%);
+    max-width: 100%;
+    box-shadow: -12px 0 28px rgb(0 0 0 / 0.12);
+  }
+
+  @container canvas-conversation (min-width: 760px) {
+    .conversation-contained-panel-divider {
+      display: block;
+    }
+
+    .conversation-contained-panel {
+      position: relative;
+      inset: auto;
+      z-index: auto;
+      width: var(--conversation-contained-panel-width);
+      max-width: calc(100% - 320px);
+      box-shadow: none;
     }
   }
 
@@ -503,6 +573,18 @@
     touch-action: none;
     z-index: 30;
   }
+
+  .rah-workbench-sidebar {
+    position: relative;
+    z-index: 20;
+    background: var(--app-sidebar-bg);
+  }
+
+  .rah-workbench-sidebar[data-sidebar-open="true"] {
+    box-shadow:
+      inset -1px 0 0 var(--app-sidebar-divider),
+      5px 0 14px -12px var(--app-sidebar-shadow);
+  }
   .resize-handle::after {
     content: '';
     position: absolute;
@@ -526,7 +608,8 @@
     flex-shrink: 0;
     margin-left: -6px;
     margin-right: -6px;
-    pointer-events: none;
+    cursor: col-resize;
+    touch-action: none;
     z-index: 30;
   }
 
@@ -539,6 +622,24 @@
     width: 2px;
     background-color: var(--app-fg);
     opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .inspector-divider::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background-color: var(--app-border);
+    transform: translateX(-50%);
+  }
+
+  .inspector-divider:hover::after,
+  .inspector-divider:focus-visible::after,
+  .inspector-divider.dragging::after {
+    opacity: 0.35;
   }
 
   .icon-click-feedback {
@@ -599,6 +700,7 @@
   }
 
   .resize-handle,
+  .inspector-divider,
   [role="dialog"],
   .fixed,
   .sticky {

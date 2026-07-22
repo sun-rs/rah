@@ -6,6 +6,9 @@ export const SEGMENTED_CONTROL_ACTIVE_CLASS =
 export const SEGMENTED_CONTROL_NEUTRAL_ACTIVE_CLASS =
   "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm";
 
+export const SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS =
+  "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-none";
+
 export const SEGMENTED_CONTROL_INACTIVE_CLASS =
   "text-[var(--app-hint)] hover:bg-[color:color-mix(in_oklab,var(--app-bg)_60%,transparent)] hover:text-[var(--app-fg)]";
 

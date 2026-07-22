@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "../hooks/useTheme";
+import { codexShikiThemeForColorScheme } from "../lib/codex-shiki-themes";
 import { ensureHighlighterLanguage, getHighlighter, highlightLines } from "../lib/shiki";
 
 export function useHighlightedLineHtml(code: string | null, language: string | null) {
@@ -21,7 +22,7 @@ export function useHighlightedLineHtml(code: string | null, language: string | n
           setHtmlByLine([]);
           return;
         }
-        const theme = colorScheme === "dark" ? "dark-plus" : "light-plus";
+        const theme = codexShikiThemeForColorScheme(colorScheme);
         const next = highlightLines(code, language, theme);
         setHtmlByLine(next);
       })

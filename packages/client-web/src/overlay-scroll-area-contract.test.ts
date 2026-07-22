@@ -66,8 +66,9 @@ describe("overlay scroll area contract", () => {
     assert.match(councilSource, /scrollAriaLabel="Council mentions"/);
     assert.match(
       councilSource,
-      /viewportClassName="max-h-\[calc\(84vh-4\.5rem\)\] p-3"/,
+      /viewportClassName="max-h-\[calc\(84vh-8rem\)\] p-3"/,
     );
+    assert.match(councilSource, /aria-label="Search Councils"/);
     assert.match(
       councilSource,
       /viewportClassName="max-h-\[calc\(84vh-4\.5rem\)\] p-4"/,
@@ -88,7 +89,7 @@ describe("overlay scroll area contract", () => {
       "./components/workbench/panes/NewSessionComposer.tsx",
     );
     assert.match(newSessionComposerSource, /OverlayScrollArea/);
-    assert.match(newSessionComposerSource, /scrollAriaLabel="Workspaces"/);
+    assert.match(newSessionComposerSource, /workspacePickerOpen/);
     assert.doesNotMatch(
       newSessionComposerSource,
       /rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full/,
@@ -149,13 +150,33 @@ describe("overlay scroll area contract", () => {
     assert.doesNotMatch(source, /space-y-5/);
   });
 
-  test("chat thread can continue top history paging without a down-scroll rearm", () => {
+  test("chat thread preserves the visible row while prepending and only chains underfilled history", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
 
     assert.match(source, /requestOlderHistoryLoad/);
     assert.match(source, /scheduleTopHistoryLoad/);
     assert.match(source, /isInTopHistoryLoadZone/);
-    assert.doesNotMatch(source, /scrollingUp && node\.scrollTop <= TOP_HISTORY_TRIGGER_PX/);
-    assert.match(source, /topHistoryAutoLoadArmedRef\.current = true;\n\s+scheduleTopHistoryLoad\(\)/);
+    assert.match(source, /captureVisiblePrependAnchor/);
+    assert.match(source, /restoreVisiblePrependAnchor/);
+    assert.match(source, /schedulePrependAnchorRestore/);
+    assert.match(source, /\[data-feed-entry-key\]/);
+    assert.match(
+      source,
+      /props\.onLoadOlderHistory &&\n\s+hasTooLittleHistoryContent\(node\)/,
+    );
+    assert.doesNotMatch(
+      source,
+      /props\.onLoadOlderHistory &&\n\s+isInTopHistoryLoadZone\(node\)\n\s+\) \{\n\s+topHistoryAutoLoadArmedRef\.current = true;\n\s+scheduleTopHistoryLoad\(\)/,
+    );
+  });
+
+  test("explicit conversation navigation resets to latest before layout positioning", () => {
+    const source = readSource("./components/chat/ChatThread.tsx");
+
+    assert.match(source, /navigationRevision\?: number/);
+    assert.match(
+      source,
+      /useLayoutEffect\(\(\) => \{\n\s+previousEntryCountRef\.current = 0;[\s\S]*?sessionSwitchBottomLockRef\.current = true;[\s\S]*?node\.scrollTop = node\.scrollHeight;[\s\S]*?\}, \[props\.navigationRevision, props\.sessionId\]\)/,
+    );
   });
 });

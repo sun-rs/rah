@@ -1,22 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ConversationOutputProjection,
   ConversationTurnProjection,
-  RahEvent,
+  TurnFileChangesResponse,
 } from "@rah/runtime-protocol";
 import {
   listDirectory,
+  readSessionConversationTurnDetail,
+  readSessionConversationTurns,
   readGitStatus,
+  readTurnFileChanges,
   readWorkspaceGitStatus,
   searchSessionFiles,
   searchWorkspaceFilesByDirectory,
 } from "./api";
+import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "./components/SegmentedControl";
 import { InspectorChangesPane } from "./inspector/InspectorChangesPane";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import { InspectorFilesPane } from "./inspector/InspectorFilesPane";
 import { InspectorHeader } from "./inspector/InspectorHeader";
 import { InspectorResourcesPane } from "./inspector/InspectorResourcesPane";
-import { collectConversationResources } from "./conversation-resources";
+import { InspectorTurnChangesPane } from "./inspector/InspectorTurnChangesPane";
+import { ReviewDialog } from "./inspector/ReviewDialog";
+import type { ReviewScope } from "./inspector/ReviewSurface";
+import {
+  collectConversationResources,
+  mergeConversationOutputs,
+  mergeConversationSources,
+} from "./conversation-resources";
+import {
+  loadConversationResourceIndex,
+  type ConversationResourceIndex,
+} from "./inspector/conversation-resource-index";
 import type {
   DirectoryEntry,
   FileDetailSelection,
@@ -24,17 +39,39 @@ import type {
   InspectorOpenFileRequest,
   InspectorTab,
 } from "./inspector/shared";
+import { getTurnArtifactErrorMessage } from "./inspector/shared";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
+
+type InspectorChangeScope = "turn" | "workspace";
 
 export function InspectorPane(props: {
   sessionId: string | null;
   workspaceRoot: string;
-  events: RahEvent[];
   conversationTurns: readonly ConversationTurnProjection[];
   onOpenTerminal?: () => void;
+  onClosePanel?: () => void;
   openFileRequest?: InspectorOpenFileRequest | null;
 }) {
+  const initialTurnRequest =
+    props.openFileRequest?.kind === "turn_changes" &&
+    props.openFileRequest.sessionId &&
+    props.openFileRequest.turnId
+      ? {
+          sessionId: props.openFileRequest.sessionId,
+          turnId: props.openFileRequest.turnId,
+        }
+      : null;
   const [activeTab, setActiveTab] = useState<InspectorTab>("changes");
+  const [changeScope, setChangeScope] = useState<InspectorChangeScope>(
+    initialTurnRequest ? "turn" : "workspace",
+  );
+  const [activeTurnTarget, setActiveTurnTarget] = useState<{
+    sessionId: string;
+    turnId: string;
+  } | null>(initialTurnRequest);
+  const [turnChanges, setTurnChanges] = useState<TurnFileChangesResponse | null>(null);
+  const [turnChangesLoading, setTurnChangesLoading] = useState(false);
+  const [turnChangesError, setTurnChangesError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [directoryEntriesByPath, setDirectoryEntriesByPath] = useState<Map<string, DirectoryEntry[]>>(
     new Map(),
@@ -42,6 +79,7 @@ export function InspectorPane(props: {
   const [directoryErrorsByPath, setDirectoryErrorsByPath] = useState<Map<string, string>>(new Map());
   const [directoryLoadingPaths, setDirectoryLoadingPaths] = useState<Set<string>>(new Set());
   const [gitStatus, setGitStatus] = useState<InspectorGitStatus | null>(null);
+  const [selectedBaseBranch, setSelectedBaseBranch] = useState<string | undefined>(undefined);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
   const [gitStatusError, setGitStatusError] = useState<string | null>(null);
   const [fileSearchQuery, setFileSearchQuery] = useState("");
@@ -49,15 +87,69 @@ export function InspectorPane(props: {
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
+  const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
+  const [indexedResources, setIndexedResources] = useState<ConversationResourceIndex>({
+    outputs: [],
+    sources: [],
+  });
+  const [resourceIndexing, setResourceIndexing] = useState(false);
   const gitStatusRequestRef = useRef(0);
-  const canonicalResources = useMemo(
+  const turnChangesRequestRef = useRef(0);
+  const liveResources = useMemo(
     () => collectConversationResources(props.conversationTurns),
     [props.conversationTurns],
+  );
+  const canonicalResources = useMemo(
+    () => ({
+      outputs: mergeConversationOutputs(liveResources.outputs, indexedResources.outputs),
+      sources: mergeConversationSources(liveResources.sources, indexedResources.sources),
+    }),
+    [indexedResources, liveResources],
   );
   const outputResources = useMemo<ConversationOutputProjection[]>(
     () => canonicalResources.outputs,
     [canonicalResources.outputs],
   );
+  useEffect(() => {
+    const seedResources = collectConversationResources(props.conversationTurns);
+    setIndexedResources(seedResources);
+    if (!props.sessionId) {
+      setResourceIndexing(false);
+      return;
+    }
+    const sessionId = props.sessionId;
+    const controller = new AbortController();
+    let active = true;
+    setResourceIndexing(true);
+    void loadConversationResourceIndex({
+      sessionId,
+      seedTurns: props.conversationTurns,
+      signal: controller.signal,
+      dependencies: {
+        readTurns: readSessionConversationTurns,
+        readTurnDetail: readSessionConversationTurnDetail,
+      },
+      onProgress: (resources) => {
+        if (active) {
+          setIndexedResources(resources);
+        }
+      },
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) {
+          setResourceIndexing(false);
+        }
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+    // The detached index follows the session identity. Live turn resources are
+    // merged separately so ordinary conversation updates never restart a full
+    // historical scan.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.sessionId]);
 
   const loadDirectory = async (directoryPath: string) => {
     setDirectoryLoadingPaths((current) => new Set(current).add(directoryPath));
@@ -94,7 +186,7 @@ export function InspectorPane(props: {
     }
   };
 
-  const loadGitStatus = async () => {
+  const loadGitStatus = async (baseBranch?: string) => {
     const requestId = gitStatusRequestRef.current + 1;
     gitStatusRequestRef.current = requestId;
     const sessionId = props.sessionId;
@@ -111,19 +203,29 @@ export function InspectorPane(props: {
       const response = sessionId
         ? await readGitStatus(sessionId, {
             ...(workspaceRoot ? { scopeRoot: workspaceRoot } : {}),
+            ...(baseBranch ? { baseBranch } : {}),
           })
-        : await readWorkspaceGitStatus(workspaceRoot);
+        : await readWorkspaceGitStatus(workspaceRoot, {
+            ...(baseBranch ? { baseBranch } : {}),
+          });
       if (gitStatusRequestRef.current !== requestId) {
         return;
       }
       setGitStatus({
         ...(response.branch ? { branch: response.branch } : {}),
+        ...(response.baseBranch ? { baseBranch: response.baseBranch } : {}),
+        ...(response.comparisonMode ? { comparisonMode: response.comparisonMode } : {}),
+        ...(response.comparisonBase ? { comparisonBase: response.comparisonBase } : {}),
+        branchOptions: response.branchOptions ?? [],
+        branchFiles: response.branchFiles ?? [],
         changedFiles: response.changedFiles,
         stagedFiles: response.stagedFiles ?? [],
         unstagedFiles: response.unstagedFiles ?? [],
+        totalBranch: response.totalBranch ?? response.branchFiles?.length ?? 0,
         totalStaged: response.totalStaged ?? response.stagedFiles?.length ?? 0,
         totalUnstaged: response.totalUnstaged ?? response.unstagedFiles?.length ?? 0,
       });
+      setSelectedBaseBranch(response.baseBranch);
     } catch (error) {
       if (gitStatusRequestRef.current !== requestId) {
         return;
@@ -137,8 +239,42 @@ export function InspectorPane(props: {
     }
   };
 
+  const loadTurnChanges = useCallback(
+    async (target: { sessionId: string; turnId: string }) => {
+      const requestId = turnChangesRequestRef.current + 1;
+      turnChangesRequestRef.current = requestId;
+      setTurnChangesLoading(true);
+      setTurnChangesError(null);
+      try {
+        const response = await readTurnFileChanges(target.sessionId, target.turnId);
+        if (turnChangesRequestRef.current !== requestId) {
+          return;
+        }
+        setTurnChanges(response);
+      } catch (error) {
+        if (turnChangesRequestRef.current !== requestId) {
+          return;
+        }
+        setTurnChanges(null);
+        setTurnChangesError(getTurnArtifactErrorMessage(error));
+      } finally {
+        if (turnChangesRequestRef.current === requestId) {
+          setTurnChangesLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
+    turnChangesRequestRef.current += 1;
     setSelectedFile(null);
+    setChangeScope("workspace");
+    setSelectedBaseBranch(undefined);
+    setActiveTurnTarget(null);
+    setTurnChanges(null);
+    setTurnChangesLoading(false);
+    setTurnChangesError(null);
     setExpandedPaths(props.workspaceRoot ? new Set([props.workspaceRoot]) : new Set());
     setDirectoryEntriesByPath(new Map());
     setDirectoryErrorsByPath(new Map());
@@ -148,12 +284,35 @@ export function InspectorPane(props: {
   }, [props.sessionId, props.workspaceRoot]);
 
   useEffect(() => {
-    void loadGitStatus();
-  }, [props.sessionId, props.workspaceRoot]);
+    if (changeScope === "workspace") {
+      void loadGitStatus(undefined);
+    }
+  }, [changeScope, props.sessionId, props.workspaceRoot]);
 
   useEffect(() => {
     const request = props.openFileRequest;
     if (!request?.path) {
+      return;
+    }
+    if (
+      request.kind === "turn_changes" &&
+      request.sessionId &&
+      request.turnId
+    ) {
+      const target = {
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+      };
+      setActiveTab("changes");
+      setChangeScope("turn");
+      setActiveTurnTarget(target);
+      setSelectedFile({
+        path: request.path,
+        source: "turn_changes",
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+      });
+      void loadTurnChanges(target);
       return;
     }
     setActiveTab("files");
@@ -161,7 +320,7 @@ export function InspectorPane(props: {
       path: request.path,
       source: "local",
     });
-  }, [props.openFileRequest?.id]);
+  }, [loadTurnChanges, props.openFileRequest?.id]);
 
   useEffect(() => {
     if (!fileSearchQuery.trim()) {
@@ -251,9 +410,9 @@ export function InspectorPane(props: {
     ? directoryEntriesByPath.get(props.workspaceRoot) ?? []
     : [];
   const changeCount =
-    (gitStatus?.totalStaged ?? 0) + (gitStatus?.totalUnstaged ?? 0) ||
-    gitStatus?.changedFiles.length ||
-    0;
+    changeScope === "turn" && activeTurnTarget
+      ? turnChanges?.fileChanges.files.length ?? 0
+      : gitStatus?.totalBranch ?? gitStatus?.changedFiles.length ?? 0;
   return (
     <div className="h-full flex flex-col">
       <InspectorHeader
@@ -262,23 +421,86 @@ export function InspectorPane(props: {
         changeCount={changeCount}
         outputCount={outputResources.length}
         sourceCount={canonicalResources.sources.length}
+        resourceIndexing={resourceIndexing}
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
+        {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
       />
-      <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full px-4 py-3" scrollAriaLabel="Inspector">
+      <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full px-3 py-2" scrollAriaLabel="Inspector">
         {activeTab === "changes" ? (
-          <InspectorChangesPane
-            gitStatus={gitStatus}
-            loading={gitStatusLoading}
-            error={gitStatusError}
-            events={props.events}
-            onRefresh={() => void loadGitStatus()}
-            onOpenFile={(selection) => setSelectedFile(selection)}
-          />
+          <div className="space-y-3">
+            {activeTurnTarget ? (
+              <SegmentedControl
+                size="compact"
+                className="grid w-full grid-cols-2"
+                role="tablist"
+                ariaLabel="Change scope"
+              >
+                <SegmentedButton
+                  size="compact"
+                  selected={changeScope === "turn"}
+                  onClick={() => setChangeScope("turn")}
+                  role="tab"
+                  aria-selected={changeScope === "turn"}
+                >
+                  <SegmentedButtonLabel size="compact">This turn</SegmentedButtonLabel>
+                </SegmentedButton>
+                <SegmentedButton
+                  size="compact"
+                  selected={changeScope === "workspace"}
+                  onClick={() => setChangeScope("workspace")}
+                  role="tab"
+                  aria-selected={changeScope === "workspace"}
+                >
+                  <SegmentedButtonLabel size="compact">Workspace</SegmentedButtonLabel>
+                </SegmentedButton>
+              </SegmentedControl>
+            ) : null}
+            {changeScope === "turn" && activeTurnTarget ? (
+              <InspectorTurnChangesPane
+                workspaceRoot={props.workspaceRoot}
+                response={turnChanges}
+                loading={turnChangesLoading}
+                error={turnChangesError}
+                onRetry={() => void loadTurnChanges(activeTurnTarget)}
+                onReview={() => {
+                  if (!turnChanges) {
+                    return;
+                  }
+                  setReviewScope({
+                    kind: "turn",
+                    sessionId: turnChanges.sessionId,
+                    turnId: turnChanges.turnId,
+                    workspaceRoot: props.workspaceRoot,
+                    files: turnChanges.fileChanges.files,
+                    totalAdditions: turnChanges.fileChanges.totalAdditions,
+                    totalDeletions: turnChanges.fileChanges.totalDeletions,
+                    truncated: turnChanges.truncated,
+                  });
+                }}
+                onOpenFile={setSelectedFile}
+              />
+            ) : (
+              <InspectorChangesPane
+                workspaceRoot={props.workspaceRoot}
+                gitStatus={gitStatus}
+                loading={gitStatusLoading}
+                error={gitStatusError}
+                onRefresh={() => void loadGitStatus(selectedBaseBranch)}
+                onBaseBranchChange={(baseBranch) => {
+                  setSelectedBaseBranch(baseBranch);
+                  void loadGitStatus(baseBranch);
+                }}
+                onOpenFile={(selection) => setSelectedFile(selection)}
+              />
+            )}
+          </div>
         ) : activeTab === "outputs" ? (
           <InspectorResourcesPane
             workspaceRoot={props.workspaceRoot}
             resources={outputResources}
+            description="Files and media explicitly generated or delivered by this conversation."
+            loading={resourceIndexing}
             emptyLabel="No outputs yet."
             testId="inspector-outputs-list"
             onOpenFile={(path) =>
@@ -295,7 +517,9 @@ export function InspectorPane(props: {
           <InspectorResourcesPane
             workspaceRoot={props.workspaceRoot}
             resources={canonicalResources.sources}
-            emptyLabel="No sources yet."
+            description="Attachments, web pages, and external references recorded in provider history. The session does not need to run in RAH."
+            loading={resourceIndexing}
+            emptyLabel="No attachments, web pages, or external references were recorded for this session."
             testId="inspector-sources-list"
             onOpenFile={(path) =>
               openFile(
@@ -332,8 +556,14 @@ export function InspectorPane(props: {
           sessionId={props.sessionId}
           workspaceRoot={props.workspaceRoot}
           selection={selectedFile}
-          onRefreshChanges={() => void loadGitStatus()}
+          onRefreshChanges={() => void loadGitStatus(selectedBaseBranch)}
           onClose={() => setSelectedFile(null)}
+        />
+      ) : null}
+      {reviewScope ? (
+        <ReviewDialog
+          scope={reviewScope}
+          onClose={() => setReviewScope(null)}
         />
       ) : null}
     </div>

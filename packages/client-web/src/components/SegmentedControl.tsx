@@ -32,11 +32,13 @@ export function SegmentedButton({
   children,
   className,
   selected,
+  selectedClassName,
   size = "panel",
   type = "button",
   ...buttonProps
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   selected: boolean;
+  selectedClassName?: string;
   size?: SegmentedControlSize;
 }) {
   const sizeClasses = SEGMENTED_CONTROL_SIZE_CLASSES[size];
@@ -46,7 +48,7 @@ export function SegmentedButton({
       type={type}
       className={joinClasses(
         sizeClasses.button,
-        selected ? sizeClasses.active : SEGMENTED_CONTROL_INACTIVE_CLASS,
+        selected ? (selectedClassName ?? sizeClasses.active) : SEGMENTED_CONTROL_INACTIVE_CLASS,
         className,
       )}
     >
