@@ -1,4 +1,8 @@
 import type {
+  ConversationActivityAction,
+  ConversationActivityDescriptor,
+  ConversationActivityFileAction,
+  ConversationActivityKind,
   EventAuthority,
   EventChannel,
   EventEnvelope,
@@ -76,6 +80,8 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "session.state.changed": "session",
   "session.side.state.changed": "session",
   "session.native_tui.prompt_state.changed": "session",
+  "session.input_queue.changed": "session",
+  "session.input_queue.policy_changed": "session",
   "session.exited": "session",
   "session.failed": "session",
   "control.claimed": "control",
@@ -88,6 +94,7 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "turn.step.completed": "turn",
   "turn.step.interrupted": "turn",
   "turn.input.appended": "turn",
+  "turn.file_changes.updated": "turn",
   "timeline.item.added": "timeline",
   "timeline.item.updated": "timeline",
   "message.part.added": "message_part",
@@ -273,6 +280,49 @@ const TOOL_FAMILIES = new Set<ToolFamily>([
   "media",
   "preview",
   "other",
+]);
+
+const CONVERSATION_ACTIVITY_KINDS = new Set<ConversationActivityKind>([
+  "thinking",
+  "command",
+  "file_read",
+  "file_change",
+  "search",
+  "web",
+  "git",
+  "subagent",
+  "permission",
+  "plan",
+  "automation",
+  "tool",
+]);
+
+const CONVERSATION_ACTIVITY_ACTIONS = new Set<ConversationActivityAction>([
+  "command",
+  "file_read",
+  "file_list",
+  "file_search",
+  "file_create",
+  "file_edit",
+  "file_delete",
+  "web_search",
+  "web_fetch",
+  "browser",
+  "git",
+  "subagent",
+  "plan",
+  "automation",
+  "permission",
+  "tool",
+]);
+
+const CONVERSATION_ACTIVITY_FILE_ACTIONS = new Set<ConversationActivityFileAction>([
+  "read",
+  "listed",
+  "searched",
+  "created",
+  "edited",
+  "deleted",
 ]);
 
 const OBSERVATION_KINDS = new Set<ObservationKind>([
@@ -531,6 +581,59 @@ function validateToolDetail(detail: ToolCallDetail | undefined, sink: IssueSink,
   });
 }
 
+function validateConversationActivity(
+  activity: ConversationActivityDescriptor | undefined,
+  sink: IssueSink,
+  path: string,
+) {
+  if (activity === undefined) return;
+  if (!isRecord(activity)) {
+    addIssue(sink, "error", "activity.invalid", "activity must be an object", path);
+    return;
+  }
+  if (!CONVERSATION_ACTIVITY_KINDS.has(activity.kind)) {
+    addIssue(sink, "error", "activity.kind.invalid", "activity kind is not canonical", `${path}.kind`);
+  }
+  if (!CONVERSATION_ACTIVITY_ACTIONS.has(activity.action)) {
+    addIssue(sink, "error", "activity.action.invalid", "activity action is not canonical", `${path}.action`);
+  }
+  if (
+    activity.operationCount !== undefined &&
+    (!Number.isInteger(activity.operationCount) || activity.operationCount < 1)
+  ) {
+    addIssue(sink, "error", "activity.operation_count.invalid", "activity operationCount must be a positive integer", `${path}.operationCount`);
+  }
+  for (const field of ["command", "cwd", "query", "label"] as const) {
+    if (activity[field] !== undefined && typeof activity[field] !== "string") {
+      addIssue(sink, "error", `activity.${field}.invalid`, `activity ${field} must be a string`, `${path}.${field}`);
+    }
+  }
+  if (
+    activity.urls !== undefined &&
+    (!Array.isArray(activity.urls) || !activity.urls.every(isNonEmptyString))
+  ) {
+    addIssue(sink, "error", "activity.urls.invalid", "activity urls must be non-empty strings", `${path}.urls`);
+  }
+  if (activity.files !== undefined) {
+    if (!Array.isArray(activity.files)) {
+      addIssue(sink, "error", "activity.files.invalid", "activity files must be an array", `${path}.files`);
+    } else {
+      activity.files.forEach((file, index) => {
+        if (!isRecord(file) || !isNonEmptyString(file.path)) {
+          addIssue(sink, "error", "activity.file.invalid", "activity file path must be non-empty", `${path}.files[${index}]`);
+          return;
+        }
+        if (
+          file.action !== undefined &&
+          !CONVERSATION_ACTIVITY_FILE_ACTIONS.has(file.action as ConversationActivityFileAction)
+        ) {
+          addIssue(sink, "error", "activity.file.action.invalid", "activity file action is not canonical", `${path}.files[${index}].action`);
+        }
+      });
+    }
+  }
+}
+
 function validateToolCall(toolCall: ToolCall, sink: IssueSink, path: string) {
   if (!isRecord(toolCall)) {
     addIssue(sink, "error", "tool.invalid", "tool call must be an object", path);
@@ -551,6 +654,7 @@ function validateToolCall(toolCall: ToolCall, sink: IssueSink, path: string) {
   if (toolCall.result !== undefined && !isRecord(toolCall.result)) {
     addIssue(sink, "error", "tool.result.invalid", "tool call result must be an object", `${path}.result`);
   }
+  validateConversationActivity(toolCall.activity, sink, `${path}.activity`);
   validateToolDetail(toolCall.detail, sink, `${path}.detail`);
 }
 
@@ -670,17 +774,19 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
       );
     }
   }
-  if (
-    capabilities.actions.archive !== undefined &&
-    typeof capabilities.actions.archive !== "boolean"
-  ) {
-    addIssue(
-      sink,
-      "error",
-      "session.capabilities.actions.archive.invalid",
-      "session capability actions.archive must be boolean when present",
-      `${path}.actions.archive`,
-    );
+  for (const field of ["archive", "restore"] as const) {
+    if (
+      capabilities.actions[field] !== undefined &&
+      typeof capabilities.actions[field] !== "boolean"
+    ) {
+      addIssue(
+        sink,
+        "error",
+        `session.capabilities.actions.${field}.invalid`,
+        `session capability actions.${field} must be boolean when present`,
+        `${path}.actions.${field}`,
+      );
+    }
   }
   if (!["none", "local", "native"].includes(capabilities.actions.rename as string)) {
     addIssue(
@@ -2162,6 +2268,22 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       }
     }
   }
+  if (session.inputQueue !== undefined) {
+    validateSessionInputQueue(session.inputQueue, sink, `${path}.inputQueue`);
+  }
+  if (
+    session.inputQueuePolicy !== undefined &&
+    session.inputQueuePolicy !== "queue" &&
+    session.inputQueuePolicy !== "steer"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.input_queue_policy.invalid",
+      "session inputQueuePolicy must be queue or steer",
+      `${path}.inputQueuePolicy`,
+    );
+  }
   if (session.mux !== undefined) {
     if (!isRecord(session.mux)) {
       addIssue(
@@ -2261,6 +2383,104 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
   validateSessionCapabilities(session.capabilities, sink, `${path}.capabilities`);
 }
 
+function validateSessionInputQueue(queue: unknown, sink: IssueSink, path: string) {
+  if (!Array.isArray(queue)) {
+    addIssue(sink, "error", "session.input_queue.invalid", "session inputQueue must be an array", path);
+    return;
+  }
+  queue.forEach((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    if (!isRecord(entry)) {
+      addIssue(sink, "error", "session.input_queue.entry.invalid", "queued input must be an object", entryPath);
+      return;
+    }
+    if (!isNonEmptyString(entry.clientMessageId)) {
+      addIssue(sink, "error", "session.input_queue.message_id.invalid", "queued input clientMessageId must be non-empty", `${entryPath}.clientMessageId`);
+    }
+    if (entry.clientTurnId !== undefined && !isNonEmptyString(entry.clientTurnId)) {
+      addIssue(sink, "error", "session.input_queue.turn_id.invalid", "queued input clientTurnId must be non-empty", `${entryPath}.clientTurnId`);
+    }
+    if (typeof entry.text !== "string") {
+      addIssue(sink, "error", "session.input_queue.text.invalid", "queued input text must be a string", `${entryPath}.text`);
+    }
+    if (entry.attachments !== undefined) {
+      validateSessionInputAttachments(entry.attachments, sink, `${entryPath}.attachments`);
+    }
+    if (!isNonEmptyString(entry.queuedAt) || Number.isNaN(Date.parse(entry.queuedAt))) {
+      addIssue(sink, "error", "session.input_queue.timestamp.invalid", "queued input queuedAt must be a valid timestamp", `${entryPath}.queuedAt`);
+    }
+    if (!Number.isInteger(entry.position) || (entry.position as number) < 1) {
+      addIssue(sink, "error", "session.input_queue.position.invalid", "queued input position must be a positive integer", `${entryPath}.position`);
+    }
+    if (
+      entry.state !== undefined
+      && entry.state !== "queued"
+      && entry.state !== "submitting"
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "session.input_queue.state.invalid",
+        "queued input state must be queued or submitting",
+        `${entryPath}.state`,
+      );
+    }
+  });
+}
+
+function validateSessionInputAttachments(value: unknown, sink: IssueSink, path: string) {
+  if (!Array.isArray(value)) {
+    addIssue(sink, "error", "session.attachments.invalid", "attachments must be an array", path);
+    return;
+  }
+  value.forEach((attachment, index) => {
+    const attachmentPath = `${path}[${index}]`;
+    if (!isRecord(attachment)) {
+      addIssue(sink, "error", "session.attachment.invalid", "attachment must be an object", attachmentPath);
+      return;
+    }
+    if (!isNonEmptyString(attachment.id)) {
+      addIssue(sink, "error", "session.attachment.id.invalid", "attachment id must be non-empty", `${attachmentPath}.id`);
+    }
+    if (attachment.kind !== "image" && attachment.kind !== "file") {
+      addIssue(sink, "error", "session.attachment.kind.invalid", "attachment kind must be image or file", `${attachmentPath}.kind`);
+    }
+    if (!isNonEmptyString(attachment.name)) {
+      addIssue(sink, "error", "session.attachment.name.invalid", "attachment name must be non-empty", `${attachmentPath}.name`);
+    }
+    if (!isNonEmptyString(attachment.mediaType)) {
+      addIssue(sink, "error", "session.attachment.media_type.invalid", "attachment mediaType must be non-empty", `${attachmentPath}.mediaType`);
+    }
+    if (!Number.isInteger(attachment.size) || (attachment.size as number) < 0) {
+      addIssue(sink, "error", "session.attachment.size.invalid", "attachment size must be a non-negative integer", `${attachmentPath}.size`);
+    }
+  });
+}
+
+function validateTurnFileChanges(value: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(value) || !Array.isArray(value.files)) {
+    addIssue(sink, "error", "turn.file_changes.invalid", "turn fileChanges must contain a files array", path);
+    return;
+  }
+  for (const [index, file] of value.files.entries()) {
+    const filePath = `${path}.files[${index}]`;
+    if (!isRecord(file) || !isNonEmptyString(file.path)) {
+      addIssue(sink, "error", "turn.file_changes.file.invalid", "file change path must be non-empty", filePath);
+      continue;
+    }
+    for (const key of ["additions", "deletions"] as const) {
+      if (!Number.isInteger(file[key]) || (file[key] as number) < 0) {
+        addIssue(sink, "error", `turn.file_changes.${key}.invalid`, `file change ${key} must be a non-negative integer`, `${filePath}.${key}`);
+      }
+    }
+  }
+  for (const key of ["totalAdditions", "totalDeletions"] as const) {
+    if (!Number.isInteger(value[key]) || (value[key] as number) < 0) {
+      addIssue(sink, "error", `turn.file_changes.${key}.invalid`, `${key} must be a non-negative integer`, `${path}.${key}`);
+    }
+  }
+}
+
 function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string) {
   if (!isRecord(item) || !isNonEmptyString(item.kind)) {
     addIssue(sink, "error", "timeline.invalid", "timeline item must have a kind", path);
@@ -2280,6 +2500,9 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
         (!Number.isInteger(item.imageCount) || item.imageCount < 0)
       ) {
         addIssue(sink, "error", "timeline.image_count.invalid", "timeline imageCount must be a non-negative integer", `${path}.imageCount`);
+      }
+      if (item.attachments !== undefined) {
+        validateSessionInputAttachments(item.attachments, sink, `${path}.attachments`);
       }
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
@@ -2349,6 +2572,15 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
     case "compaction":
       if (!["started", "completed"].includes(item.status)) {
         addIssue(sink, "error", "timeline.compaction.invalid", "compaction status is not canonical", `${path}.status`);
+      }
+      if (item.count !== undefined && (!Number.isInteger(item.count) || item.count < 1)) {
+        addIssue(
+          sink,
+          "error",
+          "timeline.compaction.count.invalid",
+          "compaction count must be a positive integer",
+          `${path}.count`,
+        );
       }
       break;
     default:
@@ -2540,6 +2772,7 @@ function validateObservation(
   if (!isNonEmptyString(observation.title)) {
     addIssue(sink, "error", "observation.title.invalid", "observation title must be non-empty", `${path}.title`);
   }
+  validateConversationActivity(observation.activity, sink, `${path}.activity`);
   if (observation.metrics !== undefined && !isJsonObject(observation.metrics)) {
     addIssue(sink, "error", "observation.metrics.invalid", "observation metrics must be an object", `${path}.metrics`);
   }
@@ -2646,6 +2879,7 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "turn.step.completed":
     case "turn.step.interrupted":
     case "turn.input.appended":
+    case "turn.file_changes.updated":
       if (!isNonEmptyString(event.turnId)) {
         addIssue(sink, "error", "turn.id.missing", "turn events must carry turnId", "turnId");
       }
@@ -2679,6 +2913,9 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
         payload.runtimeModel !== undefined
       ) {
         validateTimelineRuntimeModel(payload.runtimeModel, sink, "payload.runtimeModel");
+      }
+      if (event.type === "turn.file_changes.updated") {
+        validateTurnFileChanges(payload.fileChanges, sink, "payload.fileChanges");
       }
       break;
     case "timeline.item.added":
@@ -2862,6 +3099,33 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
           });
         }
       }
+      if (payload.workbench !== undefined) {
+        if (!isRecord(payload.workbench)) {
+          addIssue(sink, "error", "session.discovery.workbench.invalid", "workbench must be an object", "payload.workbench");
+          break;
+        }
+        if (!Array.isArray(payload.workbench.pinnedSidebarItems)) {
+          addIssue(
+            sink,
+            "error",
+            "session.discovery.workbench.pinned_sidebar_items.invalid",
+            "pinnedSidebarItems must be an array",
+            "payload.workbench.pinnedSidebarItems",
+          );
+          break;
+        }
+        payload.workbench.pinnedSidebarItems.forEach((entry, index) => {
+          if (!isRecord(entry) || !isNonEmptyString(entry.workspaceDir) || !isNonEmptyString(entry.itemKey)) {
+            addIssue(
+              sink,
+              "error",
+              "session.discovery.workbench.pinned_sidebar_item.invalid",
+              "pinned sidebar item is invalid",
+              `payload.workbench.pinnedSidebarItems.${index}`,
+            );
+          }
+        });
+      }
       break;
     case "session.attached":
       if (!isNonEmptyString(payload.clientId)) {
@@ -2924,6 +3188,20 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
           "session.native_tui.queued_input_count.invalid",
           "native TUI queuedInputCount must be a non-negative integer",
           "payload.queuedInputCount",
+        );
+      }
+      break;
+    case "session.input_queue.changed":
+      validateSessionInputQueue(payload.items, sink, "payload.items");
+      break;
+    case "session.input_queue.policy_changed":
+      if (payload.policy !== "queue" && payload.policy !== "steer") {
+        addIssue(
+          sink,
+          "error",
+          "session.input_queue_policy.invalid",
+          "session input queue policy must be queue or steer",
+          "payload.policy",
         );
       }
       break;

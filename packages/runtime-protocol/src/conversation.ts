@@ -1,5 +1,6 @@
 import type {
   ContextUsage,
+  ConversationActivityKind,
   EventAuthority,
   EventChannel,
   JsonObject,
@@ -28,20 +29,6 @@ export type ConversationItemStatus =
   | "failed";
 
 export type ConversationItemRole = "user" | "process" | "final" | "system";
-
-export type ConversationActivityKind =
-  | "thinking"
-  | "command"
-  | "file_read"
-  | "file_change"
-  | "search"
-  | "web"
-  | "git"
-  | "subagent"
-  | "permission"
-  | "plan"
-  | "automation"
-  | "tool";
 
 export interface ConversationActivitySummary {
   kind: ConversationActivityKind;
@@ -130,6 +117,18 @@ export interface ConversationSourceProjection extends ConversationResourceProjec
   activities: ConversationSourceActivity[];
 }
 
+export interface ConversationFileChangeProjection {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface ConversationTurnFileChangesProjection {
+  files: ConversationFileChangeProjection[];
+  totalAdditions: number;
+  totalDeletions: number;
+}
+
 export interface ConversationTurnProjection {
   id: string;
   provider: ProviderKind;
@@ -147,6 +146,8 @@ export interface ConversationTurnProjection {
   outputs?: ConversationOutputProjection[];
   /** Provider-neutral resources consulted or supplied to this turn. */
   sources?: ConversationSourceProjection[];
+  /** Authoritative file changes attributed to this completed provider turn. */
+  fileChanges?: ConversationTurnFileChangesProjection;
   finalAnswerItemId?: string;
   failedItemCount: number;
   /** Whether this turn contains only a lightweight item summary or hydrated items. */

@@ -13,6 +13,8 @@ import type {
   SessionLiveBackend,
   SessionConfigOption,
   SessionConfigValue,
+  SessionInputAttachment,
+  SessionInputQueuePolicy,
   SessionBranchKind,
   SessionWorkspaceMode,
   SessionModelDescriptor,
@@ -40,8 +42,18 @@ import type {
   RenameCouncilRequest,
   RenameCouncilResponse,
 } from "./council";
-import type { ContextUsage, EventEnvelope, JsonObject, RahEvent, RahEventType } from "./events";
-import type { ConversationProjectionDelta } from "./conversation";
+import type {
+  ContextUsage,
+  EventEnvelope,
+  JsonObject,
+  RahEvent,
+  RahEventType,
+  WorkbenchPinnedItemRef,
+} from "./events";
+import type {
+  ConversationProjectionDelta,
+  ConversationTurnFileChangesProjection,
+} from "./conversation";
 
 export interface RuntimeIdentityResponse {
   name: "rah";
@@ -269,9 +281,14 @@ export interface AttachSessionRequest {
   claimControl?: boolean;
 }
 
+export interface UploadAttachmentResponse {
+  attachment: SessionInputAttachment;
+}
+
 export interface SessionInputRequest {
   clientId: string;
   text: string;
+  attachments?: SessionInputAttachment[];
   /**
    * Stable client-generated id for this submitted user message. The daemon and
    * provider mirrors should echo it when they can so optimistic UI rows can be
@@ -284,6 +301,30 @@ export interface SessionInputRequest {
    * web optimistic row, queued input state, and later echo/notice anchoring.
    */
   clientTurnId?: string;
+}
+
+export interface UpdateQueuedInputRequest {
+  clientId: string;
+  text: string;
+}
+
+export interface DeleteQueuedInputRequest {
+  clientId: string;
+}
+
+export interface ReorderQueuedInputRequest {
+  clientId: string;
+  position: number;
+}
+
+export interface SteerQueuedInputRequest {
+  clientId: string;
+}
+
+/** @deprecated Follow-up input always queues; retained for older clients. */
+export interface SetInputQueuePolicyRequest {
+  clientId: string;
+  policy: SessionInputQueuePolicy;
 }
 
 export interface InterruptSessionRequest {
@@ -334,12 +375,25 @@ export interface WorkspaceDirectoryRequest {
   dir: string;
 }
 
+export interface UpdateWorkbenchPinnedItemRequest extends WorkbenchPinnedItemRef {
+  pinned: boolean;
+}
+
 export interface StoredSessionRemoveRequest {
   provider: ProviderKind;
   providerSessionId: string;
 }
 
-export type StoredSessionArchiveRequest = StoredSessionRemoveRequest;
+export interface StoredSessionArchiveRequest extends StoredSessionRemoveRequest {
+  /**
+   * When present, daemon closes this matching managed runtime before archiving
+   * its provider history. clientId is required for the close authorization.
+   */
+  runtimeSessionId?: string;
+  clientId?: string;
+}
+
+export type StoredSessionRestoreRequest = StoredSessionRemoveRequest;
 
 export interface WorkspaceDirectoryResponse {
   path: string;
@@ -397,6 +451,7 @@ export interface ListSessionsResponse {
   workspaceDirs: string[];
   hiddenWorkspaces?: string[];
   activeWorkspaceDir?: string;
+  pinnedSidebarItems?: WorkbenchPinnedItemRef[];
 }
 
 export interface StoredSessionsDeltaResponse {
@@ -449,12 +504,35 @@ export interface GitChangedFile {
   oldPath?: string;
 }
 
+/** A file in the final current-worktree snapshot that differs from the resolved diff base. */
+export type GitBranchChangedFile = Omit<GitChangedFile, "staged">;
+
+export type GitComparisonMode =
+  | "uncommitted"
+  | "merge_base"
+  | "direct";
+
 export interface GitStatusResponse {
   sessionId: string;
+  /** The branch currently checked out in the inspected worktree. */
   branch?: string;
+  /** The branch/ref selected in the Against control. Defaults to the checked-out branch. */
+  baseBranch?: string;
+  /**
+   * How `baseBranch` was resolved. The current branch uses its HEAD, while a
+   * different branch normally uses the merge-base shared with HEAD.
+   */
+  comparisonMode?: GitComparisonMode;
+  /** The concrete commit used as the left side of the diff. */
+  comparisonBase?: string;
+  /** Locally available branches/refs that can be used as diff baselines. */
+  branchOptions?: string[];
+  /** Current worktree changes relative to `comparisonBase`, including untracked files. */
+  branchFiles?: GitBranchChangedFile[];
   changedFiles: string[];
   stagedFiles?: GitChangedFile[];
   unstagedFiles?: GitChangedFile[];
+  totalBranch?: number;
   totalStaged?: number;
   totalUnstaged?: number;
 }
@@ -463,6 +541,22 @@ export interface GitDiffResponse {
   sessionId: string;
   path: string;
   diff: string;
+}
+
+export interface TurnFileChangesResponse {
+  sessionId: string;
+  turnId: string;
+  fileChanges: ConversationTurnFileChangesProjection;
+  capturedAt: string;
+  truncated: boolean;
+}
+
+export interface TurnFileDiffResponse {
+  sessionId: string;
+  turnId: string;
+  path: string;
+  diff: string;
+  truncated: boolean;
 }
 
 export interface GitHunkActionRequest {
@@ -505,6 +599,11 @@ export interface SessionFileResponse {
   contentBase64?: string;
   truncated?: boolean;
   notebookPreview?: NotebookPreviewData;
+}
+
+export interface AttachmentPreviewResponse {
+  attachment: SessionInputAttachment;
+  file: SessionFileResponse;
 }
 
 export interface NotebookPreviewCell {
@@ -634,6 +733,7 @@ export interface ListProvidersResponse {
 
 export type NativeTuiDiagnosticKind =
   | "binding_missing"
+  | "binding_failed"
   | "mirror_source_missing"
   | "mirror_failed"
   | "process_exited";

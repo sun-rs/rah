@@ -195,6 +195,19 @@ test("session events reject non-boolean optional archive capability", () => {
   );
 });
 
+test("session events reject non-boolean optional restore capability", () => {
+  const event = buildSessionCreatedEvent();
+  const payload = event.payload as {
+    session: { capabilities: { actions: { restore?: unknown } } };
+  };
+  payload.session.capabilities.actions.restore = "yes";
+  const issues = validateRahEvent(event);
+  assert.equal(
+    issues.some((issue) => issue.code === "session.capabilities.actions.restore.invalid"),
+    true,
+  );
+});
+
 test("session events accept canonical native branching and side relationships", () => {
   const event = buildSessionCreatedEvent({
     capabilities: {

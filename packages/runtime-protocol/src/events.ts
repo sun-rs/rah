@@ -1,11 +1,15 @@
 import type { CouncilMessage, CouncilSummary } from "./council";
+import type { ConversationTurnFileChangesProjection } from "./conversation";
 import type {
   ClientKind,
   ManagedSession,
   NativeTuiPromptState,
   ProviderKind,
   SessionCloseDisposition,
+  SessionInputAttachment,
+  SessionInputQueuePolicy,
   SessionSideLifecycleState,
+  SessionQueuedInput,
   StoredSessionIdentity,
   StoredSessionRef,
 } from "./session";
@@ -112,7 +116,15 @@ export interface TimelinePlanStep {
 }
 
 export type TimelineItem =
-  | { kind: "user_message"; text: string; imageCount?: number; messageId?: string; clientMessageId?: string; clientTurnId?: string }
+  | {
+      kind: "user_message";
+      text: string;
+      imageCount?: number;
+      attachments?: SessionInputAttachment[];
+      messageId?: string;
+      clientMessageId?: string;
+      clientTurnId?: string;
+    }
   | {
       kind: "assistant_message";
       text: string;
@@ -129,7 +141,12 @@ export type TimelineItem =
   | { kind: "retry"; attempt: number; error?: string }
   | { kind: "side_question"; question: string; response?: string; error?: string }
   | { kind: "attachment"; label: string; mime?: string; path?: string; url?: string }
-  | { kind: "compaction"; status: "started" | "completed"; trigger?: "auto" | "manual" };
+  | {
+      kind: "compaction";
+      status: "started" | "completed";
+      trigger?: "auto" | "manual";
+      count?: number;
+    };
 
 export type ToolCallArtifact =
   | { kind: "text"; label: string; text: string }
@@ -143,6 +160,75 @@ export type ToolCallArtifact =
 
 export interface ToolCallDetail {
   artifacts: ToolCallArtifact[];
+}
+
+/**
+ * Provider-neutral activity categories used by conversation projections and
+ * clients. Providers may expose very different tool names; these values are
+ * the stable semantic layer above those names.
+ */
+export type ConversationActivityKind =
+  | "thinking"
+  | "command"
+  | "file_read"
+  | "file_change"
+  | "search"
+  | "web"
+  | "git"
+  | "subagent"
+  | "permission"
+  | "plan"
+  | "automation"
+  | "tool";
+
+export type ConversationActivityAction =
+  | "command"
+  | "file_read"
+  | "file_list"
+  | "file_search"
+  | "file_create"
+  | "file_edit"
+  | "file_delete"
+  | "web_search"
+  | "web_fetch"
+  | "browser"
+  | "git"
+  | "subagent"
+  | "plan"
+  | "automation"
+  | "permission"
+  | "tool";
+
+export type ConversationActivityFileAction =
+  | "read"
+  | "listed"
+  | "searched"
+  | "created"
+  | "edited"
+  | "deleted";
+
+export interface ConversationActivityFileTarget {
+  path: string;
+  action?: ConversationActivityFileAction;
+}
+
+/**
+ * Canonical presentation semantics for a tool call or observation. This is
+ * deliberately data-only: localization and visual grouping remain client
+ * concerns, while provider adapters and history transports share one shape.
+ */
+export interface ConversationActivityDescriptor {
+  kind: ConversationActivityKind;
+  action: ConversationActivityAction;
+  /** Number of provider operations represented by this item (for wrappers). */
+  operationCount?: number;
+  command?: string;
+  cwd?: string;
+  files?: ConversationActivityFileTarget[];
+  urls?: string[];
+  query?: string;
+  /** Provider evidence retained as a fallback when no richer target exists. */
+  label?: string;
 }
 
 export type ToolFamily =
@@ -180,6 +266,7 @@ export interface ToolCall {
   id: string;
   family: ToolFamily;
   providerToolName: string;
+  activity?: ConversationActivityDescriptor;
   title?: string;
   summary?: string;
   input?: Record<string, unknown>;
@@ -292,6 +379,7 @@ export interface WorkbenchObservation {
   kind: ObservationKind;
   status: ObservationStatus;
   title: string;
+  activity?: ConversationActivityDescriptor;
   summary?: string;
   subject?: ObservationSubject;
   exitCode?: number;
@@ -344,8 +432,19 @@ export interface StoredSessionDiscoveryDelta {
   resetRequired?: boolean;
 }
 
+export interface WorkbenchPinnedItemRef {
+  workspaceDir: string;
+  itemKey: string;
+}
+
 export type RahEventPayloadMap = {
-  "session.discovery": { version: number; storedSessions?: StoredSessionDiscoveryDelta };
+  "session.discovery": {
+    version: number;
+    storedSessions?: StoredSessionDiscoveryDelta;
+    workbench?: {
+      pinnedSidebarItems: WorkbenchPinnedItemRef[];
+    };
+  };
   "session.created": { session: ManagedSession };
   "session.started": { session: ManagedSession };
   "session.attached": { clientId: string; clientKind: ClientKind };
@@ -360,6 +459,8 @@ export type RahEventPayloadMap = {
     promptState: NativeTuiPromptState;
     queuedInputCount?: number;
   };
+  "session.input_queue.changed": { items: SessionQueuedInput[] };
+  "session.input_queue.policy_changed": { policy: SessionInputQueuePolicy };
   "session.exited": { exitCode?: number; signal?: string };
   "session.failed": { error: string };
 
@@ -374,6 +475,9 @@ export type RahEventPayloadMap = {
   "turn.step.completed": { index?: number; reason?: string; runtimeModel?: TimelineRuntimeModel };
   "turn.step.interrupted": { index?: number; reason?: string; runtimeModel?: TimelineRuntimeModel };
   "turn.input.appended": { text?: string; parts?: JsonValue[] };
+  "turn.file_changes.updated": {
+    fileChanges: ConversationTurnFileChangesProjection;
+  };
 
   "timeline.item.added": { item: TimelineItem; identity?: TimelineIdentity };
   "timeline.item.updated": { item: TimelineItem; identity?: TimelineIdentity };

@@ -6,6 +6,21 @@ export type ProviderKind =
   | "opencode"
   | "custom";
 
+export type SessionInputAttachmentKind = "image" | "file";
+
+/**
+ * Opaque reference to a file uploaded into RAH's managed attachment store.
+ * Clients never submit a host path; the daemon resolves `id` to the trusted
+ * path it created when accepting the upload.
+ */
+export interface SessionInputAttachment {
+  id: string;
+  kind: SessionInputAttachmentKind;
+  name: string;
+  mediaType: string;
+  size: number;
+}
+
 export type SessionLaunchSource = "web";
 export type SessionLiveBackend =
   | "structured"
@@ -201,6 +216,7 @@ export interface SessionActionCapabilities {
   info: boolean;
   stop: boolean;
   archive?: boolean;
+  restore?: boolean;
   delete: boolean;
   rename: SessionRenameMode;
 }
@@ -308,6 +324,24 @@ export interface SessionCapabilities {
 }
 
 /**
+ * A provider/runtime-owned input waiting for the current turn to finish.
+ * The client message id is the stable mutation key; text is display data only.
+ */
+export type SessionQueuedInputState = "queued" | "submitting";
+/** @deprecated Follow-up submission now always queues; retained for wire compatibility. */
+export type SessionInputQueuePolicy = "queue" | "steer";
+
+export interface SessionQueuedInput {
+  clientMessageId: string;
+  clientTurnId?: string;
+  text: string;
+  attachments?: SessionInputAttachment[];
+  queuedAt: string;
+  position: number;
+  state?: SessionQueuedInputState;
+}
+
+/**
  * A runtime-owned running session. This is the only session kind that can provide
  * continuity guarantees across terminal and remote clients.
  */
@@ -336,6 +370,9 @@ export interface ManagedSession {
     promptState?: NativeTuiPromptState;
     queuedInputCount?: number;
   };
+  inputQueue?: SessionQueuedInput[];
+  /** @deprecated Follow-up input always queues; old summaries may still carry this field. */
+  inputQueuePolicy?: SessionInputQueuePolicy;
   mux?: {
     backend: "tmux";
     sessionName: string;
@@ -369,6 +406,26 @@ export interface StoredSessionProviderState {
   archivedAt?: string;
 }
 
+/**
+ * RAH-owned placement in the cross-provider session library. This is
+ * intentionally independent from both ManagedSession.runtimeState and a
+ * provider's private archive representation.
+ */
+export type StoredSessionLibraryPlacement = "workspace" | "archive";
+
+export type StoredSessionArchiveBackend =
+  | "provider_native"
+  | "rah_overlay"
+  | "rah_snapshot";
+
+export type StoredSessionRemovalDisposition = "trash" | "permanent";
+
+export interface StoredSessionLibraryState {
+  placement: StoredSessionLibraryPlacement;
+  archivedAt?: string;
+  backend?: StoredSessionArchiveBackend;
+}
+
 export interface StoredSessionIdentity {
   provider: ProviderKind;
   providerSessionId: string;
@@ -388,6 +445,9 @@ export interface StoredSessionRef extends StoredSessionIdentity {
   lastUsedAt?: string;
   historyMeta?: StoredSessionHistoryMeta;
   providerState?: StoredSessionProviderState;
+  libraryState?: StoredSessionLibraryState;
+  /** Provider adapter's actual destructive-remove behavior. */
+  removalDisposition?: StoredSessionRemovalDisposition;
   source?: "provider_history" | "previous_running";
 }
 
