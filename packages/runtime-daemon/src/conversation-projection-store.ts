@@ -284,8 +284,10 @@ function mergeConversationTurn(
     finalAnswerItemId: _existingFinalAnswerItemId,
     outputs: _existingOutputs,
     sources: _existingSources,
+    fileChanges: _existingFileChanges,
     ...existingBase
   } = existing;
+  const fileChanges = incoming.fileChanges ?? existing.fileChanges;
   const resources = projectConversationTurnResources(mergedItems);
   return {
     ...existingBase,
@@ -308,6 +310,7 @@ function mergeConversationTurn(
     activities: summarizeConversationActivities(mergedItems),
     ...(resources.outputs.length > 0 ? { outputs: resources.outputs } : {}),
     ...(resources.sources.length > 0 ? { sources: resources.sources } : {}),
+    ...(fileChanges ? { fileChanges } : {}),
     ...(finalAnswerItemId ? { finalAnswerItemId } : {}),
     failedItemCount: mergedItems.filter((item) => item.status === "failed").length,
     ...(incoming.usage ?? existing.usage ? { usage: incoming.usage ?? existing.usage } : {}),

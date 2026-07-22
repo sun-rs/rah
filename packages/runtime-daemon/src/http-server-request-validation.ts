@@ -11,6 +11,7 @@ import type {
   CouncilPostMessageRequest,
   CreateCouncilRequest,
   DetachSessionRequest,
+  DeleteQueuedInputRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
   ForkSessionRequest,
@@ -22,13 +23,20 @@ import type {
   PermissionResponseRequest,
   ProviderKind,
   ReleaseControlRequest,
+  ReorderQueuedInputRequest,
   ResumeSessionRequest,
   SessionConfigValue,
+  SessionInputAttachment,
   SessionInputRequest,
+  SetInputQueuePolicyRequest,
   SetSessionModelRequest,
   StartDebugScenarioRequest,
   StartSessionRequest,
+  SteerQueuedInputRequest,
   StoredSessionRemoveRequest,
+  StoredSessionArchiveRequest,
+  UpdateQueuedInputRequest,
+  UpdateWorkbenchPinnedItemRequest,
   WorkspaceDirectoryRequest,
 } from "@rah/runtime-protocol";
 
@@ -201,13 +209,54 @@ export function parseSessionInputRequest(body: unknown): SessionInputRequest {
   };
   const clientMessageId = optionalString(record, "clientMessageId");
   const clientTurnId = optionalString(record, "clientTurnId");
+  const attachments = optionalSessionInputAttachments(record, "attachments");
   if (clientMessageId !== undefined) {
     request.clientMessageId = clientMessageId;
   }
   if (clientTurnId !== undefined) {
     request.clientTurnId = clientTurnId;
   }
+  if (attachments !== undefined) {
+    request.attachments = attachments;
+  }
+  if (!request.text.trim() && !request.attachments?.length) {
+    throw badRequest("session input requires text or at least one attachment.");
+  }
   return request;
+}
+
+export function parseUpdateQueuedInputRequest(body: unknown): UpdateQueuedInputRequest {
+  const record = requireObjectBody(body);
+  return {
+    clientId: requireString(record, "clientId"),
+    text: requireString(record, "text"),
+  };
+}
+
+export function parseDeleteQueuedInputRequest(body: unknown): DeleteQueuedInputRequest {
+  const record = requireObjectBody(body);
+  return { clientId: requireString(record, "clientId") };
+}
+
+export function parseReorderQueuedInputRequest(body: unknown): ReorderQueuedInputRequest {
+  const record = requireObjectBody(body);
+  return {
+    clientId: requireString(record, "clientId"),
+    position: requireNumber(record, "position"),
+  };
+}
+
+export function parseSteerQueuedInputRequest(body: unknown): SteerQueuedInputRequest {
+  const record = requireObjectBody(body);
+  return { clientId: requireString(record, "clientId") };
+}
+
+export function parseSetInputQueuePolicyRequest(body: unknown): SetInputQueuePolicyRequest {
+  const record = requireObjectBody(body);
+  return {
+    clientId: requireString(record, "clientId"),
+    policy: requireEnum(record, "policy", ["queue", "steer"]),
+  };
 }
 
 export function parseInterruptSessionRequest(body: unknown): InterruptSessionRequest {
@@ -353,6 +402,18 @@ export function parseWorkspaceDirectoryRequest(body: unknown): WorkspaceDirector
   return { dir: requireString(record, "dir") };
 }
 
+export function parseUpdateWorkbenchPinnedItemRequest(body: unknown): UpdateWorkbenchPinnedItemRequest {
+  const record = requireObjectBody(body);
+  if (typeof record.pinned !== "boolean") {
+    throw new Error("pinned must be a boolean.");
+  }
+  return {
+    workspaceDir: requireString(record, "workspaceDir"),
+    itemKey: requireString(record, "itemKey"),
+    pinned: record.pinned,
+  };
+}
+
 export function parseClipboardWriteRequest(body: unknown): { text: string } {
   const record = requireObjectBody(body);
   const text = requireString(record, "text");
@@ -367,6 +428,20 @@ export function parseStoredSessionRemoveRequest(body: unknown): StoredSessionRem
   return {
     provider: requireProvider(record, "provider"),
     providerSessionId: requireString(record, "providerSessionId"),
+  };
+}
+
+export function parseStoredSessionArchiveRequest(body: unknown): StoredSessionArchiveRequest {
+  const record = requireObjectBody(body);
+  const runtimeSessionId = optionalString(record, "runtimeSessionId");
+  const clientId = optionalString(record, "clientId");
+  if ((runtimeSessionId === undefined) !== (clientId === undefined)) {
+    throw new Error("runtimeSessionId and clientId must be provided together.");
+  }
+  return {
+    provider: requireProvider(record, "provider"),
+    providerSessionId: requireString(record, "providerSessionId"),
+    ...(runtimeSessionId !== undefined ? { runtimeSessionId, clientId: clientId! } : {}),
   };
 }
 
@@ -449,6 +524,17 @@ export function parseCouncilMcpRequest(body: unknown): CouncilMcpRequest {
     request.arguments = requireRecord(record, "arguments");
   }
   return request;
+}
+
+export function parseCouncilMcpReadyRequest(body: unknown): {
+  councilId: string;
+  actorId: string;
+} {
+  const record = requireObjectBody(body);
+  return {
+    councilId: requireString(record, "councilId"),
+    actorId: requireString(record, "actorId"),
+  };
 }
 
 export function parseGitFileActionRequest(body: unknown): GitFileActionRequest {
@@ -664,6 +750,39 @@ function optionalStringArray(record: JsonRecord, key: string): string[] | undefi
     throw badRequest(`${key} must be an array of strings.`);
   }
   return [...value];
+}
+
+function optionalSessionInputAttachments(
+  record: JsonRecord,
+  key: string,
+): SessionInputAttachment[] | undefined {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw badRequest(`${key} must be an array.`);
+  }
+  if (value.length > 10) {
+    throw badRequest(`${key} cannot contain more than 10 files.`);
+  }
+  const ids = new Set<string>();
+  return value.map((entry, index) => {
+    const attachment = requireObject(entry, `${key}[${index}]`);
+    const id = requireString(attachment, "id");
+    if (ids.has(id)) {
+      throw badRequest(`${key} contains duplicate attachment ids.`);
+    }
+    ids.add(id);
+    const kind = requireEnum(attachment, "kind", ["image", "file"]);
+    const name = requireString(attachment, "name");
+    const mediaType = requireString(attachment, "mediaType");
+    const size = requireNumber(attachment, "size");
+    if (!Number.isInteger(size) || size < 1) {
+      throw badRequest(`${key}[${index}].size must be a positive integer.`);
+    }
+    return { id, kind, name, mediaType, size };
+  });
 }
 
 function requireProvider(record: JsonRecord, key: string): ProviderKind {

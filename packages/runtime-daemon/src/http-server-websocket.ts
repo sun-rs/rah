@@ -191,15 +191,13 @@ export function attachWebSocketHandlers(
     if (initialReplayEnabled) {
       const initial = engine.listEvents(filter);
       const initialReplayGap = replayGapForSubscription(engine, filter);
-      if (initial.length > 0 || initialReplayGap) {
-        const conversationDeltas = conversationDeltasForEvents(engine, initial);
-        sendEventFrame({
-          events: initial,
-          ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
-          initial: true,
-          ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
-        });
-      }
+      const conversationDeltas = conversationDeltasForEvents(engine, initial);
+      sendEventFrame({
+        events: initial,
+        ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
+        initial: true,
+        ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
+      });
     }
 
     let unsubscribe: () => void = () => undefined;

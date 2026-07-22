@@ -1,8 +1,10 @@
-import { discoverClaudeStoredSessions } from "./claude-session-files.ts";
-import { discoverCodexStoredSessions } from "./codex-stored-sessions.ts";
+import { existsSync } from "node:fs";
+import { scanClaudeStoredSessionCatalog } from "./claude-session-files.ts";
+import { scanCodexStoredSessionCatalog } from "./codex-stored-sessions.ts";
 import {
   discoverOpenCodeStoredSessions,
   OpenCodeSqliteReadError,
+  resolveOpenCodeDatabasePath,
 } from "./opencode-stored-sessions.ts";
 import type {
   StoredSessionCatalogProvider,
@@ -28,9 +30,11 @@ function discoverProvider(
 ): StoredSessionCatalogProviderResult {
   try {
     if (provider === "codex") {
+      const scan = scanCodexStoredSessionCatalog();
       return {
         provider,
-        records: discoverCodexStoredSessions().map((record) => ({
+        complete: scan.complete,
+        records: scan.records.map((record) => ({
           ref: record.ref,
           storagePath: record.rolloutPath,
           archived: record.archived,
@@ -38,16 +42,28 @@ function discoverProvider(
       };
     }
     if (provider === "claude") {
+      const scan = scanClaudeStoredSessionCatalog();
       return {
         provider,
-        records: discoverClaudeStoredSessions().map((record) => ({
+        complete: scan.complete,
+        records: scan.records.map((record) => ({
           ref: record.ref,
           storagePath: record.filePath,
         })),
       };
     }
+    const databasePath = resolveOpenCodeDatabasePath();
+    if (!existsSync(databasePath)) {
+      return {
+        provider,
+        complete: false,
+        records: [],
+        error: `OpenCode database is unavailable: ${databasePath}`,
+      };
+    }
     return {
       provider,
+      complete: true,
       records: discoverOpenCodeStoredSessions({ throwOnReadError: true }).map((record) => ({
         ref: record.ref,
         storagePath: record.databasePath,
@@ -56,6 +72,7 @@ function discoverProvider(
   } catch (error) {
     return {
       provider,
+      complete: false,
       error:
         error instanceof OpenCodeSqliteReadError
           ? error.message

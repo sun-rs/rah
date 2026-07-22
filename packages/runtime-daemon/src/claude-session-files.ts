@@ -166,6 +166,15 @@ export type ClaudeStoredActivityBatchItem = {
   activity: ProviderActivity;
 };
 
+export type ClaudeStoredSessionCatalogScan = {
+  records: ClaudeStoredSessionRecord[];
+  complete: boolean;
+};
+
+type ClaudeCatalogScanState = {
+  complete: boolean;
+};
+
 function resolveClaudeBaseHome(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
 }
@@ -636,6 +645,7 @@ function deriveStoredSessionRef(
     ...(createdAt ? { createdAt } : {}),
     updatedAt,
     source: "provider_history",
+    removalDisposition: "trash",
   };
 }
 
@@ -1082,7 +1092,10 @@ export function readClaudeStoredSessionActivityBatch(args: {
   });
 }
 
-export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionRecord[] {
+function discoverClaudeStoredSessionsImpl(
+  cwd?: string,
+  scanState?: ClaudeCatalogScanState,
+): ClaudeStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("claude");
   const baseHome = resolveClaudeBaseHome();
   const roots = cwd
@@ -1097,6 +1110,9 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
         continue;
       }
     } catch {
+      if (scanState) {
+        scanState.complete = false;
+      }
       continue;
     }
 
@@ -1117,6 +1133,9 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
                   .filter((file) => file.endsWith(".jsonl"))
                   .map((file) => path.join(projectDir, file));
               } catch {
+                if (scanState) {
+                  scanState.complete = false;
+                }
                 return [];
               }
             });
@@ -1169,6 +1188,9 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
       .filter((record): record is ClaudeRawRecord | ClaudeCustomTitleRecord => Boolean(record));
     const ref = deriveStoredSessionRef(filePath, parsed);
     if (!ref) {
+      if (scanState) {
+        scanState.complete = false;
+      }
       continue;
     }
     const refWithMeta = withHistoryFileMeta(ref, filePath, stats);
@@ -1182,24 +1204,36 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
     records.push({ ref: refWithMeta, filePath });
   }
 
-  writeStoredSessionMetadataCache(
-    "claude",
-    new Map(
-      records.map((record) => {
-        const stats = statSync(record.filePath);
-        return [
-          record.filePath,
-          {
-            ref: record.ref,
-            size: stats.size,
-            mtimeMs: stats.mtimeMs,
-          },
-        ] as const;
-      }),
-    ),
-  );
+  if (!scanState || scanState.complete) {
+    writeStoredSessionMetadataCache(
+      "claude",
+      new Map(
+        records.map((record) => {
+          const stats = statSync(record.filePath);
+          return [
+            record.filePath,
+            {
+              ref: record.ref,
+              size: stats.size,
+              mtimeMs: stats.mtimeMs,
+            },
+          ] as const;
+        }),
+      ),
+    );
+  }
 
   return records.sort((a, b) => (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""));
+}
+
+export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionRecord[] {
+  return discoverClaudeStoredSessionsImpl(cwd);
+}
+
+export function scanClaudeStoredSessionCatalog(): ClaudeStoredSessionCatalogScan {
+  const scanState: ClaudeCatalogScanState = { complete: true };
+  const records = discoverClaudeStoredSessionsImpl(undefined, scanState);
+  return { records, complete: scanState.complete };
 }
 
 export function findClaudeStoredSessionRecord(

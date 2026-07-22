@@ -4,6 +4,7 @@ import type {
   JsonObject,
   PermissionAction,
   ProviderKind,
+  SessionInputAttachment,
   TimelineIdentity,
   TimelineTurnIdentity,
   ToolCall,
@@ -81,6 +82,7 @@ interface PendingOpenCodeTextDelta {
 
 interface PendingSubmittedOpenCodeUserMessage {
   text: string;
+  attachments?: SessionInputAttachment[];
   turnId: string;
   providerMessageId?: string;
   clientMessageId?: string;
@@ -768,6 +770,16 @@ function translateOpenCodePart(
                 ? { clientMessageId: submitted.clientMessageId }
                 : {}),
               ...(submitted?.clientTurnId !== undefined ? { clientTurnId: submitted.clientTurnId } : {}),
+              ...(submitted?.attachments?.length
+                ? { attachments: submitted.attachments }
+                : {}),
+              ...(submitted?.attachments?.some((attachment) => attachment.kind === "image")
+                ? {
+                    imageCount: submitted.attachments.filter(
+                      (attachment) => attachment.kind === "image",
+                    ).length,
+                  }
+                : {}),
             },
             ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "user_message")),
             ...(userTurnId ? { turnId: userTurnId } : {}),

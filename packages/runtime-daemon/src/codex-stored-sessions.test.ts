@@ -13,6 +13,7 @@ import {
   getCodexGitStatus,
   getCodexStoredSessionHistoryPage,
   readWorkspaceFile,
+  scanCodexStoredSessionCatalog,
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
 
@@ -102,6 +103,29 @@ describe("codex stored session discovery", () => {
     );
     return rolloutPath;
   }
+
+  test("marks the provider catalog incomplete while the primary history root is unavailable", () => {
+    assert.equal(scanCodexStoredSessionCatalog().complete, false);
+
+    mkdirSync(path.join(tmpHome, "sessions"), { recursive: true });
+    const complete = scanCodexStoredSessionCatalog();
+    assert.equal(complete.complete, true);
+    assert.deepEqual(complete.records, []);
+  });
+
+  test("treats an unparseable rollout as an incomplete provider snapshot", () => {
+    const dir = path.join(tmpHome, "sessions", "2026", "07", "22");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, "rollout-2026-07-22T00-00-00-in-progress.jsonl"),
+      "{\"timestamp\":",
+      "utf8",
+    );
+
+    const scan = scanCodexStoredSessionCatalog();
+    assert.equal(scan.complete, false);
+    assert.deepEqual(scan.records, []);
+  });
 
   test("marks Codex rollout refs discovered from archived_sessions", () => {
     const sessionId = "019e2222-aaaa-7bbb-8ccc-ddddeeeeffff";

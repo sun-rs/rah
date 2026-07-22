@@ -6,6 +6,7 @@ import type {
 } from "@rah/runtime-protocol";
 import type {
   ProviderAdapter,
+  ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
@@ -25,13 +26,17 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { movePathToTrash } from "./trash";
+import { ClaudeSessionArchiveStore } from "./claude-session-archive";
 
-export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
+export class ClaudeStoredHistoryAdapter
+  implements ProviderAdapter, ProviderStoredHistoryAdapter, ProviderShutdownAdapter
+{
   readonly id = "claude-stored-history";
   readonly providers: Array<"claude"> = ["claude"];
 
   private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
+  private readonly archiveStore = new ClaudeSessionArchiveStore();
 
   constructor(private readonly services: RuntimeServices) {}
 
@@ -147,7 +152,28 @@ export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStor
     return resolveClaudeStoredSessionWatchRoots();
   }
 
+  async archiveStoredSession(session: StoredSessionRef): Promise<"rah_snapshot"> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Claude history file for ${session.providerSessionId}.`);
+    }
+    await this.archiveStore.archive(record);
+    this.storedSessionIndex.delete(session.providerSessionId);
+    return "rah_snapshot";
+  }
+
+  async restoreStoredSession(session: StoredSessionRef): Promise<void> {
+    await this.archiveStore.restore(session.providerSessionId);
+    this.refreshStoredSessionIndex();
+  }
+
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
+    if (await this.archiveStore.removeArchived(session.providerSessionId)) {
+      this.storedSessionIndex.delete(session.providerSessionId);
+      return;
+    }
     const record =
       this.storedSessionIndex.get(session.providerSessionId) ??
       this.refreshStoredSessionIndex().get(session.providerSessionId);
@@ -156,6 +182,10 @@ export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStor
     }
     await movePathToTrash(record.filePath);
     this.storedSessionIndex.delete(session.providerSessionId);
+  }
+
+  async shutdown(): Promise<void> {
+    await this.archiveStore.flush();
   }
 
   private refreshStoredSessionIndex(): Map<string, ClaudeStoredSessionRecord> {

@@ -1,6 +1,137 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { shouldApplyCodexTranslatedActivity } from "./codex-live-helpers";
+import { createCodexAppServerTranslationState } from "./codex-app-server-activity";
+import {
+  createLiveSessionBridge,
+  shouldApplyCodexTranslatedActivity,
+} from "./codex-live-helpers";
+import type { CodexAppServerRpcClient } from "./codex-live-rpc";
+import type {
+  JsonRpcNotification,
+  LiveCodexSession,
+} from "./codex-live-types";
+import { EventBus } from "./event-bus";
+import { PtyHub } from "./pty-hub";
+import { SessionStore } from "./session-store";
+import { TurnArtifactStore } from "./turn-artifact-store";
+
+test("notification flush reaches a stable queue boundary before returning", async () => {
+  let notificationHandler: (notification: JsonRpcNotification) => void = () => {};
+  const client: CodexAppServerRpcClient = {
+    setNotificationHandler(handler) {
+      notificationHandler = handler;
+    },
+    setRequestHandler() {},
+    setCloseHandler() {},
+    async request() {
+      return {};
+    },
+    notify() {},
+    async dispose() {},
+  };
+  let releaseFirstWrite: () => void = () => {};
+  const firstWriteGate = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  const writtenDiffs: string[] = [];
+  class BlockingTurnArtifactStore extends TurnArtifactStore {
+    override async replaceTurnDiff(
+      _sessionId: string,
+      _turnId: string,
+      unifiedDiff: string,
+    ) {
+      writtenDiffs.push(unifiedDiff);
+      if (writtenDiffs.length === 1) {
+        await firstWriteGate;
+      }
+      return {
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+      };
+    }
+  }
+  const turnArtifacts = new BlockingTurnArtifactStore();
+  const eventBus = new EventBus();
+  const sessionStore = new SessionStore();
+  const sessionId = sessionStore.createManagedSession({
+    id: "session-1",
+    provider: "codex",
+    providerSessionId: "thread-1",
+    launchSource: "web",
+    liveBackend: "structured",
+    cwd: "/workspace/demo",
+    rootDir: "/workspace/demo",
+    title: "demo",
+  }).session.id;
+  const services = {
+    eventBus,
+    ptyHub: new PtyHub(),
+    sessionStore,
+    turnArtifacts,
+  };
+  const bridge = createLiveSessionBridge(services, client);
+  const liveSession: LiveCodexSession = {
+    sessionId,
+    threadId: "thread-1",
+    cwd: "/workspace/demo",
+    approvalPolicy: "on-request",
+    sandboxMode: "workspace-write",
+    approvalsReviewer: "user",
+    modelId: null,
+    reasoningId: null,
+    modelCatalog: null,
+    activeModeId: "default",
+    lastNonPlanModeId: "default",
+    planCollaborationMode: null,
+    client,
+    translationState: createCodexAppServerTranslationState(),
+    currentTurnId: "turn-1",
+    finishedTurnIds: new Set(),
+    interruptingTurnIds: new Set(),
+    turnStartInFlight: false,
+    interruptWhenTurnStarts: false,
+    queuedInputs: [],
+    externalThreadMirrorSubscribeInFlight: false,
+    externalThreadMirrorSubscribed: true,
+    pendingQuestions: new Map(),
+    pendingApprovals: new Map(),
+  };
+  bridge.activate(liveSession);
+
+  const firstDiff = `diff --git a/src/first.ts b/src/first.ts
+--- a/src/first.ts
++++ b/src/first.ts
+@@ -1 +1 @@
+-old
++first
+`;
+  const secondDiff = `diff --git a/src/second.ts b/src/second.ts
+--- a/src/second.ts
++++ b/src/second.ts
+@@ -1 +1 @@
+-old
++second
+`;
+  notificationHandler({
+    method: "turn/diff/updated",
+    params: { threadId: "thread-1", turnId: "turn-1", diff: firstDiff },
+  });
+  const flush = liveSession.flushNotifications?.();
+  assert.ok(flush);
+  notificationHandler({
+    method: "turn/diff/updated",
+    params: { threadId: "thread-1", turnId: "turn-1", diff: secondDiff },
+  });
+  releaseFirstWrite();
+  await flush;
+
+  assert.deepEqual(writtenDiffs, [firstDiff, secondDiff]);
+  assert.equal(
+    eventBus.list({ eventTypes: ["turn.file_changes.updated"] }).length,
+    2,
+  );
+});
 
 test("skips inactive snapshot session state while a live Codex turn is active", () => {
   assert.equal(
@@ -179,7 +310,7 @@ test("skips unidentified lifecycle events for a different active turn", () => {
   );
 });
 
-test("allows positively identified main-thread lifecycle to recover stale local turn state", () => {
+test("rejects a different turn lifecycle even when it names the main thread", () => {
   assert.equal(
     shouldApplyCodexTranslatedActivity({
       activity: { type: "turn_started", turnId: "main-turn-2" },
@@ -188,6 +319,6 @@ test("allows positively identified main-thread lifecycle to recover stale local 
       providerSessionId: "thread-main",
       mainProviderSessionId: "thread-main",
     }),
-    true,
+    false,
   );
 });

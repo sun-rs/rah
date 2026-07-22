@@ -1105,6 +1105,54 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
+  test("preserves block-array custom tool output for command result disclosure", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-07-21T01:00:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          status: "completed",
+          call_id: "call-block-output",
+          name: "exec",
+          input: "await tools.exec_command({cmd: 'pwd'});",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-07-21T01:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-block-output",
+          output: [
+            {
+              type: "input_text",
+              text: "Script completed\nWall time 0.1 seconds\nOutput:\n",
+            },
+            { type: "input_text", text: "/workspace/rah\n" },
+          ],
+        },
+      },
+      state,
+    );
+
+    assert.equal(completed[0]?.activity.type, "tool_call_completed");
+    if (completed[0]?.activity.type === "tool_call_completed") {
+      assert.ok(
+        completed[0].activity.toolCall.detail?.artifacts.some(
+          (artifact) =>
+            artifact.kind === "text" &&
+            artifact.label === "stdout" &&
+            artifact.text === "/workspace/rah",
+        ),
+      );
+    }
+  });
+
   test("uses explicit custom tool exit codes as the failure boundary", () => {
     const state = createCodexRolloutTranslationState();
     translateCodexRolloutLine(
@@ -2254,6 +2302,104 @@ describe("translateCodexRolloutLine", () => {
       type: "timeline_item",
       item: { kind: "user_message", text: "", imageCount: 1 },
     });
+  });
+
+  test("retains persisted web-search result URLs as source artifacts", () => {
+    const state = createCodexRolloutTranslationState();
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:11:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "web_search_end",
+          call_id: "search-1",
+          action: { type: "search", queries: ["provider history"] },
+          results: [
+            { type: "text_result", title: "One", url: "https://example.com/one" },
+            { type: "text_result", title: "Two", url: "https://example.com/two" },
+          ],
+        },
+      },
+      state,
+    );
+
+    const completed = activities[0]?.activity;
+    assert.equal(completed?.type, "observation_completed");
+    if (completed?.type !== "observation_completed") return;
+    assert.deepEqual(completed.observation.subject?.urls, [
+      "https://example.com/one",
+      "https://example.com/two",
+    ]);
+    assert.deepEqual(completed.observation.detail?.artifacts, [
+      {
+        kind: "urls",
+        urls: ["https://example.com/one", "https://example.com/two"],
+      },
+      {
+        kind: "json",
+        label: "action",
+        value: { type: "search", queries: ["provider history"] },
+      },
+    ]);
+  });
+
+  test("joins authoritative web-search URLs back onto code-mode wrapper calls", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:11:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          call_id: "call-wrapper-1",
+          input:
+            "const result = await tools.web__run({search_query: [{q: 'provider history'}]});",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:11:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "web_search_end",
+          call_id: "exec-native-1",
+          action: { type: "search", queries: ["provider history"] },
+          results: [
+            { type: "text_result", title: "One", url: "https://example.com/one" },
+            { type: "text_result", title: "Two", url: "https://example.com/two" },
+          ],
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:11:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-wrapper-1",
+          output: [{ type: "input_text", text: "Search completed." }],
+        },
+      },
+      state,
+    );
+
+    const toolActivity = completed.find(
+      (item) => item.activity.type === "tool_call_completed",
+    )?.activity;
+    assert.equal(toolActivity?.type, "tool_call_completed");
+    if (toolActivity?.type !== "tool_call_completed") return;
+    assert.deepEqual(toolActivity.toolCall.detail?.artifacts, [
+      {
+        kind: "urls",
+        urls: ["https://example.com/one", "https://example.com/two"],
+      },
+      { kind: "text", label: "stdout", text: "Search completed." },
+    ]);
   });
 
   test("maps Codex multi-agent calls as sanitized subagent lifecycle observations", () => {

@@ -377,6 +377,49 @@ class FailingRemovalStoredSessionsAdapter extends CountingStoredSessionsAdapter 
   }
 }
 
+class NativeArchiveStoredSessionsAdapter extends CountingStoredSessionsAdapter {
+  archived = false;
+  archivedSessionIds: string[] = [];
+  restoredSessionIds: string[] = [];
+
+  constructor(private readonly storedSession: StoredSessionRef) {
+    super([]);
+  }
+
+  override listStoredSessions(): StoredSessionRef[] {
+    this.storedSessionCalls += 1;
+    return [
+      {
+        ...this.storedSession,
+        ...(this.archived
+          ? {
+              providerState: {
+                archived: true,
+                archivedAt: "2026-07-21T08:00:00.000Z",
+              },
+            }
+          : {}),
+      },
+    ];
+  }
+
+  async archiveStoredSession(session: StoredSessionRef): Promise<void> {
+    this.archivedSessionIds.push(session.providerSessionId);
+    this.archived = true;
+  }
+
+  async restoreStoredSession(session: StoredSessionRef): Promise<void> {
+    this.restoredSessionIds.push(session.providerSessionId);
+    this.archived = false;
+  }
+}
+
+class FailingArchiveAfterCloseAdapter extends CloseRefreshStoredSessionsAdapter {
+  async archiveStoredSession(_session: StoredSessionRef): Promise<void> {
+    throw new Error("provider archive failed");
+  }
+}
+
 class ShutdownTrackingAdapter extends CountingStoredSessionsAdapter {
   override readonly providers: Array<"codex"> = ["codex"];
   shutdownCalls = 0;
@@ -1687,6 +1730,98 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
+  test("persists and restores RAH overlay archives across daemon restarts", async () => {
+    const stored: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "overlay-session",
+      cwd: workDir,
+      rootDir: workDir,
+      title: "Overlay session",
+      updatedAt: "2026-07-21T07:00:00.000Z",
+      source: "provider_history",
+    };
+    let engine = new RuntimeEngine([new CountingStoredSessionsAdapter([stored])]);
+
+    const archived = await engine.archiveStoredSession("codex", "overlay-session", {
+      storedSessionsMode: "all",
+    });
+    assert.equal(archived.storedSessions[0]?.libraryState?.placement, "archive");
+    assert.equal(archived.storedSessions[0]?.libraryState?.backend, "rah_overlay");
+    assert.deepEqual(archived.recentSessions, []);
+    await engine.shutdown();
+
+    engine = new RuntimeEngine([new CountingStoredSessionsAdapter([stored])]);
+    const afterRestart = await engine.listSessionsForRequest({ storedSessionsMode: "all" });
+    assert.equal(afterRestart.storedSessions[0]?.libraryState?.placement, "archive");
+
+    const restored = await engine.restoreStoredSession("codex", "overlay-session", {
+      storedSessionsMode: "all",
+    });
+    assert.equal(restored.storedSessions[0]?.libraryState, undefined);
+    assert.equal(restored.recentSessions[0]?.providerSessionId, "overlay-session");
+    await engine.shutdown();
+  });
+
+  test("uses provider-native archive and restore when the adapter supports both", async () => {
+    const adapter = new NativeArchiveStoredSessionsAdapter({
+      provider: "codex",
+      providerSessionId: "native-archive-session",
+      cwd: workDir,
+      rootDir: workDir,
+      updatedAt: "2026-07-21T07:00:00.000Z",
+      source: "provider_history",
+    });
+    const engine = new RuntimeEngine([adapter]);
+
+    const archived = await engine.archiveStoredSession("codex", "native-archive-session", {
+      storedSessionsMode: "all",
+    });
+    assert.deepEqual(adapter.archivedSessionIds, ["native-archive-session"]);
+    assert.equal(archived.storedSessions[0]?.libraryState?.backend, "provider_native");
+    assert.deepEqual(archived.recentSessions, []);
+
+    const restored = await engine.restoreStoredSession("codex", "native-archive-session", {
+      storedSessionsMode: "all",
+    });
+    assert.deepEqual(adapter.restoredSessionIds, ["native-archive-session"]);
+    assert.equal(restored.storedSessions[0]?.libraryState, undefined);
+    assert.equal(restored.storedSessions[0]?.providerState?.archived, undefined);
+
+    await engine.shutdown();
+  });
+
+  test("session requests stay lightweight unless the complete stored catalog is requested", async () => {
+    const adapter = new CountingStoredSessionsAdapter(
+      Array.from({ length: 20 }, (_, index) => ({
+        provider: "codex" as const,
+        providerSessionId: `session-${index + 1}`,
+        cwd: workDir,
+        rootDir: workDir,
+        updatedAt: new Date(Date.UTC(2025, 6, 20, 0, index)).toISOString(),
+        source: "provider_history" as const,
+      })),
+    );
+    const engine = new RuntimeEngine([adapter]);
+
+    try {
+      assert.equal(adapter.storedSessionCalls, 1);
+
+      const recent = await engine.listSessionsForRequest();
+      assert.equal(adapter.storedSessionCalls, 1);
+      assert.equal(recent.storedSessions.length, 15);
+
+      const cached = await engine.listSessionsForRequest({ storedSessionsMode: "cached" });
+      assert.equal(adapter.storedSessionCalls, 1);
+      assert.equal(cached.storedSessions.length, 20);
+
+      const all = await engine.listSessionsForRequest({ storedSessionsMode: "all" });
+      assert.equal(adapter.storedSessionCalls, 2);
+      assert.equal(all.storedSessions.length, 20);
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
   test("renaming a session publishes a stored-session upsert delta", async () => {
     const adapter = new RenameStoredSessionsAdapter();
     const engine = new RuntimeEngine([adapter]);
@@ -1763,6 +1898,128 @@ describe("RuntimeEngine", () => {
       );
       assert.equal(adapter.storedSessionCalls, 2);
       assert.equal(otherProviderAdapter.storedSessionCalls, 1);
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
+  test("archives a matching running session as one daemon operation", async () => {
+    const adapter = new CloseRefreshStoredSessionsAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workDir,
+        attach: {
+          client: {
+            id: "web-user",
+            kind: "web",
+            connectionId: "archive-connection",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const runtimeSessionId = started.session.session.id;
+      assert.equal(
+        engine.sessionStore.hasAttachedClient(runtimeSessionId, "web-user"),
+        true,
+      );
+
+      await assert.rejects(
+        engine.archiveStoredSession("codex", "different-provider-session", {
+          runtimeSessionId,
+          clientId: "web-user",
+          storedSessionsMode: "all",
+        }),
+        /does not match/,
+      );
+      assert.ok(engine.sessionStore.getSession(runtimeSessionId));
+      assert.equal(
+        engine.sessionStore.hasAttachedClient(runtimeSessionId, "web-user"),
+        true,
+      );
+
+      const response = await engine.archiveStoredSession(
+        "codex",
+        "closed-provider-session",
+        {
+          runtimeSessionId,
+          clientId: "web-user",
+          storedSessionsMode: "all",
+        },
+      );
+
+      assert.equal(engine.sessionStore.getSession(runtimeSessionId), undefined);
+      assert.equal(response.sessions.some((entry) => entry.session.id === runtimeSessionId), false);
+      const archived = response.storedSessions.find(
+        (entry) => entry.providerSessionId === "closed-provider-session",
+      );
+      assert.equal(archived?.libraryState?.placement, "archive");
+      assert.equal(archived?.historyMeta?.lines, undefined);
+      assert.equal(
+        adapter.storedSessionCalls,
+        1,
+        "atomic archive must not block on a provider-wide history rescan",
+      );
+      assert.equal(
+        response.recentSessions.some(
+          (entry) => entry.providerSessionId === "closed-provider-session",
+        ),
+        false,
+      );
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
+  test("keeps a closed session in the workspace when atomic archive fails", async () => {
+    const adapter = new FailingArchiveAfterCloseAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workDir,
+        attach: {
+          client: {
+            id: "web-user",
+            kind: "web",
+            connectionId: "archive-failure-connection",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const beforeRevision = engine.listSessions().storedSessionsRevision ?? 0;
+
+      await assert.rejects(
+        engine.archiveStoredSession("codex", "closed-provider-session", {
+          runtimeSessionId: started.session.session.id,
+          clientId: "web-user",
+          storedSessionsMode: "all",
+        }),
+        /provider archive failed/,
+      );
+
+      assert.equal(engine.sessionStore.getSession(started.session.session.id), undefined);
+      const stopped = engine
+        .listSessions({ storedSessionsMode: "all" })
+        .storedSessions.find(
+          (entry) => entry.providerSessionId === "closed-provider-session",
+        );
+      assert.ok(stopped);
+      assert.equal(stopped.libraryState, undefined);
+      const delta = engine.getStoredSessionsDelta(beforeRevision);
+      assert.equal(
+        delta.upsert.some(
+          (entry) => entry.providerSessionId === "closed-provider-session",
+        ),
+        true,
+      );
     } finally {
       await engine.shutdown();
     }
@@ -1939,6 +2196,35 @@ describe("RuntimeEngine", () => {
 
     await engine.shutdown();
     rmSync(watchRoot, { recursive: true, force: true });
+  });
+
+  test("publishes the latest persisted pin snapshot for other clients", async () => {
+    const engine = new RuntimeEngine([]);
+    try {
+      engine.setWorkbenchPinnedItem(
+        workDir,
+        "session:codex:provider-session-1",
+        true,
+      );
+
+      const discoveryEvents = engine
+        .listEvents({ eventTypes: ["session.discovery"] })
+        .filter((event) => event.type === "session.discovery");
+      const latest = discoveryEvents.at(-1);
+      assert.ok(latest);
+      assert.equal(latest.type, "session.discovery");
+      if (latest.type !== "session.discovery") {
+        assert.fail("expected a session.discovery event");
+      }
+      assert.deepEqual(latest.payload.workbench?.pinnedSidebarItems, [
+        {
+          workspaceDir: workDir,
+          itemKey: "session:codex:provider-session-1",
+        },
+      ]);
+    } finally {
+      await engine.shutdown();
+    }
   });
 
   test("failed provider removal leaves stored session visible", async () => {
@@ -2486,6 +2772,116 @@ describe("RuntimeEngine", () => {
       assert.equal(engine.listSessions().sessions.some((entry) => entry.session.id === sessionId), false);
       unsubscribe();
     } finally {
+      if (previousCodexBinary === undefined) {
+        delete process.env.RAH_CODEX_BINARY;
+      } else {
+        process.env.RAH_CODEX_BINARY = previousCodexBinary;
+      }
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      await engine.shutdown();
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  });
+
+  test("native TUI provider binding collisions fail only the conflicting session", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-binding-collision-"));
+    const fakeCodex = path.join(workspace, "fake-codex.js");
+    const providerSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8bad";
+    const previousCodexBinary = process.env.RAH_CODEX_BINARY;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousConsoleError = console.error;
+    process.env.CODEX_HOME = path.join(workspace, "codex-home");
+    mkdirSync(path.join(process.env.CODEX_HOME, "sessions"), { recursive: true });
+    writeFileSync(
+      fakeCodex,
+      [
+        "#!/usr/bin/env node",
+        `process.stdout.write('Session: ${providerSessionId}\\r\\n›\\r\\n');`,
+        "process.stdin.resume();",
+        "setInterval(() => undefined, 1000);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeCodex, 0o755);
+    process.env.RAH_CODEX_BINARY = fakeCodex;
+    console.error = () => undefined;
+
+    try {
+      const first = await engine.startSession({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        attach: {
+          client: {
+            id: "web-native-binding-owner",
+            kind: "web",
+            connectionId: "web-native-binding-owner",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const firstSessionId = first.session.session.id;
+      await waitFor(() => {
+        const summary = engine.getSessionSummary(firstSessionId).session;
+        assert.equal(summary.providerSessionId, providerSessionId);
+        assert.notEqual(summary.runtimeState, "failed");
+      });
+
+      const second = await engine.startSession({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        attach: {
+          client: {
+            id: "web-native-binding-conflict",
+            kind: "web",
+            connectionId: "web-native-binding-conflict",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const secondSessionId = second.session.session.id;
+
+      await waitFor(() => {
+        const conflicting = engine.getSessionSummary(secondSessionId).session;
+        assert.equal(conflicting.providerSessionId, undefined);
+        assert.equal(conflicting.runtimeState, "failed");
+        assert.equal(conflicting.status, "stopped");
+        assert.match(
+          conflicting.runtimeDiagnostics?.lastError ?? "",
+          new RegExp(`Provider session codex:${providerSessionId} is already running`),
+        );
+      });
+
+      const owner = engine.getSessionSummary(firstSessionId).session;
+      assert.equal(owner.providerSessionId, providerSessionId);
+      assert.notEqual(owner.runtimeState, "failed");
+      assert.equal(
+        engine.listSessions().sessions.some((entry) => entry.session.id === firstSessionId),
+        true,
+      );
+      const diagnostics = engine.listNativeTuiDiagnostics({
+        sessionId: secondSessionId,
+        includeResolved: true,
+      });
+      assert.equal(diagnostics.some((diagnostic) => diagnostic.kind === "binding_failed"), true);
+
+      await engine.closeSession(secondSessionId, {
+        clientId: "web-native-binding-conflict",
+      });
+      assert.equal(engine.getSessionSummary(firstSessionId).session.providerSessionId, providerSessionId);
+      await engine.closeSession(firstSessionId, {
+        clientId: "web-native-binding-owner",
+      });
+    } finally {
+      console.error = previousConsoleError;
       if (previousCodexBinary === undefined) {
         delete process.env.RAH_CODEX_BINARY;
       } else {
@@ -3228,7 +3624,13 @@ describe("RuntimeEngine", () => {
 
       await waitFor(() => {
         const summary = engine.getSessionSummary(sessionId);
-        assert.equal(summary.session.runtimeState, "stopped");
+        assert.equal(summary.session.runtimeState, "failed");
+        assert.equal(summary.session.status, "stopped");
+        assert.equal(summary.session.phase, "failed");
+        assert.match(
+          summary.session.runtimeDiagnostics?.lastError ?? "",
+          /Native TUI process exited with code 7/,
+        );
         assert.equal(summary.session.capabilities.steerInput, false);
         assert.equal(summary.session.capabilities.rawPtyInput, false);
         const active = engine.listNativeTuiDiagnostics({ sessionId });
@@ -3919,10 +4321,27 @@ describe("RuntimeEngine", () => {
         ].join("\n") + "\n",
       );
       await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+        const session = engine.getSessionSummary(sessionId).session;
+        assert.equal(session.nativeTui?.queuedInputCount, 1);
+        assert.equal(session.inputQueue?.[0]?.state, "submitting");
         assert.match(transcript, /queued after active Claude turn/);
       });
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
+
+      appendFileSync(
+        claudeHistoryPath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "claude-queued-user",
+          cwd: workspace,
+          sessionId: providerSessionId,
+          timestamp: new Date(Date.now() + 20).toISOString(),
+          message: { content: "queued after active Claude turn" },
+        })}\n`,
+      );
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+      });
 
       unsubscribe();
       await engine.closeSession(sessionId, { clientId: "web-native" });
@@ -4011,8 +4430,9 @@ describe("RuntimeEngine", () => {
       const projectDir = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", projectId);
       mkdirSync(projectDir, { recursive: true });
       const userUuid = "claude-late-cancel-user";
+      const claudeHistoryPath = path.join(projectDir, `${providerSessionId}.jsonl`);
       writeFileSync(
-        path.join(projectDir, `${providerSessionId}.jsonl`),
+        claudeHistoryPath,
         `${JSON.stringify({
           type: "user",
           uuid: userUuid,
@@ -4030,10 +4450,27 @@ describe("RuntimeEngine", () => {
             .some(
               (event) =>
                 event.type === "turn.canceled" && event.turnId === `turn:${userUuid}`,
-            ),
+              ),
         );
-        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+        const session = engine.getSessionSummary(sessionId).session;
+        assert.equal(session.nativeTui?.queuedInputCount, 1);
+        assert.equal(session.inputQueue?.[0]?.state, "submitting");
         assert.match(transcript, new RegExp(recoveryPrompt));
+      });
+
+      appendFileSync(
+        claudeHistoryPath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "claude-late-cancel-recovery-user",
+          cwd: workspace,
+          sessionId: providerSessionId,
+          timestamp: new Date(Date.now() + 20).toISOString(),
+          message: { content: recoveryPrompt },
+        })}\n`,
+      );
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
       });
 
       unsubscribe();

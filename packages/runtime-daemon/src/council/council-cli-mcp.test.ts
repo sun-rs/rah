@@ -39,8 +39,15 @@ function collectLines(stream: NodeJS.ReadableStream, count: number): Promise<str
 
 test("rah council-mcp speaks minimal MCP JSON-RPC over stdio", async () => {
   const received: unknown[] = [];
+  let resolveReady!: (request: unknown) => void;
+  const readyRequest = new Promise<unknown>((resolve) => {
+    resolveReady = resolve;
+  });
   const server = http.createServer((req, res) => {
-    if (req.method !== "POST" || req.url !== "/api/council/mcp") {
+    if (
+      req.method !== "POST" ||
+      (req.url !== "/api/council/mcp" && req.url !== "/api/council/mcp-ready")
+    ) {
       res.writeHead(404);
       res.end();
       return;
@@ -52,6 +59,12 @@ test("rah council-mcp speaks minimal MCP JSON-RPC over stdio", async () => {
     });
     req.on("end", () => {
       const parsed = JSON.parse(body) as { tool?: string };
+      if (req.url === "/api/council/mcp-ready") {
+        resolveReady(parsed);
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
       received.push(parsed);
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ ok: true, result: { echoedTool: parsed.tool } }));
@@ -105,6 +118,14 @@ test("rah council-mcp speaks minimal MCP JSON-RPC over stdio", async () => {
     assert.equal(responses[4]!.result?.content?.[0]?.type, "text");
     assert.deepEqual(responses[4]!.result?.structuredContent, { echoedTool: "channel_post" });
     assert.equal((received[0] as { councilId?: string }).councilId, "council-1");
+    const ready = await readyRequest as {
+      councilId?: string;
+      actorId?: string;
+      clientId?: string;
+    };
+    assert.equal(ready.councilId, "council-1");
+    assert.equal(ready.actorId, "agent-1");
+    assert.match(ready.clientId ?? "", /^mcp:agent-1:/);
   } finally {
     child.kill("SIGTERM");
     await new Promise<void>((resolve) => server.close(() => resolve()));

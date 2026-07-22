@@ -98,7 +98,7 @@ describe("buildSessionsResponse", () => {
     );
   });
 
-  test("keeps current provider archive state authoritative in recent history", () => {
+  test("keeps archived sessions in the full catalog but out of recent history", () => {
     const archived: StoredSessionRef = {
       ...storedRef("archive-authority"),
       providerState: { archived: true },
@@ -119,8 +119,10 @@ describe("buildSessionsResponse", () => {
         rememberedSessionTitleOverrides: {},
       },
       isClosingSession: () => false,
+      storedSessionsMode: "all",
     });
-    assert.equal(archivedResponse.recentSessions[0]?.providerState?.archived, true);
+    assert.deepEqual(archivedResponse.recentSessions, []);
+    assert.equal(archivedResponse.storedSessions[0]?.providerState?.archived, true);
 
     const unarchivedResponse = buildSessionsResponse({
       liveStates: [],
@@ -136,6 +138,34 @@ describe("buildSessionsResponse", () => {
       isClosingSession: () => false,
     });
     assert.equal(unarchivedResponse.recentSessions[0]?.providerState, undefined);
+  });
+
+  test("keeps RAH overlay archives out of recent history", () => {
+    const archived: StoredSessionRef = {
+      ...storedRef("rah-overlay-archive"),
+      libraryState: {
+        placement: "archive",
+        backend: "rah_overlay",
+        archivedAt: "2026-07-12T10:00:00.000Z",
+      },
+    };
+    const response = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: [archived],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [storedRef("rah-overlay-archive")],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+      storedSessionsMode: "all",
+    });
+
+    assert.deepEqual(response.recentSessions, []);
+    assert.equal(response.storedSessions[0]?.libraryState?.placement, "archive");
   });
 
   test("keeps provider-backed running sessions visible in stored history", () => {
@@ -242,7 +272,7 @@ describe("buildSessionsResponse", () => {
     assert.equal(response.recentSessions[1]?.lastUsedAt, "2026-04-29T09:00:00.000Z");
   });
 
-  test("can return only recent stored sessions for lightweight app bootstrap", () => {
+  test("defaults to recent stored sessions for lightweight app bootstrap", () => {
     const storedSessions = Array.from({ length: 20 }, (_, index) => ({
       ...storedRef(`session-${index}`),
       updatedAt: `2026-04-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
@@ -260,7 +290,6 @@ describe("buildSessionsResponse", () => {
         rememberedSessionTitleOverrides: {},
       },
       isClosingSession: () => false,
-      storedSessionsMode: "recent",
     });
 
     assert.equal(response.recentSessions.length, 15);
@@ -269,6 +298,31 @@ describe("buildSessionsResponse", () => {
       response.storedSessions.map((session) => session.providerSessionId),
       Array.from({ length: 15 }, (_, index) => `session-${19 - index}`),
     );
+  });
+
+  test("returns the complete stored catalog only when explicitly requested", () => {
+    const storedSessions = Array.from({ length: 20 }, (_, index) => ({
+      ...storedRef(`session-${index}`),
+      updatedAt: `2026-04-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
+    }));
+
+    const response = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: storedSessions,
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+      storedSessionsMode: "all",
+    });
+
+    assert.equal(response.recentSessions.length, 15);
+    assert.equal(response.storedSessions.length, 20);
   });
 
   test("uses running session conversation activity for recent timestamps", () => {

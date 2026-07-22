@@ -441,6 +441,89 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
+  test("closeSession treats an already inactive Codex turn as an idempotent interrupt", async () => {
+    const marker = path.join(tmpDir, "codex-inactive-turn-disposed.txt");
+    const serverJs = path.join(tmpDir, "mock-codex-inactive-turn-close-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const marker = ${JSON.stringify(marker)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+process.on('SIGTERM', () => {
+  fs.writeFileSync(marker, 'sigterm');
+  process.exit(0);
+});
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-inactive-close-1' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    send({ id: msg.id, result: { turn: { id: 'turn-inactive-close-1' } } });
+    send({ method: 'turn/started', params: { threadId: 'thread-inactive-close-1', turn: { id: 'turn-inactive-close-1' } } });
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    send({ id: msg.id, error: { message: 'turn/interrupt: no active turn to interrupt.' } });
+    return;
+  }
+  if (msg.method === 'thread/goal/get') {
+    send({ id: msg.id, result: { goal: null } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-inactive-turn-close");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "inactive turn close test",
+      attach: {
+        client: {
+          id: "test-client",
+          kind: "web",
+          connectionId: "test-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "test-client",
+      text: "complete remotely before close",
+    });
+    await waitFor(() =>
+      services.sessionStore.getSession(started.session.session.id)?.activeTurnId ===
+      "turn-inactive-close-1",
+    );
+
+    await adapter.closeSession(started.session.session.id, { clientId: "web-user" });
+    await waitFor(() => existsSync(marker));
+
+    await adapter.shutdown?.();
+  });
+
   test("shutdown interrupts active Codex turns and pauses active goals before disposal", async () => {
     const methodLog = path.join(tmpDir, "codex-shutdown-control.jsonl");
     const serverJs = path.join(tmpDir, "mock-codex-shutdown-control-server.js");
@@ -629,6 +712,13 @@ rl.on('line', (line) => {
     send({ id: msg.id, result: { turn: { id: turnId } } });
     setTimeout(() => send({ method: 'turn/started', params: { turn: { id: turnId } } }), 20);
     setTimeout(() => send({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-live-queue-1',
+        turn: { id: 'delayed-historical-turn-' + turnCount, status: 'completed' },
+      },
+    }), 30);
+    setTimeout(() => send({
       method: 'item/agentMessage/delta',
       params: { threadId: 'thread-live-queue-1', turnId, itemId: 'assistant-' + turnCount, delta: 'answer:' + prompt },
     }), 40);
@@ -708,6 +798,375 @@ rl.on('line', (line) => {
           event.type === "runtime.status" &&
           event.payload.status === "error",
       ),
+      false,
+    );
+
+    await adapter.shutdown?.();
+  });
+
+  test("Codex restores a rejected queued input and does not consume later inputs", async () => {
+    const promptsPath = path.join(tmpDir, "queued-prompts.txt");
+    const serverJs = path.join(tmpDir, "mock-codex-queue-rejection-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const promptsPath = ${JSON.stringify(promptsPath)};
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let turnCount = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-queue-rejection' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    turnCount += 1;
+    const prompt = msg.params.input[0].text;
+    fs.appendFileSync(promptsPath, prompt + "\\n");
+    if (turnCount === 2) {
+      send({ id: msg.id, error: { code: -32000, message: 'turn rejected' } });
+      setTimeout(() => {
+        send({ method: 'turn/started', params: { threadId: 'thread-queue-rejection', turn: { id: 'turn-unrelated' } } });
+        send({ method: 'turn/completed', params: { threadId: 'thread-queue-rejection', turn: { id: 'turn-unrelated', status: 'completed' } } });
+      }, 5);
+      return;
+    }
+    const turnId = 'turn-queue-rejection-' + turnCount;
+    send({ id: msg.id, result: { turn: { id: turnId } } });
+    send({ method: 'turn/started', params: { threadId: 'thread-queue-rejection', turn: { id: turnId } } });
+    setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'thread-queue-rejection', turn: { id: turnId, status: 'completed' } } }), 20);
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-queue-rejection");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      attach: {
+        client: {
+          id: "web-user",
+          kind: "web",
+          connectionId: "test-web",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-first",
+      text: "first",
+    });
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-rejected",
+      text: "rejected",
+    });
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-third",
+      text: "third",
+    });
+
+    await waitFor(() => {
+      const queue = services.sessionStore.getSession(sessionId)?.session.inputQueue ?? [];
+      return (
+        queue.length === 2 &&
+        queue[0]?.clientMessageId === "message-rejected" &&
+        queue[1]?.clientMessageId === "message-third"
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.deepEqual(readFileSync(promptsPath, "utf8").trim().split("\n"), [
+      "first",
+      "rejected",
+    ]);
+
+    adapter.deleteQueuedInput(sessionId, "message-rejected", {
+      clientId: "web-user",
+    });
+    await waitFor(() =>
+      readFileSync(promptsPath, "utf8").trim().split("\n").includes("third"),
+    );
+    assert.deepEqual(readFileSync(promptsPath, "utf8").trim().split("\n"), [
+      "first",
+      "rejected",
+      "third",
+    ]);
+    await waitFor(
+      () => (services.sessionStore.getSession(sessionId)?.session.inputQueue?.length ?? 0) === 0,
+    );
+
+    await adapter.shutdown?.();
+  });
+
+  test("Codex guides a selected queued input while future follow-ups remain queued", async () => {
+    const steeredPath = path.join(tmpDir, "steered-inputs.jsonl");
+    const serverJs = path.join(tmpDir, "mock-codex-steer-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const steeredPath = ${JSON.stringify(steeredPath)};
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-steer' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    send({ id: msg.id, result: { turn: { id: 'turn-steer-active' } } });
+    send({ method: 'turn/started', params: { threadId: 'thread-steer', turn: { id: 'turn-steer-active' } } });
+    return;
+  }
+  if (msg.method === 'turn/steer') {
+    if (msg.params.input[0].text === 'reject guide') {
+      send({ id: msg.id, error: { code: -32000, message: 'guide rejected' } });
+      return;
+    }
+    fs.appendFileSync(steeredPath, JSON.stringify(msg.params) + "\\n");
+    send({ id: msg.id, result: { turnId: 'turn-steer-active' } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-steer");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      attach: {
+        client: { id: "web-user", kind: "web", connectionId: "test-web" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-first",
+      text: "first",
+    });
+    await waitFor(() =>
+      services.eventBus
+        .list({ sessionIds: [sessionId] })
+        .some((event) => event.type === "turn.started"),
+    );
+
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-rejected-guide",
+      text: "reject guide",
+    });
+    await waitFor(() =>
+      services.sessionStore.getSession(sessionId)?.session.inputQueue?.[0]
+        ?.clientMessageId === "message-rejected-guide",
+    );
+    await assert.rejects(
+      adapter.steerQueuedInput(sessionId, "message-rejected-guide", {
+        clientId: "web-user",
+      }),
+      /guide rejected/,
+    );
+    assert.equal(
+      services.sessionStore.getSession(sessionId)?.session.inputQueue?.[0]?.state,
+      "queued",
+    );
+    adapter.deleteQueuedInput(sessionId, "message-rejected-guide", {
+      clientId: "web-user",
+    });
+
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-guide",
+      clientTurnId: "client-turn-guide",
+      text: "guide this run",
+    });
+    await waitFor(() =>
+      services.sessionStore.getSession(sessionId)?.session.inputQueue?.[0]
+        ?.clientMessageId === "message-guide",
+    );
+    await adapter.steerQueuedInput(sessionId, "message-guide", {
+      clientId: "web-user",
+    });
+    assert.equal(
+      services.sessionStore.getSession(sessionId)?.session.inputQueue?.length,
+      0,
+    );
+
+    adapter.setInputQueuePolicy(sessionId, {
+      clientId: "web-user",
+      policy: "steer",
+    });
+    assert.equal(
+      services.sessionStore.getSession(sessionId)?.session.inputQueuePolicy,
+      "queue",
+    );
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-direct-steer",
+      text: "future follow-up",
+    });
+    await waitFor(
+      () =>
+        services.sessionStore.getSession(sessionId)?.session.inputQueue?.[0]
+          ?.clientMessageId === "message-direct-steer",
+    );
+    const steered = readFileSync(steeredPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(steered.length, 1);
+    assert.equal(steered[0]?.expectedTurnId, "turn-steer-active");
+    assert.equal(steered[0]?.clientUserMessageId, "message-guide");
+    assert.equal(steered[0]?.input?.[0]?.text, "guide this run");
+
+    await adapter.shutdown?.();
+  });
+
+  test("Codex does not restore a queued input after authoritative turn acceptance", async () => {
+    const promptsPath = path.join(tmpDir, "accepted-queued-prompts.txt");
+    const serverJs = path.join(tmpDir, "mock-codex-accepted-queue-rpc-failure-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const promptsPath = ${JSON.stringify(promptsPath)};
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let turnCount = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-accepted-queue' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    turnCount += 1;
+    const prompt = msg.params.input[0].text;
+    const turnId = 'turn-accepted-queue-' + turnCount;
+    fs.appendFileSync(promptsPath, prompt + "\\n");
+    if (turnCount === 2) {
+      send({ method: 'turn/started', params: { threadId: 'thread-accepted-queue', turn: { id: turnId } } });
+      setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'thread-accepted-queue', turn: { id: turnId, status: 'completed' } } }), 1);
+      setTimeout(() => send({ id: msg.id, error: { code: -32000, message: 'ack lost' } }), 5);
+      return;
+    }
+    send({ id: msg.id, result: { turn: { id: turnId } } });
+    send({ method: 'turn/started', params: { threadId: 'thread-accepted-queue', turn: { id: turnId } } });
+    setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'thread-accepted-queue', turn: { id: turnId, status: 'completed' } } }), 20);
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-accepted-queue-rpc-failure");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      attach: {
+        client: {
+          id: "web-user",
+          kind: "web",
+          connectionId: "test-web",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-first",
+      text: "first",
+    });
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-accepted",
+      text: "accepted despite lost acknowledgement",
+    });
+    adapter.sendInput(sessionId, {
+      clientId: "web-user",
+      clientMessageId: "message-third",
+      text: "third",
+    });
+
+    await waitFor(
+      () => existsSync(promptsPath) && readFileSync(promptsPath, "utf8").includes("third"),
+    );
+    assert.deepEqual(readFileSync(promptsPath, "utf8").trim().split("\n"), [
+      "first",
+      "accepted despite lost acknowledgement",
+      "third",
+    ]);
+    assert.equal(
+      services.sessionStore.getSession(sessionId)?.session.inputQueue?.length ?? 0,
+      0,
+    );
+    assert.equal(
+      services.eventBus
+        .list({ sessionIds: [sessionId] })
+        .some(
+          (event) =>
+            event.type === "runtime.status" && event.payload.status === "error",
+        ),
       false,
     );
 

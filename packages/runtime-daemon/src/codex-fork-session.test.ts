@@ -33,8 +33,9 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("forks an ephemeral Codex Side thread and unsubscribes it on close", async () => {
+test("forks an ephemeral Codex Side thread and unsubscribes it after its live client detaches", async () => {
   const requestLog = path.join(tmpDir, "requests.jsonl");
+  const forkCounter = path.join(tmpDir, "fork-counter.txt");
   const serverJs = path.join(tmpDir, "mock-codex-fork-server.js");
   writeFileSync(
     serverJs,
@@ -56,7 +57,15 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'thread/fork') {
-    const threadId = msg.params?.ephemeral ? 'thread-side' : 'thread-fork';
+    let threadId = 'thread-side';
+    if (!msg.params?.ephemeral) {
+      const counterPath = ${JSON.stringify(forkCounter)};
+      const persistentForkCount = fs.existsSync(counterPath)
+        ? Number.parseInt(fs.readFileSync(counterPath, 'utf8'), 10) + 1
+        : 1;
+      fs.writeFileSync(counterPath, String(persistentForkCount));
+      threadId = 'thread-fork-' + persistentForkCount;
+    }
     send({ id: msg.id, result: { thread: { id: threadId, status: { type: 'idle' } }, cwd: ${JSON.stringify(tmpDir)}, model: 'gpt-test' } });
     return;
   }
@@ -72,6 +81,10 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'thread/goal/get') {
+    if (msg.params?.threadId === 'thread-side') {
+      send({ id: msg.id, error: { code: -32000, message: 'ephemeral thread does not support goals' } });
+      return;
+    }
     send({ id: msg.id, result: { goal: null } });
     return;
   }
@@ -143,11 +156,35 @@ rl.on('line', (line) => {
     });
     assert.equal(persistentFork.session.session.relationship?.kind, "fork");
     assert.equal(persistentFork.session.session.relationship?.persistence, "persistent");
+    assert.equal(persistentFork.session.session.title, "Parent (2)");
     assert.equal(persistentFork.session.session.capabilities.actions?.archive, true);
     assert.equal(persistentFork.session.session.capabilities.branching?.side, true);
 
+    const secondPersistentFork = await adapter.forkSession(parent.session.session.id, {
+      operationId: "fork-operation-2",
+      kind: "fork",
+      workspaceMode: "shared",
+      attach,
+    });
+    assert.equal(secondPersistentFork.session.session.title, "Parent (3)");
+
+    const liveSessions = (
+      adapter as unknown as {
+        liveSessions: Map<
+          string,
+          { ephemeral?: boolean; client: { dispose(): Promise<void> } }
+        >;
+      }
+    ).liveSessions;
+    const sideLiveSession = liveSessions.get(side.session.session.id);
+    assert.ok(sideLiveSession);
+    delete sideLiveSession.ephemeral;
+    liveSessions.delete(side.session.session.id);
+    await sideLiveSession.client.dispose();
+
     await adapter.closeSession(side.session.session.id, { clientId: "web-1" });
     await adapter.closeSession(persistentFork.session.session.id, { clientId: "web-1" });
+    await adapter.closeSession(secondPersistentFork.session.session.id, { clientId: "web-1" });
 
     const requests = readFileSync(requestLog, "utf8")
       .trim()
@@ -165,6 +202,7 @@ rl.on('line', (line) => {
       sandbox: "danger-full-access",
       ephemeral: true,
       threadSource: "sideConversation",
+      excludeTurns: true,
     });
     const inject = requests.find((request) => request.method === "thread/inject_items");
     assert.equal(inject?.params?.threadId, "thread-side");
@@ -180,14 +218,138 @@ rl.on('line', (line) => {
     assert.equal(
       requests.some(
         (request) =>
+          request.method.startsWith("thread/goal/") &&
+          request.params?.threadId === "thread-side",
+      ),
+      false,
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
           request.method === "thread/unsubscribe" &&
-          request.params?.threadId === "thread-fork",
+          request.params?.threadId === "thread-fork-1",
       ),
       false,
     );
     assert.equal(
       requests.filter((request) => request.method === "thread/inject_items").length,
       1,
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "thread/name/set" &&
+          request.params?.threadId === "thread-fork-1" &&
+          request.params?.name === "Parent (2)",
+      ),
+      true,
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "thread/name/set" &&
+          request.params?.threadId === "thread-fork-2" &&
+          request.params?.name === "Parent (3)",
+      ),
+      true,
+    );
+  } finally {
+    await adapter.shutdown();
+  }
+});
+
+test("archives a persistent Codex Fork when its native title cannot be committed", async () => {
+  const requestLog = path.join(tmpDir, "rename-rollback-requests.jsonl");
+  const serverJs = path.join(tmpDir, "mock-codex-fork-rename-rollback-server.js");
+  writeFileSync(
+    serverJs,
+    `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(msg) { fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  log({ method: msg.method, params: msg.params });
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-parent-rename', status: { type: 'idle' } }, cwd: ${JSON.stringify(tmpDir)} } });
+    return;
+  }
+  if (msg.method === 'thread/fork') {
+    send({ id: msg.id, result: { thread: { id: 'thread-fork-name-failed', status: { type: 'idle' } }, cwd: ${JSON.stringify(tmpDir)} } });
+    return;
+  }
+  if (msg.method === 'thread/name/set' && msg.params?.threadId === 'thread-fork-name-failed') {
+    send({ id: msg.id, error: { code: -32000, message: 'native rename failed' } });
+    return;
+  }
+  if (msg.method === 'thread/archive') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/goal/get') {
+    send({ id: msg.id, result: { goal: null } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+  );
+  const wrapper = path.join(tmpDir, "mock-codex-rename-rollback");
+  writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+  chmodSync(wrapper, 0o755);
+  process.env.RAH_CODEX_BINARY = wrapper;
+
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const adapter = new CodexAdapter(services);
+  const attach = {
+    client: { id: "web-rename", kind: "web" as const, connectionId: "connection-rename" },
+    mode: "interactive" as const,
+    claimControl: true,
+  };
+
+  try {
+    const parent = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "Parent",
+      attach,
+    });
+
+    await assert.rejects(
+      adapter.forkSession(parent.session.session.id, {
+        operationId: "fork-native-rename-failure",
+        kind: "fork",
+        workspaceMode: "shared",
+        attach,
+      }),
+      /native rename failed/,
+    );
+
+    assert.deepEqual(
+      services.sessionStore.listSessions().map((state) => state.session.providerSessionId),
+      ["thread-parent-rename"],
+    );
+    const requests = readFileSync(requestLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; params?: Record<string, unknown> });
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "thread/archive" &&
+          request.params?.threadId === "thread-fork-name-failed",
+      ),
+      true,
     );
   } finally {
     await adapter.shutdown();

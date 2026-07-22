@@ -21,4 +21,17 @@ describe("classifyCodexCommand", () => {
     assert.equal(classified.kind, "command.run");
     assert.equal(classified.title, "Run command");
   });
+
+  test("stops sed target extraction at a command newline", () => {
+    const classified = classifyCodexCommand(
+      [
+        "sed -n '1,115p' docs/design.md",
+        "iconv -f UTF-8 data.csv",
+        "sqlite3 data.db 'SELECT key FROM rows WHERE product_id=1'",
+      ].join("\n"),
+    );
+
+    assert.equal(classified.kind, "file.read");
+    assert.deepEqual(classified.files, ["docs/design.md"]);
+  });
 });

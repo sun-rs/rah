@@ -6,6 +6,8 @@ type CodexTimelineItemKind = Extract<
   { kind: "user_message" | "assistant_message" | "reasoning" | "plan" | "system" | "compaction" }
 >["kind"];
 
+export const CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY = "context-compaction";
+
 export function createCodexTimelineIdentity(args: {
   providerSessionId?: string | undefined;
   turnId: string;
@@ -53,6 +55,32 @@ export function createCodexLiveEphemeralTimelineIdentity(args: {
       ...(args.providerEventId !== undefined ? { providerEventId: args.providerEventId } : {}),
       ...(args.providerMessageId !== undefined ? { providerMessageId: args.providerMessageId } : {}),
     },
+  });
+}
+
+export function createCodexAggregateTimelineIdentity(args: {
+  providerSessionId?: string | undefined;
+  turnId: string;
+  itemKind: CodexTimelineItemKind;
+  itemKey: string;
+  origin: "live" | "history";
+  providerEventId?: string;
+  providerMessageId?: string;
+  confidence?: TimelineIdentity["confidence"];
+}): TimelineIdentity {
+  const sourceCursor = {
+    ...(args.providerEventId !== undefined ? { providerEventId: args.providerEventId } : {}),
+    ...(args.providerMessageId !== undefined ? { providerMessageId: args.providerMessageId } : {}),
+  };
+  return createTimelineIdentity({
+    provider: "codex",
+    ...(args.providerSessionId !== undefined ? { providerSessionId: args.providerSessionId } : {}),
+    turnKey: `turn:${args.turnId}`,
+    itemKind: args.itemKind,
+    itemKey: `aggregate:${args.itemKind}:${args.itemKey}`,
+    origin: args.origin,
+    confidence: args.confidence ?? "derived",
+    ...(Object.keys(sourceCursor).length > 0 ? { sourceCursor } : {}),
   });
 }
 

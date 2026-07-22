@@ -1,10 +1,17 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ManagedSession, ToolCall } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
-import { applyProviderActivity } from "./provider-activity";
+import {
+  applyProviderActivity,
+  applyProviderActivityAsync,
+} from "./provider-activity";
 import { SessionStore } from "./session-store";
+import { TurnArtifactStore, turnArtifactOwnerKey } from "./turn-artifact-store";
 import { createTimelineIdentity } from "./timeline-identity";
 import {
   resetTimelineIdentityTelemetryForTests,
@@ -23,12 +30,18 @@ function createServices() {
 
 function createSession(
   services: ReturnType<typeof createServices>,
-  options: { liveBackend?: ManagedSession["liveBackend"] } = {},
+  options: {
+    liveBackend?: ManagedSession["liveBackend"];
+    providerSessionId?: string;
+  } = {},
 ) {
   return services.sessionStore.createManagedSession({
     provider: "codex",
     launchSource: "web",
     ...(options.liveBackend !== undefined ? { liveBackend: options.liveBackend } : {}),
+    ...(options.providerSessionId !== undefined
+      ? { providerSessionId: options.providerSessionId }
+      : {}),
     cwd: "/workspace/demo",
     rootDir: "/workspace/demo",
     title: "demo",
@@ -211,6 +224,108 @@ describe("applyProviderActivity", () => {
 
     assert.equal(services.sessionStore.getSession(sessionId)?.activeTurnId, undefined);
     assert.equal(services.sessionStore.getSession(sessionId)?.session.runtimeState, "idle");
+  });
+
+  test("publishes turn file change snapshots with the provider turn id", async () => {
+    const rootDir = mkdtempSync(path.join(os.tmpdir(), "rah-provider-turn-artifacts-"));
+    try {
+      const turnArtifacts = new TurnArtifactStore({ rootDir });
+      const services = { ...createServices(), turnArtifacts };
+      const sessionId = createSession(services, { providerSessionId: "thread-1" });
+      const unifiedDiff = `diff --git a/src/demo.ts b/src/demo.ts
+--- a/src/demo.ts
++++ b/src/demo.ts
+@@ -1,2 +1,4 @@
+-old one
+-old two
++new one
++new two
++new three
+`;
+
+      const [published] = await applyProviderActivityAsync(
+        services,
+        sessionId,
+        {
+          provider: "codex",
+          channel: "structured_live",
+          raw: {
+            method: "turn/diff/updated",
+            params: { turnId: "turn-1", diff: unifiedDiff },
+          },
+        },
+        {
+          type: "turn_file_changes_updated",
+          turnId: "turn-1",
+          unifiedDiff,
+        },
+      );
+
+      assert.equal(published?.type, "turn.file_changes.updated");
+      assert.equal(published?.turnId, "turn-1");
+      assert.equal(published?.raw, undefined);
+      if (published?.type === "turn.file_changes.updated") {
+        assert.equal(published.payload.fileChanges.files[0]?.path, "src/demo.ts");
+      }
+      const ownerId = turnArtifactOwnerKey(
+        sessionId,
+        services.sessionStore.getSession(sessionId)?.session,
+      );
+      assert.equal(
+        turnArtifacts.getTurnFileDiff(ownerId, "turn-1", "src/demo.ts", sessionId).diff,
+        unifiedDiff,
+      );
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not publish a turn file-change summary when its frozen artifact cannot be stored", async () => {
+    class FailingTurnArtifactStore extends TurnArtifactStore {
+      override async replaceTurnDiff(): Promise<never> {
+        throw new Error("disk unavailable");
+      }
+    }
+    const services = {
+      ...createServices(),
+      turnArtifacts: new FailingTurnArtifactStore(),
+    };
+    const sessionId = createSession(services);
+    const previousConsoleWarn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    try {
+      const published = await applyProviderActivityAsync(
+        services,
+        sessionId,
+        { provider: "codex", channel: "structured_live" },
+        {
+          type: "turn_file_changes_updated",
+          turnId: "turn-1",
+          unifiedDiff: `diff --git a/src/demo.ts b/src/demo.ts
+--- a/src/demo.ts
++++ b/src/demo.ts
+@@ -1 +1 @@
+-old
++new
+`,
+        },
+      );
+
+      assert.deepEqual(published, []);
+      assert.equal(warnings.length, 1);
+      assert.equal(warnings[0]?.[0], "[rah] failed to persist turn file-change snapshot");
+      assert.equal(
+        services.eventBus.list({ sessionIds: [sessionId] }).some(
+          (event) => event.type === "turn.file_changes.updated",
+        ),
+        false,
+      );
+    } finally {
+      console.warn = previousConsoleWarn;
+    }
   });
 
   test("passes timeline identity through without making origin part of the key", () => {

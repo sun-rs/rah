@@ -4,9 +4,12 @@ import type { IndependentTerminalProcess } from "./independent-terminal";
 import {
   cancelNativeTuiQueuedInputsForClient,
   clearNativeTuiSessionTimers,
-  dequeueNativeTuiQueuedInput,
+  confirmNativeTuiQueuedInput,
+  deleteNativeTuiQueuedInput,
   enqueueNativeTuiQueuedInput,
+  markNextNativeTuiQueuedInputSubmitting,
   nativeTuiProviderRuntimeSession,
+  updateNativeTuiQueuedInput,
   type NativeTuiSessionState,
 } from "./native-tui-session-state";
 
@@ -29,7 +32,15 @@ describe("native TUI session state", () => {
     const projected = nativeTuiProviderRuntimeSession(
       nativeSession({
         providerSessionId: "provider-a",
-        queuedInputs: [{ clientId: "client-a", text: "hello", queuedAt: "now" }],
+        queuedInputs: [
+          {
+            clientId: "client-a",
+            clientMessageId: "message-a",
+            text: "hello",
+            queuedAt: "now",
+            state: "queued",
+          },
+        ],
       }),
     );
 
@@ -51,13 +62,13 @@ describe("native TUI session state", () => {
     });
   });
 
-  test("queues and dequeues chat input in FIFO order", () => {
+  test("keeps submitted chat input visible until canonical handoff confirms it", () => {
     const native = nativeSession();
 
     assert.equal(
       enqueueNativeTuiQueuedInput(
         native,
-        { clientId: "client-a", text: "first", queuedAt: "t1" },
+        { clientId: "client-a", clientMessageId: "message-1", text: "first", queuedAt: "t1" },
         2,
       ),
       true,
@@ -65,7 +76,7 @@ describe("native TUI session state", () => {
     assert.equal(
       enqueueNativeTuiQueuedInput(
         native,
-        { clientId: "client-b", text: "second", queuedAt: "t2" },
+        { clientId: "client-b", clientMessageId: "message-2", text: "second", queuedAt: "t2" },
         2,
       ),
       true,
@@ -73,31 +84,98 @@ describe("native TUI session state", () => {
     assert.equal(
       enqueueNativeTuiQueuedInput(
         native,
-        { clientId: "client-c", text: "third", queuedAt: "t3" },
+        { clientId: "client-c", clientMessageId: "message-3", text: "third", queuedAt: "t3" },
         2,
       ),
       false,
     );
 
-    assert.equal(dequeueNativeTuiQueuedInput(native)?.text, "first");
-    assert.equal(dequeueNativeTuiQueuedInput(native)?.text, "second");
-    assert.equal(dequeueNativeTuiQueuedInput(native), undefined);
+    const first = markNextNativeTuiQueuedInputSubmitting(native);
+    assert.equal(first?.text, "first");
+    assert.equal(first?.state, "submitting");
+    assert.equal(native.queuedInputs.length, 2);
+    assert.equal(markNextNativeTuiQueuedInputSubmitting(native), undefined);
+
+    assert.equal(confirmNativeTuiQueuedInput(native, "message-1"), true);
+    assert.equal(native.queuedInputs.length, 1);
+
+    const second = markNextNativeTuiQueuedInputSubmitting(native);
+    assert.equal(second?.text, "second");
+    assert.equal(second?.state, "submitting");
+    assert.equal(confirmNativeTuiQueuedInput(native, "message-2"), true);
+    assert.equal(confirmNativeTuiQueuedInput(native, "message-2"), false);
+    assert.deepEqual(native.queuedInputs, []);
   });
 
   test("cancels only queued input for the interrupted client", () => {
     const native = nativeSession({
       queuedInputs: [
-        { clientId: "client-a", text: "drop-1", queuedAt: "t1" },
-        { clientId: "client-b", text: "keep", queuedAt: "t2" },
-        { clientId: "client-a", text: "drop-2", queuedAt: "t3" },
+        {
+          clientId: "client-a",
+          clientMessageId: "message-1",
+          text: "drop-1",
+          queuedAt: "t1",
+          state: "queued",
+        },
+        {
+          clientId: "client-b",
+          clientMessageId: "message-2",
+          text: "keep",
+          queuedAt: "t2",
+          state: "queued",
+        },
+        {
+          clientId: "client-a",
+          clientMessageId: "message-3",
+          text: "drop-2",
+          queuedAt: "t3",
+          state: "queued",
+        },
       ],
     });
 
     cancelNativeTuiQueuedInputsForClient(native, "client-a");
 
     assert.deepEqual(native.queuedInputs, [
-      { clientId: "client-b", text: "keep", queuedAt: "t2" },
+      {
+        clientId: "client-b",
+        clientMessageId: "message-2",
+        text: "keep",
+        queuedAt: "t2",
+        state: "queued",
+      },
     ]);
+  });
+
+  test("edits and deletes queued input by stable client message id", () => {
+    const native = nativeSession({
+      queuedInputs: [
+        {
+          clientId: "client-a",
+          clientMessageId: "message-1",
+          text: "first",
+          queuedAt: "t1",
+          state: "queued",
+        },
+        {
+          clientId: "client-a",
+          clientMessageId: "message-2",
+          text: "second",
+          queuedAt: "t2",
+          state: "queued",
+        },
+      ],
+    });
+
+    assert.equal(updateNativeTuiQueuedInput(native, "message-2", "edited"), true);
+    assert.equal(updateNativeTuiQueuedInput(native, "missing", "ignored"), false);
+    markNextNativeTuiQueuedInputSubmitting(native);
+    assert.equal(updateNativeTuiQueuedInput(native, "message-1", "too late"), false);
+    assert.equal(deleteNativeTuiQueuedInput(native, "message-1"), false);
+    assert.equal(deleteNativeTuiQueuedInput(native, "message-2"), true);
+    assert.equal(deleteNativeTuiQueuedInput(native, "missing"), false);
+    assert.equal(confirmNativeTuiQueuedInput(native, "message-1"), true);
+    assert.deepEqual(native.queuedInputs, []);
   });
 
   test("clears binding, mirror, and stop timers", () => {

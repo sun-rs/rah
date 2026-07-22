@@ -18,8 +18,10 @@ import {
   parseCreateCouncilRequest,
   parsePermissionResponseRequest,
   parseResumeSessionRequest,
+  parseSessionInputRequest,
   parseSetSessionModelRequest,
   parseStartSessionRequest,
+  parseStoredSessionArchiveRequest,
 } from "./http-server-request-validation";
 import { isLoopbackRemoteAddress, sendJsonWithBackpressure } from "./http-server-websocket";
 import {
@@ -27,6 +29,8 @@ import {
   isLocalNetworkRemoteAddress,
   resolveImagePreviewModeForPeer,
 } from "./http-server-client-address";
+import { SessionInputQueueConflictError } from "./session-input-queue";
+import { turnArtifactOwnerKey } from "./turn-artifact-store";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -195,6 +199,52 @@ describe("startRahDaemon", () => {
     });
     assert.equal(response.status, 200);
     assert.equal(typeof response.json, "object");
+  });
+
+  test("uploads device files as opaque daemon-owned attachments", async () => {
+    const pixelPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lz7c7wAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const response = await fetch(`http://127.0.0.1:${port}/api/attachments`, {
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "content-type": "image/png",
+        "x-rah-client": "web",
+        "x-rah-file-name": encodeURIComponent("phone photo.png"),
+      },
+      body: pixelPng,
+    });
+
+    assert.equal(response.status, 201);
+    const json = await response.json() as {
+      attachment?: Record<string, unknown>;
+    };
+    assert.equal(json.attachment?.kind, "image");
+    assert.equal(json.attachment?.name, "phone photo.png");
+    assert.equal(json.attachment?.mediaType, "image/png");
+    assert.equal(json.attachment?.size, pixelPng.byteLength);
+    assert.equal(typeof json.attachment?.id, "string");
+    assert.equal("path" in (json.attachment ?? {}), false);
+
+    const attachmentId = String(json.attachment?.id);
+    const preview = await requestJson({
+      port,
+      path: `/api/attachments/${encodeURIComponent(attachmentId)}?imagePreviewClient=local`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(preview.status, 200);
+    const previewJson = preview.json as {
+      attachment?: Record<string, unknown>;
+      file?: Record<string, unknown>;
+    };
+    assert.equal(previewJson.attachment?.id, attachmentId);
+    assert.equal(previewJson.attachment?.name, "phone photo.png");
+    assert.equal("path" in (previewJson.attachment ?? {}), false);
+    assert.equal(previewJson.file?.mimeType, "image/png");
+    assert.equal(previewJson.file?.contentBase64, pixelPng.toString("base64"));
+    assert.equal(typeof previewJson.file?.path, "string");
   });
 
   test("serves runtime identity", async () => {
@@ -416,6 +466,30 @@ describe("startRahDaemon", () => {
     assert.equal(batch.initial, true);
     const events = batch.events as Array<Record<string, unknown>>;
     assert.deepEqual(events.map((event) => event.seq), [target.seq]);
+  });
+
+  test("acknowledges an empty initial event replay", async () => {
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}/api/events?sessionId=no-events-for-this-session`,
+    );
+    const batch = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        socket.close();
+        reject(new Error("Timed out waiting for empty initial replay acknowledgement."));
+      }, 1_000);
+      socket.once("message", (raw) => {
+        clearTimeout(timer);
+        resolve(JSON.parse(raw.toString("utf8")) as Record<string, unknown>);
+      });
+      socket.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    socket.close();
+
+    assert.equal(batch.initial, true);
+    assert.deepEqual(batch.events, []);
   });
 
   test("can subscribe to live filtered events without replaying retained history", async () => {
@@ -846,6 +920,62 @@ describe("startRahDaemon", () => {
     assert.equal(resume.liveBackend, "native_local_server");
   });
 
+  test("validates atomic running-session archive identity fields together", () => {
+    assert.deepEqual(
+      parseStoredSessionArchiveRequest({
+        provider: "codex",
+        providerSessionId: "thread-1",
+        runtimeSessionId: "runtime-1",
+        clientId: "client-1",
+      }),
+      {
+        provider: "codex",
+        providerSessionId: "thread-1",
+        runtimeSessionId: "runtime-1",
+        clientId: "client-1",
+      },
+    );
+    assert.throws(
+      () =>
+        parseStoredSessionArchiveRequest({
+          provider: "codex",
+          providerSessionId: "thread-1",
+          runtimeSessionId: "runtime-1",
+        }),
+      /must be provided together/,
+    );
+  });
+
+  test("accepts attachment-only session input and rejects duplicate attachment ids", () => {
+    const attachment = {
+      id: "00000000-0000-4000-8000-000000000001",
+      kind: "image" as const,
+      name: "photo.png",
+      mediaType: "image/png",
+      size: 10,
+    };
+    assert.deepEqual(
+      parseSessionInputRequest({
+        clientId: "client-1",
+        text: "",
+        attachments: [attachment],
+      }),
+      {
+        clientId: "client-1",
+        text: "",
+        attachments: [attachment],
+      },
+    );
+    assert.throws(
+      () => parseSessionInputRequest({
+        clientId: "client-1",
+        text: "",
+        attachments: [attachment, attachment],
+      }),
+      /duplicate attachment ids/,
+    );
+  });
+
   test("rejects removed model and access aliases at the public HTTP boundary", () => {
     assert.throws(
       () =>
@@ -982,6 +1112,15 @@ describe("startRahDaemon", () => {
       requestErrorStatus(new Error("Bad Request: invalid JSON body.")),
       400,
     );
+    assert.equal(
+      requestErrorStatus(
+        new SessionInputQueueConflictError(
+          "Queued message is no longer waiting and cannot be edited.",
+        ),
+      ),
+      409,
+    );
+    assert.equal(requestErrorStatus(new Error("Queued message cannot be empty.")), 400);
   });
 
   test("recognizes loopback clients for host-only websocket fallbacks", () => {
@@ -1176,6 +1315,85 @@ describe("startRahDaemon", () => {
     );
 
     void nestedDir;
+  });
+
+  test("serves frozen per-turn file summaries and exact file diffs independently of workspace git", async () => {
+    const state = engine.sessionStore.createManagedSession({
+      id: "session-http",
+      provider: "codex",
+      providerSessionId: "thread-http",
+      launchSource: "web",
+      cwd: tempHome,
+      rootDir: tempHome,
+    });
+    const sessionId = state.session.id;
+    const turnId = "turn-http";
+    const filePath = "src/demo.ts";
+    const frozenDiff = `diff --git a/${filePath} b/${filePath}
+--- a/${filePath}
++++ b/${filePath}
+@@ -1 +1 @@
+-old
++new
+`;
+    await engine.turnArtifacts.replaceTurnDiff(
+      turnArtifactOwnerKey(sessionId, state.session),
+      turnId,
+      frozenDiff,
+    );
+
+    const changesResponse = await requestJson({
+      port,
+      path:
+        `/api/sessions/${encodeURIComponent(sessionId)}` +
+        `/turns/${encodeURIComponent(turnId)}/file-changes`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(changesResponse.status, 200);
+    assert.deepEqual(
+      (changesResponse.json as {
+        sessionId: string;
+        turnId: string;
+        fileChanges: {
+          files: Array<{ path: string; additions: number; deletions: number }>;
+          totalAdditions: number;
+          totalDeletions: number;
+        };
+      }).fileChanges,
+      {
+        files: [{ path: filePath, additions: 1, deletions: 1 }],
+        totalAdditions: 1,
+        totalDeletions: 1,
+      },
+    );
+
+    writeFileSync(path.join(tempHome, "demo.ts"), "workspace content changed later\n");
+    const diffResponse = await requestJson({
+      port,
+      path:
+        `/api/sessions/${encodeURIComponent(sessionId)}` +
+        `/turns/${encodeURIComponent(turnId)}/file-diff` +
+        `?path=${encodeURIComponent(filePath)}`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(diffResponse.status, 200);
+    assert.deepEqual(diffResponse.json, {
+      sessionId,
+      turnId,
+      path: filePath,
+      diff: frozenDiff,
+      truncated: false,
+    });
+
+    const missingPathResponse = await requestJson({
+      port,
+      path:
+        `/api/sessions/${encodeURIComponent(sessionId)}` +
+        `/turns/${encodeURIComponent(turnId)}/file-diff`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(missingPathResponse.status, 400);
+    assert.deepEqual(missingPathResponse.json, { error: "File path is required." });
   });
 
   test("serves workspace git routes for a registered workspace", async () => {

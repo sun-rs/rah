@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -222,6 +222,99 @@ test("CouncilStore exposes message metadata, tail windows, and older pages", () 
     assert.equal(older.total, 10);
     assert.equal(older.hasMoreBefore, true);
     assert.equal(older.nextBeforeMessageId, older.messages[0]!.id);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilStore lists persisted metadata without loading transcripts and recovers stale message ids", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-lazy-meta-"));
+  const filePath = path.join(root, "councils.json");
+  try {
+    const store = new CouncilStore(filePath);
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Agent A" }],
+    });
+    const first = store.appendMessage({
+      councilId: created.id,
+      actorId: "user",
+      role: "user",
+      text: "first question",
+    });
+    store.appendMessage({
+      councilId: created.id,
+      actorId: "system",
+      role: "system",
+      text: "wait timed out; no active listener is currently blocking on channel_wait_new",
+    });
+    store.appendMessage({
+      councilId: created.id,
+      actorId: created.agents[0]!.id,
+      role: "agent",
+      text: "first answer",
+    });
+
+    const persisted = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    persisted.nextMessageId = 1;
+    writeFileSync(filePath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+
+    const recovered = new CouncilStore(filePath);
+    const appended = recovered.appendMessage({
+      councilId: created.id,
+      actorId: created.agents[0]!.id,
+      role: "agent",
+      text: "second answer",
+    });
+    assert.equal(appended.id, first.id + 3);
+
+    const lazy = new CouncilStore(filePath);
+    const [summary] = lazy.listCouncils({
+      metadataOnly: true,
+    });
+    assert.equal(summary!.messages.length, 0);
+    assert.equal(summary!.meta?.messageCount, 3);
+    assert.equal(summary!.meta?.firstUserMessage?.text, "first question");
+    assert.equal(summary!.meta?.lastContentMessage?.text, "second answer");
+
+    rmSync(summary!.storage!.messageLogPath, { force: true });
+    const [metadataAfterLogRemoval] = lazy.listCouncils({
+      metadataOnly: true,
+    });
+    assert.equal(metadataAfterLogRemoval!.meta?.messageCount, 3);
+    assert.deepEqual(lazy.messagePage(created.id, { limit: 20 }).messages, []);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilStore migrates legacy inline messages when no message log exists", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-legacy-inline-"));
+  const filePath = path.join(root, "councils.json");
+  try {
+    const store = new CouncilStore(filePath);
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Agent A" }],
+    });
+    const persisted = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    delete persisted.messageMeta;
+    persisted.messages = [{
+      id: 1,
+      councilId: created.id,
+      actorId: "user",
+      role: "user",
+      parts: [{ kind: "text", text: "legacy inline question" }],
+      createdAt: new Date().toISOString(),
+    }];
+    persisted.nextMessageId = 2;
+    writeFileSync(filePath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+
+    const migrated = new CouncilStore(filePath);
+    assert.equal(migrated.snapshot(created.id).messages[0]?.parts[0]?.kind, "text");
+    assert.equal(migrated.listCouncils({ metadataOnly: true })[0]?.meta?.messageCount, 1);
+    const migratedFile = JSON.parse(readFileSync(filePath, "utf8")) as { messages?: unknown[] };
+    assert.deepEqual(migratedFile.messages, []);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

@@ -21,6 +21,8 @@ export type MuxPaneState = {
 
 export type MuxSessionState = {
   sessionName: string;
+  ownerScope?: string;
+  ownerPid?: number;
 };
 
 export type MuxPaneUpdate = {

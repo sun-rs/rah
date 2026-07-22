@@ -23,6 +23,7 @@ import {
   createOpenCodeSession,
   getOpenCodeMessages,
   getOpenCodeSession,
+  OpenCodeHttpResponseError,
   promptOpenCodeSession,
   respondOpenCodePermission,
   startOpenCodeServer,
@@ -60,6 +61,16 @@ import {
   extraMcpServersFromRequest,
   opencodeEnvForMcpServers,
 } from "../provider-mcp-server-spec";
+import {
+  deleteRuntimeQueuedInput,
+  markRuntimeQueuedInputQueued,
+  markRuntimeQueuedInputSubmitting,
+  publishSessionInputQueue,
+  runtimeQueuedInput,
+  type RuntimeQueuedInput,
+  withdrawRuntimeQueuedInput,
+} from "../session-input-queue";
+import { openCodePromptParts } from "../session-input-attachments";
 
 export interface LiveOpenCodeSession {
   sessionId: string;
@@ -75,7 +86,10 @@ export interface LiveOpenCodeSession {
   reasoningId?: string | null;
   modeId: string;
   availableModes: SessionModeDescriptor[];
-  queuedInputs: SessionInputRequest[];
+  queuedInputs: RuntimeQueuedInput[];
+  queuedInputDrainPaused?: boolean;
+  uncertainQueuedInputClientMessageId?: string;
+  queuedInputSubmissionStates?: Map<string, "submitting" | "accepted">;
   abortRetryTimers?: Array<ReturnType<typeof setTimeout>>;
   abortPendingTurnId?: string;
   locallyCanceledTurnIds?: Set<string>;
@@ -233,6 +247,34 @@ function applyActivity(
       ...(raw !== undefined ? { raw } : {}),
     },
     activity,
+  );
+}
+
+function confirmOpenCodeQueuedInputHandoff(
+  services: RuntimeServices,
+  liveSession: LiveOpenCodeSession,
+  activity: ProviderActivity,
+): void {
+  if (
+    activity.type !== "timeline_item" ||
+    activity.item.kind !== "user_message" ||
+    !activity.item.clientMessageId
+  ) {
+    return;
+  }
+  const clientMessageId = activity.item.clientMessageId;
+  if (!deleteRuntimeQueuedInput(liveSession.queuedInputs, clientMessageId)) {
+    return;
+  }
+  liveSession.queuedInputSubmissionStates?.delete(clientMessageId);
+  if (liveSession.uncertainQueuedInputClientMessageId === clientMessageId) {
+    delete liveSession.uncertainQueuedInputClientMessageId;
+  }
+  liveSession.queuedInputDrainPaused = false;
+  publishSessionInputQueue(
+    services,
+    liveSession.sessionId,
+    liveSession.queuedInputs,
   );
 }
 
@@ -777,7 +819,16 @@ export function sendInputToOpenCodeLiveSession(params: {
     liveSession.activityState.currentTurnId ||
     liveSession.providerReadyForInput === false
   ) {
-    liveSession.queuedInputs.push(request);
+    liveSession.queuedInputs.push(runtimeQueuedInput(request));
+    publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+    return;
+  }
+  if (liveSession.queuedInputs.length > 0 || liveSession.queuedInputDrainPaused) {
+    liveSession.queuedInputs.push(runtimeQueuedInput(request));
+    publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+    if (!liveSession.queuedInputDrainPaused) {
+      drainQueuedOpenCodeInput(services, liveSession);
+    }
     return;
   }
   submitOpenCodePrompt({
@@ -814,8 +865,9 @@ function submitOpenCodePrompt(params: {
   services: RuntimeServices;
   liveSession: LiveOpenCodeSession;
   request: SessionInputRequest;
+  queuedInput?: RuntimeQueuedInput;
 }): void {
-  const { services, liveSession, request } = params;
+  const { services, liveSession, request, queuedInput } = params;
   // Abort retries belong to the previously interrupted turn. If a recovery
   // prompt starts, stale retry timers must not cancel that new provider turn.
   clearOpenCodeAbortRetries(liveSession);
@@ -829,15 +881,22 @@ function submitOpenCodePrompt(params: {
   }
   recordOpenCodeSubmittedUserMessage(liveSession.activityState, {
     text,
+    ...(request.attachments?.length ? { attachments: request.attachments } : {}),
     turnId,
     providerMessageId,
     ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
     ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
   });
+  if (queuedInput) {
+    (liveSession.queuedInputSubmissionStates ??= new Map()).set(
+      queuedInput.clientMessageId,
+      "submitting",
+    );
+  }
   void promptOpenCodeSession({
     handle: liveSession.server,
     providerSessionId: liveSession.providerSessionId,
-    text,
+    parts: openCodePromptParts(request),
     messageId: providerMessageId,
     ...(liveSession.model ? { model: liveSession.model } : {}),
     ...(liveSession.reasoningId && liveSession.reasoningId !== "default"
@@ -846,11 +905,26 @@ function submitOpenCodePrompt(params: {
     agent: openCodeNativeModeId(liveSession.modeId),
   })
     .then((message) => {
+      if (queuedInput) {
+        liveSession.queuedInputSubmissionStates?.set(
+          queuedInput.clientMessageId,
+          "accepted",
+        );
+      }
+      liveSession.providerReadyForInput = true;
+      liveSession.queuedInputDrainPaused = false;
+      if (
+        queuedInput &&
+        liveSession.uncertainQueuedInputClientMessageId === queuedInput.clientMessageId
+      ) {
+        delete liveSession.uncertainQueuedInputClientMessageId;
+      }
       for (const activity of translateOpenCodeMessage(liveSession.activityState, message)) {
         applyActivity(services, liveSession.sessionId, activity, {
           source: "opencode-prompt-response",
           messageId: message.info.id,
         });
+        confirmOpenCodeQueuedInputHandoff(services, liveSession, activity);
       }
       drainQueuedOpenCodeInput(services, liveSession);
     })
@@ -866,22 +940,63 @@ function submitOpenCodePrompt(params: {
           turnId,
           reason: "interrupted",
         });
+        if (queuedInput) {
+          deleteRuntimeQueuedInput(liveSession.queuedInputs, queuedInput.clientMessageId);
+          liveSession.queuedInputSubmissionStates?.delete(queuedInput.clientMessageId);
+          publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+        }
         drainQueuedOpenCodeInput(services, liveSession);
         return;
       }
       patchOpenCodeRuntimeError(services, liveSession, error);
-      if (liveSession.activityState.currentTurnId !== turnId) {
+      const queuedSubmissionState = queuedInput
+        ? liveSession.queuedInputSubmissionStates?.get(queuedInput.clientMessageId)
+        : undefined;
+      if (queuedSubmissionState === "accepted") {
+        // The provider status stream proved that this prompt was accepted. A
+        // later HTTP failure is only an acknowledgement/transport failure and
+        // must not put the same input back into the queue.
+        if (queuedInput) {
+          if (
+            liveSession.uncertainQueuedInputClientMessageId ===
+            queuedInput.clientMessageId
+          ) {
+            delete liveSession.uncertainQueuedInputClientMessageId;
+          }
+          liveSession.queuedInputDrainPaused = false;
+        }
         drainQueuedOpenCodeInput(services, liveSession);
         return;
       }
-      delete liveSession.activityState.currentTurnId;
+      const ownsCurrentTurn = liveSession.activityState.currentTurnId === turnId;
+      if (ownsCurrentTurn) {
+        delete liveSession.activityState.currentTurnId;
+      }
       liveSession.providerReadyForInput = true;
-      applyActivity(services, liveSession.sessionId, {
-        type: "turn_failed",
-        turnId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      drainQueuedOpenCodeInput(services, liveSession);
+      if (ownsCurrentTurn) {
+        applyActivity(services, liveSession.sessionId, {
+          type: "turn_failed",
+          turnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (queuedInput) {
+        if (error instanceof OpenCodeHttpResponseError) {
+          liveSession.queuedInputSubmissionStates?.delete(
+            queuedInput.clientMessageId,
+          );
+          markRuntimeQueuedInputQueued(liveSession.queuedInputs, queuedInput.clientMessageId);
+        }
+        liveSession.queuedInputDrainPaused = true;
+        liveSession.uncertainQueuedInputClientMessageId = queuedInput.clientMessageId;
+        publishSessionInputQueue(
+          services,
+          liveSession.sessionId,
+          liveSession.queuedInputs,
+        );
+      } else {
+        drainQueuedOpenCodeInput(services, liveSession);
+      }
     });
 }
 
@@ -895,11 +1010,54 @@ function drainQueuedOpenCodeInput(
   if (liveSession.providerReadyForInput === false) {
     return;
   }
-  const next = liveSession.queuedInputs.shift();
-  if (!next) {
+  if (liveSession.queuedInputDrainPaused) {
     return;
   }
-  submitOpenCodePrompt({ services, liveSession, request: next });
+  const next = liveSession.queuedInputs[0];
+  if (!next || next.state !== "queued") {
+    return;
+  }
+  if (!markRuntimeQueuedInputSubmitting(liveSession.queuedInputs, next.clientMessageId)) {
+    return;
+  }
+  if (liveSession.uncertainQueuedInputClientMessageId === next.clientMessageId) {
+    delete liveSession.uncertainQueuedInputClientMessageId;
+  }
+  publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+  submitOpenCodePrompt({ services, liveSession, request: next, queuedInput: next });
+}
+
+export function deleteOpenCodeQueuedInput(params: {
+  services: RuntimeServices;
+  liveSession: LiveOpenCodeSession;
+  clientMessageId: string;
+}): boolean {
+  const { services, liveSession, clientMessageId } = params;
+  if (!withdrawRuntimeQueuedInput(liveSession.queuedInputs, clientMessageId)) {
+    return false;
+  }
+  if (liveSession.uncertainQueuedInputClientMessageId === clientMessageId) {
+    delete liveSession.uncertainQueuedInputClientMessageId;
+    liveSession.queuedInputDrainPaused = false;
+  }
+  publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+  drainQueuedOpenCodeInput(services, liveSession);
+  return true;
+}
+
+export function retryOpenCodeQueuedInput(params: {
+  services: RuntimeServices;
+  liveSession: LiveOpenCodeSession;
+  clientMessageId: string;
+}): void {
+  const { services, liveSession, clientMessageId } = params;
+  if (liveSession.uncertainQueuedInputClientMessageId !== clientMessageId) {
+    return;
+  }
+  delete liveSession.uncertainQueuedInputClientMessageId;
+  liveSession.queuedInputDrainPaused = false;
+  publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+  drainQueuedOpenCodeInput(services, liveSession);
 }
 
 function attachOpenCodeEventSink(params: {
@@ -918,6 +1076,22 @@ function attachOpenCodeEventSink(params: {
             : undefined;
         if (statusType === "busy" || statusType === "retry") {
           liveSession.providerReadyForInput = false;
+          const submittingQueuedInput = [
+            ...(liveSession.queuedInputSubmissionStates?.entries() ?? []),
+          ].find(([, state]) => state === "submitting");
+          if (submittingQueuedInput) {
+            liveSession.queuedInputSubmissionStates?.set(
+              submittingQueuedInput[0],
+              "accepted",
+            );
+            const acceptedClientMessageId = submittingQueuedInput[0];
+            if (
+              liveSession.uncertainQueuedInputClientMessageId === acceptedClientMessageId
+            ) {
+              delete liveSession.uncertainQueuedInputClientMessageId;
+            }
+            liveSession.queuedInputDrainPaused = false;
+          }
         } else if (statusType === "idle") {
           liveSession.providerReadyForInput = true;
         }
@@ -931,6 +1105,7 @@ function attachOpenCodeEventSink(params: {
           patchOpenCodeRuntimeError(services, liveSession, activity.error);
         }
         applyActivity(services, liveSession.sessionId, activity, event);
+        confirmOpenCodeQueuedInputHandoff(services, liveSession, activity);
       }
       reconcileOpenCodeAbortProgress(liveSession, activities);
       drainQueuedOpenCodeInput(services, liveSession);
@@ -952,8 +1127,15 @@ function attachOpenCodeEventSink(params: {
 export async function closeOpenCodeLiveSession(
   liveSession: LiveOpenCodeSession,
   _request?: CloseSessionRequest,
+  services?: RuntimeServices,
 ): Promise<void> {
   liveSession.queuedInputs.length = 0;
+  delete liveSession.uncertainQueuedInputClientMessageId;
+  delete liveSession.queuedInputDrainPaused;
+  liveSession.queuedInputSubmissionStates?.clear();
+  if (services) {
+    publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+  }
   clearOpenCodeAbortRetries(liveSession);
   liveSession.stopEvents();
   liveSession.stopHistoryMirror();
@@ -1028,6 +1210,10 @@ export function interruptOpenCodeLiveSession(params: {
   const { services, liveSession } = params;
   const turnId = liveSession.activityState.currentTurnId;
   liveSession.queuedInputs.length = 0;
+  delete liveSession.uncertainQueuedInputClientMessageId;
+  delete liveSession.queuedInputDrainPaused;
+  liveSession.queuedInputSubmissionStates?.clear();
+  publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
   if (!turnId) {
     return toSessionSummary(services.sessionStore.getSession(liveSession.sessionId)!);
   }

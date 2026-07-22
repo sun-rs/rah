@@ -31,6 +31,7 @@ import { movePathToTrash } from "./trash";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
 import { CodexTurnPageCache } from "./codex-turn-page-cache";
 import {
+  readCodexConversationItemDetail,
   readCodexConversationTurnDetail,
 } from "./codex-turn-history";
 import { createCodexAppServerClient } from "./codex-app-server-client";
@@ -248,14 +249,29 @@ export class CodexStoredHistoryAdapter
         !Array.isArray(candidate) &&
         (candidate as Record<string, unknown>).id === options.providerItemId,
     );
-    if (item === undefined) {
+    if (item !== undefined) {
+      return materializeCodexAppServerItemDetail({
+        sessionId,
+        providerSessionId: record.ref.providerSessionId,
+        providerTurnId: options.providerTurnId,
+        item,
+      });
+    }
+
+    // Code-mode custom calls use call_id as their canonical provider identity,
+    // while native item paging may expose a different response-item id. Fall
+    // back to the indexed turn range so the call and output remain joined for
+    // the third-level result disclosure.
+    const range = await this.turnDirectories.getTurnRange(record, options.providerTurnId);
+    if (!range) {
       return undefined;
     }
-    return materializeCodexAppServerItemDetail({
+    return readCodexConversationItemDetail({
       sessionId,
-      providerSessionId: record.ref.providerSessionId,
-      providerTurnId: options.providerTurnId,
-      item,
+      turnId: options.providerTurnId,
+      itemId: options.providerItemId,
+      record,
+      range,
     });
   }
 
@@ -380,6 +396,47 @@ export class CodexStoredHistoryAdapter
           archived: true,
           archivedAt: new Date().toISOString(),
         },
+      },
+    });
+  }
+
+  async restoreStoredSession(session: StoredSessionRef): Promise<void> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
+    }
+    if (!record.archived && record.ref.providerState?.archived !== true) {
+      return;
+    }
+    try {
+      const client = await this.getPagingClient();
+      await client.request(
+        "thread/unarchive",
+        { threadId: session.providerSessionId },
+        8_000,
+      );
+    } catch (error) {
+      if (isBrokenPagingTransport(error)) {
+        await this.resetPagingClient();
+      }
+      throw error;
+    }
+    const { archived: _archived, archivedAt: _archivedAt, ...remainingProviderState } =
+      record.ref.providerState ?? {};
+    void _archived;
+    void _archivedAt;
+    const { providerState: _providerState, ...remainingRef } = record.ref;
+    void _providerState;
+    this.storedSessionIndex.set(session.providerSessionId, {
+      ...record,
+      archived: false,
+      ref: {
+        ...remainingRef,
+        ...(Object.keys(remainingProviderState).length > 0
+          ? { providerState: remainingProviderState }
+          : {}),
       },
     });
   }

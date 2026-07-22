@@ -80,6 +80,7 @@ test("discovers provider catalogs off the main runtime path", async () => {
     const results = await catalog.refresh("codex");
     assert.equal(results.length, 1);
     assert.equal(results[0]?.provider, "codex");
+    assert.equal(results[0]?.complete, true);
     assert.equal(results[0]?.error, undefined);
     assert.equal(results[0]?.records?.[0]?.ref.providerSessionId, expected.sessionId);
     assert.equal(results[0]?.records?.[0]?.storagePath, expected.rolloutPath);
@@ -105,10 +106,30 @@ test("isolates one provider discovery failure from the other catalogs", async ()
       results.find((result) => result.provider === "claude")?.records,
       [],
     );
+    assert.equal(
+      results.find((result) => result.provider === "claude")?.complete,
+      true,
+    );
+    assert.equal(
+      results.find((result) => result.provider === "opencode")?.complete,
+      false,
+    );
     assert.match(
       results.find((result) => result.provider === "opencode")?.error ?? "",
       /opencode\.db|sqlite/i,
     );
+  } finally {
+    await catalog.shutdown();
+  }
+});
+
+test("reports an unavailable provider root as incomplete instead of an authoritative empty catalog", async () => {
+  const catalog = new StoredSessionCatalog();
+  try {
+    const [result] = await catalog.refresh("codex");
+    assert.equal(result?.provider, "codex");
+    assert.equal(result?.complete, false);
+    assert.deepEqual(result?.records, []);
   } finally {
     await catalog.shutdown();
   }

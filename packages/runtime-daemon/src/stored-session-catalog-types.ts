@@ -19,5 +19,11 @@ export type StoredSessionCatalogRecord = {
 export type StoredSessionCatalogProviderResult = {
   provider: StoredSessionCatalogProvider;
   records?: StoredSessionCatalogRecord[];
+  /**
+   * Only a complete provider scan is authoritative for removals. Partial
+   * scans may still contribute upserts, but must never shrink the persisted
+   * RAH catalog.
+   */
+  complete?: boolean;
   error?: string;
 };

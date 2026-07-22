@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createGzip, constants as zlibConstants } from "node:zlib";
 import { applyCorsHeaders } from "./http-server-cors";
+import { SessionInputQueueConflictError } from "./session-input-queue";
 
 export const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const MIN_GZIP_RESPONSE_BYTES = 16 * 1024;
@@ -13,6 +14,9 @@ export type JsonHandler = (
 ) => Promise<void>;
 
 export function requestErrorStatus(error: unknown): number {
+  if (error instanceof SessionInputQueueConflictError) {
+    return 409;
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (
     message.includes("Cross-origin requests are not allowed.") ||
@@ -29,6 +33,7 @@ export function requestErrorStatus(error: unknown): number {
   if (
     message.includes("is required") ||
     message.includes("Bad Request") ||
+    message.includes("Queued message cannot be empty.") ||
     message.includes("Path is not a file.") ||
     message.includes("Workspace directory is required.") ||
     message.includes("is not a supported live provider.") ||
@@ -40,7 +45,17 @@ export function requestErrorStatus(error: unknown): number {
     return 400;
   }
   if (
+    message.includes("does not hold input control") ||
+    message.includes("is no longer queued") ||
+    message.includes("does not support queued input")
+  ) {
+    return 409;
+  }
+  if (
     message.startsWith("Unknown session ") ||
+    message.startsWith("Unknown attachment ") ||
+    message.startsWith("Unknown turn artifact ") ||
+    message.startsWith("Unknown turn file ") ||
     message.startsWith("Unknown manual model ") ||
     message.startsWith("Unknown manual model option ")
   ) {
@@ -114,6 +129,67 @@ export function readJsonBody(
   });
 }
 
+export function readBinaryBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<Buffer> {
+  return readRequestBody(req, maxBytes);
+}
+
+function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const contentLength = req.headers["content-length"];
+    let settled = false;
+    let totalBytes = 0;
+
+    const fail = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      chunks.splice(0, chunks.length);
+      req.resume();
+      reject(error);
+    };
+
+    if (typeof contentLength === "string") {
+      const parsed = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(parsed) && parsed > maxBytes) {
+        fail(new Error("Request body too large."));
+        return;
+      }
+    }
+
+    req.on("data", (chunk) => {
+      if (settled) {
+        return;
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        fail(new Error("Request body too large."));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
+    req.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    });
+  });
+}
+
 export function writeJson(
   req: IncomingMessage,
   res: ServerResponse,
@@ -126,6 +202,7 @@ export function writeJson(
     res.writeHead(status, {
       "content-type": "application/json; charset=utf-8",
       "content-encoding": "gzip",
+      "cache-control": "no-store",
       vary: "accept-encoding",
     });
     const gzip = createGzip({ level: zlibConstants.Z_BEST_SPEED });
@@ -137,6 +214,7 @@ export function writeJson(
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": body.byteLength,
+    "cache-control": "no-store",
     ...(body.byteLength >= MIN_GZIP_RESPONSE_BYTES ? { vary: "accept-encoding" } : {}),
   });
   res.end(body);

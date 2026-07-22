@@ -45,8 +45,11 @@ export function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): voi
     res.setHeader("access-control-allow-origin", originHeader);
     res.setHeader("access-control-allow-credentials", "true");
   }
-  res.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type, x-rah-client");
+  res.setHeader("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  res.setHeader(
+    "access-control-allow-headers",
+    "content-type, x-rah-client, x-rah-file-name",
+  );
 }
 
 export function validateApiRequest(req: IncomingMessage, pathname: string): string | null {
@@ -57,7 +60,7 @@ export function validateApiRequest(req: IncomingMessage, pathname: string): stri
     return "Cross-origin requests are not allowed.";
   }
   if (
-    (req.method === "POST" || req.method === "DELETE") &&
+    (req.method === "POST" || req.method === "PATCH" || req.method === "DELETE") &&
     typeof req.headers.origin === "string" &&
     req.headers["x-rah-client"] !== "web"
   ) {

@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import type { ManagedSession, StoredSessionRef } from "@rah/runtime-protocol";
+import type { ManagedSession, StoredSessionRef, WorkbenchPinnedItemRef } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import type { StoredSessionState } from "./session-store";
 import { canonicalDirectoryKey, isReadOnlyReplaySession } from "./workbench-directory-utils";
 
 const SNAPSHOT_FILE = "workbench-state.json";
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 const RECENT_SESSION_LIMIT = 15;
 
 interface WorkbenchStateFile {
@@ -24,6 +24,7 @@ interface WorkbenchStateFile {
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   tuiMuxLiveSessions?: ManagedSession[];
+  pinnedSidebarItems?: WorkbenchPinnedItemRef[];
 }
 
 export type WorkbenchStateSnapshot = {
@@ -36,6 +37,7 @@ export type WorkbenchStateSnapshot = {
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   tuiMuxLiveSessions: ManagedSession[];
+  pinnedSidebarItems: WorkbenchPinnedItemRef[];
 };
 
 function normalizeDirectory(value: string | undefined): string | null {
@@ -113,6 +115,33 @@ function uniqueStringsInOrder(values: readonly string[]): string[] {
     next.push(value);
   }
   return next;
+}
+
+function normalizePinnedSidebarItems(value: unknown): WorkbenchPinnedItemRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: WorkbenchPinnedItemRef[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const workspaceDir = normalizeDirectory((candidate as { workspaceDir?: unknown }).workspaceDir as string | undefined);
+    const itemKey = typeof (candidate as { itemKey?: unknown }).itemKey === "string"
+      ? (candidate as { itemKey: string }).itemKey.trim()
+      : "";
+    if (!workspaceDir || !itemKey) {
+      continue;
+    }
+    const key = `${canonicalDirectoryKey(workspaceDir) ?? workspaceDir}\u0000${itemKey}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push({ workspaceDir, itemKey });
+  }
+  return result;
 }
 
 function resolveRahHome(): string {
@@ -367,6 +396,7 @@ export class WorkbenchStateStore {
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
     tuiMuxLiveSessions: ManagedSession[];
+    pinnedSidebarItems: WorkbenchPinnedItemRef[];
   } = {
     workspaces: [],
     hiddenWorkspaces: [],
@@ -376,6 +406,7 @@ export class WorkbenchStateStore {
     sessions: [],
     recentSessions: [],
     tuiMuxLiveSessions: [],
+    pinnedSidebarItems: [],
   };
 
   constructor(rootDir = path.join(resolveRahHome(), "runtime-daemon")) {
@@ -395,6 +426,7 @@ export class WorkbenchStateStore {
         sessions: [],
         recentSessions: [],
         tuiMuxLiveSessions: [],
+        pinnedSidebarItems: [],
       };
       return this.state;
     }
@@ -410,6 +442,7 @@ export class WorkbenchStateStore {
           sessions: [],
           recentSessions: [],
           tuiMuxLiveSessions: [],
+          pinnedSidebarItems: [],
         };
         return this.state;
       }
@@ -450,6 +483,7 @@ export class WorkbenchStateStore {
         ? uniqueStringsInOrder(raw.hiddenSessionKeys.filter((value): value is string => typeof value === "string"))
             .filter((key) => !isInternalDebugSessionKey(key))
         : [];
+      const pinnedSidebarItems = normalizePinnedSidebarItems(raw.pinnedSidebarItems);
       const sessionTitleOverrides =
         raw.sessionTitleOverrides && typeof raw.sessionTitleOverrides === "object"
           ? Object.fromEntries(
@@ -506,6 +540,7 @@ export class WorkbenchStateStore {
           sessionTitleOverrides,
         ),
         tuiMuxLiveSessions,
+        pinnedSidebarItems,
       };
       return this.state;
     } catch (error) {
@@ -519,6 +554,7 @@ export class WorkbenchStateStore {
         sessions: [],
         recentSessions: [],
         tuiMuxLiveSessions: [],
+        pinnedSidebarItems: [],
       };
       return this.state;
     }
@@ -567,6 +603,7 @@ export class WorkbenchStateStore {
       sessions: mergeRememberedSessions(this.state.sessions, sessions),
       recentSessions: mergeRecentSessions(this.state.recentSessions, recentSessions),
       tuiMuxLiveSessions,
+      pinnedSidebarItems: this.state.pinnedSidebarItems,
     };
     this.persistState();
   }
@@ -620,6 +657,7 @@ export class WorkbenchStateStore {
       sessions: [...this.state.sessions],
       recentSessions: [...this.state.recentSessions],
       tuiMuxLiveSessions: [...this.state.tuiMuxLiveSessions],
+      pinnedSidebarItems: this.state.pinnedSidebarItems.map((item) => ({ ...item })),
     };
   }
 
@@ -640,6 +678,7 @@ export class WorkbenchStateStore {
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
       tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
+      pinnedSidebarItems: this.state.pinnedSidebarItems,
     };
     this.persistState();
   }
@@ -665,6 +704,27 @@ export class WorkbenchStateStore {
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
       tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
+      pinnedSidebarItems: this.state.pinnedSidebarItems.filter(
+        (item) => !sameDirectory(item.workspaceDir, directory),
+      ),
+    };
+    this.persistState();
+  }
+
+  setPinnedSidebarItem(rawWorkspaceDir: string, rawItemKey: string, pinned: boolean): void {
+    const workspaceDir = normalizeDirectory(rawWorkspaceDir);
+    const itemKey = rawItemKey.trim();
+    if (!workspaceDir || !itemKey) {
+      throw new Error("Pinned sidebar item requires a workspace and item key.");
+    }
+    const existing = this.state.pinnedSidebarItems.filter(
+      (item) => !(sameDirectory(item.workspaceDir, workspaceDir) && item.itemKey === itemKey),
+    );
+    this.state = {
+      ...this.state,
+      pinnedSidebarItems: pinned
+        ? [...existing, { workspaceDir, itemKey }]
+        : existing,
     };
     this.persistState();
   }
@@ -680,6 +740,7 @@ export class WorkbenchStateStore {
       sessions: this.state.sessions.filter((entry) => sessionKey(entry) !== key),
       recentSessions: this.state.recentSessions.filter((entry) => sessionKey(entry) !== key),
       tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
+      pinnedSidebarItems: this.state.pinnedSidebarItems,
     };
     this.persistState();
   }
@@ -812,6 +873,7 @@ export class WorkbenchStateStore {
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
       tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
+      pinnedSidebarItems: this.state.pinnedSidebarItems,
     };
     this.enqueue(async () => {
       await mkdir(this.rootDir, { recursive: true });

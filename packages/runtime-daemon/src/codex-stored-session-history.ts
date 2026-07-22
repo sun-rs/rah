@@ -4,6 +4,7 @@ import type {
   ManagedSession,
   RahEvent,
   ConversationEvidencePage,
+  TimelineIdentity,
 } from "@rah/runtime-protocol";
 import type {
   FrozenHistoryBoundary,
@@ -29,6 +30,10 @@ import {
 } from "./codex-stored-session-types";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
+import {
+  CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+  createCodexAggregateTimelineIdentity,
+} from "./codex-timeline-identity";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -153,10 +158,130 @@ function sameTimelineText(
   return false;
 }
 
-export function collapseDuplicateCodexTimelineEvents(events: RahEvent[]): RahEvent[] {
+type CodexTimelineEvent = Extract<
+  RahEvent,
+  { type: "timeline.item.added" | "timeline.item.updated" }
+>;
+type CodexCompactionItem = Extract<
+  CodexTimelineEvent["payload"]["item"],
+  { kind: "compaction" }
+>;
+
+type CodexCompactionAggregate = {
+  eventIndex: number;
+  count: number;
+  seenCanonicalItemIds: Set<string>;
+};
+
+function codexTimelineTurnScope(
+  event: CodexTimelineEvent,
+  fallbackTurnIndex: number,
+): string {
+  return (
+    event.turnId ??
+    event.payload.identity?.canonicalTurnId ??
+    event.payload.identity?.turnKey ??
+    `fallback:${fallbackTurnIndex}`
+  );
+}
+
+function codexTerminalTurnScope(
+  event: RahEvent,
+  fallbackTurnIndex: number,
+): string | undefined {
+  if (
+    event.type !== "turn.completed" &&
+    event.type !== "turn.failed" &&
+    event.type !== "turn.canceled"
+  ) {
+    return undefined;
+  }
+  return (
+    event.turnId ??
+    event.payload.identity?.canonicalTurnId ??
+    event.payload.identity?.turnKey ??
+    `fallback:${fallbackTurnIndex}`
+  );
+}
+
+function withCodexCompactionItem(
+  event: CodexTimelineEvent,
+  item: CodexCompactionItem,
+  identity: TimelineIdentity | undefined = event.payload.identity,
+): CodexTimelineEvent {
+  if (event.type === "timeline.item.added") {
+    return {
+      ...event,
+      payload: {
+        ...event.payload,
+        item,
+        ...(identity ? { identity } : {}),
+      },
+    };
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      item,
+      ...(identity ? { identity } : {}),
+    },
+  };
+}
+
+function codexProviderTurnId(event: CodexTimelineEvent): string | undefined {
+  if (event.turnId) {
+    return event.turnId;
+  }
+  const turnKey = event.payload.identity?.turnKey;
+  return turnKey?.startsWith("turn:") ? turnKey.slice("turn:".length) : undefined;
+}
+
+function codexCompactionAggregateIdentity(
+  event: CodexTimelineEvent,
+  providerSessionId?: string,
+): TimelineIdentity | undefined {
+  const turnId = codexProviderTurnId(event);
+  const resolvedProviderSessionId =
+    providerSessionId ?? event.payload.identity?.providerSessionId;
+  if (!turnId || !resolvedProviderSessionId) {
+    return event.payload.identity;
+  }
+  return createCodexAggregateTimelineIdentity({
+    providerSessionId: resolvedProviderSessionId,
+    turnId,
+    itemKind: "compaction",
+    itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+    origin: "history",
+    confidence: "derived",
+  });
+}
+
+function replaceCompactionAggregate(
+  events: RahEvent[],
+  aggregate: CodexCompactionAggregate,
+  item: CodexCompactionItem,
+): void {
+  const retainedEvent = events[aggregate.eventIndex];
+  if (
+    !retainedEvent ||
+    (retainedEvent.type !== "timeline.item.added" &&
+      retainedEvent.type !== "timeline.item.updated") ||
+    retainedEvent.payload.item.kind !== "compaction"
+  ) {
+    return;
+  }
+  events[aggregate.eventIndex] = withCodexCompactionItem(retainedEvent, item);
+}
+
+export function collapseDuplicateCodexTimelineEvents(
+  events: RahEvent[],
+  options: { providerSessionId?: string } = {},
+): RahEvent[] {
   const next: RahEvent[] = [];
   const seenCanonicalItemIds = new Set<string>();
   const reasoningTextsByTurn = new Map<string, Set<string>>();
+  const compactionByTurn = new Map<string, CodexCompactionAggregate>();
   let fallbackTurnIndex = 0;
   for (const originalEvent of events) {
     let event = originalEvent;
@@ -165,6 +290,65 @@ export function collapseDuplicateCodexTimelineEvents(events: RahEvent[]): RahEve
       event.payload.item.kind === "user_message"
     ) {
       fallbackTurnIndex += 1;
+    }
+    if (
+      (event.type === "timeline.item.added" ||
+        event.type === "timeline.item.updated") &&
+      event.payload.item.kind === "compaction"
+    ) {
+      const turnScope = codexTimelineTurnScope(event, fallbackTurnIndex);
+      const canonicalItemId = event.payload.identity?.canonicalItemId;
+      const existing = compactionByTurn.get(turnScope);
+      if (!existing) {
+        const count = Math.max(1, event.payload.item.count ?? 1);
+        const normalizedEvent = withCodexCompactionItem(
+          event,
+          {
+            ...event.payload.item,
+            count,
+          },
+          codexCompactionAggregateIdentity(event, options.providerSessionId),
+        );
+        const seenCanonicalItemIdsForTurn = new Set<string>();
+        if (canonicalItemId) {
+          seenCanonicalItemIdsForTurn.add(canonicalItemId);
+        }
+        compactionByTurn.set(turnScope, {
+          eventIndex: next.length,
+          count,
+          seenCanonicalItemIds: seenCanonicalItemIdsForTurn,
+        });
+        next.push(normalizedEvent);
+        continue;
+      }
+
+      const distinctLegacyOccurrence = canonicalItemId
+        ? !existing.seenCanonicalItemIds.has(canonicalItemId)
+        : event.type === "timeline.item.added";
+      if (canonicalItemId) {
+        existing.seenCanonicalItemIds.add(canonicalItemId);
+      }
+      existing.count =
+        event.payload.item.count !== undefined
+          ? Math.max(existing.count, event.payload.item.count)
+          : existing.count + (distinctLegacyOccurrence ? 1 : 0);
+
+      const retainedEvent = next[existing.eventIndex];
+      const retainedItem =
+        retainedEvent &&
+        (retainedEvent.type === "timeline.item.added" ||
+          retainedEvent.type === "timeline.item.updated") &&
+        retainedEvent.payload.item.kind === "compaction"
+          ? retainedEvent.payload.item
+          : undefined;
+      const trigger = event.payload.item.trigger ?? retainedItem?.trigger;
+      replaceCompactionAggregate(next, existing, {
+        kind: "compaction",
+        status: event.payload.item.status,
+        count: existing.count,
+        ...(trigger !== undefined ? { trigger } : {}),
+      });
+      continue;
     }
     if (
       event.type === "timeline.item.added" &&
@@ -213,6 +397,26 @@ export function collapseDuplicateCodexTimelineEvents(events: RahEvent[]): RahEve
       }
       seenCanonicalItemIds.add(event.payload.identity.canonicalItemId);
     }
+    const terminalTurnScope = codexTerminalTurnScope(event, fallbackTurnIndex);
+    if (terminalTurnScope) {
+      const aggregate = compactionByTurn.get(terminalTurnScope);
+      if (aggregate) {
+        const retainedEvent = next[aggregate.eventIndex];
+        if (
+          retainedEvent &&
+          (retainedEvent.type === "timeline.item.added" ||
+            retainedEvent.type === "timeline.item.updated") &&
+          retainedEvent.payload.item.kind === "compaction" &&
+          retainedEvent.payload.item.status === "started"
+        ) {
+          replaceCompactionAggregate(next, aggregate, {
+            ...retainedEvent.payload.item,
+            status: "completed",
+            count: aggregate.count,
+          });
+        }
+      }
+    }
     const previous = next.at(-1);
     if (sameTimelineText(previous, event)) {
       continue;
@@ -246,7 +450,13 @@ export function translateCodexRolloutWindowToHistoryEvents(args: {
   finalizePendingTools?: boolean;
 }): RahEvent[] {
   const services = {
-    eventBus: new EventBus(),
+    // This bus is a translation buffer, not the daemon's bounded live replay
+    // buffer. A single frozen history window can legitimately project more
+    // than 2,000 semantic events; truncating here silently drops the oldest
+    // turns and therefore their Sources/Outputs before page selection runs.
+    eventBus: new EventBus({
+      maxEvents: Math.max(2_000, args.lines.length * 8 + 32),
+    }),
     ptyHub: new PtyHub(),
     sessionStore: new SessionStore(),
   };
@@ -321,6 +531,7 @@ export function translateCodexRolloutWindowToHistoryEvents(args: {
         sessionId: args.sessionId,
       }))
       .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq),
+    { providerSessionId: args.providerSessionId },
   );
 }
 
@@ -481,7 +692,9 @@ export function getCodexStoredSessionHistoryPage(params: {
   finalizeUnterminatedTools?: boolean;
 }): ConversationEvidencePage {
   const services = {
-    eventBus: new EventBus(),
+    // The legacy full-rollout path filters and pages only after replay. Keep
+    // the complete projection until that selection has happened.
+    eventBus: new EventBus({ maxEvents: Number.MAX_SAFE_INTEGER }),
     ptyHub: new PtyHub(),
     sessionStore: new SessionStore(),
   };
@@ -514,7 +727,9 @@ export function getCodexStoredSessionHistoryPage(params: {
       sessionId: params.sessionId,
     }))
     .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
-  const collapsed = collapseDuplicateCodexTimelineEvents(all);
+  const collapsed = collapseDuplicateCodexTimelineEvents(all, {
+    providerSessionId: params.record.ref.providerSessionId,
+  });
 
   const limit = Math.max(1, params.limit ?? 1000);
   const start = Math.max(0, collapsed.length - limit);

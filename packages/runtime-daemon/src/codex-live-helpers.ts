@@ -8,7 +8,11 @@ import {
   type PermissionResponseRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import {
+  applyProviderActivity,
+  applyProviderActivityAsync,
+  type ProviderActivity,
+} from "./provider-activity";
 import {
   type CodexLiveTranslatedActivity,
   mapCodexQuestionRequestToActivities,
@@ -24,6 +28,10 @@ import {
 } from "./codex-live-types";
 import { requestCodexThreadResumeWithoutTranscript } from "./codex-app-server-resume";
 import { setSessionSideLifecycleState } from "./session-side-lifecycle";
+import {
+  deleteRuntimeQueuedInput,
+  publishSessionInputQueue,
+} from "./session-input-queue";
 
 type BufferedServerRequest = {
   request: JsonRpcRequest;
@@ -236,8 +244,6 @@ function isTurnLifecycleActivity(activity: ProviderActivity): activity is Extrac
 function isOutOfBandTurnLifecycleActivity(args: {
   activity: ProviderActivity;
   currentTurnId: string | null;
-  providerSessionId?: string | undefined;
-  mainProviderSessionId?: string | undefined;
 }): boolean {
   if (!args.currentTurnId || !isTurnLifecycleActivity(args.activity)) {
     return false;
@@ -245,11 +251,12 @@ function isOutOfBandTurnLifecycleActivity(args: {
   if (args.activity.turnId === args.currentTurnId || args.activity.turnId === "current-turn") {
     return false;
   }
-  // If Codex positively identifies the current main thread, let that lifecycle
-  // through; it may be recovering from a stale local currentTurnId after a
-  // reconnect. Unidentified different turn ids are treated as out-of-band,
-  // which prevents subagent lifecycle events from ending the main turn.
-  return !(args.providerSessionId && args.providerSessionId === args.mainProviderSessionId);
+  // A Codex thread may publish delayed historical or nested-agent lifecycle
+  // notifications under the main thread id. The turn id is the authoritative
+  // correlation key while a web turn is active; accepting a different one
+  // would let it end the public turn without clearing the adapter's private
+  // currentTurnId, permanently blocking queued input.
+  return true;
 }
 
 export function shouldApplyCodexTranslatedActivity(args: {
@@ -294,11 +301,11 @@ export function publishSessionBootstrap(
   });
 }
 
-function applyCodexLiveTranslatedItems(
+async function applyCodexLiveTranslatedItems(
   services: RuntimeServices,
   liveSession: LiveCodexSession,
   items: CodexLiveTranslatedActivity[],
-) {
+): Promise<void> {
   for (const item of items) {
     if (
       item.activity.type === "turn_started" &&
@@ -321,7 +328,7 @@ function applyCodexLiveTranslatedItems(
       normalizeCurrentTurnLifecycle(item.activity, liveSession.currentTurnId),
       liveSession.currentTurnId,
     );
-    const events = applyProviderActivity(
+    const events = await applyProviderActivityAsync(
       services,
       liveSession.sessionId,
       {
@@ -333,9 +340,57 @@ function applyCodexLiveTranslatedItems(
       },
       activity,
     );
+    if (
+      activity.type === "timeline_item" &&
+      activity.item.kind === "user_message" &&
+      activity.item.clientMessageId
+    ) {
+      const clientMessageId = activity.item.clientMessageId;
+      if (deleteRuntimeQueuedInput(liveSession.queuedInputs, clientMessageId)) {
+        if (
+          liveSession.queuedInputSubmission?.clientMessageId === clientMessageId
+        ) {
+          delete liveSession.queuedInputSubmission;
+        }
+        if (
+          liveSession.uncertainQueuedInputClientMessageId === clientMessageId
+        ) {
+          delete liveSession.uncertainQueuedInputClientMessageId;
+        }
+        liveSession.queuedInputDrainPaused = false;
+        publishSessionInputQueue(
+          services,
+          liveSession.sessionId,
+          liveSession.queuedInputs,
+        );
+      }
+    }
     for (const event of events) {
       if (event.type === "turn.started") {
         liveSession.currentTurnId = event.turnId ?? null;
+        const queuedInputSubmission = liveSession.queuedInputSubmission;
+        if (queuedInputSubmission) {
+          queuedInputSubmission.accepted = true;
+          if (
+            deleteRuntimeQueuedInput(
+              liveSession.queuedInputs,
+              queuedInputSubmission.clientMessageId,
+            )
+          ) {
+            publishSessionInputQueue(
+              services,
+              liveSession.sessionId,
+              liveSession.queuedInputs,
+            );
+          }
+          if (
+            liveSession.uncertainQueuedInputClientMessageId ===
+            queuedInputSubmission.clientMessageId
+          ) {
+            delete liveSession.uncertainQueuedInputClientMessageId;
+          }
+          liveSession.queuedInputDrainPaused = false;
+        }
         if (liveSession.ephemeral && item.origin !== "snapshot") {
           setSessionSideLifecycleState(services, liveSession.sessionId, "active");
         }
@@ -348,10 +403,11 @@ function applyCodexLiveTranslatedItems(
           liveSession.finishedTurnIds.add(event.turnId);
           liveSession.interruptingTurnIds.delete(event.turnId);
         }
-        if (!liveSession.currentTurnId || !event.turnId || event.turnId === liveSession.currentTurnId) {
-          liveSession.currentTurnId = null;
-          liveSession.drainQueuedInput?.();
-        }
+        // shouldApplyCodexTranslatedActivity is the single turn-correlation
+        // boundary. Once a terminal event passes it, public and private turn
+        // state must transition together.
+        liveSession.currentTurnId = null;
+        liveSession.drainQueuedInput?.();
         if (liveSession.ephemeral && item.origin !== "snapshot") {
           setSessionSideLifecycleState(
             services,
@@ -418,6 +474,10 @@ function expireCodexSideFromNotification(
   }
   liveSession.ephemeralExpired = true;
   liveSession.queuedInputs.length = 0;
+  delete liveSession.queuedInputSubmission;
+  delete liveSession.queuedInputDrainPaused;
+  delete liveSession.uncertainQueuedInputClientMessageId;
+  publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
   liveSession.currentTurnId = null;
   applyProviderActivity(
     services,
@@ -499,7 +559,7 @@ function subscribeExternalCodexThreadForMirror(
             timeoutMs: 30_000,
           });
           liveSession.externalThreadMirrorSubscribed = true;
-          applyCodexLiveTranslatedItems(
+          await applyCodexLiveTranslatedItems(
             services,
             liveSession,
             translateCodexAppServerThreadSnapshot(
@@ -565,16 +625,16 @@ function bindCodexThreadFromNotification(
   liveSession.drainQueuedInput?.();
 }
 
-function handleCodexLiveNotification(
+async function handleCodexLiveNotification(
   services: RuntimeServices,
   liveSession: LiveCodexSession,
   notification: JsonRpcNotification,
-) {
+): Promise<void> {
   if (expireCodexSideFromNotification(services, liveSession, notification)) {
     return;
   }
   bindCodexThreadFromNotification(services, liveSession, notification);
-  applyCodexLiveTranslatedItems(
+  await applyCodexLiveTranslatedItems(
     services,
     liveSession,
     translateCodexAppServerNotification(notification, liveSession.translationState),
@@ -802,13 +862,29 @@ export function createLiveSessionBridge(
   const bufferedNotifications: JsonRpcNotification[] = [];
   const bufferedRequests: BufferedServerRequest[] = [];
   let liveSession: LiveCodexSession | null = null;
+  let notificationQueue = Promise.resolve();
+
+  const enqueueNotification = (
+    target: LiveCodexSession,
+    notification: JsonRpcNotification,
+  ) => {
+    notificationQueue = notificationQueue
+      .then(() => handleCodexLiveNotification(services, target, notification))
+      .catch((error) => {
+        console.warn("[rah] failed to apply Codex live notification", {
+          sessionId: target.sessionId,
+          method: notification.method,
+          error,
+        });
+      });
+  };
 
   client.setNotificationHandler((notification) => {
     if (!liveSession) {
       bufferedNotifications.push(notification);
       return;
     }
-    handleCodexLiveNotification(services, liveSession, notification);
+    enqueueNotification(liveSession, notification);
   });
 
   client.setRequestHandler((request) => {
@@ -827,8 +903,17 @@ export function createLiveSessionBridge(
   return {
     activate(nextLiveSession: LiveCodexSession) {
       liveSession = nextLiveSession;
+      nextLiveSession.flushNotifications = async () => {
+        while (true) {
+          const pending = notificationQueue;
+          await pending;
+          if (pending === notificationQueue) {
+            return;
+          }
+        }
+      };
       for (const notification of bufferedNotifications.splice(0)) {
-        handleCodexLiveNotification(services, nextLiveSession, notification);
+        enqueueNotification(nextLiveSession, notification);
       }
       for (const pending of bufferedRequests.splice(0)) {
         void handleCodexLiveRequest(services, nextLiveSession, pending.request).then(

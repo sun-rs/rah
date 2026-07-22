@@ -930,7 +930,8 @@ function councilMcpTools() {
     {
       name: "channel_post",
       description: [
-        "Post a text message to the RAH council.",
+        "Post one final user-facing answer to the RAH council after the requested work is complete.",
+        "Never post reasoning, tool narration, progress updates, partial drafts, or bootstrap instructions here; use channel_set_status for brief work status.",
         "After posting a reply, immediately call channel_wait_new again; do not stop listening after a reply.",
       ].join(" "),
       inputSchema: {
@@ -1098,6 +1099,19 @@ async function handleCouncilMcpLine(parsed, line) {
     }
     if (request.method === "tools/list") {
       writeMcpResponse(request.id, { tools: councilMcpTools() });
+      try {
+        await postJson(parsed.daemonUrl, "/api/council/mcp-ready", {
+          councilId: parsed.councilId,
+          actorId: parsed.actorId,
+          clientId: parsed.clientId,
+        });
+      } catch (error) {
+        console.error(
+          `[rah-council-mcp] failed to report MCP readiness: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       return;
     }
     if (request.method === "resources/list") {

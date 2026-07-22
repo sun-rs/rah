@@ -1,5 +1,7 @@
 import type {
   ConversationItemProjection,
+  ConversationActivityDescriptor,
+  ConversationActivityFileAction,
   ConversationOutputActivity,
   ConversationOutputProjection,
   ConversationSourceActivity,
@@ -15,11 +17,6 @@ const OUTPUT_OBSERVATION_ACTIVITY = new Map<string, ConversationOutputActivity>(
   ["git.apply", "updated"],
 ]);
 const SOURCE_OBSERVATION_ACTIVITY = new Map<string, ConversationSourceActivity>([
-  ["file.read", "read"],
-  ["media.read", "read"],
-  ["file.list", "searched"],
-  ["file.search", "searched"],
-  ["workspace.scan", "searched"],
   ["web.search", "searched"],
   ["web.fetch", "fetched"],
 ]);
@@ -32,14 +29,71 @@ const OUTPUT_TOOL_ACTIVITY = new Map<string, ConversationOutputActivity>([
   ["preview", "generated"],
 ]);
 const SOURCE_TOOL_ACTIVITY = new Map<string, ConversationSourceActivity>([
-  ["file_read", "read"],
-  ["search", "searched"],
   ["web_search", "searched"],
   ["fetch", "fetched"],
   ["web_fetch", "fetched"],
   ["browser", "fetched"],
 ]);
 const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
+// Provider-native output resources are authoritative regardless of extension.
+// This allowlist applies only to the compatibility fallback that infers an
+// output from a successful write/edit plus an explicit final-answer link.
+// Source-code edits belong in Changes unless the provider actually emits them
+// as an attachment/artifact.
+const FALLBACK_DELIVERABLE_EXTENSIONS = new Set([
+  "7z",
+  "arrow",
+  "avif",
+  "bz2",
+  "csv",
+  "db",
+  "doc",
+  "docx",
+  "feather",
+  "flac",
+  "gif",
+  "gz",
+  "htm",
+  "html",
+  "ipynb",
+  "jpeg",
+  "jpg",
+  "json",
+  "jsonl",
+  "m4a",
+  "markdown",
+  "md",
+  "mdx",
+  "mov",
+  "mp3",
+  "mp4",
+  "odp",
+  "ods",
+  "odt",
+  "parquet",
+  "pdf",
+  "png",
+  "ppt",
+  "pptx",
+  "pq",
+  "rtf",
+  "sqlite",
+  "sqlite3",
+  "svg",
+  "tar",
+  "tgz",
+  "tsv",
+  "txt",
+  "wav",
+  "webm",
+  "webp",
+  "xls",
+  "xlsx",
+  "xml",
+  "xz",
+  "zip",
+]);
+const WELL_KNOWN_EXTENSIONLESS_FILES = /^(?:dockerfile|gemfile|license|makefile|readme)(?:[-_.].*)?$/i;
 
 type ResourceLocation = {
   kind: "file" | "image" | "url";
@@ -63,7 +117,11 @@ type SourceCandidate = ResourceLocation & {
 
 function normalizePath(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
-  return !normalized || normalized === "." || normalized === "/dev/null"
+  return !normalized ||
+    normalized === "." ||
+    normalized === "/dev/null" ||
+    /^\d+(?:,\d+)?$/.test(normalized) ||
+    /^\d*[<>]/.test(normalized)
     ? undefined
     : normalized;
 }
@@ -91,6 +149,17 @@ function pathLocation(value: string, mimeType?: string): ResourceLocation | unde
     path,
     ...(mimeType ? { mimeType } : {}),
   };
+}
+
+function isReopenableSourcePath(value: string): boolean {
+  if (/^(?:\/|[A-Za-z]:\/)/.test(value)) return true;
+  if (/[\r\n\0()[\]{}='"`;|<>]/.test(value)) return false;
+  const label = value.slice(value.lastIndexOf("/") + 1);
+  return (
+    value.includes("/") ||
+    /^\.?[^/]+\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(label) ||
+    WELL_KNOWN_EXTENSIONLESS_FILES.test(label)
+  );
 }
 
 function urlLocation(value: string, kind: "url" | "image" = "url"): ResourceLocation | undefined {
@@ -135,6 +204,66 @@ function subjectLocations(subject: {
     ...(subject.files ?? []).map((file) => pathLocation(file)),
     ...(subject.urls ?? []).map((url) => urlLocation(url)),
   ].filter((location): location is ResourceLocation => location !== undefined);
+}
+
+function outputActivityForDescriptor(
+  activity: ConversationActivityDescriptor,
+  fileAction?: ConversationActivityFileAction,
+): ConversationOutputActivity | undefined {
+  if (fileAction === "created") return "written";
+  if (fileAction === "edited") return "updated";
+  if (fileAction === "deleted") return undefined;
+  if (activity.action === "file_create") return "written";
+  if (activity.action === "file_edit") return "updated";
+  if (activity.action === "file_delete") return undefined;
+  return activity.kind === "file_change" ? "updated" : undefined;
+}
+
+function sourceActivityForDescriptor(
+  activity: ConversationActivityDescriptor,
+  fileAction?: ConversationActivityFileAction,
+): ConversationSourceActivity | undefined {
+  if (fileAction === "read") return "read";
+  if (activity.action === "file_read") return "read";
+  if (activity.action === "web_search") return "searched";
+  if (activity.action === "web_fetch" || activity.action === "browser") return "fetched";
+  if (activity.kind === "file_read") return "read";
+  if (activity.kind === "web") return "fetched";
+  if (activity.kind === "git") return "fetched";
+  return undefined;
+}
+
+function sourceLocationsForActivity(
+  locations: readonly ResourceLocation[],
+  activity: ConversationSourceActivity,
+): ResourceLocation[] {
+  return activity === "searched" || activity === "fetched"
+    ? locations.filter((location) => Boolean(location.url))
+    : [...locations];
+}
+
+function addActivityDescriptorResources(
+  outputs: Map<string, ConversationOutputProjection>,
+  sources: Map<string, ConversationSourceProjection>,
+  activity: ConversationActivityDescriptor,
+  item: ConversationItemProjection,
+  surfacedOutputText: string,
+) {
+  for (const file of activity.files ?? []) {
+    const location = pathLocation(file.path);
+    if (!location) continue;
+    const outputActivity = outputActivityForDescriptor(activity, file.action);
+    if (outputActivity) {
+      addOutputLocations(outputs, [location], outputActivity, item, surfacedOutputText);
+    }
+  }
+  const urlLocations = (activity.urls ?? [])
+    .map((url) => urlLocation(url))
+    .filter((location): location is ResourceLocation => location !== undefined);
+  const urlSourceActivity = sourceActivityForDescriptor(activity);
+  if (urlSourceActivity) {
+    addSourceLocations(sources, urlLocations, urlSourceActivity, item);
+  }
 }
 
 function itemTimes(item: ConversationItemProjection): {
@@ -239,14 +368,131 @@ function addOutputLocations(
   locations: readonly ResourceLocation[],
   activity: ConversationOutputActivity,
   item: ConversationItemProjection,
+  surfacedOutputText: string,
 ) {
   for (const location of locations) {
+    if (
+      activity !== "generated" &&
+      (!isFallbackDeliverableLocation(location) ||
+        !isExplicitlySurfacedOutput(location, surfacedOutputText))
+    ) {
+      continue;
+    }
     addOutput(
       outputs,
       { ...location, activity, confidence: "authoritative", ...itemTimes(item) },
       item.id,
     );
   }
+}
+
+function isFallbackDeliverableLocation(location: ResourceLocation): boolean {
+  if (location.kind === "image") return true;
+  const locator = location.path ?? location.url ?? location.label;
+  const clean = locator.split(/[?#]/, 1)[0]?.toLowerCase() ?? "";
+  const separator = clean.lastIndexOf(".");
+  if (separator < 0 || separator === clean.length - 1) return false;
+  return FALLBACK_DELIVERABLE_EXTENSIONS.has(clean.slice(separator + 1));
+}
+
+function finalAnswerText(items: readonly ConversationItemProjection[]): string {
+  return items
+    .filter(
+      (item) =>
+        item.content.kind === "timeline" &&
+        item.content.item.kind === "assistant_message" &&
+        (item.role === "final" || item.content.item.phase === "final_answer"),
+    )
+    .map((item) =>
+      item.content.kind === "timeline" && item.content.item.kind === "assistant_message"
+        ? item.content.item.text
+        : "",
+    )
+    .join("\n");
+}
+
+function isExplicitlySurfacedOutput(location: ResourceLocation, text: string): boolean {
+  if (!text) return false;
+  const locators = [location.path, location.url, location.label]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return locators.some((locator) => text.includes(locator));
+}
+
+function localMarkdownImageLocations(text: string): ResourceLocation[] {
+  const locations: ResourceLocation[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const imageStart = text.indexOf("![", cursor);
+    if (imageStart < 0) break;
+    const destinationStart = text.indexOf("](", imageStart + 2);
+    if (destinationStart < 0) break;
+
+    let index = destinationStart + 2;
+    while (index < text.length && /\s/.test(text[index] ?? "")) index += 1;
+
+    let destination = "";
+    if (text[index] === "<") {
+      const destinationEnd = text.indexOf(">", index + 1);
+      if (destinationEnd < 0) {
+        cursor = destinationStart + 2;
+        continue;
+      }
+      destination = text.slice(index + 1, destinationEnd);
+      cursor = destinationEnd + 1;
+    } else {
+      while (index < text.length) {
+        const character = text[index] ?? "";
+        if (character === "\\" && index + 1 < text.length) {
+          destination += text[index + 1] ?? "";
+          index += 2;
+          continue;
+        }
+        if (character === ")" || /\s/.test(character)) break;
+        destination += character;
+        index += 1;
+      }
+      cursor = Math.max(index + 1, destinationStart + 2);
+    }
+
+    if (!destination.startsWith("/")) continue;
+    const location = pathLocation(destination);
+    if (location?.kind === "image") locations.push(location);
+  }
+
+  return locations;
+}
+
+/**
+ * Codex persists files supplied through Desktop in a small, human-readable
+ * preamble.  The same preamble is present in stored rollout history even when
+ * the binary image payload is represented separately as base64.  Treat only
+ * entries inside that explicit preamble as user-provided sources; ordinary
+ * paths mentioned in the prompt must not become Sources.
+ */
+function codexMentionedFileLocations(text: string): ResourceLocation[] {
+  const startMarker = "# Files mentioned by the user:";
+  const endMarker = "## My request for Codex:";
+  const start = text.indexOf(startMarker);
+  if (start < 0) return [];
+  const contentStart = start + startMarker.length;
+  const end = text.indexOf(endMarker, contentStart);
+  const preamble = text.slice(contentStart, end < 0 ? text.length : end);
+  const locations = new Map<string, ResourceLocation>();
+
+  for (const line of preamble.split(/\r?\n/)) {
+    const match = /^##\s+(.+?):\s+((?:\/|[A-Za-z]:[\\/]).+?)\s*$/.exec(line);
+    if (!match) continue;
+    const suppliedLabel = match[1]?.trim();
+    const location = pathLocation(match[2] ?? "");
+    if (!location) continue;
+    locations.set(location.path ?? location.label, {
+      ...location,
+      ...(suppliedLabel ? { label: suppliedLabel } : {}),
+    });
+  }
+  return [...locations.values()];
 }
 
 function addSourceLocations(
@@ -256,6 +502,17 @@ function addSourceLocations(
   item: ConversationItemProjection,
 ) {
   for (const location of locations) {
+    // Sources are reopenable provenance, not a dump of shell argv. Local
+    // project files read by the agent belong to Files/process activity, not
+    // Sources; only explicit user attachments may contribute local paths.
+    // Keep this guard for older/provider-native projections as well.
+    if (
+      activity !== "provided" &&
+      location.path &&
+      !isReopenableSourcePath(location.path)
+    ) {
+      continue;
+    }
     addSource(
       sources,
       { ...location, activities: [activity], confidence: "authoritative", ...itemTimes(item) },
@@ -274,14 +531,13 @@ function sortResources<T extends ConversationOutputProjection | ConversationSour
   );
 }
 
-export function projectConversationTurnResources(
-  items: readonly ConversationItemProjection[],
-): {
+export function projectConversationTurnResources(items: readonly ConversationItemProjection[]): {
   outputs: ConversationOutputProjection[];
   sources: ConversationSourceProjection[];
 } {
   const outputs = new Map<string, ConversationOutputProjection>();
   const sources = new Map<string, ConversationSourceProjection>();
+  const surfacedOutputText = finalAnswerText(items);
 
   for (const item of items) {
     if (item.content.kind === "timeline") {
@@ -291,19 +547,80 @@ export function projectConversationTurnResources(
           ...(timeline.path ? [pathLocation(timeline.path, timeline.mime)] : []),
           ...(timeline.url ? [urlLocation(timeline.url)] : []),
         ].filter((location): location is ResourceLocation => location !== undefined);
-        addSourceLocations(sources, locations, "provided", item);
-      } else if (timeline.kind === "user_message" && (timeline.imageCount ?? 0) > 0) {
-        addSource(
-          sources,
-          {
-            kind: "image",
-            label: timeline.imageCount === 1 ? "Image" : `${timeline.imageCount} images`,
-            activities: ["provided"],
-            confidence: "authoritative",
-            ...itemTimes(item),
-          },
-          item.id,
+        if (item.role === "process" || item.role === "final") {
+          for (const location of locations) {
+            addOutput(
+              outputs,
+              {
+                ...location,
+                activity: "generated",
+                confidence: "authoritative",
+                ...itemTimes(item),
+              },
+              item.id,
+            );
+          }
+        } else {
+          addSourceLocations(sources, locations, "provided", item);
+        }
+      } else if (timeline.kind === "user_message") {
+        const mentionedFiles = codexMentionedFileLocations(timeline.text);
+        addSourceLocations(sources, mentionedFiles, "provided", item);
+
+        for (const attachment of timeline.attachments ?? []) {
+          addSource(
+            sources,
+            {
+              kind: attachment.kind === "image" ? "image" : "file",
+              label: attachment.name,
+              mimeType: attachment.mediaType,
+              activities: ["provided"],
+              confidence: "authoritative",
+              ...itemTimes(item),
+            },
+            `${item.id}:${attachment.id}`,
+          );
+        }
+
+        const locatedImageCount = mentionedFiles.filter(
+          (location) => location.kind === "image",
+        ).length;
+        const structuredImageCount = (timeline.attachments ?? []).filter(
+          (attachment) => attachment.kind === "image",
+        ).length;
+        const unresolvedImageCount = Math.max(
+          0,
+          (timeline.imageCount ?? 0) - locatedImageCount - structuredImageCount,
         );
+        if (unresolvedImageCount > 0) {
+          addSource(
+            sources,
+            {
+              kind: "image",
+              label: unresolvedImageCount === 1 ? "Image" : `${unresolvedImageCount} images`,
+              activities: ["provided"],
+              confidence: "authoritative",
+              ...itemTimes(item),
+            },
+            `${item.id}:unresolved-images`,
+          );
+        }
+      } else if (
+        timeline.kind === "assistant_message" &&
+        (item.role === "final" || timeline.phase === "final_answer")
+      ) {
+        for (const location of localMarkdownImageLocations(timeline.text)) {
+          addOutput(
+            outputs,
+            {
+              ...location,
+              activity: "generated",
+              confidence: "authoritative",
+              ...itemTimes(item),
+            },
+            item.id,
+          );
+        }
       }
       continue;
     }
@@ -317,8 +634,32 @@ export function projectConversationTurnResources(
       ];
       const outputActivity = OUTPUT_OBSERVATION_ACTIVITY.get(observation.kind);
       const sourceActivity = SOURCE_OBSERVATION_ACTIVITY.get(observation.kind);
-      if (outputActivity) addOutputLocations(outputs, locations, outputActivity, item);
-      if (sourceActivity) addSourceLocations(sources, locations, sourceActivity, item);
+      if (outputActivity) {
+        addOutputLocations(
+          outputs,
+          locations,
+          outputActivity,
+          item,
+          surfacedOutputText,
+        );
+      }
+      if (sourceActivity) {
+        addSourceLocations(
+          sources,
+          sourceLocationsForActivity(locations, sourceActivity),
+          sourceActivity,
+          item,
+        );
+      }
+      if (observation.activity) {
+        addActivityDescriptorResources(
+          outputs,
+          sources,
+          observation.activity,
+          item,
+          surfacedOutputText,
+        );
+      }
       continue;
     }
 
@@ -327,8 +668,32 @@ export function projectConversationTurnResources(
       const locations = artifactLocations(tool.detail?.artifacts ?? []);
       const outputActivity = OUTPUT_TOOL_ACTIVITY.get(tool.family);
       const sourceActivity = SOURCE_TOOL_ACTIVITY.get(tool.family);
-      if (outputActivity) addOutputLocations(outputs, locations, outputActivity, item);
-      if (sourceActivity) addSourceLocations(sources, locations, sourceActivity, item);
+      if (outputActivity) {
+        addOutputLocations(
+          outputs,
+          locations,
+          outputActivity,
+          item,
+          surfacedOutputText,
+        );
+      }
+      if (sourceActivity) {
+        addSourceLocations(
+          sources,
+          sourceLocationsForActivity(locations, sourceActivity),
+          sourceActivity,
+          item,
+        );
+      }
+      if (tool.activity) {
+        addActivityDescriptorResources(
+          outputs,
+          sources,
+          tool.activity,
+          item,
+          surfacedOutputText,
+        );
+      }
     }
   }
 

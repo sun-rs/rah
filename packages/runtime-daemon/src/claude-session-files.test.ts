@@ -12,6 +12,7 @@ import {
   findClaudeStoredSessionRecord,
   getClaudeStoredSessionHistoryPage,
   resumeClaudeStoredSession,
+  scanClaudeStoredSessionCatalog,
   updateClaudeSessionTitle,
 } from "./claude-session-files";
 import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
@@ -80,6 +81,22 @@ describe("Claude session files", () => {
     assert.equal(stored[0]?.ref.providerSessionId, "session-1");
     assert.equal(stored[0]?.ref.cwd, workDir);
     assert.match(stored[0]?.ref.title ?? "", /say lol/);
+  });
+
+  test("marks the provider catalog incomplete while the projects root is unavailable", () => {
+    rmSync(path.join(tmpClaudeConfig, "projects"), { recursive: true, force: true });
+
+    const scan = scanClaudeStoredSessionCatalog();
+    assert.equal(scan.complete, false);
+    assert.deepEqual(scan.records, []);
+  });
+
+  test("treats an unparseable session file as an incomplete provider snapshot", () => {
+    writeFileSync(path.join(projectDir, "session-in-progress.jsonl"), "{\"type\":", "utf8");
+
+    const scan = scanClaudeStoredSessionCatalog();
+    assert.equal(scan.complete, false);
+    assert.deepEqual(scan.records, []);
   });
 
   test("finds stored Claude sessions across /var and /private/var aliases", () => {

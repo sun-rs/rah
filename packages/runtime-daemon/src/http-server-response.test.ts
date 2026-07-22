@@ -52,6 +52,7 @@ test("writeJson streams large responses with gzip when accepted", async () => {
   await withJsonServer(payload, async (port) => {
     const response = await getRawJson(port, "br, gzip");
     assert.equal(response.headers["content-encoding"], "gzip");
+    assert.equal(response.headers["cache-control"], "no-store");
     assert.equal(response.headers["content-length"], undefined);
     assert.deepEqual(JSON.parse(gunzipSync(response.body).toString("utf8")), payload);
   });
@@ -62,6 +63,7 @@ test("writeJson honors an explicit gzip opt-out", async () => {
   await withJsonServer(payload, async (port) => {
     const response = await getRawJson(port, "gzip;q=0, identity");
     assert.equal(response.headers["content-encoding"], undefined);
+    assert.equal(response.headers["cache-control"], "no-store");
     assert.equal(response.headers.vary, "accept-encoding");
     assert.equal(Number(response.headers["content-length"]), response.body.byteLength);
     assert.deepEqual(JSON.parse(response.body.toString("utf8")), payload);

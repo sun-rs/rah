@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -11,8 +11,8 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import {
-  archiveOpenCodeStoredSession,
   createOpenCodeStoredSessionFrozenHistoryPageLoader,
+  deleteOpenCodeStoredSession,
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
@@ -20,6 +20,7 @@ import {
   getOpenCodeStoredSessionTurnDirectory,
   getOpenCodeStoredSessionTurnHistoryPage,
   loadOpenCodeStoredMessages,
+  restoreOpenCodeStoredSession,
   resumeOpenCodeStoredSession,
 } from "./opencode-stored-sessions";
 
@@ -36,11 +37,12 @@ test("discovers OpenCode stored sessions from opencode.db", { skip: !hasSqlite }
   const dataDir = createOpenCodeFixture();
   try {
     const sessions = discoverOpenCodeStoredSessions({ dataDir });
-    assert.equal(sessions.length, 1);
+    assert.equal(sessions.length, 2);
     assert.deepEqual(sessions[0]!.ref, {
       provider: "opencode",
       providerSessionId: "ses_active",
       source: "provider_history",
+      removalDisposition: "permanent",
       cwd: "/tmp/project/sub",
       rootDir: "/tmp/project",
       title: "Active session",
@@ -53,6 +55,12 @@ test("discovers OpenCode stored sessions from opencode.db", { skip: !hasSqlite }
         messages: 2,
       },
     });
+    assert.equal(sessions[1]?.ref.providerSessionId, "ses_archived");
+    assert.equal(sessions[1]?.ref.providerState?.archived, true);
+    assert.equal(
+      sessions[1]?.ref.providerState?.archivedAt,
+      "2026-04-26T16:00:05.000Z",
+    );
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
@@ -66,6 +74,41 @@ test("uses stable OpenCode stored session preview instead of the latest text par
   try {
     const sessions = discoverOpenCodeStoredSessions({ dataDir });
     assert.equal(sessions[0]?.ref.preview, "First assistant answer");
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("discovers the complete OpenCode catalog when no explicit limit is requested", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const dbPath = path.join(dataDir, "opencode.db");
+    execFileSync("sqlite3", [
+      dbPath,
+      `
+        with recursive sequence(value) as (
+          select 1
+          union all
+          select value + 1 from sequence where value < 1005
+        )
+        insert into session (
+          id, project_id, parent_id, directory, title,
+          time_created, time_updated, time_archived
+        )
+        select
+          printf('bulk_%04d', value),
+          'project_active',
+          null,
+          '/tmp/project/sub',
+          printf('Bulk session %d', value),
+          ${Date.parse("2026-04-26T16:00:00.000Z")},
+          ${Date.parse("2026-04-26T16:00:05.000Z")},
+          null
+        from sequence;
+      `,
+    ]);
+
+    assert.equal(discoverOpenCodeStoredSessions({ dataDir }).length, 1007);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
@@ -518,15 +561,57 @@ test("preserves OpenCode stored assistant markdown line breaks and indentation",
   }
 });
 
-test("archives OpenCode stored sessions so discovery no longer returns them", { skip: !hasSqlite }, () => {
+test("discovers and restores provider-native OpenCode archives", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {
     const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
     assert.ok(record);
-    archiveOpenCodeStoredSession(record);
-    assert.deepEqual(discoverOpenCodeStoredSessions({ dataDir }), []);
+    execFileSync("sqlite3", [
+      record.databasePath,
+      `update session set time_archived = ${Date.now()} where id = 'ses_active';`,
+    ]);
+    const archived = discoverOpenCodeStoredSessions({ dataDir }).find(
+      (entry) => entry.ref.providerSessionId === "ses_active",
+    );
+    assert.equal(archived?.ref.providerState?.archived, true);
+    restoreOpenCodeStoredSession(record);
+    const restored = discoverOpenCodeStoredSessions({ dataDir }).find(
+      (entry) => entry.ref.providerSessionId === "ses_active",
+    );
+    assert.equal(restored?.ref.providerState, undefined);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("permanently deletes OpenCode sessions through the provider CLI", { skip: !hasSqlite }, () => {
+  const xdgDataHome = mkdtempSync(path.join(os.tmpdir(), "rah-opencode-delete-"));
+  const dataDir = path.join(xdgDataHome, "opencode");
+  const binDir = path.join(xdgDataHome, "bin");
+  const fakeOpenCode = path.join(binDir, "opencode");
+  const previousBinary = process.env.RAH_OPENCODE_BINARY;
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    fakeOpenCode,
+    `#!/bin/sh\nsqlite3 "$XDG_DATA_HOME/opencode/opencode.db" "delete from session where id = '$3'"\n`,
+    "utf8",
+  );
+  chmodSync(fakeOpenCode, 0o755);
+  process.env.RAH_OPENCODE_BINARY = fakeOpenCode;
+  createOpenCodeFixture({ dataDir });
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+    deleteOpenCodeStoredSession(record);
+    assert.equal(findOpenCodeStoredSessionRecord("ses_active", { dataDir }), null);
+    assert.ok(findOpenCodeStoredSessionRecord("ses_archived", { dataDir }));
+  } finally {
+    if (previousBinary === undefined) {
+      delete process.env.RAH_OPENCODE_BINARY;
+    } else {
+      process.env.RAH_OPENCODE_BINARY = previousBinary;
+    }
+    rmSync(xdgDataHome, { recursive: true, force: true });
   }
 });
 
@@ -544,7 +629,7 @@ test("OpenCode stored history adapter keeps last-good cache when sqlite refresh 
   try {
     const adapter = new OpenCodeStoredHistoryAdapter({} as RuntimeServices);
     const first = adapter.listStoredSessions();
-    assert.equal(first.length, 1);
+    assert.equal(first.length, 2);
 
     writeFileSync(path.join(dataDir, "opencode.db"), "not a sqlite database", "utf8");
     assert.deepEqual(adapter.refreshStoredSessionsCatalog(), first);

@@ -35,6 +35,7 @@ import { SessionStore } from "./session-store";
 import { normalizeDirectory } from "./workbench-directory-utils";
 import { withHistoryMeta } from "./stored-session-history-meta";
 import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
+import { providerBinaryArgv } from "./provider-binary-utils";
 
 export interface OpenCodeStoredSessionRecord {
   ref: StoredSessionRef;
@@ -194,7 +195,9 @@ export function discoverOpenCodeStoredSessions(options: {
   throwOnReadError?: boolean;
 } = {}): OpenCodeStoredSessionRecord[] {
   const databasePath = resolveOpenCodeDatabasePath(options.dataDir);
-  const limit = Math.max(1, options.limit ?? 1000);
+  const limitClause = options.limit === undefined
+    ? ""
+    : `limit ${Math.max(1, options.limit)}`;
   const rows = sqliteJson<OpenCodeSessionRow>(
     databasePath,
     `
@@ -239,11 +242,11 @@ export function discoverOpenCodeStoredSessions(options: {
         ) as message_count,
         (
           coalesce((
-            select sum(length(mm.data))
+            select sum(length(cast(mm.data as blob)))
             from message mm
             where mm.session_id = s.id
           ), 0) + coalesce((
-            select sum(length(pp.data))
+            select sum(length(cast(pp.data as blob)))
             from part pp
             where pp.session_id = s.id
           ), 0)
@@ -251,9 +254,8 @@ export function discoverOpenCodeStoredSessions(options: {
       from session s
       left join project p on p.id = s.project_id
       where s.parent_id is null
-        and s.time_archived is null
-      order by s.time_updated desc, s.id desc
-      limit ${limit}
+      order by (s.time_archived is not null) asc, s.time_updated desc, s.id desc
+      ${limitClause}
     `,
     { throwOnReadError: options.throwOnReadError === true },
   );
@@ -309,11 +311,11 @@ export function findOpenCodeStoredSessionRecord(
         ) as message_count,
         (
           coalesce((
-            select sum(length(mm.data))
+            select sum(length(cast(mm.data as blob)))
             from message mm
             where mm.session_id = s.id
           ), 0) + coalesce((
-            select sum(length(pp.data))
+            select sum(length(cast(pp.data as blob)))
             from part pp
             where pp.session_id = s.id
           ), 0)
@@ -327,15 +329,81 @@ export function findOpenCodeStoredSessionRecord(
   return buildStoredSessionRecord(rows[0], databasePath)[0] ?? null;
 }
 
-export function archiveOpenCodeStoredSession(record: OpenCodeStoredSessionRecord): void {
+export function restoreOpenCodeStoredSession(record: OpenCodeStoredSessionRecord): void {
   sqliteExec(
     record.databasePath,
     `
       update session
-      set time_archived = ${Date.now()}
+      set time_archived = null
       where id = ${quoteSql(record.ref.providerSessionId)}
     `,
   );
+  const verification = sqliteJson<{ time_archived: number | null }>(
+    record.databasePath,
+    `
+      select time_archived
+      from session
+      where id = ${quoteSql(record.ref.providerSessionId)}
+      limit 1
+    `,
+  )[0];
+  if (!verification || verification.time_archived !== null) {
+    throw new Error(
+      `OpenCode could not restore archived session ${record.ref.providerSessionId}.`,
+    );
+  }
+}
+
+/**
+ * Permanently removes an OpenCode session through OpenCode's public CLI. RAH
+ * deliberately does not emulate deletion by setting time_archived: archive
+ * and delete are distinct product operations, and the provider owns recursive
+ * cleanup of child sessions and related records.
+ */
+export function deleteOpenCodeStoredSession(record: OpenCodeStoredSessionRecord): void {
+  const dataDir = path.dirname(record.databasePath);
+  if (path.basename(dataDir) !== "opencode") {
+    throw new Error(
+      `OpenCode session deletion requires the standard XDG database layout: ${record.databasePath}`,
+    );
+  }
+  const xdgDataHome = path.dirname(dataDir);
+  const binary = process.env.RAH_OPENCODE_BINARY?.trim() || "opencode";
+  const [command, ...prefixArgs] = providerBinaryArgv(binary);
+  if (!command) {
+    throw new Error("OpenCode session deletion requires a provider command.");
+  }
+  try {
+    execFileSync(
+      command,
+      [...prefixArgs, "session", "delete", record.ref.providerSessionId],
+      {
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: xdgDataHome,
+        },
+      },
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `OpenCode could not permanently delete session ${record.ref.providerSessionId}: ${detail}`,
+    );
+  }
+
+  const remaining = sqliteJson<{ id: string }>(
+    record.databasePath,
+    `select id from session where id = ${quoteSql(record.ref.providerSessionId)} limit 1`,
+    { throwOnReadError: true },
+  );
+  if (remaining.length > 0) {
+    throw new Error(
+      `OpenCode reported success but session ${record.ref.providerSessionId} still exists.`,
+    );
+  }
 }
 
 export function loadOpenCodeStoredMessages(
@@ -1001,6 +1069,7 @@ function buildStoredSessionRecord(
     provider: "opencode",
     providerSessionId: row.id,
     source: "provider_history",
+    removalDisposition: "permanent",
     ...(cwd ? { cwd } : {}),
     ...(rootDir ? { rootDir } : {}),
     ...(row.title ? { title: row.title } : {}),
@@ -1008,6 +1077,14 @@ function buildStoredSessionRecord(
     ...(toIso(row.time_created) ? { createdAt: toIso(row.time_created)! } : {}),
     ...(toIso(row.time_updated) ? { updatedAt: toIso(row.time_updated)! } : {}),
     ...(toIso(row.time_updated) ? { lastUsedAt: toIso(row.time_updated)! } : {}),
+    ...(toIso(row.time_archived)
+      ? {
+          providerState: {
+            archived: true,
+            archivedAt: toIso(row.time_archived)!,
+          },
+        }
+      : {}),
   }, {
     ...(typeof row.history_bytes === "number" ? { bytes: row.history_bytes } : {}),
     ...(typeof row.message_count === "number" ? { messages: row.message_count } : {}),

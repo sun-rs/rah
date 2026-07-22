@@ -5,6 +5,7 @@ import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
 import { rahNativeServerEnv } from "./native-local-server-orphans";
+import type { OpenCodePromptPart } from "./session-input-attachments";
 
 const OPENCODE_HEALTHCHECK_REQUEST_TIMEOUT_MS = 1_500;
 const OPENCODE_ID_RANDOM_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -374,12 +375,34 @@ export async function openCodeRequestJson<T>(
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`OpenCode API ${path} failed with HTTP ${response.status}${body ? `: ${body}` : ""}`);
+    throw new OpenCodeHttpResponseError({
+      path,
+      status: response.status,
+      body,
+    });
   }
   if (response.status === 204) {
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+export class OpenCodeHttpResponseError extends Error {
+  readonly path: string;
+  readonly status: number;
+  readonly body: string;
+
+  constructor(params: { path: string; status: number; body: string }) {
+    super(
+      `OpenCode API ${params.path} failed with HTTP ${params.status}${
+        params.body ? `: ${params.body}` : ""
+      }`,
+    );
+    this.name = "OpenCodeHttpResponseError";
+    this.path = params.path;
+    this.status = params.status;
+    this.body = params.body;
+  }
 }
 
 export async function openCodeFetch(
@@ -447,20 +470,21 @@ export async function getOpenCodeMessages(
 export async function promptOpenCodeSessionAsync(params: {
   handle: Pick<OpenCodeServerHandle, "baseUrl" | "cwd" | "authHeader">;
   providerSessionId: string;
-  text: string;
+  text?: string;
+  parts?: OpenCodePromptPart[];
   model?: string;
   variant?: string;
   agent?: string;
   messageId?: string;
 }): Promise<void> {
   const body: {
-    parts: Array<{ type: "text"; text: string }>;
+    parts: OpenCodePromptPart[];
     messageID?: string;
     model?: { providerID: string; modelID: string };
     variant?: string;
     agent?: string;
   } = {
-    parts: [{ type: "text", text: params.text }],
+    parts: params.parts ?? [{ type: "text", text: params.text ?? "" }],
     ...(params.messageId ? { messageID: params.messageId } : {}),
   };
   const model = parseOpenCodeModel(params.model);
@@ -486,20 +510,21 @@ export async function promptOpenCodeSessionAsync(params: {
 export async function promptOpenCodeSession(params: {
   handle: Pick<OpenCodeServerHandle, "baseUrl" | "cwd" | "authHeader">;
   providerSessionId: string;
-  text: string;
+  text?: string;
+  parts?: OpenCodePromptPart[];
   model?: string;
   variant?: string;
   agent?: string;
   messageId?: string;
 }): Promise<OpenCodeMessageWithParts> {
   const body: {
-    parts: Array<{ type: "text"; text: string }>;
+    parts: OpenCodePromptPart[];
     messageID?: string;
     model?: { providerID: string; modelID: string };
     variant?: string;
     agent?: string;
   } = {
-    parts: [{ type: "text", text: params.text }],
+    parts: params.parts ?? [{ type: "text", text: params.text ?? "" }],
     ...(params.messageId ? { messageID: params.messageId } : {}),
   };
   const model = parseOpenCodeModel(params.model);

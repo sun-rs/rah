@@ -1,8 +1,10 @@
 import type {
   CloseSessionRequest,
+  DeleteQueuedInputRequest,
   InterruptSessionRequest,
   PermissionResponseRequest,
   ProviderModelCatalog,
+  ReorderQueuedInputRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
@@ -10,12 +12,15 @@ import type {
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
+  UpdateQueuedInputRequest,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
 import {
   closeOpenCodeLiveSession,
+  deleteOpenCodeQueuedInput,
   interruptOpenCodeLiveSession,
   respondToOpenCodeLivePermission,
+  retryOpenCodeQueuedInput,
   resumeOpenCodeLiveSession,
   sendInputToOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
@@ -42,6 +47,12 @@ import {
 } from "../provider-resume";
 import { toSessionSummary } from "../session-store";
 import { mergeManualProviderModels } from "../manual-provider-models";
+import {
+  publishSessionInputQueue,
+  reorderRuntimeQueuedInput,
+  SessionInputQueueConflictError,
+  updateRuntimeQueuedInput,
+} from "../session-input-queue";
 
 interface OpenCodeStartupModelCatalogSource {
   getCached(options?: { cwd?: string }): ProviderModelCatalog | null;
@@ -83,6 +94,11 @@ export class OpenCodeAdapter implements ProviderAdapter {
       modelCatalog,
     });
     this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+    publishSessionInputQueue(
+      this.services,
+      response.liveSession.sessionId,
+      response.liveSession.queuedInputs,
+    );
     return { session: response.summary };
   }
 
@@ -141,6 +157,11 @@ export class OpenCodeAdapter implements ProviderAdapter {
         modelCatalog: cachedModelCatalog,
       });
       this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+      publishSessionInputQueue(
+        this.services,
+        response.liveSession.sessionId,
+        response.liveSession.queuedInputs,
+      );
       return { session: response.summary };
     } catch (error) {
       preparedResume.rollback();
@@ -220,6 +241,72 @@ export class OpenCodeAdapter implements ProviderAdapter {
     });
   }
 
+  updateQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: UpdateQueuedInputRequest,
+  ): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("OpenCode session is not live.");
+    }
+    if (!request.text.trim()) {
+      throw new Error("Queued message cannot be empty.");
+    }
+    if (!updateRuntimeQueuedInput(live.queuedInputs, clientMessageId, request.text)) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be edited.",
+      );
+    }
+    publishSessionInputQueue(this.services, sessionId, live.queuedInputs);
+    retryOpenCodeQueuedInput({
+      services: this.services,
+      liveSession: live,
+      clientMessageId,
+    });
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
+  deleteQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: DeleteQueuedInputRequest,
+  ): SessionSummary {
+    void request;
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("OpenCode session is not live.");
+    }
+    if (!deleteOpenCodeQueuedInput({
+      services: this.services,
+      liveSession: live,
+      clientMessageId,
+    })) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be removed.",
+      );
+    }
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
+  reorderQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: ReorderQueuedInputRequest,
+  ): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("OpenCode session is not live.");
+    }
+    if (!reorderRuntimeQueuedInput(live.queuedInputs, clientMessageId, request.position)) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be reordered.",
+      );
+    }
+    publishSessionInputQueue(this.services, sessionId, live.queuedInputs);
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
@@ -231,7 +318,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const live = this.liveSessions.get(sessionId);
     if (live) {
       this.liveSessions.delete(sessionId);
-      await closeOpenCodeLiveSession(live, request);
+      await closeOpenCodeLiveSession(live, request, this.services);
     }
     this.rehydratedSessionIds.delete(sessionId);
   }
@@ -240,7 +327,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const live = this.liveSessions.get(sessionId);
     if (live) {
       this.liveSessions.delete(sessionId);
-      await closeOpenCodeLiveSession(live);
+      await closeOpenCodeLiveSession(live, undefined, this.services);
     }
     this.rehydratedSessionIds.delete(sessionId);
   }
@@ -289,7 +376,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const sessions = [...this.liveSessions.values()];
     this.liveSessions.clear();
     const results = await Promise.allSettled(
-      sessions.map((session) => closeOpenCodeLiveSession(session)),
+      sessions.map((session) => closeOpenCodeLiveSession(session, undefined, this.services)),
     );
     results.forEach((result, index) => {
       if (result.status === "rejected") {

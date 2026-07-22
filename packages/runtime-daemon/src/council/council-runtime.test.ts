@@ -20,16 +20,21 @@ function visibleCouncilMessages(runtime: CouncilRuntime, councilId: string) {
 class FakeManagedSessionRunner {
   readonly started: Array<StartSessionRequest & StartSessionMcpOptions> = [];
   readonly inputs: Array<{ sessionId: string; request: SessionInputRequest }> = [];
+  readonly structuredInputs: Array<{ sessionId: string; request: SessionInputRequest }> = [];
   readonly interrupted: Array<{ sessionId: string; clientId: string }> = [];
   readonly closed: string[] = [];
+  readonly closeAttempts: string[] = [];
+  readonly failCloseSessionIds = new Set<string>();
+  readonly closeFailuresRemaining = new Map<string, number>();
   failOnStartIndex: number | null = null;
   startDelayMs = 0;
+  closeDelayMs = 0;
   onStartSession?: ((sessionId: string) => void) | undefined;
   private readonly sessions = new Set<string>();
 
   options(): Pick<
     CouncilRuntimeOptions,
-    "startSession" | "sendInput" | "interruptSession" | "closeSession" | "hasSession"
+    "startSession" | "sendInput" | "sendStructuredInput" | "interruptSession" | "closeSession" | "hasSession"
   > {
     return {
       startSession: async (request) => {
@@ -91,10 +96,25 @@ class FakeManagedSessionRunner {
       sendInput: (sessionId, request) => {
         this.inputs.push({ sessionId, request });
       },
+      sendStructuredInput: (sessionId, request) => {
+        this.structuredInputs.push({ sessionId, request });
+      },
       interruptSession: (sessionId, request) => {
         this.interrupted.push({ sessionId, clientId: request.clientId });
       },
       closeSession: async (sessionId) => {
+        this.closeAttempts.push(sessionId);
+        if (this.closeDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.closeDelayMs));
+        }
+        if (this.failCloseSessionIds.has(sessionId)) {
+          throw new Error(`managed session close failed: ${sessionId}`);
+        }
+        const failuresRemaining = this.closeFailuresRemaining.get(sessionId) ?? 0;
+        if (failuresRemaining > 0) {
+          this.closeFailuresRemaining.set(sessionId, failuresRemaining - 1);
+          throw new Error(`transient managed session close failed: ${sessionId}`);
+        }
         if (this.sessions.delete(sessionId)) {
           this.closed.push(sessionId);
         }
@@ -214,12 +234,17 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.equal(managed.started[0]!.attach?.client.id, `rah-council:${response.council.id}:${codexId}`);
     assert.equal(managed.started[0]!.attach?.claimControl, true);
     assert.equal(managed.started[0]!.extraMcpServers?.[0]?.name, "rah_council");
-    const codexPrompt = managed.inputs.find((input) => input.sessionId === "managed:codex:1")?.request.text ?? "";
+    const codexPrompt = managed.structuredInputs.find(
+      (input) => input.sessionId === "managed:codex:1",
+    )?.request.text ?? "";
     assert.match(codexPrompt, /你的唯一名字是 'Codex Lead'/);
     assert.match(codexPrompt, /你的角色: Lead implementation and propose concrete changes\./);
     assert.match(codexPrompt, /用户消息优先级最高/);
     assert.match(codexPrompt, /只能处理 rah_council 工具返回的 recent_messages 或 msg/);
     assert.match(codexPrompt, /@all 表示全体 agent 都应参与讨论/);
+    assert.match(codexPrompt, /channel_post 是最终答复通道/);
+    assert.match(codexPrompt, /禁止发布思考过程、工具调用说明、执行进度/);
+    assert.match(codexPrompt, /只用 channel_set_status 更新简短状态/);
     assert.doesNotMatch(codexPrompt, /@council/);
     assert.match(codexPrompt, /timeout 是心跳/);
     assert.match(codexPrompt, /收到 timed_out=true 后不要输出任何自然语言/);
@@ -236,7 +261,12 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
       agentId: claudeId,
       agentLabel: "Claude Reviewer",
     });
-    const claudePrompt = managed.started[1]!.initialPrompt ?? "";
+    assert.equal(managed.started[1]!.initialPrompt, undefined);
+    assert.equal(managed.inputs.length, 0);
+    runtime.markCouncilMcpReady(response.council.id, claudeId);
+    const claudePrompt = managed.inputs.find(
+      (input) => input.sessionId === "managed:claude:2",
+    )?.request.text ?? "";
     assert.match(claudePrompt, /你的唯一名字是 'Claude Reviewer'/);
     assert.match(claudePrompt, /你的角色: Review risks and challenge weak assumptions\./);
     assert.match(claudePrompt, /mcp__rah_council__channel_join/);
@@ -249,7 +279,9 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.equal(managed.started[2]!.provider, "opencode");
     assert.equal(managed.started[2]!.liveBackend, "native_local_server");
     assert.equal(managed.started[2]!.extraMcpServers?.[0]?.name, "rah_council");
-    const openCodePrompt = managed.inputs.find((input) => input.sessionId === "managed:opencode:3")?.request.text ?? "";
+    const openCodePrompt = managed.structuredInputs.find(
+      (input) => input.sessionId === "managed:opencode:3",
+    )?.request.text ?? "";
     assert.match(openCodePrompt, /你的唯一名字是 'OpenCode Builder'/);
     assert.match(openCodePrompt, /你的角色: Inspect implementation details and report exact findings\./);
     assert.match(openCodePrompt, /timeout_s=120/);
@@ -305,6 +337,135 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
   }
 });
 
+test("CouncilRuntime keeps failed stops retryable and coalesces concurrent stop requests", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-stop-transaction-"));
+  try {
+    const managed = new FakeManagedSessionRunner();
+    const runtime = createCouncilRuntime({
+      store: new CouncilStore(path.join(root, "councils.json")),
+    }, managed);
+    const response = await runtime.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Lead" }],
+    });
+    await waitForCondition(() => managed.started.length === 1, "expected managed Council session");
+    const managedSessionId = "managed:codex:1";
+    managed.failCloseSessionIds.add(managedSessionId);
+
+    await assert.rejects(
+      runtime.stopCouncil(response.council.id),
+      /Council stop could not close managed sessions/,
+    );
+    const failedStop = runtime.listCouncils().councils.find(
+      (council) => council.id === response.council.id,
+    )!;
+    assert.equal(failedStop.status, "running");
+    assert.equal(failedStop.phase, "stopping");
+    assert.match(failedStop.error ?? "", /managed:codex:1/);
+    assert.throws(
+      () => runtime.postMessage(response.council.id, { text: "must not race with stop" }),
+      /Council is stopping/,
+    );
+
+    managed.failCloseSessionIds.clear();
+    managed.closeDelayMs = 25;
+    await Promise.all([
+      runtime.stopCouncil(response.council.id),
+      runtime.stopCouncil(response.council.id),
+    ]);
+    const stopped = runtime.listCouncils().councils.find(
+      (council) => council.id === response.council.id,
+    )!;
+    assert.equal(stopped.status, "stopped");
+    assert.equal(stopped.phase, "ended");
+    assert.equal(stopped.agents[0]!.lastStatusDetail, "Council stopped");
+    assert.deepEqual(managed.closed, [managedSessionId]);
+    assert.equal(
+      managed.closeAttempts.filter((sessionId) => sessionId === managedSessionId).length,
+      3,
+      "the failed transaction retries twice, while concurrent successful callers share one close",
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime completes stop when a transient close failure succeeds on the final pass", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-stop-transient-"));
+  try {
+    const managed = new FakeManagedSessionRunner();
+    const runtime = createCouncilRuntime({
+      store: new CouncilStore(path.join(root, "councils.json")),
+    }, managed);
+    const response = await runtime.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Lead" }],
+    });
+    await waitForCondition(() => managed.started.length === 1, "expected managed Council session");
+    const managedSessionId = "managed:codex:1";
+    managed.closeFailuresRemaining.set(managedSessionId, 1);
+
+    await runtime.stopCouncil(response.council.id);
+
+    const stopped = runtime.listCouncils().councils.find(
+      (council) => council.id === response.council.id,
+    )!;
+    assert.equal(stopped.status, "stopped");
+    assert.equal(stopped.phase, "ended");
+    assert.deepEqual(managed.closed, [managedSessionId]);
+    assert.equal(
+      managed.closeAttempts.filter((sessionId) => sessionId === managedSessionId).length,
+      2,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime clears every agent binding when persisted agents share one managed session", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-shared-session-"));
+  try {
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [
+        { provider: "codex", label: "Agent A" },
+        { provider: "claude", label: "Agent B" },
+      ],
+    });
+    const sharedSessionId = "managed:shared";
+    for (const agent of created.agents) {
+      store.updateAgent(created.id, agent.id, {
+        status: "idle",
+        nativeSessionId: sharedSessionId,
+      });
+    }
+    let live = true;
+    let closeCalls = 0;
+    const runtime = new CouncilRuntime({
+      store,
+      hasSession: (sessionId) => sessionId === sharedSessionId && live,
+      closeSession: async (sessionId) => {
+        assert.equal(sessionId, sharedSessionId);
+        closeCalls += 1;
+        live = false;
+      },
+    });
+
+    await runtime.stopCouncil(created.id);
+
+    const stopped = store.snapshot(created.id, { metadataOnly: true });
+    assert.equal(closeCalls, 1);
+    assert.equal(stopped.status, "stopped");
+    assert.deepEqual(
+      stopped.agents.map((agent) => agent.nativeSessionId ?? agent.terminalId),
+      [undefined, undefined],
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilRuntime can append an agent to an already running council", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-add-agent-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
@@ -344,7 +505,7 @@ test("CouncilRuntime can append an agent to an already running council", async (
     assert.equal(managed.started[1]!.provider, "opencode");
     assert.equal(managed.started[1]!.model, "deepseek/deepseek-v4-pro");
     assert.deepEqual(managed.started[1]!.optionValues, { model_reasoning_variant: "high" });
-    assert.match(managed.inputs.at(-1)?.request.text ?? "", /OpenCode Reviewer/);
+    assert.match(managed.structuredInputs.at(-1)?.request.text ?? "", /OpenCode Reviewer/);
     assert.equal(
       added.council.messages.some((message) =>
         message.actorId === "OpenCode Reviewer" &&
@@ -362,6 +523,42 @@ test("CouncilRuntime can append an agent to an already running council", async (
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
     if (previousRahHome === undefined) delete process.env.RAH_HOME;
     else process.env.RAH_HOME = previousRahHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime stop waits for an in-flight add-agent launch and closes its session", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-stop-add-agent-"));
+  try {
+    const managed = new FakeManagedSessionRunner();
+    const runtime = createCouncilRuntime({
+      store: new CouncilStore(path.join(root, "councils.json")),
+    }, managed);
+    const created = await runtime.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Lead" }],
+    });
+    await waitForCondition(
+      () => managed.structuredInputs.length === 1,
+      "expected initial Council launch to finish",
+    );
+
+    managed.startDelayMs = 60;
+    const addAgent = runtime.addAgent(created.council.id, {
+      agent: { provider: "opencode", label: "Late Reviewer" },
+    });
+    await waitForCondition(() => managed.started.length === 2, "expected add-agent launch to begin");
+    await Promise.all([addAgent, runtime.stopCouncil(created.council.id)]);
+
+    const stopped = runtime.listCouncils().councils.find(
+      (council) => council.id === created.council.id,
+    )!;
+    assert.equal(stopped.status, "stopped");
+    assert.deepEqual(
+      [...managed.closed].sort(),
+      ["managed:codex:1", "managed:opencode:2"],
+    );
+  } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
@@ -972,7 +1169,8 @@ test("CouncilRuntime stop closes an agent session that finishes launching after 
     assert.equal(stopped.phase, "ended");
     assert.equal(stopped.agents[0]!.status, "stopped");
     assert.equal(stopped.agents[0]!.nativeSessionId, undefined);
-    assert.deepEqual(managed.inputs, []);
+    const initialGenericInputs = managed.inputs.slice();
+    assert.deepEqual(initialGenericInputs, []);
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
     else process.env.RAH_CODEX_BINARY = previousCodex;
@@ -1005,6 +1203,8 @@ test("CouncilRuntime shutdown closes live managed agent sessions", async () => {
     const persisted = store.snapshot(response.council.id);
     assert.equal(persisted.status, "stopped");
     assert.equal(persisted.agents[0]?.status, "stopped");
+    assert.equal(persisted.agents[0]?.nativeSessionId, undefined);
+    assert.equal(persisted.agents[0]?.terminalId, undefined);
   } finally {
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;
@@ -1079,10 +1279,15 @@ test("CouncilRuntime can re-inject bootstrap prompts and pause a managed agent l
     const agentId = response.council.agents[0]!.id;
     const terminalId = "managed:claude:1";
     await waitForCondition(() => managed.started.length === 1, "expected council managed session to launch");
-    assert.equal(managed.started[0]!.initialPrompt?.includes("channel_join"), true);
+    assert.equal(managed.started[0]!.initialPrompt, undefined);
+    assert.equal(managed.inputs.length, 0);
+    runtime.markCouncilMcpReady(councilId, agentId);
+    assert.equal(managed.inputs.length, 1);
+    assert.match(managed.inputs[0]!.request.text, /channel_join/);
 
     const reinjected = runtime.reinjectAgentPrompt(councilId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
+    assert.equal(managed.inputs.length, 2);
     assert.match(managed.inputs.at(-1)?.request.text ?? "", /channel_join/);
     assert.equal(managed.inputs.at(-1)?.sessionId, terminalId);
     assert.equal(reinjected.council.agents[0]!.status, "starting");
@@ -1106,6 +1311,72 @@ test("CouncilRuntime can re-inject bootstrap prompts and pause a managed agent l
   } finally {
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime routes native-local-server bootstrap and resend directly to structured input", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-input-routing-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  const previousClaude = process.env.RAH_CLAUDE_BINARY;
+  const previousOpenCode = process.env.RAH_OPENCODE_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
+  process.env.RAH_OPENCODE_BINARY = fakeBinary(root, "opencode");
+  try {
+    const managed = new FakeManagedSessionRunner();
+    const runtime = createCouncilRuntime({
+      store: new CouncilStore(path.join(root, "councils.json")),
+    }, managed);
+    const response = await runtime.createCouncil({
+      workspace: root,
+      agents: [
+        { provider: "codex", label: "Codex Builder" },
+        { provider: "opencode", label: "OpenCode Builder" },
+        { provider: "claude", label: "Claude Reviewer" },
+      ],
+    });
+    await waitForCondition(
+      () => managed.started.length === 3 && managed.structuredInputs.length === 2,
+      "expected native-local-server bootstrap prompts to use structured input",
+    );
+
+    assert.deepEqual(
+      managed.structuredInputs.map((entry) => entry.sessionId),
+      ["managed:codex:1", "managed:opencode:2"],
+    );
+    const claudeAgent = response.council.agents.find((agent) => agent.provider === "claude")!;
+    runtime.markCouncilMcpReady(response.council.id, claudeAgent.id);
+    assert.deepEqual(
+      managed.inputs.map((entry) => entry.sessionId),
+      ["managed:claude:3"],
+    );
+
+    for (const agent of response.council.agents) {
+      const reinjected = runtime.reinjectAgentPrompt(response.council.id, agent.id);
+      assert.deepEqual(reinjected.injectedAgentIds, [agent.id]);
+    }
+
+    assert.deepEqual(
+      managed.structuredInputs.map((entry) => entry.sessionId),
+      [
+        "managed:codex:1",
+        "managed:opencode:2",
+        "managed:codex:1",
+        "managed:opencode:2",
+      ],
+    );
+    assert.deepEqual(
+      managed.inputs.map((entry) => entry.sessionId),
+      ["managed:claude:3", "managed:claude:3"],
+    );
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
+    if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
+    else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
+    else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
     rmSync(root, { force: true, recursive: true });
   }
 });
@@ -1173,7 +1444,10 @@ test("CouncilRuntime pauses active managed OpenCode waiters without raw TUI esca
 
     assert.equal(paused.council.agents[0]!.status, "idle");
     assert.equal(paused.council.agents[0]!.lastStatusDetail, "listening paused");
-    assert.deepEqual(managed.interrupted, []);
+    assert.deepEqual(managed.interrupted, [{
+      sessionId: "managed:opencode:1",
+      clientId: `rah-council:${councilId}:${agentId}`,
+    }]);
     assert.deepEqual((await waitPromise).result, {
       ok: true,
       paused: true,
@@ -1184,9 +1458,36 @@ test("CouncilRuntime pauses active managed OpenCode waiters without raw TUI esca
     assert.equal(afterPrompt.agents[0]!.status, "idle");
     assert.equal(afterPrompt.agents[0]!.lastStatusDetail, "listening paused");
 
+    const repeatedWait = await runtime.callMcpTool({
+      councilId,
+      actorId: agentId,
+      clientId: "opencode-client",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 60 },
+    });
+    assert.deepEqual(repeatedWait.result, {
+      ok: true,
+      paused: true,
+      next_action: "stop_wait_loop",
+      instruction: "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.",
+    });
+    const stillPaused = runtime.listCouncils().councils.find((council) => council.id === councilId)!;
+    assert.equal(stillPaused.agents[0]!.status, "idle");
+    assert.equal(stillPaused.agents[0]!.lastStatusDetail, "listening paused");
+
     const reinjected = runtime.reinjectAgentPrompt(councilId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
     assert.equal(reinjected.council.agents[0]!.status, "starting");
+    assert.equal(managed.structuredInputs.at(-1)?.sessionId, "managed:opencode:1");
+    assert.equal(managed.inputs.length, 0);
+    const resumedWait = await runtime.callMcpTool({
+      councilId,
+      actorId: agentId,
+      clientId: "opencode-client",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 60 },
+    });
+    assert.equal((resumedWait.result as { paused?: unknown }).paused, undefined);
   } finally {
     if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
@@ -1295,22 +1596,25 @@ test("CouncilRuntime stops the council when the last agent terminal is removed",
   }
 });
 
-test("CouncilRuntime pauses active Claude waiters without sending Escape", async () => {
+test("CouncilRuntime pauses active Claude waiters and interrupts the managed provider turn", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-claude-pause-waiter-"));
   const previousClaude = process.env.RAH_CLAUDE_BINARY;
   const previousRahHome = process.env.RAH_HOME;
   process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
   process.env.RAH_HOME = path.join(root, "rah-home");
   try {
+    const managed = new FakeManagedSessionRunner();
     const runtime = createCouncilRuntime({
       store: new CouncilStore(path.join(root, "councils.json")),
-    });
+    }, managed);
     const response = await runtime.createCouncil({
       workspace: root,
       agents: [{ provider: "claude", label: "Claude Reviewer" }],
     });
     const councilId = response.council.id;
     const agentId = response.council.agents[0]!.id;
+    await waitForCondition(() => managed.started.length === 1, "expected Claude managed session to launch");
+    runtime.markCouncilMcpReady(councilId, agentId);
     await runtime.callMcpTool({
       councilId,
       actorId: agentId,
@@ -1329,6 +1633,10 @@ test("CouncilRuntime pauses active Claude waiters without sending Escape", async
 
     assert.equal(paused.council.agents[0]!.status, "idle");
     assert.equal(paused.council.agents[0]!.lastStatusDetail, "listening paused");
+    assert.deepEqual(managed.interrupted, [{
+      sessionId: "managed:claude:1",
+      clientId: `rah-council:${councilId}:${agentId}`,
+    }]);
     assert.deepEqual(waitResult.result, {
       ok: true,
       paused: true,
@@ -1362,11 +1670,16 @@ test("CouncilRuntime re-injects Claude bootstrap prompts without interrupting th
     const councilId = response.council.id;
     const agentId = response.council.agents[0]!.id;
     await waitForCondition(() => managed.started.length === 1, "expected council managed session to launch");
+    assert.equal(managed.started[0]!.initialPrompt, undefined);
+    assert.equal(managed.inputs.length, 0);
+    runtime.markCouncilMcpReady(councilId, agentId);
+    assert.equal(managed.inputs.length, 1);
 
     const reinjected = runtime.reinjectAgentPrompt(councilId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
     assert.equal(reinjected.council.agents[0]!.lastStatusDetail, "bootstrap prompt re-injected");
     assert.deepEqual(managed.interrupted, []);
+    assert.equal(managed.inputs.length, 2);
     assert.equal(managed.inputs.at(-1)?.sessionId, "managed:claude:1");
     assert.match(managed.inputs.at(-1)?.request.text ?? "", /mcp__rah_council__channel_join/);
   } finally {
@@ -1473,6 +1786,42 @@ test("CouncilRuntime reconciles persisted running councils without live agents",
     const persisted = store.snapshot(response.council.id);
     assert.equal(persisted.status, "stopped");
     assert.equal(persisted.agents[0]?.status, "stopped");
+  } finally {
+    if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
+    else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime clears only stale bindings when another persisted council agent is live", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-partial-reconcile-"));
+  const previousClaude = process.env.RAH_CLAUDE_BINARY;
+  process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
+  try {
+    const managed = new FakeManagedSessionRunner();
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const runtime = createCouncilRuntime({ store }, managed);
+    const response = await runtime.createCouncil({
+      workspace: root,
+      agents: [
+        { id: "claude-a", provider: "claude", label: "Claude A" },
+        { id: "claude-b", provider: "claude", label: "Claude B" },
+      ],
+    });
+    await waitForCondition(() => managed.started.length === 2, "expected both council agents to launch");
+    const started = store.snapshot(response.council.id, { metadataOnly: true });
+    const liveSessionId = started.agents[0]!.nativeSessionId!;
+    const staleSessionId = started.agents[1]!.nativeSessionId!;
+    await managed.options().closeSession!(staleSessionId);
+
+    runtime.reconcilePersistedRuntimeState();
+
+    const persisted = store.snapshot(response.council.id, { metadataOnly: true });
+    assert.equal(persisted.status, "running");
+    assert.equal(persisted.agents[0]?.nativeSessionId, liveSessionId);
+    assert.equal(persisted.agents[1]?.status, "stopped");
+    assert.equal(persisted.agents[1]?.nativeSessionId, undefined);
+    assert.equal(persisted.agents[1]?.terminalId, undefined);
   } finally {
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;

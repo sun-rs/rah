@@ -647,7 +647,10 @@ export class DebugEngine {
     };
   }
 
-  getGitStatus(sessionId: string, _options?: { scopeRoot?: string }): GitStatusResponse {
+  getGitStatus(
+    sessionId: string,
+    _options?: { scopeRoot?: string; baseBranch?: string },
+  ): GitStatusResponse {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -674,7 +677,12 @@ export class DebugEngine {
   getGitDiff(
     sessionId: string,
     path: string,
-    _options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
+    _options?: {
+      staged?: boolean;
+      ignoreWhitespace?: boolean;
+      scopeRoot?: string;
+      baseBranch?: string;
+    },
   ): GitDiffResponse {
     return {
       sessionId,

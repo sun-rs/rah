@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type {
+  GitBranchChangedFile,
   GitChangedFile,
+  GitComparisonMode,
   GitDiffResponse,
   GitFileActionRequest,
   GitFileActionResponse,
@@ -32,16 +34,32 @@ type ParsedFileDiff = {
 
 export type WorkspaceGitStatusData = {
   branch?: string;
+  baseBranch?: string;
+  comparisonMode?: GitComparisonMode;
+  comparisonBase?: string;
+  branchOptions: string[];
+  branchFiles: GitBranchChangedFile[];
   changedFiles: string[];
   stagedFiles: GitChangedFile[];
   unstagedFiles: GitChangedFile[];
+  totalBranch: number;
   totalStaged: number;
   totalUnstaged: number;
 };
 
+export type WorkspaceGitStatusOptions = {
+  scopeRoot?: string;
+  baseBranch?: string;
+};
+
+export type WorkspaceGitDiffOptions = WorkspaceGitStatusOptions & {
+  staged?: boolean;
+  ignoreWhitespace?: boolean;
+};
+
 export async function getWorkspaceGitStatusAsync(
   cwd: string,
-  options?: { scopeRoot?: string },
+  options?: WorkspaceGitStatusOptions,
 ): Promise<GitStatusResponse> {
   return {
     sessionId: "",
@@ -52,7 +70,7 @@ export async function getWorkspaceGitStatusAsync(
 export async function getWorkspaceGitDiffAsync(
   cwd: string,
   targetPath: string,
-  options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
+  options?: WorkspaceGitDiffOptions,
 ): Promise<GitDiffResponse["diff"]> {
   try {
     const gitBase = options?.scopeRoot ?? cwd;
@@ -61,8 +79,28 @@ export async function getWorkspaceGitDiffAsync(
       return "";
     }
     const relativeGitPath = await toGitPathAsync(gitBase, targetPath);
+    if (await isUntrackedGitPathAsync(gitCwd, relativeGitPath)) {
+      return await runGitCommand(
+        gitCwd,
+        [
+          "diff",
+          "--no-index",
+          ...(options?.ignoreWhitespace ? ["-w"] : []),
+          "--",
+          "/dev/null",
+          relativeGitPath,
+        ],
+        { acceptedExitCodes: [1] },
+      );
+    }
     const args = ["-C", gitCwd, "diff"];
-    if (options?.staged) {
+    if (options?.baseBranch) {
+      const comparison = await readBranchComparisonAsync(gitCwd, options.baseBranch);
+      if (!comparison.comparisonBase) {
+        return "";
+      }
+      args.push(comparison.comparisonBase);
+    } else if (options?.staged) {
       args.push("--cached");
     }
     if (options?.ignoreWhitespace) {
@@ -143,38 +181,50 @@ export async function applyWorkspaceGitHunkActionAsync(
 
 export async function getWorkspaceGitStatusDataAsync(
   cwd: string,
-  options?: { scopeRoot?: string },
+  options?: WorkspaceGitStatusOptions,
 ): Promise<WorkspaceGitStatusData> {
   return await tryReadGitStatusAsync(cwd, options);
 }
 
 async function tryReadGitStatusAsync(
   cwd: string,
-  options?: { scopeRoot?: string },
+  options?: WorkspaceGitStatusOptions,
 ): Promise<WorkspaceGitStatusData> {
   try {
     const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
     const gitCwd = await tryResolveGitRootAsync(options?.scopeRoot ?? cwd);
     if (!gitCwd) {
       return {
+        branchOptions: [],
+        branchFiles: [],
         changedFiles: [],
         stagedFiles: [],
         unstagedFiles: [],
+        totalBranch: 0,
         totalStaged: 0,
         totalUnstaged: 0,
       };
     }
-    const output = await runGitCommand(gitCwd, ["status", "--porcelain", "--branch"]);
+    const [output, comparison] = await Promise.all([
+      runGitCommand(gitCwd, ["status", "--porcelain"]),
+      readBranchComparisonAsync(gitCwd, options?.baseBranch),
+    ]);
     const lines = output.split(/\r?\n/).filter(Boolean);
-    const branchLine = lines[0] ?? "";
-    const branchMatch = /^## ([^.\s]+)/.exec(branchLine);
-    const unstagedStats = createDiffStatsMap(parseNumStat(await runGitNumstatAsync(gitCwd, false)));
-    const stagedStats = createDiffStatsMap(parseNumStat(await runGitNumstatAsync(gitCwd, true)));
+    const [unstagedStatsOutput, stagedStatsOutput, branchFiles] = await Promise.all([
+      runGitNumstatAsync(gitCwd, false),
+      runGitNumstatAsync(gitCwd, true),
+      comparison.comparisonBase
+        ? readBranchChangedFilesAsync(gitCwd, scopeRoot, comparison.comparisonBase)
+        : Promise.resolve([]),
+    ]);
+    const unstagedStats = createDiffStatsMap(parseNumStat(unstagedStatsOutput));
+    const stagedStats = createDiffStatsMap(parseNumStat(stagedStatsOutput));
     const stagedFiles: GitChangedFile[] = [];
     const unstagedFiles: GitChangedFile[] = [];
     const changedFiles = new Set<string>();
+    const branchFilePaths = new Set(branchFiles.map((file) => file.path));
 
-    for (const line of lines.slice(1)) {
+    for (const line of lines) {
       if (line.startsWith("?? ")) {
         const rawPath = line.slice(3).trim();
         if (!rawPath || rawPath.endsWith("/")) {
@@ -191,6 +241,15 @@ async function tryReadGitStatusAsync(
           added: 0,
           removed: 0,
         });
+        if (!branchFilePaths.has(rawPath)) {
+          branchFiles.push({
+            path: rawPath,
+            status: "untracked",
+            added: 0,
+            removed: 0,
+          });
+          branchFilePaths.add(rawPath);
+        }
         continue;
       }
 
@@ -236,22 +295,188 @@ async function tryReadGitStatusAsync(
     }
 
     return {
-      ...(branchMatch ? { branch: branchMatch[1] } : {}),
+      ...(comparison.currentBranch ? { branch: comparison.currentBranch } : {}),
+      ...(comparison.baseBranch ? { baseBranch: comparison.baseBranch } : {}),
+      ...(comparison.comparisonMode ? { comparisonMode: comparison.comparisonMode } : {}),
+      ...(comparison.comparisonBase ? { comparisonBase: comparison.comparisonBase } : {}),
+      branchOptions: comparison.branchOptions,
+      branchFiles,
       changedFiles: [...changedFiles],
       stagedFiles,
       unstagedFiles,
+      totalBranch: branchFiles.length,
       totalStaged: stagedFiles.length,
       totalUnstaged: unstagedFiles.length,
     };
   } catch {
     return {
+      branchOptions: [],
+      branchFiles: [],
       changedFiles: [],
       stagedFiles: [],
       unstagedFiles: [],
+      totalBranch: 0,
       totalStaged: 0,
       totalUnstaged: 0,
     };
   }
+}
+
+type BranchComparison = {
+  currentBranch?: string;
+  baseBranch?: string;
+  comparisonMode?: GitComparisonMode;
+  comparisonBase?: string;
+  branchOptions: string[];
+};
+
+async function readBranchComparisonAsync(
+  gitCwd: string,
+  requestedBaseBranch?: string,
+): Promise<BranchComparison> {
+  const [currentBranch, refsOutput, originHead, upstream] = await Promise.all([
+    tryRunGitCommand(gitCwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+    tryRunGitCommand(gitCwd, [
+      "for-each-ref",
+      "--format=%(refname:short)%09%(symref)",
+      "refs/heads",
+      "refs/remotes",
+    ]),
+    tryRunGitCommand(gitCwd, [
+      "symbolic-ref",
+      "--quiet",
+      "--short",
+      "refs/remotes/origin/HEAD",
+    ]),
+    tryRunGitCommand(gitCwd, [
+      "rev-parse",
+      "--abbrev-ref",
+      "--symbolic-full-name",
+      "@{upstream}",
+    ]),
+  ]);
+  const normalizedCurrentBranch = currentBranch.trim() || undefined;
+  const availableRefs = refsOutput
+    .split(/\r?\n/)
+    .map((line) => {
+      const [name, symbolicTarget] = line.split("\t");
+      return symbolicTarget?.trim() ? "" : (name?.trim() ?? "");
+    })
+    .filter(
+      (value) =>
+        Boolean(value) && !value.endsWith("/HEAD"),
+    );
+  const branchOptions = [
+    ...new Set([...(normalizedCurrentBranch ? [] : ["HEAD"]), ...availableRefs]),
+  ].sort((left, right) => left.localeCompare(right));
+  const available = new Set(branchOptions);
+  const candidates = [
+    requestedBaseBranch,
+    normalizedCurrentBranch ?? "HEAD",
+    originHead.trim(),
+    "origin/main",
+    "main",
+    "origin/master",
+    "master",
+    upstream.trim(),
+    ...branchOptions,
+  ];
+  const baseBranch = candidates.find(
+    (candidate): candidate is string =>
+      candidate !== undefined &&
+      candidate.length > 0 &&
+      available.has(candidate),
+  );
+
+  let comparisonMode: GitComparisonMode | undefined;
+  let comparisonBase: string | undefined;
+  if (baseBranch) {
+    const currentRef = normalizedCurrentBranch ?? "HEAD";
+    if (baseBranch === currentRef) {
+      comparisonMode = "uncommitted";
+      comparisonBase =
+        (await tryRunGitCommand(gitCwd, ["rev-parse", "HEAD"])).trim() || "HEAD";
+    } else {
+      const mergeBase = (
+        await tryRunGitCommand(gitCwd, ["merge-base", "HEAD", baseBranch])
+      ).trim();
+      if (mergeBase) {
+        comparisonMode = "merge_base";
+        comparisonBase = mergeBase;
+      } else {
+        // Unrelated histories have no common ancestor. A direct snapshot
+        // comparison is still useful, but is exposed explicitly so clients do
+        // not describe it as a PR-style divergence comparison.
+        comparisonMode = "direct";
+        comparisonBase = baseBranch;
+      }
+    }
+  }
+
+  return {
+    ...(normalizedCurrentBranch ? { currentBranch: normalizedCurrentBranch } : {}),
+    ...(baseBranch ? { baseBranch } : {}),
+    ...(comparisonMode ? { comparisonMode } : {}),
+    ...(comparisonBase ? { comparisonBase } : {}),
+    branchOptions,
+  };
+}
+
+async function readBranchChangedFilesAsync(
+  gitCwd: string,
+  scopeRoot: string,
+  comparisonBase: string,
+): Promise<GitBranchChangedFile[]> {
+  const [nameStatusOutput, numStatOutput] = await Promise.all([
+    runGitCommand(gitCwd, ["diff", "--name-status", "--find-renames", comparisonBase]),
+    runGitCommand(gitCwd, ["diff", "--numstat", "--find-renames", comparisonBase]),
+  ]);
+  const stats = createDiffStatsMap(parseNumStat(numStatOutput));
+  const files: GitBranchChangedFile[] = [];
+
+  for (const line of nameStatusOutput.split(/\r?\n/).filter(Boolean)) {
+    const parts = line.split("\t");
+    const statusToken = parts[0] ?? "M";
+    const statusChar = statusToken[0] ?? "M";
+    const isRename = statusChar === "R" || statusChar === "C";
+    const oldPath = isRename ? parts[1]?.trim() : undefined;
+    const filePath = (isRename ? parts[2] : parts[1])?.trim();
+    if (!filePath || !isPathWithinBase(scopeRoot, path.resolve(gitCwd, filePath))) {
+      continue;
+    }
+    const fileStats = stats[filePath] ?? { added: 0, removed: 0, binary: false };
+    files.push({
+      path: filePath,
+      ...(oldPath ? { oldPath } : {}),
+      status: getGitFileStatus(statusChar),
+      added: fileStats.added,
+      removed: fileStats.removed,
+      ...(fileStats.binary ? { binary: true } : {}),
+    });
+  }
+
+  return files;
+}
+
+async function tryRunGitCommand(cwd: string, args: string[]): Promise<string> {
+  try {
+    return await runGitCommand(cwd, args);
+  } catch {
+    return "";
+  }
+}
+
+async function isUntrackedGitPathAsync(cwd: string, targetPath: string): Promise<boolean> {
+  const output = await tryRunGitCommand(cwd, [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "--",
+    targetPath,
+  ]);
+  return output
+    .split(/\r?\n/)
+    .some((candidate) => candidate.trim() === targetPath);
 }
 
 async function getGitCommandCwdAsync(cwd: string): Promise<string> {
@@ -418,7 +643,7 @@ function buildSingleHunkPatch(parsed: ParsedFileDiff, hunkIndex: number): string
 async function runGitCommand(
   cwd: string,
   args: string[],
-  options?: { input?: string },
+  options?: { input?: string; acceptedExitCodes?: readonly number[] },
 ): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     const child = spawn("git", ["-C", cwd, ...args], {
@@ -436,7 +661,7 @@ async function runGitCommand(
     });
     child.on("error", reject);
     child.on("close", (code) => {
-      if (code === 0) {
+      if (code === 0 || (code !== null && options?.acceptedExitCodes?.includes(code))) {
         resolve(stdout);
         return;
       }

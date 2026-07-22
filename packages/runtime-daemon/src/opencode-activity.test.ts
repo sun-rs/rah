@@ -734,6 +734,15 @@ describe("translateOpenCodeEvent", () => {
       turnId,
       clientMessageId: "client-message-1",
       clientTurnId: "client-turn-1",
+      attachments: [
+        {
+          id: "attachment-1",
+          kind: "image",
+          name: "chart.png",
+          mediaType: "image/png",
+          size: 128,
+        },
+      ],
     });
 
     const activities = translateOpenCodeMessage(state, {
@@ -762,6 +771,16 @@ describe("translateOpenCodeEvent", () => {
       assert.equal(user.item.messageId, "msg-user");
       assert.equal(user.item.clientMessageId, "client-message-1");
       assert.equal(user.item.clientTurnId, "client-turn-1");
+      assert.deepEqual(user.item.attachments, [
+        {
+          id: "attachment-1",
+          kind: "image",
+          name: "chart.png",
+        mediaType: "image/png",
+          size: 128,
+        },
+      ]);
+      assert.equal(user.item.imageCount, 1);
     }
   });
 

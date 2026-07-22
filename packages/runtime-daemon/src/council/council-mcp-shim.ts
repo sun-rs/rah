@@ -92,6 +92,13 @@ function waitNewResultPayload(result: CouncilMcpWaitNewResult): Record<string, u
   return { ok: true, msg: toChannelMessage(result) };
 }
 
+export function pausedCouncilMcpWaitResponse(): CouncilMcpResponse {
+  return {
+    ok: true,
+    result: waitNewResultPayload({ kind: "paused" }),
+  };
+}
+
 export type CouncilMcpWaitNew = (args: {
   councilId: string;
   actorId: string;

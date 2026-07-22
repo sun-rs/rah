@@ -20,6 +20,7 @@ import {
   stopOpenCodeServer,
 } from "./opencode-api";
 import {
+  deleteOpenCodeQueuedInput,
   interruptOpenCodeLiveSession,
   normalizeOpenCodeLiveActivities,
   primeOpenCodeHistoryMirrorState,
@@ -409,6 +410,133 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
         }));
       }
     }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("OpenCode restores a rejected queued input and pauses later inputs", async () => {
+  const prompts: string[] = [];
+  let requestCount = 0;
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      if (!/\/message(?:\?|$)/.test(req.url ?? "")) {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      requestCount += 1;
+      prompts.push(body.parts?.[0]?.text ?? "");
+      if (requestCount === 2) {
+        res.statusCode = 503;
+        res.end("provider unavailable");
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({
+        info: {
+          id: `message-${requestCount}`,
+          sessionID: "opencode-queue-rejection",
+          role: "assistant",
+          parentID: body.messageID,
+          time: { completed: Date.now() },
+          finish: "stop",
+        },
+        parts: [],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const session = services.sessionStore.createManagedSession({
+    provider: "opencode",
+    providerSessionId: "opencode-queue-rejection",
+    launchSource: "web",
+    cwd: "/tmp/rah-opencode",
+    rootDir: "/tmp/rah-opencode",
+  });
+  const liveSession = {
+    sessionId: session.session.id,
+    providerSessionId: "opencode-queue-rejection",
+    cwd: "/tmp/rah-opencode",
+    modeId: "build",
+    providerReadyForInput: true,
+    activityState: createOpenCodeActivityState("opencode-queue-rejection"),
+    queuedInputs: [],
+    server: {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      cwd: "/tmp/rah-opencode",
+    },
+  } as unknown as LiveOpenCodeSession;
+
+  try {
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: {
+        clientId: "web-user",
+        clientMessageId: "message-first",
+        text: "first",
+      },
+    });
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: {
+        clientId: "web-user",
+        clientMessageId: "message-rejected",
+        text: "rejected",
+      },
+    });
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: {
+        clientId: "web-user",
+        clientMessageId: "message-third",
+        text: "third",
+      },
+    });
+
+    await waitFor(
+      () =>
+        liveSession.queuedInputDrainPaused === true &&
+        liveSession.queuedInputs.length === 2,
+    );
+    assert.deepEqual(
+      liveSession.queuedInputs.map((item) => item.clientMessageId),
+      ["message-rejected", "message-third"],
+    );
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.deepEqual(prompts, ["first", "rejected"]);
+
+    assert.equal(
+      deleteOpenCodeQueuedInput({
+        services,
+        liveSession,
+        clientMessageId: "message-rejected",
+      }),
+      true,
+    );
+    await waitFor(() => prompts.length === 3);
+    assert.deepEqual(prompts, ["first", "rejected", "third"]);
+    await waitFor(
+      () =>
+        liveSession.queuedInputs.length === 1 &&
+        liveSession.queuedInputs[0]?.clientMessageId === "message-third" &&
+        liveSession.queuedInputs[0]?.state === "submitting",
+    );
+  } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

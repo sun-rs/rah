@@ -323,7 +323,7 @@ describe("WorkbenchStateStore", () => {
     );
 
     const engine = new RuntimeEngine();
-    const listed = engine.listSessions();
+    const listed = engine.listSessions({ storedSessionsMode: "all" });
 
     const stored = listed.storedSessions.find(
       (entry) => entry.provider === "codex" && entry.providerSessionId === "thread-sanitize-1",

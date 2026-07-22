@@ -1,17 +1,22 @@
 import type {
   CloseSessionRequest,
+  DeleteQueuedInputRequest,
   ForkSessionRequest,
   ForkSessionResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
   ProviderModelCatalog,
+  ReorderQueuedInputRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetInputQueuePolicyRequest,
   SetSessionModelRequest,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
+  SteerQueuedInputRequest,
+  UpdateQueuedInputRequest,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
 import {
@@ -24,6 +29,7 @@ import {
   type LiveCodexSession,
 } from "./codex-live-client";
 import { createCodexAppServerClient } from "../codex-app-server-client";
+import { CodexJsonRpcResponseError } from "../codex-live-rpc";
 import {
   bindCodexSubmittedUserMessageToTurn,
   discardPendingCodexSubmittedUserMessage,
@@ -56,6 +62,21 @@ import { timelineRuntimeModel } from "../timeline-runtime-model";
 import { mergeManualProviderModels } from "../manual-provider-models";
 import { publishSessionStateChanged } from "../runtime-session-events";
 import { setSessionSideLifecycleState } from "../session-side-lifecycle";
+import {
+  deleteRuntimeQueuedInput,
+  markRuntimeQueuedInputQueued,
+  markRuntimeQueuedInputSubmitting,
+  publishSessionInputQueue,
+  publishSessionInputQueuePolicy,
+  reorderRuntimeQueuedInput,
+  restoreRuntimeQueuedInput,
+  runtimeQueuedInput,
+  SessionInputQueueConflictError,
+  type RuntimeQueuedInput,
+  updateRuntimeQueuedInput,
+  withdrawRuntimeQueuedInput,
+} from "../session-input-queue";
+import { codexTurnInput } from "../session-input-attachments";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
@@ -64,6 +85,18 @@ const CODEX_EVENT_SOURCE = {
 };
 const CODEX_INTERRUPT_FALLBACK_MS = 1_500;
 const CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS = 2_000;
+const CODEX_NO_ACTIVE_TURN_ERROR = "no active turn to interrupt";
+
+function isCodexNoActiveTurnError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim().toLowerCase().replace(/[.!]+$/, "");
+  return (
+    message === CODEX_NO_ACTIVE_TURN_ERROR ||
+    message.endsWith(`: ${CODEX_NO_ACTIVE_TURN_ERROR}`)
+  );
+}
 
 type CodexTurnCollaborationMode = {
   mode: "default" | "plan";
@@ -163,12 +196,109 @@ export class CodexAdapter implements ProviderAdapter {
     this.services.sessionStore.setRuntimeState(sessionId, "failed");
   }
 
+  private isEphemeralSideSession(sessionId: string): boolean {
+    const relationship =
+      this.services.sessionStore.getSession(sessionId)?.session.relationship;
+    return relationship?.kind === "side" && relationship.persistence === "ephemeral";
+  }
+
+  private isEphemeralLiveSession(liveSession: LiveCodexSession): boolean {
+    return liveSession.ephemeral === true || this.isEphemeralSideSession(liveSession.sessionId);
+  }
+
   private registerLiveSession(liveSession: LiveCodexSession): void {
+    if (this.isEphemeralSideSession(liveSession.sessionId)) {
+      liveSession.ephemeral = true;
+    }
+    liveSession.inputQueuePolicy = "queue";
     liveSession.drainQueuedInput = () => this.drainQueuedInput(liveSession);
     liveSession.client.setCloseHandler((error) => {
       this.handleLiveClientClosed(liveSession, error);
     });
     this.liveSessions.set(liveSession.sessionId, liveSession);
+    publishSessionInputQueue(this.services, liveSession.sessionId, liveSession.queuedInputs);
+    publishSessionInputQueuePolicy(
+      this.services,
+      liveSession.sessionId,
+      liveSession.inputQueuePolicy,
+    );
+  }
+
+  private enqueueInput(live: LiveCodexSession, request: SessionInputRequest): void {
+    live.queuedInputs.push(runtimeQueuedInput(request));
+    publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+  }
+
+  private async steerLiveTurn(
+    live: LiveCodexSession,
+    request: SessionInputRequest,
+    queuedInput?: RuntimeQueuedInput,
+  ): Promise<void> {
+    const turnId = live.currentTurnId;
+    if (!live.threadId || !turnId || live.turnStartInFlight) {
+      throw new SessionInputQueueConflictError(
+        "The active turn ended before this message could be guided.",
+      );
+    }
+    if (
+      queuedInput &&
+      !markRuntimeQueuedInputSubmitting(live.queuedInputs, queuedInput.clientMessageId)
+    ) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be guided.",
+      );
+    }
+    if (queuedInput) {
+      publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+    }
+    recordCodexSubmittedUserMessage(live.translationState, {
+      text: request.text,
+      ...(request.attachments?.length ? { attachments: request.attachments } : {}),
+      ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
+      ...(request.clientTurnId ? { clientTurnId: request.clientTurnId } : {}),
+    });
+    try {
+      await live.client.request(
+        "turn/steer",
+        {
+          threadId: live.threadId,
+          expectedTurnId: turnId,
+          input: codexTurnInput(request),
+          ...(request.clientMessageId
+            ? { clientUserMessageId: request.clientMessageId }
+            : {}),
+        },
+        90_000,
+      );
+      if (queuedInput) {
+        deleteRuntimeQueuedInput(live.queuedInputs, queuedInput.clientMessageId);
+        publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+      }
+    } catch (error) {
+      discardPendingCodexSubmittedUserMessage(
+        live.translationState,
+        request.clientMessageId,
+      );
+      if (queuedInput) {
+        markRuntimeQueuedInputQueued(live.queuedInputs, queuedInput.clientMessageId);
+        publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+      }
+      throw error;
+    }
+  }
+
+  private clearQueuedInputs(live: LiveCodexSession): void {
+    const changed =
+      live.queuedInputs.length > 0 ||
+      live.queuedInputDrainPaused === true ||
+      live.uncertainQueuedInputClientMessageId !== undefined;
+    live.queuedInputs.length = 0;
+    delete live.queuedInputSubmission;
+    delete live.queuedInputDrainPaused;
+    delete live.uncertainQueuedInputClientMessageId;
+    if (changed) {
+      publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+    }
   }
 
   private handleLiveClientClosed(liveSession: LiveCodexSession, error: Error): void {
@@ -180,7 +310,13 @@ export class CodexAdapter implements ProviderAdapter {
     // Each live Codex session owns its app-server process. A transport close
     // is terminal for an ephemeral, pathless Side, and the process must not be
     // left behind after its RPC channel disappears.
-    void liveSession.client.dispose().catch((disposeError) => {
+    void (async () => {
+      try {
+        await liveSession.flushNotifications?.();
+      } finally {
+        await liveSession.client.dispose();
+      }
+    })().catch((disposeError) => {
       console.warn("[rah] failed to dispose Codex app-server after transport close", {
         sessionId: liveSession.sessionId,
         error: disposeError,
@@ -191,9 +327,9 @@ export class CodexAdapter implements ProviderAdapter {
       return;
     }
     const detail = error.message || "Codex app-server closed";
-    if (liveSession.ephemeral && !liveSession.disposalInFlight) {
+    if (this.isEphemeralLiveSession(liveSession) && !liveSession.disposalInFlight) {
       liveSession.ephemeralExpired = true;
-      liveSession.queuedInputs.length = 0;
+      this.clearQueuedInputs(liveSession);
       liveSession.currentTurnId = null;
       this.services.sessionStore.patchManagedSession(liveSession.sessionId, {
         ...(state.session.nativeTui
@@ -249,14 +385,26 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private drainQueuedInput(live: LiveCodexSession): void {
-    if (!live.threadId || live.currentTurnId || live.turnStartInFlight) {
+    if (
+      !live.threadId ||
+      live.currentTurnId ||
+      live.turnStartInFlight ||
+      live.queuedInputDrainPaused
+    ) {
       return;
     }
-    const next = live.queuedInputs.shift();
-    if (!next) {
+    const next = live.queuedInputs[0];
+    if (!next || next.state !== "queued") {
       return;
     }
-    this.startLiveTurn(live, next);
+    if (!markRuntimeQueuedInputSubmitting(live.queuedInputs, next.clientMessageId)) {
+      return;
+    }
+    if (live.uncertainQueuedInputClientMessageId === next.clientMessageId) {
+      delete live.uncertainQueuedInputClientMessageId;
+    }
+    publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+    this.startLiveTurn(live, next, { queuedInput: next });
   }
 
   private clearInterruptFallback(live: LiveCodexSession): void {
@@ -295,7 +443,7 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private async interruptLiveTurnBeforeDisposal(live: LiveCodexSession): Promise<void> {
-    live.queuedInputs.length = 0;
+    this.clearQueuedInputs(live);
     if (!live.threadId) {
       return;
     }
@@ -321,6 +469,14 @@ export class CodexAdapter implements ProviderAdapter {
       );
     } catch (error) {
       live.interruptingTurnIds.delete(turnId);
+      if (isCodexNoActiveTurnError(error)) {
+        live.finishedTurnIds.add(turnId);
+        if (live.currentTurnId === turnId) {
+          live.currentTurnId = null;
+        }
+        live.interruptWhenTurnStarts = false;
+        return;
+      }
       console.warn("[rah] failed to interrupt Codex turn before session disposal", {
         sessionId: live.sessionId,
         threadId: live.threadId,
@@ -347,13 +503,14 @@ export class CodexAdapter implements ProviderAdapter {
     try {
       if (!live.ephemeralExpired) {
         await this.interruptLiveTurnBeforeDisposal(live);
-        await this.pauseLiveGoalBeforeDisposal(live);
-        if (live.ephemeral && live.threadId) {
+        if (this.isEphemeralLiveSession(live) && live.threadId) {
           await live.client.request(
             "thread/unsubscribe",
             { threadId: live.threadId },
             CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
           );
+        } else {
+          await this.pauseLiveGoalBeforeDisposal(live);
         }
       }
     } catch (error) {
@@ -362,15 +519,51 @@ export class CodexAdapter implements ProviderAdapter {
     }
   }
 
-  private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
+  private async disposeDetachedEphemeralSide(sessionId: string): Promise<void> {
+    const state = this.services.sessionStore.getSession(sessionId);
+    const relationship = state?.session.relationship;
+    if (
+      relationship?.kind !== "side" ||
+      relationship.persistence !== "ephemeral" ||
+      relationship.sideState === "expired"
+    ) {
+      return;
+    }
+    const threadId = state?.session.providerSessionId;
+    if (!threadId) {
+      throw new Error(`Side session ${sessionId} does not have a provider thread id.`);
+    }
+
+    const client = await createCodexAppServerClient();
+    try {
+      await client.request(
+        "thread/unsubscribe",
+        { threadId },
+        CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
+      );
+    } finally {
+      await client.dispose();
+    }
+  }
+
+  private startLiveTurn(
+    live: LiveCodexSession,
+    request: SessionInputRequest,
+    options?: { queuedInput?: RuntimeQueuedInput },
+  ): void {
     if (live.ephemeralExpired) {
       return;
     }
-    if (live.ephemeral) {
+    if (this.isEphemeralLiveSession(live)) {
       setSessionSideLifecycleState(this.services, live.sessionId, "active");
     }
     if (!live.threadId) {
-      live.queuedInputs.push(request);
+      if (options?.queuedInput) {
+        restoreRuntimeQueuedInput(live.queuedInputs, options.queuedInput);
+        publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+      } else {
+        this.enqueueInput(live, request);
+      }
       return;
     }
     const collaborationMode = codexCollaborationModeForTurn(live);
@@ -387,6 +580,7 @@ export class CodexAdapter implements ProviderAdapter {
     }
     recordCodexSubmittedUserMessage(live.translationState, {
       text: request.text,
+      ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       ...(request.clientMessageId !== undefined
         ? { clientMessageId: request.clientMessageId }
         : {}),
@@ -395,11 +589,18 @@ export class CodexAdapter implements ProviderAdapter {
         : {}),
     });
     live.turnStartInFlight = true;
+    if (options?.queuedInput) {
+      live.queuedInputSubmission = {
+        clientMessageId: options.queuedInput.clientMessageId,
+        accepted: false,
+        rpcUncertain: false,
+      };
+    }
     void live.client.request(
       "turn/start",
       {
         threadId: live.threadId,
-        input: [{ type: "text", text: request.text }],
+        input: codexTurnInput(request),
         cwd: live.cwd,
         approvalPolicy: live.approvalPolicy,
         ...(live.approvalsReviewer === "auto_review"
@@ -425,6 +626,44 @@ export class CodexAdapter implements ProviderAdapter {
         !live.finishedTurnIds.has(turn.id)
       ) {
         live.currentTurnId = turn.id;
+      }
+      if (typeof turn?.id === "string") {
+        if (
+          options?.queuedInput &&
+          live.queuedInputSubmission?.clientMessageId ===
+            options.queuedInput.clientMessageId
+        ) {
+          live.queuedInputSubmission.accepted = true;
+          if (
+            deleteRuntimeQueuedInput(
+              live.queuedInputs,
+              options.queuedInput.clientMessageId,
+            )
+          ) {
+            publishSessionInputQueue(
+              this.services,
+              live.sessionId,
+              live.queuedInputs,
+            );
+          }
+        }
+        live.queuedInputDrainPaused = false;
+        if (
+          options?.queuedInput &&
+          live.uncertainQueuedInputClientMessageId === options.queuedInput.clientMessageId
+        ) {
+          delete live.uncertainQueuedInputClientMessageId;
+        }
+      } else if (
+        options?.queuedInput &&
+        live.queuedInputSubmission?.clientMessageId ===
+          options.queuedInput.clientMessageId
+      ) {
+        live.queuedInputSubmission.rpcUncertain = true;
+        live.queuedInputDrainPaused = true;
+        live.uncertainQueuedInputClientMessageId =
+          options.queuedInput.clientMessageId;
+        publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
       }
       if (
         typeof turn?.id === "string" &&
@@ -462,16 +701,65 @@ export class CodexAdapter implements ProviderAdapter {
         }
       }
     }).catch((error) => {
-      discardPendingCodexSubmittedUserMessage(
-        live.translationState,
-        request.clientMessageId,
+      const queuedInputWasAccepted = Boolean(
+        options?.queuedInput &&
+          live.queuedInputSubmission?.clientMessageId ===
+            options.queuedInput.clientMessageId &&
+          live.queuedInputSubmission.accepted,
       );
-      this.reportAsyncLiveError(
-        live.sessionId,
-        error instanceof Error ? error.message : String(error),
-      );
+      if (!queuedInputWasAccepted) {
+        const rpcExplicitlyRejected = error instanceof CodexJsonRpcResponseError;
+        if (rpcExplicitlyRejected) {
+          discardPendingCodexSubmittedUserMessage(
+            live.translationState,
+            request.clientMessageId,
+          );
+          if (options?.queuedInput) {
+            markRuntimeQueuedInputQueued(
+              live.queuedInputs,
+              options.queuedInput.clientMessageId,
+            );
+            if (
+              live.queuedInputSubmission?.clientMessageId ===
+              options.queuedInput.clientMessageId
+            ) {
+              delete live.queuedInputSubmission;
+            }
+          }
+        } else if (
+          options?.queuedInput &&
+          live.queuedInputSubmission?.clientMessageId === options.queuedInput.clientMessageId
+        ) {
+          live.queuedInputSubmission.rpcUncertain = true;
+        }
+      }
+      if (
+        options?.queuedInput &&
+        !queuedInputWasAccepted &&
+        this.liveSessions.get(live.sessionId) === live &&
+        !live.ephemeralExpired
+      ) {
+        live.queuedInputDrainPaused = true;
+        live.uncertainQueuedInputClientMessageId =
+          options.queuedInput.clientMessageId;
+        publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+      }
+      if (!queuedInputWasAccepted) {
+        this.reportAsyncLiveError(
+          live.sessionId,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }).finally(() => {
       live.turnStartInFlight = false;
+      if (
+        options?.queuedInput &&
+        live.queuedInputSubmission?.clientMessageId ===
+          options.queuedInput.clientMessageId &&
+        live.queuedInputSubmission.accepted
+      ) {
+        delete live.queuedInputSubmission;
+      }
       if (!live.currentTurnId) {
         live.interruptWhenTurnStarts = false;
       }
@@ -622,8 +910,19 @@ export class CodexAdapter implements ProviderAdapter {
       if (live.ephemeralExpired) {
         throw new Error("This Side task expired in Codex. Start a new Side to continue.");
       }
-      if (!live.threadId || live.currentTurnId || live.turnStartInFlight) {
-        live.queuedInputs.push(request);
+      if (!live.threadId || live.turnStartInFlight) {
+        this.enqueueInput(live, request);
+        return;
+      }
+      if (live.currentTurnId) {
+        this.enqueueInput(live, request);
+        return;
+      }
+      if (live.queuedInputs.length > 0 || live.queuedInputDrainPaused) {
+        this.enqueueInput(live, request);
+        if (!live.queuedInputDrainPaused) {
+          this.drainQueuedInput(live);
+        }
         return;
       }
       this.startLiveTurn(live, request);
@@ -632,6 +931,110 @@ export class CodexAdapter implements ProviderAdapter {
     throw new Error(
       "Rehydrated Codex sessions are currently read-only. Live Codex app-server control is not wired yet.",
     );
+  }
+
+  updateQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: UpdateQueuedInputRequest,
+  ): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error(`Session ${sessionId} has no live input queue.`);
+    }
+    if (!request.text.trim()) {
+      throw new Error("Queued message cannot be empty.");
+    }
+    if (!updateRuntimeQueuedInput(live.queuedInputs, clientMessageId, request.text)) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be edited.",
+      );
+    }
+    publishSessionInputQueue(this.services, sessionId, live.queuedInputs);
+    if (live.uncertainQueuedInputClientMessageId === clientMessageId) {
+      delete live.uncertainQueuedInputClientMessageId;
+      live.queuedInputDrainPaused = false;
+      this.drainQueuedInput(live);
+    }
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
+  deleteQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: DeleteQueuedInputRequest,
+  ): SessionSummary {
+    void request;
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error(`Session ${sessionId} has no live input queue.`);
+    }
+    if (!withdrawRuntimeQueuedInput(live.queuedInputs, clientMessageId)) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be removed.",
+      );
+    }
+    if (live.uncertainQueuedInputClientMessageId === clientMessageId) {
+      delete live.uncertainQueuedInputClientMessageId;
+      live.queuedInputDrainPaused = false;
+    }
+    publishSessionInputQueue(this.services, sessionId, live.queuedInputs);
+    this.drainQueuedInput(live);
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
+  reorderQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: ReorderQueuedInputRequest,
+  ): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error(`Session ${sessionId} has no live input queue.`);
+    }
+    if (!reorderRuntimeQueuedInput(live.queuedInputs, clientMessageId, request.position)) {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be reordered.",
+      );
+    }
+    publishSessionInputQueue(this.services, sessionId, live.queuedInputs);
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
+  async steerQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    request: SteerQueuedInputRequest,
+  ): Promise<SessionSummary> {
+    void request;
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error(`Session ${sessionId} has no live input queue.`);
+    }
+    const queuedInput = live.queuedInputs.find(
+      (item) => item.clientMessageId === clientMessageId,
+    );
+    if (!queuedInput || queuedInput.state !== "queued") {
+      throw new SessionInputQueueConflictError(
+        "Queued message is no longer waiting and cannot be guided.",
+      );
+    }
+    await this.steerLiveTurn(live, queuedInput, queuedInput);
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+  }
+
+  setInputQueuePolicy(
+    sessionId: string,
+    request: SetInputQueuePolicyRequest,
+  ): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error(`Session ${sessionId} has no live input queue.`);
+    }
+    void request.policy;
+    live.inputQueuePolicy = "queue";
+    publishSessionInputQueuePolicy(this.services, sessionId, "queue");
+    return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
   }
 
   async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
@@ -781,7 +1184,10 @@ export class CodexAdapter implements ProviderAdapter {
       await this.prepareLiveSessionForDisposal(live);
       this.liveSessions.delete(sessionId);
       this.clearInterruptFallback(live);
+      await live.flushNotifications?.();
       await live.client.dispose();
+    } else {
+      await this.disposeDetachedEphemeralSide(sessionId);
     }
     this.rehydratedSessionIds.delete(sessionId);
   }
@@ -792,7 +1198,10 @@ export class CodexAdapter implements ProviderAdapter {
       await this.prepareLiveSessionForDisposal(live);
       this.liveSessions.delete(sessionId);
       this.clearInterruptFallback(live);
+      await live.flushNotifications?.();
       await live.client.dispose();
+    } else {
+      await this.disposeDetachedEphemeralSide(sessionId);
     }
     this.rehydratedSessionIds.delete(sessionId);
   }
@@ -805,7 +1214,7 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       const turnId = live.currentTurnId;
-      live.queuedInputs.length = 0;
+      this.clearQueuedInputs(live);
       if (turnId) {
         if (live.interruptingTurnIds.has(turnId)) {
           return toSessionSummary(state);
@@ -885,6 +1294,7 @@ export class CodexAdapter implements ProviderAdapter {
       sessions.map(async (live) => {
         try {
           await this.prepareLiveSessionForDisposal(live);
+          await live.flushNotifications?.();
         } finally {
           await live.client.dispose();
         }

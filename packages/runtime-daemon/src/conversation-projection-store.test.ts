@@ -137,6 +137,48 @@ test("resident conversation store emits bounded item deltas and preserves trimme
   store.close();
 });
 
+test("resident conversation store preserves turn file changes through lifecycle deltas", () => {
+  const eventBus = new EventBus();
+  const store = new ConversationProjectionStore(eventBus);
+  eventBus.publish({
+    sessionId: "session-1",
+    turnId: "turn-1",
+    type: "turn.started",
+    source,
+    payload: {},
+  });
+  const fileChanges = {
+    files: [{ path: "src/main.ts", additions: 2, deletions: 1 }],
+    totalAdditions: 2,
+    totalDeletions: 1,
+  };
+  const updated = eventBus.publish({
+    sessionId: "session-1",
+    turnId: "turn-1",
+    type: "turn.file_changes.updated",
+    source,
+    payload: { fileChanges },
+  });
+  const completed = eventBus.publish({
+    sessionId: "session-1",
+    turnId: "turn-1",
+    type: "turn.completed",
+    source,
+    payload: {},
+  });
+
+  assert.deepEqual(
+    store.deltaForSourceSeq(updated.seq)?.upsertTurns[0]?.turn.fileChanges,
+    fileChanges,
+  );
+  assert.deepEqual(
+    store.deltaForSourceSeq(completed.seq)?.upsertTurns[0]?.turn.fileChanges,
+    fileChanges,
+  );
+  assert.deepEqual(store.snapshot("session-1").turns[0]?.fileChanges, fileChanges);
+  store.close();
+});
+
 test("Codex persisted mirror emits canonical item deltas for the active turn", () => {
   const eventBus = new EventBus();
   const sessionStore = new SessionStore();

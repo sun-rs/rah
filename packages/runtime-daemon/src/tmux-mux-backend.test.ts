@@ -225,6 +225,37 @@ test("tmux mux backend resizes detached TUI windows to the requested surface", a
   }
 });
 
+test("tmux mux backend preserves failed pane output in full scrollback", async (t) => {
+  const backend = new TmuxMuxBackend();
+  if (await skipIfTmuxUnavailable(t, backend)) {
+    return;
+  }
+  const sessionName = `rah-tmux-dead-pane-${process.pid}-${Date.now()}`;
+  const created = await backend.createSession({
+    sessionName,
+    cwd: process.cwd(),
+    command: process.execPath,
+    args: [
+      "-e",
+      "process.stdout.write('Error: unsupported model fixture\\n'); setTimeout(() => process.exit(1), 50);",
+    ],
+  });
+  try {
+    await waitFor(async () => {
+      const pane = (await backend.listPanes(sessionName)).find(
+        (candidate) => candidate.paneId === created.paneId,
+      );
+      return pane?.exited === true;
+    });
+    assert.match(
+      await backend.dumpScreen(sessionName, created.paneId, { full: true }),
+      /unsupported model fixture/,
+    );
+  } finally {
+    await backend.killSession(sessionName);
+  }
+});
+
 test("tmux mux backend maps control bytes to terminal key events", async (t) => {
   const backend = new TmuxMuxBackend();
   if (await skipIfTmuxUnavailable(t, backend)) {

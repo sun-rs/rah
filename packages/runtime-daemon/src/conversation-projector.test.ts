@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { EventSource, RahEvent } from "@rah/runtime-protocol";
+import {
+  CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+  createCodexAggregateTimelineIdentity,
+} from "./codex-timeline-identity";
 import { projectConversation } from "./conversation-projector";
 import { createTimelineIdentity, createTimelineTurnIdentity } from "./timeline-identity";
 
@@ -42,6 +46,140 @@ function event(
 }
 
 describe("conversation projector", () => {
+  test("keeps a Codex compaction aggregate at its first position when updates arrive", () => {
+    const compactionIdentity = createCodexAggregateTimelineIdentity({
+      providerSessionId: "thread-1",
+      turnId: "turn-1",
+      itemKind: "compaction",
+      itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+      origin: "live",
+    });
+    const projection = projectConversation("session-1", [
+      event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
+      event(2, "timeline.item.added", CODEX_SOURCE, "turn-1", {
+        identity: compactionIdentity,
+        item: { kind: "compaction", status: "started", count: 1 },
+      }),
+      event(3, "tool.call.started", CODEX_SOURCE, "turn-1", {
+        toolCall: {
+          id: "call-1",
+          family: "test",
+          providerToolName: "exec_command",
+          title: "Run command",
+        },
+      }),
+      event(4, "tool.call.completed", CODEX_SOURCE, "turn-1", {
+        toolCall: {
+          id: "call-1",
+          family: "test",
+          providerToolName: "exec_command",
+          title: "Run command",
+        },
+      }),
+      event(5, "timeline.item.updated", CODEX_SOURCE, "turn-1", {
+        identity: { ...compactionIdentity, origin: "history" },
+        item: { kind: "compaction", status: "completed", count: 2 },
+      }),
+      event(6, "turn.completed", CODEX_SOURCE, "turn-1", {}),
+    ]);
+
+    const turn = projection.turns[0];
+    assert.ok(turn);
+    const compactions = turn.items.filter(
+      (item) =>
+        item.content.kind === "timeline" && item.content.item.kind === "compaction",
+    );
+    assert.equal(compactions.length, 1);
+    assert.equal(turn.items[0]?.id, compactionIdentity.canonicalItemId);
+    assert.equal(compactions[0]?.id, compactionIdentity.canonicalItemId);
+    assert.deepEqual(
+      compactions[0]?.content.kind === "timeline" ? compactions[0].content.item : undefined,
+      { kind: "compaction", status: "completed", count: 2 },
+    );
+  });
+
+  test("replaces a turn file-change snapshot instead of accumulating updates", () => {
+    const projection = projectConversation("session-1", [
+      event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
+      event(2, "turn.file_changes.updated", CODEX_SOURCE, "turn-1", {
+        fileChanges: {
+          files: [{ path: "src/old.ts", additions: 10, deletions: 2 }],
+          totalAdditions: 10,
+          totalDeletions: 2,
+        },
+      }),
+      event(3, "turn.file_changes.updated", CODEX_SOURCE, "turn-1", {
+        fileChanges: {
+          files: [{ path: "src/final.ts", additions: 4, deletions: 1 }],
+          totalAdditions: 4,
+          totalDeletions: 1,
+        },
+      }),
+      event(4, "turn.completed", CODEX_SOURCE, "turn-1", {}),
+    ]);
+
+    assert.deepEqual(projection.turns[0]?.fileChanges, {
+      files: [{ path: "src/final.ts", additions: 4, deletions: 1 }],
+      totalAdditions: 4,
+      totalDeletions: 1,
+    });
+  });
+
+  test("keeps an explicitly delivered document in both outputs and changed files", () => {
+    const finalIdentity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "thread-1",
+      turnKey: "turn-1",
+      itemKind: "assistant_message",
+      itemKey: "assistant-final",
+      origin: "live",
+      confidence: "native",
+    });
+    const projection = projectConversation("session-1", [
+      event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
+      event(2, "observation.completed", CODEX_SOURCE, "turn-1", {
+        observation: {
+          id: "edit-report",
+          kind: "file.edit",
+          status: "completed",
+          title: "Edit report",
+          subject: { files: ["/workspace/results/report.md"] },
+        },
+      }),
+      event(3, "turn.file_changes.updated", CODEX_SOURCE, "turn-1", {
+        fileChanges: {
+          files: [{ path: "/workspace/results/report.md", additions: 12, deletions: 3 }],
+          totalAdditions: 12,
+          totalDeletions: 3,
+        },
+      }),
+      event(4, "timeline.item.added", CODEX_SOURCE, "turn-1", {
+        identity: finalIdentity,
+        item: {
+          kind: "assistant_message",
+          phase: "final_answer",
+          text: "Delivered [report.md](/workspace/results/report.md).",
+          messageId: "assistant-final",
+        },
+      }),
+      event(5, "turn.completed", CODEX_SOURCE, "turn-1", {}),
+    ]);
+
+    assert.deepEqual(
+      projection.turns[0]?.outputs?.map((output) => [
+        output.path,
+        output.activity,
+        output.confidence,
+      ]),
+      [["/workspace/results/report.md", "updated", "authoritative"]],
+    );
+    assert.deepEqual(projection.turns[0]?.fileChanges, {
+      files: [{ path: "/workspace/results/report.md", additions: 12, deletions: 3 }],
+      totalAdditions: 12,
+      totalDeletions: 3,
+    });
+  });
+
   test("preserves Codex turn lifecycle and keeps subagent work inside the main turn", () => {
     const turnIdentity = createTimelineTurnIdentity({
       provider: "codex",

@@ -1,6 +1,7 @@
 import type { CodexAppServerTranslationState } from "./codex-app-server-activity";
 import type { CodexAppServerRpcClient } from "./codex-live-rpc";
-import type { ProviderModelCatalog, SessionInputRequest } from "@rah/runtime-protocol";
+import type { ProviderModelCatalog, SessionInputQueuePolicy } from "@rah/runtime-protocol";
+import type { RuntimeQueuedInput } from "./session-input-queue";
 
 export type JsonRpcRequest = {
   id: number | string;
@@ -64,8 +65,18 @@ export type LiveCodexSession = {
   interruptFallbackTurnId?: string;
   turnStartInFlight: boolean;
   interruptWhenTurnStarts: boolean;
-  queuedInputs: SessionInputRequest[];
+  queuedInputs: RuntimeQueuedInput[];
+  inputQueuePolicy?: SessionInputQueuePolicy;
+  /** The single queued input currently crossing the turn/start acceptance boundary. */
+  queuedInputSubmission?: {
+    clientMessageId: string;
+    accepted: boolean;
+    rpcUncertain: boolean;
+  };
+  queuedInputDrainPaused?: boolean;
+  uncertainQueuedInputClientMessageId?: string;
   drainQueuedInput?: () => void;
+  flushNotifications?: () => Promise<void>;
   externalThreadMirrorSubscribeInFlight: boolean;
   externalThreadMirrorSubscribed: boolean;
   pendingQuestions: Map<string, LiveQuestionRequest>;
@@ -74,6 +85,7 @@ export type LiveCodexSession = {
 
 export const JSON_RPC_TIMEOUT_MS = 30_000;
 export const TURN_START_TIMEOUT_MS = 90_000;
+export const THREAD_FORK_TIMEOUT_MS = 60_000;
 export const SESSION_SOURCE = {
   provider: "system" as const,
   channel: "system" as const,

@@ -31,8 +31,16 @@ import {
 
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
-const MAX_ROLLOUT_FILES = 400;
 const CODEX_STORED_SESSION_CACHE_VERSION = 2;
+
+export type CodexStoredSessionCatalogScan = {
+  records: CodexStoredSessionRecord[];
+  complete: boolean;
+};
+
+type CodexCatalogScanState = {
+  complete: boolean;
+};
 
 function resolveCodexBaseHome(): string {
   return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
@@ -111,7 +119,13 @@ function isCodexBootstrapUserMessage(text: string): boolean {
   );
 }
 
-function listRolloutFiles(root: string): string[] {
+function listRolloutFiles(
+  root: string,
+  options?: {
+    requiredRoot?: boolean;
+    scanState?: CodexCatalogScanState;
+  },
+): string[] {
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
   const files: string[] = [];
   while (queue.length > 0) {
@@ -120,6 +134,12 @@ function listRolloutFiles(root: string): string[] {
     try {
       entries = readdirSync(current.dir, { withFileTypes: true });
     } catch {
+      if (
+        options?.scanState &&
+        (current.depth > 0 || options.requiredRoot === true)
+      ) {
+        options.scanState.complete = false;
+      }
       continue;
     }
     for (const entry of entries) {
@@ -138,7 +158,7 @@ function listRolloutFiles(root: string): string[] {
   // Rollout paths contain YYYY/MM/DD and an ISO-like timestamp in the file
   // name. Sorting the complete path therefore selects the newest files
   // deterministically instead of depending on filesystem readdir order.
-  return files.sort((left, right) => right.localeCompare(left)).slice(0, MAX_ROLLOUT_FILES);
+  return files.sort((left, right) => right.localeCompare(left));
 }
 
 function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | null {
@@ -235,6 +255,7 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
       updatedAt: stat.mtime.toISOString(),
       ...(archived ? { providerState: { archived: true } } : {}),
       source: "provider_history",
+      removalDisposition: "trash",
     },
     rolloutPath: filePath,
     archived,
@@ -312,12 +333,21 @@ function setPreferredCodexStoredSessionRecord(
   );
 }
 
-export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
+function discoverCodexStoredSessionsImpl(
+  scanState?: CodexCatalogScanState,
+): CodexStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("codex");
   const renamedTitles = loadCodexThreadTitleIndex();
   const records = new Map<string, CodexStoredSessionRecord>();
-  for (const root of resolveCodexSearchRoots()) {
-    for (const file of listRolloutFiles(root)) {
+  const roots = resolveCodexSearchRoots();
+  for (let rootIndex = 0; rootIndex < roots.length; rootIndex += 1) {
+    const root = roots[rootIndex]!;
+    for (const file of listRolloutFiles(root, {
+      // The active sessions directory is the authoritative Codex history
+      // root. archived_sessions is optional until Codex creates it.
+      requiredRoot: rootIndex === 0,
+      ...(scanState ? { scanState } : {}),
+    })) {
       const stats = statSync(file);
       const archived = isCodexStoredSessionArchivedPath(file);
       const cachedHistoryMeta = getCachedStoredSessionHistoryMeta({
@@ -374,6 +404,12 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
       }
       const parsed = parseStoredSessionRecord(file);
       if (!parsed) {
+        if (scanState) {
+          // A provider file may be in the middle of an atomic rewrite, and
+          // the metadata cache may itself have been rebuilt or removed.
+          // Absence from this scan is therefore never deletion evidence.
+          scanState.complete = false;
+        }
         continue;
       }
       const renamedTitle = renamedTitles.get(parsed.ref.providerSessionId);
@@ -397,26 +433,38 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
       setPreferredCodexStoredSessionRecord(records, parsed);
     }
   }
-  writeStoredSessionMetadataCache(
-    "codex",
-    new Map(
-      [...records.values()].map((record) => {
-        const stats = statSync(record.rolloutPath);
-        return [
-          record.rolloutPath,
-          {
-            ref: record.ref,
-            size: stats.size,
-            mtimeMs: stats.mtimeMs,
-            version: CODEX_STORED_SESSION_CACHE_VERSION,
-          },
-        ] as const;
-      }),
-    ),
-  );
+  if (!scanState || scanState.complete) {
+    writeStoredSessionMetadataCache(
+      "codex",
+      new Map(
+        [...records.values()].map((record) => {
+          const stats = statSync(record.rolloutPath);
+          return [
+            record.rolloutPath,
+            {
+              ref: record.ref,
+              size: stats.size,
+              mtimeMs: stats.mtimeMs,
+              version: CODEX_STORED_SESSION_CACHE_VERSION,
+            },
+          ] as const;
+        }),
+      ),
+    );
+  }
   return [...records.values()].sort((a, b) =>
     (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""),
   );
+}
+
+export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
+  return discoverCodexStoredSessionsImpl();
+}
+
+export function scanCodexStoredSessionCatalog(): CodexStoredSessionCatalogScan {
+  const scanState: CodexCatalogScanState = { complete: true };
+  const records = discoverCodexStoredSessionsImpl(scanState);
+  return { records, complete: scanState.complete };
 }
 
 export function findCodexStoredSessionRecord(
@@ -457,14 +505,22 @@ export function getCodexWorkspaceSnapshot(cwd: string) {
   return getWorkspaceSnapshot(cwd);
 }
 
-export async function getCodexGitStatus(cwd: string, options?: { scopeRoot?: string }) {
+export async function getCodexGitStatus(
+  cwd: string,
+  options?: { scopeRoot?: string; baseBranch?: string },
+) {
   return await getWorkspaceGitStatusDataAsync(cwd, options);
 }
 
 export async function getCodexGitDiff(
   cwd: string,
   targetPath: string,
-  options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
+  options?: {
+    staged?: boolean;
+    ignoreWhitespace?: boolean;
+    scopeRoot?: string;
+    baseBranch?: string;
+  },
 ): Promise<string> {
   return await getWorkspaceGitDiffAsync(cwd, targetPath, options);
 }

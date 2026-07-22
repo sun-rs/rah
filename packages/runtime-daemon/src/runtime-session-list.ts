@@ -1,6 +1,7 @@
 import type {
   ListSessionsResponse,
   StoredSessionRef,
+  WorkbenchPinnedItemRef,
 } from "@rah/runtime-protocol";
 import type { ProviderStoredHistoryAdapter } from "./provider-adapter";
 import {
@@ -17,7 +18,7 @@ const RECENT_SESSION_LIMIT = 15;
 const INTERNAL_NATIVE_TUI_PROBE_WORKSPACE_SEGMENT =
   "/test-results/native-real-tui-workspaces/";
 
-export type StoredSessionsResponseMode = "all" | "recent";
+export type StoredSessionsResponseMode = "all" | "cached" | "recent";
 
 export type RememberedWorkbenchSessionState = {
   rememberedSessions: readonly StoredSessionRef[];
@@ -27,6 +28,7 @@ export type RememberedWorkbenchSessionState = {
   rememberedActiveWorkspaceDir?: string;
   rememberedHiddenSessionKeys: readonly string[];
   rememberedSessionTitleOverrides: Readonly<Record<string, string>>;
+  rememberedPinnedSidebarItems?: readonly WorkbenchPinnedItemRef[];
 };
 
 export function discoverStoredSessions(
@@ -62,6 +64,10 @@ export function storedSessionRefKey(entry: StoredSessionRef): string {
     entry.historyMeta?.messages ?? "",
     entry.providerState?.archived ?? "",
     entry.providerState?.archivedAt ?? "",
+    entry.libraryState?.placement ?? "",
+    entry.libraryState?.archivedAt ?? "",
+    entry.libraryState?.backend ?? "",
+    entry.removalDisposition ?? "",
   ]);
 }
 
@@ -163,12 +169,20 @@ function buildGlobalRecentSessions(args: {
   applyTitleOverride: (session: StoredSessionRef) => StoredSessionRef;
 }): StoredSessionRef[] {
   const recentByKey = new Map<string, StoredSessionRef>();
+  const archivedSessionKeys = new Set<string>();
   const discoveredProviderStateByKey = new Map<
     string,
     StoredSessionRef["providerState"]
   >();
   const addCandidate = (session: StoredSessionRef) => {
     const key = sessionProviderKey(session);
+    if (
+      archivedSessionKeys.has(key) ||
+      session.libraryState?.placement === "archive" ||
+      session.providerState?.archived === true
+    ) {
+      return;
+    }
     if (args.hiddenSessionKeys.has(key)) {
       return;
     }
@@ -180,7 +194,14 @@ function buildGlobalRecentSessions(args: {
   };
 
   for (const session of args.discoveredStoredSessions) {
-    discoveredProviderStateByKey.set(sessionProviderKey(session), session.providerState);
+    const key = sessionProviderKey(session);
+    discoveredProviderStateByKey.set(key, session.providerState);
+    if (
+      session.libraryState?.placement === "archive" ||
+      session.providerState?.archived === true
+    ) {
+      archivedSessionKeys.add(key);
+    }
     addCandidate(session);
   }
   for (const session of args.rememberedRecentSessions) {
@@ -303,7 +324,9 @@ export function buildSessionsResponse(args: {
     applyTitleOverride: applyCanonicalTitle,
   });
   const responseStoredSessions =
-    args.storedSessionsMode === "recent" ? recentSessions : allStoredSessions;
+    args.storedSessionsMode === "all" || args.storedSessionsMode === "cached"
+      ? allStoredSessions
+      : recentSessions;
 
   return {
     sessions: visibleRunningStates.map((state) => {
@@ -338,5 +361,6 @@ export function buildSessionsResponse(args: {
     ...(rememberedActiveWorkspaceDir
       ? { activeWorkspaceDir: rememberedActiveWorkspaceDir }
       : {}),
+    pinnedSidebarItems: (args.remembered.rememberedPinnedSidebarItems ?? []).map((item) => ({ ...item })),
   };
 }

@@ -204,6 +204,10 @@ export function projectConversation(
         );
         break;
       }
+      case "turn.file_changes.updated": {
+        turn.projection.fileChanges = event.payload.fileChanges;
+        break;
+      }
       case "timeline.item.added":
       case "timeline.item.updated": {
         const itemIdentity = event.payload.identity;

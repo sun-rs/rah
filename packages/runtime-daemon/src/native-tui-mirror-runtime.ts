@@ -39,6 +39,7 @@ type NativeTuiMirrorRuntimeDeps = {
   diagnostics: NativeTuiDiagnosticStore;
   getSession: (sessionId: string) => NativeTuiSessionState | undefined;
   updatePromptState: (sessionId: string, promptState: NativeTuiPromptState) => void;
+  confirmQueuedInputHandoff: (sessionId: string, clientMessageId: string) => void;
 };
 
 function isTurnEndingActivity(activity: ProviderActivity): activity is Extract<
@@ -126,6 +127,19 @@ export class NativeTuiMirrorRuntime {
       meta,
       activityWithClientInput,
     );
+    if (attachedInput.input) {
+      consumeSubmittedInput(native, attachedInput.input);
+    }
+    if (
+      activityWithClientInput.type === "timeline_item" &&
+      activityWithClientInput.item.kind === "user_message" &&
+      activityWithClientInput.item.clientMessageId !== undefined
+    ) {
+      this.deps.confirmQueuedInputHandoff(
+        native.sessionId,
+        activityWithClientInput.item.clientMessageId,
+      );
+    }
     if (
       attachedInput.input?.interruptedAt !== undefined &&
       activityWithClientInput.type === "timeline_item" &&
@@ -225,8 +239,7 @@ function attachSubmittedClientInput(
 ): { activity: ProviderActivity; input?: NativeTuiSubmittedInput } {
   if (
     activity.type !== "timeline_item" ||
-    activity.item.kind !== "user_message" ||
-    activity.item.clientMessageId !== undefined
+    activity.item.kind !== "user_message"
   ) {
     pruneSubmittedInputs(native);
     return { activity };
@@ -235,13 +248,22 @@ function attachSubmittedClientInput(
   if (!inputs || inputs.length === 0) {
     return { activity };
   }
-  const userText = activity.item.text;
-  const matchIndex = inputs.findIndex((input) => input.text === userText);
-  if (matchIndex < 0) {
+  const userItem = activity.item;
+  if (userItem.clientMessageId !== undefined) {
+    const match = inputs.find(
+      (input) => input.clientMessageId === userItem.clientMessageId,
+    );
+    return {
+      activity,
+      ...(match ? { input: match } : {}),
+    };
+  }
+  const userText = userItem.text;
+  const match = inputs.find((input) => input.text === userText);
+  if (!match) {
     pruneSubmittedInputs(native);
     return { activity };
   }
-  const [match] = inputs.splice(matchIndex, 1);
   return {
     activity: {
       ...activity,
@@ -251,8 +273,18 @@ function attachSubmittedClientInput(
         ...(match?.clientTurnId !== undefined ? { clientTurnId: match.clientTurnId } : {}),
       },
     },
-    ...(match ? { input: match } : {}),
+    input: match,
   };
+}
+
+function consumeSubmittedInput(
+  native: NativeTuiSessionState,
+  input: NativeTuiSubmittedInput,
+): void {
+  const index = native.submittedInputs?.indexOf(input) ?? -1;
+  if (index >= 0) {
+    native.submittedInputs?.splice(index, 1);
+  }
 }
 
 function pruneSubmittedInputs(native: NativeTuiSessionState): void {

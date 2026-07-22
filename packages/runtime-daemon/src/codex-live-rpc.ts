@@ -19,6 +19,13 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export class CodexJsonRpcResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexJsonRpcResponseError";
+  }
+}
+
 export interface CodexAppServerRpcClient {
   readonly processId?: number | undefined;
   readonly endpoint?: string | undefined;
@@ -204,7 +211,11 @@ export class CodexJsonRpcClient implements CodexAppServerRpcClient {
       const response = message as JsonRpcResponse;
       if (response.error && typeof response.error === "object" && !Array.isArray(response.error)) {
         pending.reject(
-          new Error(typeof response.error.message === "string" ? response.error.message : "JSON-RPC error"),
+          new CodexJsonRpcResponseError(
+            typeof response.error.message === "string"
+              ? response.error.message
+              : "JSON-RPC error",
+          ),
         );
       } else {
         pending.resolve(response.result);
@@ -431,7 +442,9 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
       if (message.error && typeof message.error === "object" && !Array.isArray(message.error)) {
         const error = message.error as { message?: unknown };
         pending.reject(
-          new Error(typeof error.message === "string" ? error.message : "JSON-RPC error"),
+          new CodexJsonRpcResponseError(
+            typeof error.message === "string" ? error.message : "JSON-RPC error",
+          ),
         );
       } else {
         pending.resolve(message.result);

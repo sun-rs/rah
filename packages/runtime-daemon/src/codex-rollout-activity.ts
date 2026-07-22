@@ -16,6 +16,7 @@ import {
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
+import { parsePersistedUserMessageContent } from "./session-input-attachments";
 import {
   normalizeCouncilMcpToolCall,
   projectCouncilMcpToolCall,
@@ -839,6 +840,17 @@ function webSearchActionType(action: Record<string, unknown> | null): string | n
   }
 }
 
+function webSearchResultUrls(payload: Record<string, unknown>): string[] {
+  if (!Array.isArray(payload.results)) return [];
+  const urls = new Set<string>();
+  for (const result of payload.results) {
+    if (!result || typeof result !== "object" || Array.isArray(result)) continue;
+    const url = stringField(result as Record<string, unknown>, "url");
+    if (url) urls.add(url);
+  }
+  return [...urls];
+}
+
 function stableShortHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -871,6 +883,8 @@ function makeWebSearchObservation(
     actionType === "open_page" || actionType === "find_in_page"
       ? stringField(action ?? {}, "url")
       : null;
+  const resultUrls = webSearchResultUrls(payload);
+  const urls = url ? [url] : resultUrls;
   const pattern = actionType === "find_in_page" ? stringField(action ?? {}, "pattern") : null;
   const effectiveQueries = query ? [query] : queries;
   const title =
@@ -888,8 +902,8 @@ function makeWebSearchObservation(
           ? effectiveQueries.join(", ")
           : undefined;
   const artifacts: ToolCallArtifact[] = [];
-  if (url) {
-    artifacts.push({ kind: "urls", urls: [url] });
+  if (urls.length > 0) {
+    artifacts.push({ kind: "urls", urls });
   }
   if (action) {
     artifacts.push({ kind: "json", label: "action", value: action });
@@ -904,10 +918,45 @@ function makeWebSearchObservation(
       providerToolName: typeof payload.type === "string" ? payload.type : "web_search",
       providerCallId: callId,
       ...(effectiveQueries.length > 0 ? { query: effectiveQueries.join(", ") } : {}),
-      ...(url ? { urls: [url] } : {}),
+      ...(urls.length > 0 ? { urls } : {}),
     },
     ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
   };
+}
+
+function attachWebSearchUrlsToPendingWrapper(
+  state: CodexRolloutTranslationState,
+  observation: WorkbenchObservation,
+): void {
+  const urls = observation.subject?.urls ?? [];
+  if (urls.length === 0) return;
+  const pendingEntries = [...state.pendingToolCalls.entries()].reverse();
+  const entry = pendingEntries.find(([, pending]) => {
+    const script = pending.toolCall.input?.value;
+    return typeof script === "string" && /\btools\.web__run\s*\(/.test(script);
+  });
+  if (!entry) return;
+  const [callId, pending] = entry;
+  const artifacts = [...(pending.toolCall.detail?.artifacts ?? [])];
+  const existingIndex = artifacts.findIndex((artifact) => artifact.kind === "urls");
+  if (existingIndex >= 0) {
+    const existing = artifacts[existingIndex];
+    if (existing?.kind === "urls") {
+      artifacts[existingIndex] = {
+        kind: "urls",
+        urls: [...new Set([...existing.urls, ...urls])],
+      };
+    }
+  } else {
+    artifacts.push({ kind: "urls", urls: [...new Set(urls)] });
+  }
+  state.pendingToolCalls.set(callId, {
+    ...pending,
+    toolCall: {
+      ...pending.toolCall,
+      detail: { artifacts },
+    },
+  });
 }
 
 function translateWebSearchResponseItem(
@@ -1142,15 +1191,41 @@ function isExplicitPatchFailure(toolCall: ToolCall, output: string): boolean {
   );
 }
 
+function customToolCallOutputText(output: unknown): string | null {
+  if (typeof output === "string") {
+    return output;
+  }
+  if (!Array.isArray(output)) {
+    return null;
+  }
+  const parts = output.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    return typeof record.text === "string" ? [record.text] : [];
+  });
+  if (parts.length === 0) {
+    return null;
+  }
+  return parts.reduce((combined, part) => {
+    if (!combined || combined.endsWith("\n") || part.startsWith("\n")) {
+      return `${combined}${part}`;
+    }
+    return `${combined}\n${part}`;
+  }, "");
+}
+
 function parseCustomToolCallOutput(output: unknown, toolCall: ToolCall): {
   successText?: string;
   exitCode?: number;
   failedText?: string;
   fileRefs?: string[];
 } {
-  if (typeof output === "string") {
+  const outputText = customToolCallOutputText(output);
+  if (outputText !== null) {
     try {
-      const parsed = JSON.parse(output) as Record<string, unknown>;
+      const parsed = JSON.parse(outputText) as Record<string, unknown>;
       const text = typeof parsed.output === "string" ? parsed.output : undefined;
       const exitCode =
         parsed.metadata &&
@@ -1173,7 +1248,7 @@ function parseCustomToolCallOutput(output: unknown, toolCall: ToolCall): {
         ...(exitCode !== undefined ? { exitCode } : {}),
       };
     } catch {
-      const trimmed = output.trim();
+      const trimmed = outputText.trim();
       const processOutput = parseFunctionCallOutput(trimmed);
       if (processOutput.exitCode !== undefined) {
         const text = processOutput.textOutput ?? trimmed;
@@ -1185,8 +1260,15 @@ function parseCustomToolCallOutput(output: unknown, toolCall: ToolCall): {
             }
           : {
               failedText: text || trimmed,
-              exitCode: processOutput.exitCode,
-            };
+            exitCode: processOutput.exitCode,
+          };
+      }
+      if (processOutput.textOutput?.trim()) {
+        const text = processOutput.textOutput.trim();
+        return {
+          successText: text,
+          fileRefs: extractUpdatedFiles(text),
+        };
       }
       if (isExplicitPatchFailure(toolCall, trimmed)) {
         return { failedText: trimmed };
@@ -1556,12 +1638,14 @@ function translateCodexRolloutLineUnscoped(
       ];
     }
     if (payload.type === "web_search_end" && typeof payload.call_id === "string") {
+      const observation = makeWebSearchObservation(payload, "completed");
+      attachWebSearchUrlsToPendingWrapper(state, observation);
       return [
         persistedActivity(
           record,
           {
             type: "observation_completed",
-            observation: makeWebSearchObservation(payload, "completed"),
+            observation,
           },
           "authoritative",
         ),
@@ -1727,8 +1811,8 @@ function translateCodexRolloutLineUnscoped(
     }
     if (payload.role === "user") {
       const rawText = textFromContentItems(payload.content, "input_text");
-      const imageCount = imageCountFromContentItems(payload.content);
-      if (rawText === null && imageCount === 0) {
+      const nativeImageCount = imageCountFromContentItems(payload.content);
+      if (rawText === null && nativeImageCount === 0) {
         return [];
       }
       if (rawText === null) {
@@ -1741,25 +1825,27 @@ function translateCodexRolloutLineUnscoped(
             record,
             {
               type: "timeline_item",
-              item: { kind: "user_message", text: "", imageCount },
+              item: { kind: "user_message", text: "", imageCount: nativeImageCount },
               ...timelineIdentityProps(identity),
             },
             "authoritative",
           ),
         ];
       }
-      const goalObjective = extractCodexGoalObjective(rawText);
+      const persistedContent = parsePersistedUserMessageContent(rawText);
+      const imageCount = Math.max(nativeImageCount, persistedContent.imageCount);
+      const goalObjective = extractCodexGoalObjective(persistedContent.text);
       if (goalObjective) {
         return translateCodexGoalContextNotification(record, state, goalObjective);
       }
-      if (isCodexBootstrapUserMessage(rawText)) {
+      if (isCodexBootstrapUserMessage(persistedContent.text)) {
         return [];
       }
-      const text = stripCodexContextualFragments(rawText);
+      const text = stripCodexContextualFragments(persistedContent.text);
       if (!text && imageCount === 0) {
         return [];
       }
-      if (shouldSkipDuplicateTimelineText(state, record, "user_message", text)) {
+      if (text && shouldSkipDuplicateTimelineText(state, record, "user_message", text)) {
         return [];
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
@@ -1794,6 +1880,9 @@ function translateCodexRolloutLineUnscoped(
               kind: "user_message",
               text,
               ...(imageCount > 0 ? { imageCount } : {}),
+              ...(persistedContent.attachments.length > 0
+                ? { attachments: persistedContent.attachments }
+                : {}),
             },
             ...timelineIdentityProps(identity),
           },

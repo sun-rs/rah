@@ -39,6 +39,8 @@ export function hasStoredHistoryCapability(
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).archiveStoredSession ===
       "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).restoreStoredSession ===
+      "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).removeStoredSession === "function"
   );
 }
@@ -92,6 +94,9 @@ export function bindStoredHistoryCapability(
     ...(adapter.archiveStoredSession
       ? { archiveStoredSession: adapter.archiveStoredSession.bind(adapter) }
       : {}),
+    ...(adapter.restoreStoredSession
+      ? { restoreStoredSession: adapter.restoreStoredSession.bind(adapter) }
+      : {}),
     ...(adapter.removeStoredSession
       ? { removeStoredSession: adapter.removeStoredSession.bind(adapter) }
       : {}),
@@ -141,6 +146,21 @@ export function bindStructuredInputControlCapability(
   return {
     id: adapter.id,
     sendInput: adapter.sendInput.bind(adapter),
+    ...(adapter.updateQueuedInput
+      ? { updateQueuedInput: adapter.updateQueuedInput.bind(adapter) }
+      : {}),
+    ...(adapter.deleteQueuedInput
+      ? { deleteQueuedInput: adapter.deleteQueuedInput.bind(adapter) }
+      : {}),
+    ...(adapter.reorderQueuedInput
+      ? { reorderQueuedInput: adapter.reorderQueuedInput.bind(adapter) }
+      : {}),
+    ...(adapter.steerQueuedInput
+      ? { steerQueuedInput: adapter.steerQueuedInput.bind(adapter) }
+      : {}),
+    ...(adapter.setInputQueuePolicy
+      ? { setInputQueuePolicy: adapter.setInputQueuePolicy.bind(adapter) }
+      : {}),
     interruptSession: adapter.interruptSession.bind(adapter),
     onPtyInput: adapter.onPtyInput.bind(adapter),
     onPtyResize: adapter.onPtyResize.bind(adapter),

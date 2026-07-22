@@ -38,6 +38,7 @@ import {
   resolveNativeTuiBindingDiagnostic,
 } from "./native-tui-diagnostics";
 import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
+import { classifyNativeTuiExit } from "./native-tui-exit-classification";
 import { nativeLocalServerAttachSpec } from "./native-local-server-attach";
 import {
   DEFAULT_NATIVE_LOCAL_TUI_IDLE_CLOSE_MS,
@@ -60,12 +61,16 @@ import {
 import {
   cancelNativeTuiQueuedInputsForClient,
   clearNativeTuiSessionTimers,
-  dequeueNativeTuiQueuedInput,
+  confirmNativeTuiQueuedInput,
+  deleteNativeTuiQueuedInput,
   enqueueNativeTuiQueuedInput,
+  markNextNativeTuiQueuedInputSubmitting,
   nativeTuiProviderRuntimeSession,
+  updateNativeTuiQueuedInput,
   type NativeTuiSessionState,
   type NativeTuiSubmittedInput,
 } from "./native-tui-session-state";
+import { publishSessionInputQueue } from "./session-input-queue";
 import {
   attachClientAndMaybeClaimControl,
   claimClientControlAndPublish,
@@ -82,6 +87,10 @@ import {
   TmuxMuxBackend,
 } from "./tmux-mux-backend";
 import type { MuxPaneSubscription, MuxRuntime } from "./mux-runtime";
+import {
+  isProcessAlive,
+  selectRahTmuxCleanupTargets,
+} from "./tmux-session-ownership";
 
 type RuntimeTerminalCoordinatorDeps = {
   eventBus: EventBus;
@@ -338,6 +347,9 @@ function stripTerminalControl(value: string): string {
 }
 
 function nativeTuiExitErrorFromOutput(native: NativeTuiSessionState | undefined): string | undefined {
+  if (native?.fatalObservationError) {
+    return native.fatalObservationError;
+  }
   if (!native?.recentOutputTail) {
     return undefined;
   }
@@ -453,6 +465,13 @@ export class RuntimeTerminalCoordinator {
       updatePromptState: (sessionId, promptState) => {
         this.updateNativeTuiPromptState(sessionId, promptState);
       },
+      confirmQueuedInputHandoff: (sessionId, clientMessageId) => {
+        const native = this.nativeTuiSessions.get(sessionId);
+        if (!native || !confirmNativeTuiQueuedInput(native, clientMessageId)) {
+          return;
+        }
+        this.updateNativeTuiPromptState(sessionId, native.promptState);
+      },
     });
   }
 
@@ -503,6 +522,13 @@ export class RuntimeTerminalCoordinator {
     });
     const pane = panes.find((candidate) => candidate.paneId === mux.paneId);
     if (!pane || isExitedTuiMuxPane(pane)) {
+      return false;
+    }
+    if (!(await this.tmuxMux.claimSessionOwnership(mux.sessionName))) {
+      console.warn("[rah] skipped TUI mux recovery because another live RAH owns it", {
+        sessionId: session.id,
+        muxSessionName: mux.sessionName,
+      });
       return false;
     }
 
@@ -653,7 +679,9 @@ export class RuntimeTerminalCoordinator {
     });
   }
 
-  async cleanupUnmanagedTuiMuxSessions(): Promise<string[]> {
+  async cleanupUnmanagedTuiMuxSessions(options?: {
+    includeCurrentDaemon?: boolean;
+  }): Promise<string[]> {
     const managedSessionNames = new Set(
       [...this.tuiMuxSessions.values()].map((session) => session.muxSessionName),
     );
@@ -667,10 +695,15 @@ export class RuntimeTerminalCoordinator {
       });
       return closed;
     }
-    for (const session of sessions) {
-      if (!session.sessionName.startsWith("rah-") || managedSessionNames.has(session.sessionName)) {
-        continue;
-      }
+    for (const session of selectRahTmuxCleanupTargets(sessions, {
+      ownerScope: this.tmuxMux.ownerScope,
+      managedSessionNames,
+      ...(options?.includeCurrentDaemon !== undefined
+        ? { includeCurrentDaemon: options.includeCurrentDaemon }
+        : {}),
+      currentPid: this.tmuxMux.ownerPid,
+      isOwnerAlive: isProcessAlive,
+    })) {
       await this.removeMuxSession(session.sessionName, "tmux").then(
         () => {
           closed.push(session.sessionName);
@@ -839,7 +872,7 @@ export class RuntimeTerminalCoordinator {
             clientId,
             text,
             queuedAt: new Date().toISOString(),
-            ...(options?.clientMessageId !== undefined ? { clientMessageId: options.clientMessageId } : {}),
+            clientMessageId: options?.clientMessageId ?? crypto.randomUUID(),
             ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
           },
           20,
@@ -869,7 +902,7 @@ export class RuntimeTerminalCoordinator {
           clientId,
           text,
           queuedAt: new Date().toISOString(),
-          ...(options?.clientMessageId !== undefined ? { clientMessageId: options.clientMessageId } : {}),
+          clientMessageId: options?.clientMessageId ?? crypto.randomUUID(),
           ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
         },
         20,
@@ -909,6 +942,28 @@ export class RuntimeTerminalCoordinator {
     this.mirrorRuntime.mirrorSession(native.sessionId);
     delete native.clearPromptBeforeNextInput;
     this.writeNativeTuiChatSubmit(native, text, { clearPromptBeforeSubmit });
+  }
+
+  updateNativeTuiQueuedInput(
+    sessionId: string,
+    clientMessageId: string,
+    text: string,
+  ): boolean {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || !updateNativeTuiQueuedInput(native, clientMessageId, text)) {
+      return false;
+    }
+    this.updateNativeTuiPromptState(sessionId, native.promptState);
+    return true;
+  }
+
+  deleteNativeTuiQueuedInput(sessionId: string, clientMessageId: string): boolean {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || !deleteNativeTuiQueuedInput(native, clientMessageId)) {
+      return false;
+    }
+    this.updateNativeTuiPromptState(sessionId, native.promptState);
+    return true;
   }
 
   private writeNativeTuiChatSubmit(
@@ -1278,6 +1333,7 @@ export class RuntimeTerminalCoordinator {
         queuedInputCount: native.queuedInputs.length,
       },
     });
+    publishSessionInputQueue(this.deps, sessionId, native.queuedInputs);
     this.deps.eventBus.publish({
       sessionId,
       type: "session.native_tui.prompt_state.changed",
@@ -1305,7 +1361,7 @@ export class RuntimeTerminalCoordinator {
       this.scheduleNativeTuiQueuedDrain(native);
       return;
     }
-    const queued = dequeueNativeTuiQueuedInput(native);
+    const queued = markNextNativeTuiQueuedInputSubmitting(native);
     if (!queued) {
       return;
     }
@@ -1750,7 +1806,13 @@ export class RuntimeTerminalCoordinator {
         onExit: (terminalId, exitArgs) => {
           const native = this.nativeTuiSessions.get(terminalId);
           const expectedClose = this.closingNativeTuiSessionIds.has(terminalId);
-          const exitError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
+          const outputError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
+          const exitError = classifyNativeTuiExit({
+            expectedClose,
+            ...(outputError ? { outputError } : {}),
+            ...(exitArgs.exitCode !== undefined ? { exitCode: exitArgs.exitCode } : {}),
+            ...(exitArgs.signal !== undefined ? { signal: exitArgs.signal } : {}),
+          });
           this.clearNativeTuiRuntimeState(terminalId);
           this.closingNativeTuiSessionIds.delete(terminalId);
           this.deps.ptyHub.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
@@ -1820,10 +1882,14 @@ export class RuntimeTerminalCoordinator {
     }
 
     const native = this.nativeTuiSessions.get(sessionId);
+    const readyState = this.deps.sessionStore.getSession(sessionId);
+    if (readyState?.session.runtimeState === "failed") {
+      return { session: toSessionSummary(readyState) };
+    }
     const runtimeState = "idle";
-    const readyState = this.deps.sessionStore.setRuntimeState(sessionId, runtimeState);
+    const idleState = this.deps.sessionStore.setRuntimeState(sessionId, runtimeState);
     publishSessionStateChanged(this.deps, sessionId, runtimeState);
-    return { session: toSessionSummary(readyState) };
+    return { session: toSessionSummary(idleState) };
   }
 
   async startTuiMuxSession(args: {
@@ -2299,7 +2365,7 @@ export class RuntimeTerminalCoordinator {
     }
     if (pane) {
       const finalScreen = await tmux.muxRuntime
-        .dumpScreen(tmux.muxSessionName, tmux.paneId, { ansi: true })
+        .dumpScreen(tmux.muxSessionName, tmux.paneId, { ansi: true, full: true })
         .catch(() => "");
       if (finalScreen && this.isCurrentTuiMuxSession(tmux)) {
         this.observeNativeTuiOutput(sessionId, finalScreen);
@@ -2311,14 +2377,11 @@ export class RuntimeTerminalCoordinator {
     const native = this.nativeTuiSessions.get(sessionId);
     const expectedClose = this.closingNativeTuiSessionIds.has(sessionId);
     const outputError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
-    const exitError = expectedClose
-      ? undefined
-      : outputError ??
-        (pane?.exitStatus !== null && pane?.exitStatus !== undefined && pane.exitStatus !== 0
-          ? `Native TUI process exited with code ${pane.exitStatus}.`
-          : !pane
-            ? "Native TUI process exited unexpectedly."
-            : undefined);
+    const exitError = classifyNativeTuiExit({
+      expectedClose,
+      ...(outputError ? { outputError } : {}),
+      ...(pane ? { exitCode: pane.exitStatus } : {}),
+    });
     this.clearTuiMuxRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     if (!exitError) {
@@ -2415,8 +2478,12 @@ export class RuntimeTerminalCoordinator {
       return;
     }
     const timer = setInterval(() => {
-      this.probeNativeTuiBinding(sessionId);
-      this.warnIfNativeTuiBindingIsStillMissing(sessionId);
+      try {
+        this.probeNativeTuiBinding(sessionId);
+        this.warnIfNativeTuiBindingIsStillMissing(sessionId);
+      } catch (error) {
+        this.failNativeTuiObservation(sessionId, error);
+      }
     }, nativeTuiBindingProbeIntervalMs());
     timer.unref?.();
     native.bindingTimer = timer;
@@ -2436,16 +2503,22 @@ export class RuntimeTerminalCoordinator {
 
   private observeNativeTuiOutput(sessionId: string, data: string): void {
     const native = this.nativeTuiSessions.get(sessionId);
-    if (!native) {
+    if (!native || native.fatalObservationError) {
       return;
     }
     native.recentOutputTail = `${native.recentOutputTail ?? ""}${data}`.slice(
       -NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT,
     );
-    const observation = this.deps.nativeTuiProviders.observeOutput(
-      nativeTuiProviderRuntimeSession(native),
-      native.recentOutputTail,
-    );
+    let observation;
+    try {
+      observation = this.deps.nativeTuiProviders.observeOutput(
+        nativeTuiProviderRuntimeSession(native),
+        native.recentOutputTail,
+      );
+    } catch (error) {
+      this.failNativeTuiObservation(sessionId, error);
+      return;
+    }
     const promptMarkerCanCompleteBusyState =
       native.provider !== "claude" ||
       native.promptState !== "agent_busy" ||
@@ -2519,6 +2592,19 @@ export class RuntimeTerminalCoordinator {
     ) {
       return;
     }
+    const currentState = this.deps.sessionStore.getSession(sessionId);
+    const nextTitle = record?.ref.title ?? currentState?.session.title ?? providerSessionId;
+    const nextPreview = record?.ref.preview ?? currentState?.session.preview ?? providerSessionId;
+    try {
+      this.deps.sessionStore.patchManagedSession(sessionId, {
+        providerSessionId,
+        title: nextTitle,
+        preview: nextPreview,
+      });
+    } catch (error) {
+      this.failNativeTuiObservation(sessionId, error, providerSessionId);
+      return;
+    }
     native.providerSessionId = providerSessionId;
     resolveNativeTuiBindingDiagnostic(this.nativeTuiDiagnostics, sessionId, providerSessionId);
     if (native.bindingTimer) {
@@ -2528,17 +2614,80 @@ export class RuntimeTerminalCoordinator {
     if (native.providerMirror?.providerSessionId !== providerSessionId) {
       delete native.providerMirror;
     }
-    const currentState = this.deps.sessionStore.getSession(sessionId);
-    const nextTitle = record?.ref.title ?? currentState?.session.title ?? providerSessionId;
-    const nextPreview = record?.ref.preview ?? currentState?.session.preview ?? providerSessionId;
-    this.deps.sessionStore.patchManagedSession(sessionId, {
-      providerSessionId,
-      title: nextTitle,
-      preview: nextPreview,
-    });
     this.deps.historySnapshots.clear(sessionId);
     publishSessionStarted(this.deps, sessionId);
     this.mirrorRuntime.mirrorSession(sessionId);
+  }
+
+  private failNativeTuiObservation(
+    sessionId: string,
+    error: unknown,
+    providerSessionId?: string,
+  ): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || native.fatalObservationError) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    native.fatalObservationError = message;
+    clearNativeTuiSessionTimers(native);
+    console.error("[rah] native TUI provider observation failed", {
+      sessionId,
+      provider: native.provider,
+      ...(providerSessionId ? { providerSessionId } : {}),
+      error,
+    });
+    this.nativeTuiDiagnostics.upsert({
+      sessionId,
+      provider: native.provider,
+      ...(providerSessionId ? { providerSessionId } : {}),
+      kind: "binding_failed",
+      severity: "error",
+      message,
+      cwd: native.cwd,
+      elapsedMs: Math.max(0, Date.now() - native.startupTimestampMs),
+    });
+    const current = this.deps.sessionStore.getSession(sessionId);
+    if (current) {
+      this.deps.sessionStore.patchManagedSession(sessionId, {
+        capabilities: buildStoppedNativeTuiSessionCapabilities(current.session.provider),
+        nativeTui: {
+          terminalId: sessionId,
+          viewAvailable: true,
+          promptState: "prompt_clean",
+          queuedInputCount: 0,
+        },
+        runtimeDiagnostics: {
+          ...(current.session.runtimeDiagnostics ?? {}),
+          lastError: message,
+        },
+      });
+      this.deps.sessionStore.setActiveTurn(sessionId, undefined);
+      this.deps.sessionStore.setRuntimeState(sessionId, "failed");
+      publishSessionStateChanged(this.deps, sessionId, "failed");
+    }
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
+      this.clearTuiMuxRuntimeState(sessionId);
+      this.nativeTuiSessionIds.delete(sessionId);
+      void this.closeTuiMuxSession(tmux)
+        .catch((closeError) => {
+          console.error("[rah] failed to close native TUI after observation failure", {
+            sessionId,
+            error: closeError,
+          });
+        })
+        .finally(() => {
+          this.clearNativeTuiRuntimeState(sessionId);
+        });
+      return;
+    }
+    void this.ptySessions.close(sessionId).catch((closeError) => {
+      console.error("[rah] failed to close native TUI after observation failure", {
+        sessionId,
+        error: closeError,
+      });
+    });
   }
 
   async shutdown(): Promise<void> {
@@ -2559,7 +2708,9 @@ export class RuntimeTerminalCoordinator {
         });
       }
     });
-    const closedUnmanaged = await this.cleanupUnmanagedTuiMuxSessions();
+    const closedUnmanaged = await this.cleanupUnmanagedTuiMuxSessions({
+      includeCurrentDaemon: true,
+    });
     if (closedUnmanaged.length > 0) {
       console.warn("[rah] cleaned unmanaged RAH tmux sessions during shutdown", {
         sessions: closedUnmanaged,

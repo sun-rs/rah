@@ -4,14 +4,16 @@ import type {
   ConversationEvidencePage,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import { existsSync } from "node:fs";
 import type {
   ProviderAdapter,
+  ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import {
-  archiveOpenCodeStoredSession,
+  deleteOpenCodeStoredSession,
   createOpenCodeStoredSessionFrozenHistoryPageLoader,
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
@@ -22,19 +24,30 @@ import {
   OpenCodeSqliteReadError,
   resolveOpenCodeStoredSessionWatchRoots,
   resumeOpenCodeStoredSession,
+  restoreOpenCodeStoredSession,
   type OpenCodeStoredSessionRecord,
 } from "./opencode-stored-sessions";
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
 } from "./provider-resume";
+import {
+  archiveOpenCodeSession,
+  startOpenCodeServer,
+  stopOpenCodeServer,
+  type OpenCodeServerHandle,
+} from "./opencode-api";
 
-export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
+export class OpenCodeStoredHistoryAdapter
+  implements ProviderAdapter, ProviderStoredHistoryAdapter, ProviderShutdownAdapter
+{
   readonly id = "opencode-stored-history";
   readonly providers: Array<"opencode"> = ["opencode"];
 
   private storedSessionIndex = new Map<string, OpenCodeStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
+  private archiveServer: OpenCodeServerHandle | null = null;
+  private archiveServerPromise: Promise<OpenCodeServerHandle> | null = null;
 
   constructor(private readonly services: RuntimeServices) {}
 
@@ -178,6 +191,42 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
     return resolveOpenCodeStoredSessionWatchRoots();
   }
 
+  async archiveStoredSession(session: StoredSessionRef): Promise<"provider_native"> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(session.providerSessionId) ??
+      findOpenCodeStoredSessionRecord(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
+    }
+    if (record.ref.providerState?.archived === true) {
+      return "provider_native";
+    }
+    const recordedCwd = record.ref.cwd ?? record.ref.rootDir;
+    const cwd = recordedCwd && existsSync(recordedCwd) ? recordedCwd : process.cwd();
+    const server = await this.getArchiveServer(cwd);
+    try {
+      const updated = await archiveOpenCodeSession({
+        handle: {
+          baseUrl: server.baseUrl,
+          cwd,
+          ...(server.authHeader ? { authHeader: server.authHeader } : {}),
+        },
+        providerSessionId: session.providerSessionId,
+      });
+      if (typeof updated.time?.archived !== "number") {
+        throw new Error(
+          `OpenCode did not confirm native archive for ${session.providerSessionId}.`,
+        );
+      }
+    } catch (error) {
+      await this.resetArchiveServer();
+      throw error;
+    }
+    this.refreshStoredSessionIndex();
+    return "provider_native";
+  }
+
   removeStoredSession(session: StoredSessionRef): void {
     const record =
       this.storedSessionIndex.get(session.providerSessionId) ??
@@ -186,8 +235,28 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
     if (!record) {
       throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
     }
-    archiveOpenCodeStoredSession(record);
+    deleteOpenCodeStoredSession(record);
     this.storedSessionIndex.delete(session.providerSessionId);
+  }
+
+  restoreStoredSession(session: StoredSessionRef): void {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(session.providerSessionId) ??
+      findOpenCodeStoredSessionRecord(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
+    }
+    // OpenCode 1.18.4 exposes archive through session.update, but its public
+    // schema only accepts a numeric archived timestamp and silently ignores
+    // null. Clearing the provider-owned field is therefore the narrow,
+    // reversible counterpart until an official unarchive endpoint exists.
+    restoreOpenCodeStoredSession(record);
+    this.refreshStoredSessionIndex();
+  }
+
+  async shutdown(): Promise<void> {
+    await this.resetArchiveServer();
   }
 
   private findRecordForRuntimeSession(sessionId: string): OpenCodeStoredSessionRecord | undefined {
@@ -221,5 +290,32 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
       throw error;
     }
     return this.storedSessionIndex;
+  }
+
+  private async getArchiveServer(cwd: string): Promise<OpenCodeServerHandle> {
+    if (
+      this.archiveServer &&
+      this.archiveServer.child.exitCode === null &&
+      this.archiveServer.child.signalCode === null
+    ) {
+      return this.archiveServer;
+    }
+    this.archiveServerPromise ??= startOpenCodeServer({ cwd });
+    try {
+      this.archiveServer = await this.archiveServerPromise;
+      return this.archiveServer;
+    } finally {
+      this.archiveServerPromise = null;
+    }
+  }
+
+  private async resetArchiveServer(): Promise<void> {
+    const pending = this.archiveServerPromise;
+    this.archiveServerPromise = null;
+    const server = this.archiveServer ?? (pending ? await pending.catch(() => null) : null);
+    this.archiveServer = null;
+    if (server) {
+      await stopOpenCodeServer(server);
+    }
   }
 }

@@ -84,14 +84,22 @@ export class DebugAdapter implements ProviderAdapter {
     return this.engine.getWorkspaceSnapshot(sessionId, options);
   }
 
-  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }): Promise<GitStatusResponse> {
+  async getGitStatus(
+    sessionId: string,
+    options?: { scopeRoot?: string; baseBranch?: string },
+  ): Promise<GitStatusResponse> {
     return await this.engine.getGitStatus(sessionId, options);
   }
 
   async getGitDiff(
     sessionId: string,
     path: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
+    options?: {
+      staged?: boolean;
+      ignoreWhitespace?: boolean;
+      scopeRoot?: string;
+      baseBranch?: string;
+    },
   ): Promise<GitDiffResponse> {
     return await this.engine.getGitDiff(sessionId, path, options);
   }

@@ -42,6 +42,7 @@ function compactToolCall(toolCall: ToolCall): ToolCall {
     id: toolCall.id,
     family: toolCall.family,
     providerToolName: toolCall.providerToolName,
+    ...(toolCall.activity !== undefined ? { activity: toolCall.activity } : {}),
     ...(toolCall.title !== undefined ? { title: toolCall.title } : {}),
     ...(toolCall.summary !== undefined ? { summary: toolCall.summary } : {}),
     ...(compactInput !== undefined ? { input: compactInput } : {}),
@@ -63,6 +64,7 @@ function compactObservation(observation: WorkbenchObservation): WorkbenchObserva
     kind: observation.kind,
     status: observation.status,
     title: observation.title,
+    ...(observation.activity !== undefined ? { activity: observation.activity } : {}),
     ...(observation.summary !== undefined ? { summary: observation.summary } : {}),
     ...(observation.subject !== undefined
       ? {

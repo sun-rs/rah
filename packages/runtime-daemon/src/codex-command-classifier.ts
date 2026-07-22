@@ -34,7 +34,7 @@ function isDynamicShellPath(value: string): boolean {
 
 function extractSedReadFiles(command: string): string[] {
   const refs: string[] = [];
-  for (const match of command.matchAll(/(?:^|[\s;&|{])sed\s+(?<args>[^;&|}]+)/g)) {
+  for (const match of command.matchAll(/(?:^|[\s;&|{])sed\s+(?<args>[^\r\n;&|}]+)/g)) {
     const words = shellWords(match.groups?.args ?? "");
     let sawScript = false;
     let skipNextScript = false;

@@ -6,7 +6,9 @@ import type {
   PermissionRequest,
   PermissionResolution,
   RuntimeOperation,
+  SessionInputAttachment,
   TimelineIdentity,
+  TimelineItem,
   TimelineRuntimeModel,
   TimelineTurnIdentity,
   ToolCall,
@@ -17,6 +19,8 @@ import { classifyCodexCommand } from "./codex-command-classifier";
 import { classifyCodexCommandResult } from "./codex-command-result";
 import { normalizeContextUsage } from "./context-usage";
 import {
+  CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+  createCodexAggregateTimelineIdentity,
   createCodexLiveEphemeralTimelineIdentity,
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
@@ -41,6 +45,7 @@ type PendingLiveToolCall = {
 
 export type CodexSubmittedUserMessage = {
   text: string;
+  attachments?: SessionInputAttachment[];
   clientMessageId?: string;
   clientTurnId?: string;
 };
@@ -54,6 +59,9 @@ export interface CodexAppServerTranslationState {
   emittedReasoningDeltaItemIds: Set<string>;
   completedAgentMessageItemIds: Set<string>;
   completedReasoningItemIds: Set<string>;
+  emittedCompactionItemKeys: Set<string>;
+  compactionCountByTurnId: Map<string, number>;
+  activeCompactionItemKeysByTurnId: Map<string, Set<string>>;
   reasoningSectionBreakKeys: Set<string>;
   timelineItemIndexByProviderItemKey: Map<string, number>;
   userTimelineItemIndexByTurnId: Map<string, number>;
@@ -64,6 +72,7 @@ export interface CodexAppServerTranslationState {
   clientUserMessageEmittedTurnIds: Set<string>;
   pendingRuntimeModel?: TimelineRuntimeModel;
   runtimeModelByTurnId: Map<string, TimelineRuntimeModel>;
+  providerSessionIdByTurnId: Map<string, string>;
   lastAgentMessageDeltaByItemId: Map<string, string>;
   lastReasoningDeltaByItemId: Map<string, string>;
   lastCommandOutputDeltaByCallId: Map<string, string>;
@@ -84,6 +93,9 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     emittedReasoningDeltaItemIds: new Set(),
     completedAgentMessageItemIds: new Set(),
     completedReasoningItemIds: new Set(),
+    emittedCompactionItemKeys: new Set(),
+    compactionCountByTurnId: new Map(),
+    activeCompactionItemKeysByTurnId: new Map(),
     reasoningSectionBreakKeys: new Set(),
     timelineItemIndexByProviderItemKey: new Map(),
     userTimelineItemIndexByTurnId: new Map(),
@@ -92,6 +104,7 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     submittedUserMessageByTurnId: new Map(),
     clientUserMessageEmittedTurnIds: new Set(),
     runtimeModelByTurnId: new Map(),
+    providerSessionIdByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
     lastReasoningDeltaByItemId: new Map(),
     lastCommandOutputDeltaByCallId: new Map(),
@@ -225,7 +238,6 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "thread/goal/updated",
   "thread/goal/cleared",
   "thread/settings/updated",
-  "turn/diff/updated",
   "rawResponseItem/completed",
   "command/exec/outputDelta",
   "process/outputDelta",
@@ -241,6 +253,7 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "externalAgentConfig/import/progress",
   "externalAgentConfig/import/completed",
   "fs/changed",
+  "thread/compacted",
   "model/rerouted",
   "model/verification",
   "turn/moderationMetadata",
@@ -489,6 +502,19 @@ function providerSessionIdFromParams(params: Record<string, unknown> | null | un
   );
 }
 
+function providerSessionIdForTurn(
+  state: CodexAppServerTranslationState,
+  turnId: string,
+  params: Record<string, unknown> | null | undefined,
+): string | undefined {
+  const providerSessionId = providerSessionIdFromParams(params);
+  if (providerSessionId) {
+    state.providerSessionIdByTurnId.set(turnId, providerSessionId);
+    return providerSessionId;
+  }
+  return state.providerSessionIdByTurnId.get(turnId);
+}
+
 function codexRuntimeModelFromTurnRecord(turn: Record<string, unknown>): TimelineRuntimeModel | undefined {
   const collaborationMode = recordField(turn, "collaborationMode") ?? recordField(turn, "collaboration_mode");
   const settings = collaborationMode
@@ -620,13 +646,62 @@ function createLiveTimelineIdentityFromNotification(
     return undefined;
   }
   return createLiveTimelineIdentity(state, {
-    providerSessionId: providerSessionIdFromParams(record),
+    providerSessionId: providerSessionIdForTurn(state, turnId, record),
     turnId,
     itemKind: params.itemKind,
     providerItemKey: params.providerItemKey,
     ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
     ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
   });
+}
+
+function createLiveCompactionIdentity(
+  providerSessionId: string | undefined,
+  turnId: string,
+): TimelineIdentity | undefined {
+  if (!providerSessionId) {
+    return undefined;
+  }
+  return createCodexAggregateTimelineIdentity({
+    providerSessionId,
+    turnId,
+    itemKind: "compaction",
+    itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+    origin: "live",
+    confidence: "derived",
+  });
+}
+
+function compactionTimelineItem(
+  state: CodexAppServerTranslationState,
+  turnId: string,
+): Extract<TimelineItem, { kind: "compaction" }> {
+  const count = state.compactionCountByTurnId.get(turnId) ?? 1;
+  const activeCount = state.activeCompactionItemKeysByTurnId.get(turnId)?.size ?? 0;
+  return {
+    kind: "compaction",
+    status: activeCount > 0 ? "started" : "completed",
+    count,
+  };
+}
+
+function finalizeActiveCompaction(
+  state: CodexAppServerTranslationState,
+  providerSessionId: string | undefined,
+  turnId: string,
+): ProviderActivity | undefined {
+  const activeKeys = state.activeCompactionItemKeysByTurnId.get(turnId);
+  if (!activeKeys || activeKeys.size === 0 || !state.compactionCountByTurnId.has(turnId)) {
+    return undefined;
+  }
+  activeKeys.clear();
+  state.activeCompactionItemKeysByTurnId.delete(turnId);
+  return {
+    type: "timeline_item_updated",
+    turnId,
+    item: compactionTimelineItem(state, turnId),
+    ...timelineIdentityProps(createLiveCompactionIdentity(providerSessionId, turnId)),
+  };
 }
 
 function createLiveEphemeralTimelineIdentity(
@@ -1384,6 +1459,85 @@ function makeGenericObservation(
   };
 }
 
+function appServerWebSearchAction(item: Record<string, unknown>): Record<string, unknown> | null {
+  return recordField(item, "action");
+}
+
+function appServerWebSearchActionType(action: Record<string, unknown> | null): string | null {
+  const type = action ? stringField(action, "type") : null;
+  if (type === "openPage") return "open_page";
+  if (type === "findInPage") return "find_in_page";
+  return type;
+}
+
+function appServerWebSearchUrls(item: Record<string, unknown>): string[] {
+  const urls = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value === "string" && /^https?:\/\//i.test(value.trim())) {
+      urls.add(value.trim());
+    }
+  };
+  add(item.url);
+  for (const url of stringArrayField(item, "urls")) add(url);
+  const action = appServerWebSearchAction(item);
+  add(action?.url);
+  for (const result of Array.isArray(item.results) ? item.results : []) {
+    if (result && typeof result === "object" && !Array.isArray(result)) {
+      add((result as Record<string, unknown>).url);
+    }
+  }
+  return [...urls];
+}
+
+function makeAppServerWebSearchObservation(
+  item: Record<string, unknown>,
+  status: WorkbenchObservation["status"],
+): WorkbenchObservation {
+  const id = stringField(item, "id") ?? `web.search-${Date.now().toString(36)}`;
+  const action = appServerWebSearchAction(item);
+  const actionType = appServerWebSearchActionType(action);
+  const query =
+    stringField(item, "query") ??
+    (actionType === "search" ? stringField(action ?? {}, "query") : null);
+  const queries =
+    actionType === "search" ? stringArrayField(action ?? {}, "queries") : [];
+  const effectiveQuery = query ?? (queries.length > 0 ? queries.join(", ") : null);
+  const urls = appServerWebSearchUrls(item);
+  const kind =
+    actionType === "open_page" || actionType === "find_in_page"
+      ? "web.fetch"
+      : "web.search";
+  const title =
+    actionType === "open_page"
+      ? "Open page"
+      : actionType === "find_in_page"
+        ? "Find in page"
+        : "Web search";
+  return {
+    id: `obs-${id}`,
+    kind,
+    status,
+    title,
+    subject: {
+      providerCallId: id,
+      ...(effectiveQuery ? { query: effectiveQuery } : {}),
+      ...(urls.length > 0 ? { urls } : {}),
+    },
+    activity: {
+      kind: "web",
+      action: kind === "web.fetch" ? "web_fetch" : "web_search",
+      ...(effectiveQuery ? { query: effectiveQuery } : {}),
+      ...(urls.length > 0 ? { urls } : {}),
+    },
+    detail: {
+      artifacts: [
+        ...(urls.length > 0 ? [{ kind: "urls" as const, urls }] : []),
+        { kind: "json", label: "item", value: item },
+      ],
+    },
+  };
+}
+
 function makeSubagentLifecycleObservation(
   item: Record<string, unknown>,
   status: WorkbenchObservation["status"],
@@ -1499,7 +1653,23 @@ function mapThreadItem(
                 ...(submitted?.clientTurnId !== undefined
                   ? { clientTurnId: submitted.clientTurnId }
                   : {}),
-                ...(imageCount > 0 ? { imageCount } : {}),
+                ...(submitted?.attachments?.length
+                  ? { attachments: submitted.attachments }
+                  : {}),
+                ...(Math.max(
+                  imageCount,
+                  submitted?.attachments?.filter((attachment) => attachment.kind === "image")
+                    .length ?? 0,
+                ) > 0
+                  ? {
+                      imageCount: Math.max(
+                        imageCount,
+                        submitted?.attachments?.filter(
+                          (attachment) => attachment.kind === "image",
+                        ).length ?? 0,
+                      ),
+                    }
+                  : {}),
               },
               ...timelineIdentityProps(identity),
             },
@@ -1770,7 +1940,10 @@ function mapThreadItem(
       ];
     }
     case "webSearch": {
-      const observation = makeGenericObservation(item, "web.search", "Web search", phase === "started" ? "running" : "completed");
+      const observation = makeAppServerWebSearchObservation(
+        item,
+        phase === "started" ? "running" : "completed",
+      );
       return [
         phase === "started"
           ? { type: "observation_started", turnId, observation }
@@ -1801,10 +1974,52 @@ function mapThreadItem(
           : { type: "observation_completed", turnId, observation },
       ];
     }
-    case "contextCompaction":
+    case "contextCompaction": {
+      const itemKey = `${turnId}:${id}`;
+      const previouslyEmitted = state.emittedCompactionItemKeys.has(itemKey);
+      const aggregatePreviouslyEmitted = state.compactionCountByTurnId.has(turnId);
+      const activeItemKeys =
+        state.activeCompactionItemKeysByTurnId.get(turnId) ?? new Set<string>();
+      if (phase === "started") {
+        if (previouslyEmitted) {
+          return [];
+        }
+        state.emittedCompactionItemKeys.add(itemKey);
+        state.compactionCountByTurnId.set(
+          turnId,
+          (state.compactionCountByTurnId.get(turnId) ?? 0) + 1,
+        );
+        activeItemKeys.add(itemKey);
+        state.activeCompactionItemKeysByTurnId.set(turnId, activeItemKeys);
+      } else {
+        if (previouslyEmitted && !activeItemKeys.has(itemKey)) {
+          return [];
+        }
+        if (!previouslyEmitted) {
+          state.emittedCompactionItemKeys.add(itemKey);
+          state.compactionCountByTurnId.set(
+            turnId,
+            (state.compactionCountByTurnId.get(turnId) ?? 0) + 1,
+          );
+        }
+        activeItemKeys.delete(itemKey);
+        if (activeItemKeys.size > 0) {
+          state.activeCompactionItemKeysByTurnId.set(turnId, activeItemKeys);
+        } else {
+          state.activeCompactionItemKeysByTurnId.delete(turnId);
+        }
+      }
       return [
-        { type: "timeline_item", turnId, item: { kind: "compaction", status: phase === "started" ? "started" : "completed" } },
+        {
+          type: aggregatePreviouslyEmitted ? "timeline_item_updated" : "timeline_item",
+          turnId,
+          item: compactionTimelineItem(state, turnId),
+          ...timelineIdentityProps(
+            createLiveCompactionIdentity(providerSessionId, turnId),
+          ),
+        },
       ];
+    }
     case "hookPrompt": {
       return [
         {
@@ -1873,6 +2088,9 @@ export function translateCodexAppServerThreadSnapshot(
     const turnId = stringField(turnRecord, "id");
     if (!turnId) {
       continue;
+    }
+    if (providerSessionId) {
+      state.providerSessionIdByTurnId.set(turnId, providerSessionId);
     }
     const runtimeModel = codexRuntimeModelFromTurnRecord(turnRecord);
     if (runtimeModel) {
@@ -1954,7 +2172,10 @@ export function translateCodexAppServerThreadSnapshot(
       }),
     );
   }
-  return translatedItems;
+  return translatedItems.map((item) => ({
+    ...item,
+    origin: "snapshot" as const,
+  }));
 }
 
 function makeTerminalCommandPreamble(command: string): string {
@@ -2106,7 +2327,7 @@ export function translateCodexAppServerNotification(
       }
       delete state.pendingRuntimeModel;
       const submitted = bindCodexSubmittedUserMessageToTurn(state, turn.id);
-      const providerSessionId = providerSessionIdFromParams(params);
+      const providerSessionId = providerSessionIdForTurn(state, turn.id, params);
       const identity = providerSessionId
         ? createCodexTimelineTurnIdentity({
             providerSessionId,
@@ -2151,6 +2372,16 @@ export function translateCodexAppServerNotification(
               ...(submitted.clientTurnId !== undefined
                 ? { clientTurnId: submitted.clientTurnId }
                 : {}),
+              ...(submitted.attachments?.length
+                ? { attachments: submitted.attachments }
+                : {}),
+              ...(submitted.attachments?.some((attachment) => attachment.kind === "image")
+                ? {
+                    imageCount: submitted.attachments.filter(
+                      (attachment) => attachment.kind === "image",
+                    ).length,
+                  }
+                : {}),
             },
             ...timelineIdentityProps(userIdentity),
           }),
@@ -2167,6 +2398,27 @@ export function translateCodexAppServerNotification(
       const activity = makeOperationFromRun(run, "started");
       return [translated(notification, withTurnId(activity, turnIdFromParams(params!)))];
     }
+    case "turn/diff/updated": {
+      const params = paramsRecord(notification);
+      if (!params) {
+        return invalidStreamActivities(notification, "turn/diff/updated params were not an object");
+      }
+      const turnId = turnIdFromParams(params);
+      const diff = stringField(params, "diff");
+      if (!turnId || diff === null) {
+        return invalidStreamActivities(
+          notification,
+          "turn/diff/updated did not include turnId and diff",
+        );
+      }
+      return [
+        translated(notification, {
+          type: "turn_file_changes_updated",
+          turnId,
+          unifiedDiff: diff,
+        }),
+      ];
+    }
     case "turn/completed": {
       if (!notification.params || typeof notification.params !== "object" || Array.isArray(notification.params)) {
         return invalidStreamActivities(notification, "turn/completed params were not an object");
@@ -2182,7 +2434,16 @@ export function translateCodexAppServerNotification(
       const turnId = typeof turn.id === "string" ? turn.id : "current-turn";
       state.submittedUserMessageByTurnId.delete(turnId);
       const timing = turnLifecycleTiming(turn);
-      const providerSessionId = providerSessionIdFromParams(params);
+      const providerSessionId = providerSessionIdForTurn(state, turnId, params);
+      const activities: CodexLiveTranslatedActivity[] = [];
+      const finalizedCompaction = finalizeActiveCompaction(
+        state,
+        providerSessionId,
+        turnId,
+      );
+      if (finalizedCompaction) {
+        activities.push(translated(notification, finalizedCompaction));
+      }
       const identity = providerSessionId
         ? createCodexTimelineTurnIdentity({
             providerSessionId,
@@ -2196,7 +2457,7 @@ export function translateCodexAppServerNotification(
           turn.error && typeof turn.error === "object" && !Array.isArray(turn.error)
             ? (turn.error as Record<string, unknown>)
             : null;
-        return [
+        activities.push(
           translated(notification, {
             type: "turn_failed",
             turnId,
@@ -2204,10 +2465,11 @@ export function translateCodexAppServerNotification(
             ...turnIdentityProps(identity),
             ...timing,
           }),
-        ];
+        );
+        return activities;
       }
       if (turn.status === "interrupted") {
-        return [
+        activities.push(
           translated(notification, {
             type: "turn_canceled",
             turnId,
@@ -2215,16 +2477,18 @@ export function translateCodexAppServerNotification(
             ...turnIdentityProps(identity),
             ...timing,
           }),
-        ];
+        );
+        return activities;
       }
-      return [
+      activities.push(
         translated(notification, {
           type: "turn_completed",
           turnId,
           ...turnIdentityProps(identity),
           ...timing,
         }),
-      ];
+      );
+      return activities;
     }
     case "hook/completed": {
       const params = paramsRecord(notification);
@@ -2262,7 +2526,7 @@ export function translateCodexAppServerNotification(
         phase,
         turnId,
         state,
-        providerSessionIdFromParams(params),
+        providerSessionIdForTurn(state, turnId, params),
       ).map((activity) => translated(notification, activity, ts ? { ts } : undefined));
     }
     case "item/autoApprovalReview/started": {
@@ -2459,7 +2723,7 @@ export function translateCodexAppServerNotification(
       const turnId = params ? turnIdFromParams(params) : undefined;
       const identity = turnId
         ? createLiveEphemeralTimelineIdentity({
-            providerSessionId: providerSessionIdFromParams(params),
+            providerSessionId: providerSessionIdForTurn(state, turnId, params),
             turnId,
             itemKind: "plan",
             providerItemKey: "turn-plan",
@@ -2890,17 +3154,6 @@ export function translateCodexAppServerNotification(
             title: "Filesystem changed",
             subject: { files },
           },
-        }),
-      ];
-    }
-    case "thread/compacted": {
-      const params = paramsRecord(notification);
-      const turnId = params ? turnIdFromParams(params) : undefined;
-      return [
-        translated(notification, {
-          type: "timeline_item",
-          ...(turnId !== undefined ? { turnId } : {}),
-          item: { kind: "compaction", status: "completed" },
         }),
       ];
     }

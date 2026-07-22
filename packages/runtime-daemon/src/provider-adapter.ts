@@ -15,31 +15,39 @@ import type {
   ProviderDiagnostic,
   PermissionResponseRequest,
   ProviderModelCatalog,
+  ReorderQueuedInputRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetInputQueuePolicyRequest,
   SetSessionModelRequest,
   SessionFileResponse,
   ConversationEvidencePage,
   ConversationTurnDirectoryResponse,
+  DeleteQueuedInputRequest,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
+  StoredSessionArchiveBackend,
   StoredSessionRef,
+  SteerQueuedInputRequest,
   WorkspaceSnapshotResponse,
   ManagedSession,
+  UpdateQueuedInputRequest,
 } from "@rah/runtime-protocol";
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import type { EventBus } from "./event-bus";
 import type { FrozenHistoryPageLoader } from "./history-snapshots";
 import type { PtyHub } from "./pty-hub";
 import type { SessionStore } from "./session-store";
+import type { TurnArtifactStore } from "./turn-artifact-store";
 import type { WorkbenchStateStore } from "./workbench-state";
 
 export interface RuntimeServices {
   eventBus: EventBus;
   ptyHub: PtyHub;
   sessionStore: SessionStore;
+  turnArtifacts?: TurnArtifactStore;
   workbenchState?: WorkbenchStateStore;
 }
 
@@ -103,6 +111,30 @@ export interface ProviderActionCapabilityAdapter {
 
 export interface ProviderStructuredInputControlAdapter {
   sendInput(sessionId: string, request: SessionInputRequest): void;
+  updateQueuedInput?(
+    sessionId: string,
+    clientMessageId: string,
+    request: UpdateQueuedInputRequest,
+  ): SessionSummary;
+  deleteQueuedInput?(
+    sessionId: string,
+    clientMessageId: string,
+    request: DeleteQueuedInputRequest,
+  ): SessionSummary;
+  reorderQueuedInput?(
+    sessionId: string,
+    clientMessageId: string,
+    request: ReorderQueuedInputRequest,
+  ): SessionSummary;
+  steerQueuedInput?(
+    sessionId: string,
+    clientMessageId: string,
+    request: SteerQueuedInputRequest,
+  ): Promise<SessionSummary>;
+  setInputQueuePolicy?(
+    sessionId: string,
+    request: SetInputQueuePolicyRequest,
+  ): SessionSummary;
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary;
   onPtyInput(sessionId: string, clientId: string, data: string): void;
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void;
@@ -123,12 +155,17 @@ export interface ProviderWorkspaceInspectionAdapter {
   ): WorkspaceSnapshotResponse;
   getGitStatus(
     sessionId: string,
-    options?: { scopeRoot?: string },
+    options?: { scopeRoot?: string; baseBranch?: string },
   ): GitStatusResponse | Promise<GitStatusResponse>;
   getGitDiff(
     sessionId: string,
     path: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
+    options?: {
+      staged?: boolean;
+      ignoreWhitespace?: boolean;
+      scopeRoot?: string;
+      baseBranch?: string;
+    },
   ): GitDiffResponse | Promise<GitDiffResponse>;
   applyGitFileAction?(
     sessionId: string,
@@ -173,7 +210,10 @@ export interface ProviderStoredHistoryAdapter {
   refreshStoredSessionsCatalog?(): StoredSessionRef[];
   hydrateStoredSessionsCatalog?(records: readonly StoredSessionCatalogRecord[]): void;
   listStoredSessionWatchRoots?(): string[];
-  archiveStoredSession?(session: StoredSessionRef): Promise<void> | void;
+  archiveStoredSession?(
+    session: StoredSessionRef,
+  ): Promise<StoredSessionArchiveBackend | void> | StoredSessionArchiveBackend | void;
+  restoreStoredSession?(session: StoredSessionRef): Promise<void> | void;
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
 }
 

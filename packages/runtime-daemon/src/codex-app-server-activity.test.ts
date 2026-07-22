@@ -11,7 +11,11 @@ import {
   translateCodexAppServerThreadSnapshot,
 } from "./codex-app-server-activity";
 import { reconcileCodexTrailingTurnLiveness } from "./codex-app-server-turns-page";
-import { createCodexTimelineIdentity } from "./codex-timeline-identity";
+import {
+  CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+  createCodexAggregateTimelineIdentity,
+  createCodexTimelineIdentity,
+} from "./codex-timeline-identity";
 
 function hasInvalidStreamObservation(items: ReturnType<typeof translateCodexAppServerNotification>): boolean {
   return items.some(
@@ -873,6 +877,15 @@ describe("translateCodexAppServerNotification", () => {
       text: "连续提问",
       clientMessageId: "client-message-1",
       clientTurnId: "client-turn-1",
+      attachments: [
+        {
+          id: "attachment-1",
+          kind: "image",
+          name: "chart.png",
+          mediaType: "image/png",
+          size: 128,
+        },
+      ],
     });
     const started = translateCodexAppServerNotification(
       {
@@ -908,6 +921,16 @@ describe("translateCodexAppServerNotification", () => {
       messageId: "client-message-1",
       clientMessageId: "client-message-1",
       clientTurnId: "client-turn-1",
+      attachments: [
+        {
+          id: "attachment-1",
+          kind: "image",
+          name: "chart.png",
+          mediaType: "image/png",
+          size: 128,
+        },
+      ],
+      imageCount: 1,
     });
     assert.deepEqual(activities, []);
   });
@@ -946,6 +969,61 @@ describe("translateCodexAppServerNotification", () => {
         imageCount: 1,
       },
     );
+  });
+
+  test("keeps native web-search result and opened-page URLs as Sources evidence", () => {
+    const search = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-web",
+          item: {
+            type: "webSearch",
+            id: "web-search-1",
+            action: { type: "search", queries: ["provider history"] },
+            results: [
+              { title: "One", url: "https://example.com/one" },
+              { title: "Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      createCodexAppServerTranslationState(),
+    );
+    const opened = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-web",
+          item: {
+            type: "webSearch",
+            id: "web-open-1",
+            action: { type: "openPage", url: "https://example.com/one" },
+          },
+        },
+      },
+      createCodexAppServerTranslationState(),
+    );
+
+    const searchObservation = search[0]?.activity;
+    const openObservation = opened[0]?.activity;
+    assert.equal(searchObservation?.type, "observation_completed");
+    assert.equal(openObservation?.type, "observation_completed");
+    if (
+      searchObservation?.type !== "observation_completed" ||
+      openObservation?.type !== "observation_completed"
+    ) {
+      assert.fail("expected completed web observations");
+    }
+    assert.equal(searchObservation.observation.kind, "web.search");
+    assert.deepEqual(searchObservation.observation.subject?.urls, [
+      "https://example.com/one",
+      "https://example.com/two",
+    ]);
+    assert.equal(openObservation.observation.kind, "web.fetch");
+    assert.deepEqual(openObservation.observation.subject?.urls, [
+      "https://example.com/one",
+    ]);
   });
 
   test("preserves markdown structure while stripping contextual fragments from live assistant messages", () => {
@@ -1596,7 +1674,7 @@ describe("translateCodexAppServerNotification", () => {
     assert.deepEqual(repeatedCommandDelta, []);
   });
 
-  test("keeps transient turn diff snapshots out of the chat timeline", () => {
+  test("maps the authoritative turn diff snapshot to file changes", () => {
     const state = createCodexAppServerTranslationState();
 
     const translated = translateCodexAppServerNotification(
@@ -1605,13 +1683,224 @@ describe("translateCodexAppServerNotification", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          diff: "diff --git a/test.md b/test.md",
+          diff: `diff --git a/test.md b/test.md
+--- a/test.md
++++ b/test.md
+@@ -1 +1,2 @@
+-old
++new
++more
+`,
         },
       },
       state,
     );
 
-    assert.deepEqual(translated, []);
+    assert.equal(translated.length, 1);
+    assert.deepEqual(translated[0]?.activity, {
+      type: "turn_file_changes_updated",
+      turnId: "turn-1",
+      unifiedDiff: `diff --git a/test.md b/test.md
+--- a/test.md
++++ b/test.md
+@@ -1 +1,2 @@
+-old
++new
++more
+`,
+    });
+  });
+
+  test("aggregates context compactions per turn and ignores the deprecated thread notification", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const firstStarted = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-1" },
+        },
+      },
+      state,
+    );
+    const repeatedFirstStarted = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-1" },
+        },
+      },
+      state,
+    );
+    const secondStarted = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-2" },
+        },
+      },
+      state,
+    );
+    const firstCompleted = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-1" },
+        },
+      },
+      state,
+    );
+    const deprecated = translateCodexAppServerNotification(
+      {
+        method: "thread/compacted",
+        params: { threadId: "thread-1", turnId: "turn-1" },
+      },
+      state,
+    );
+    const secondCompleted = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-2" },
+        },
+      },
+      state,
+    );
+
+    assert.equal(firstStarted.length, 1);
+    assert.equal(firstStarted[0]?.activity.type, "timeline_item");
+    assert.deepEqual(repeatedFirstStarted, []);
+    assert.equal(secondStarted.length, 1);
+    assert.equal(secondStarted[0]?.activity.type, "timeline_item_updated");
+    assert.equal(firstCompleted.length, 1);
+    assert.equal(firstCompleted[0]?.activity.type, "timeline_item_updated");
+    assert.deepEqual(deprecated, []);
+    assert.equal(secondCompleted.length, 1);
+    assert.equal(secondCompleted[0]?.activity.type, "timeline_item_updated");
+    if (
+      firstStarted[0]?.activity.type === "timeline_item" &&
+      secondStarted[0]?.activity.type === "timeline_item_updated" &&
+      firstCompleted[0]?.activity.type === "timeline_item_updated" &&
+      secondCompleted[0]?.activity.type === "timeline_item_updated"
+    ) {
+      assert.deepEqual(firstStarted[0].activity.item, {
+        kind: "compaction",
+        status: "started",
+        count: 1,
+      });
+      assert.deepEqual(secondStarted[0].activity.item, {
+        kind: "compaction",
+        status: "started",
+        count: 2,
+      });
+      assert.deepEqual(firstCompleted[0].activity.item, {
+        kind: "compaction",
+        status: "started",
+        count: 2,
+      });
+      assert.deepEqual(secondCompleted[0].activity.item, {
+        kind: "compaction",
+        status: "completed",
+        count: 2,
+      });
+      assert.equal(
+        firstStarted[0].activity.identity?.canonicalItemId,
+        secondCompleted[0].activity.identity?.canonicalItemId,
+      );
+    }
+  });
+
+  test("recovers the provider session for compaction notifications that omit threadId", () => {
+    const state = createCodexAppServerTranslationState();
+
+    translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress" },
+        },
+      },
+      state,
+    );
+    const translated = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-1" },
+        },
+      },
+      state,
+    );
+
+    assert.equal(translated.length, 1);
+    assert.equal(translated[0]?.activity.type, "timeline_item");
+    if (translated[0]?.activity.type !== "timeline_item") {
+      assert.fail("expected a compaction timeline item");
+    }
+    const expectedIdentity = createCodexAggregateTimelineIdentity({
+      providerSessionId: "thread-1",
+      turnId: "turn-1",
+      itemKind: "compaction",
+      itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+      origin: "live",
+    });
+    assert.equal(
+      translated[0].activity.identity?.providerSessionId,
+      "thread-1",
+    );
+    assert.equal(
+      translated[0].activity.identity?.canonicalItemId,
+      expectedIdentity.canonicalItemId,
+    );
+  });
+
+  test("finalizes an active context compaction when the turn completes", () => {
+    const state = createCodexAppServerTranslationState();
+
+    translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "compaction-1" },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      },
+      state,
+    );
+
+    assert.equal(completed.length, 2);
+    assert.equal(completed[0]?.activity.type, "timeline_item_updated");
+    assert.equal(completed[1]?.activity.type, "turn_completed");
+    if (completed[0]?.activity.type === "timeline_item_updated") {
+      assert.deepEqual(completed[0].activity.item, {
+        kind: "compaction",
+        status: "completed",
+        count: 1,
+      });
+    }
   });
 
   test("maps or deliberately ignores every known Codex app-server notification method without invalid fallback", () => {
@@ -1792,6 +2081,55 @@ describe("translateCodexAppServerNotification", () => {
 });
 
 describe("translateCodexAppServerThreadSnapshot", () => {
+  test("uses the same compaction identity as the live notification stream", () => {
+    const live = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "contextCompaction", id: "live-compaction" },
+        },
+      },
+      createCodexAppServerTranslationState(),
+    );
+    const snapshot = translateCodexAppServerThreadSnapshot(
+      {
+        id: "thread-1",
+        status: { type: "idle" },
+        turns: [
+          {
+            id: "turn-1",
+            status: "completed",
+            items: [
+              { type: "contextCompaction", id: "snapshot-compaction" },
+            ],
+          },
+        ],
+      },
+      createCodexAppServerTranslationState(),
+    );
+
+    const liveCompaction = live.find(
+      (item) => item.activity.type === "timeline_item",
+    );
+    const snapshotCompaction = snapshot.find(
+      (item) => item.activity.type === "timeline_item",
+    );
+    assert.equal(liveCompaction?.activity.type, "timeline_item");
+    assert.equal(snapshotCompaction?.activity.type, "timeline_item");
+    if (
+      liveCompaction?.activity.type !== "timeline_item" ||
+      snapshotCompaction?.activity.type !== "timeline_item"
+    ) {
+      assert.fail("expected live and snapshot compaction timeline items");
+    }
+    assert.equal(
+      liveCompaction.activity.identity?.canonicalItemId,
+      snapshotCompaction.activity.identity?.canonicalItemId,
+    );
+  });
+
   test("projects active thread status from resume snapshots after historical turns", () => {
     const state = createCodexAppServerTranslationState();
     const items = translateCodexAppServerThreadSnapshot(
@@ -1813,6 +2151,11 @@ describe("translateCodexAppServerThreadSnapshot", () => {
       "turn_started",
       "turn_completed",
       "session_state",
+    ]);
+    assert.deepEqual(items.map((item) => item.origin), [
+      "snapshot",
+      "snapshot",
+      "snapshot",
     ]);
     assert.deepEqual(items.at(-1)?.activity, {
       type: "session_state",

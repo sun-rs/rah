@@ -19,6 +19,10 @@ import type {
   ToolCallDetail,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
+import {
+  normalizeObservationConversationActivity,
+  normalizeToolCallConversationActivity,
+} from "@rah/runtime-protocol";
 import { normalizeContextUsage } from "./context-usage";
 import type { RuntimeServices } from "./provider-adapter";
 import { recordTimelineIdentityTelemetry } from "./timeline-identity-telemetry";
@@ -28,6 +32,7 @@ import {
 } from "./timeline-reconciler";
 import { COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX } from "./council/council-mcp-projection";
 import type { StoredSessionState } from "./session-store";
+import { turnArtifactOwnerKey } from "./turn-artifact-store";
 
 export interface ProviderActivityMeta {
   provider: ManagedSession["provider"];
@@ -115,6 +120,11 @@ export type ProviderActivity =
       turnId: string;
       text?: string;
       parts?: JsonValue[];
+    }
+  | {
+      type: "turn_file_changes_updated";
+      turnId: string;
+      unifiedDiff: string;
     }
   | {
       type: "timeline_item";
@@ -719,6 +729,10 @@ export function applyProviderActivity(
         ),
       );
       break;
+    case "turn_file_changes_updated":
+      throw new Error(
+        "turn_file_changes_updated must be applied with applyProviderActivityAsync().",
+      );
     case "timeline_item":
       recordTimelineIdentityTelemetry(services, {
         sessionId,
@@ -910,7 +924,9 @@ export function applyProviderActivity(
                   sessionId,
                   type: "tool.call.started",
                   source,
-                  payload: { toolCall: activity.toolCall },
+                  payload: {
+                    toolCall: normalizeToolCallConversationActivity(activity.toolCall),
+                  },
                 },
                 ts,
               ),
@@ -955,7 +971,9 @@ export function applyProviderActivity(
                   sessionId,
                   type: "tool.call.completed",
                   source,
-                  payload: { toolCall: activity.toolCall },
+                  payload: {
+                    toolCall: normalizeToolCallConversationActivity(activity.toolCall),
+                  },
                 },
                 ts,
               ),
@@ -1000,7 +1018,9 @@ export function applyProviderActivity(
                   sessionId,
                   type: "observation.started",
                   source,
-                  payload: { observation: activity.observation },
+                  payload: {
+                    observation: normalizeObservationConversationActivity(activity.observation),
+                  },
                 },
                 ts,
               ),
@@ -1021,7 +1041,9 @@ export function applyProviderActivity(
                   sessionId,
                   type: "observation.updated",
                   source,
-                  payload: { observation: activity.observation },
+                  payload: {
+                    observation: normalizeObservationConversationActivity(activity.observation),
+                  },
                 },
                 ts,
               ),
@@ -1042,7 +1064,9 @@ export function applyProviderActivity(
                   sessionId,
                   type: "observation.completed",
                   source,
-                  payload: { observation: activity.observation },
+                  payload: {
+                    observation: normalizeObservationConversationActivity(activity.observation),
+                  },
                 },
                 ts,
               ),
@@ -1064,7 +1088,7 @@ export function applyProviderActivity(
                   type: "observation.failed",
                   source,
                   payload: {
-                    observation: activity.observation,
+                    observation: normalizeObservationConversationActivity(activity.observation),
                     ...(activity.error !== undefined ? { error: activity.error } : {}),
                   },
                 },
@@ -1399,4 +1423,57 @@ export function applyProviderActivity(
   }
 
   return published;
+}
+
+export async function applyProviderActivityAsync(
+  services: RuntimeServices,
+  sessionId: string,
+  meta: ProviderActivityMeta,
+  activity: ProviderActivity,
+): Promise<RahEvent[]> {
+  if (activity.type !== "turn_file_changes_updated") {
+    return applyProviderActivity(services, sessionId, meta, activity);
+  }
+  if (isCouncilManagedSession(services, sessionId) && shouldSuppressCouncilManagedActivity(activity)) {
+    return [];
+  }
+  if (!services.turnArtifacts) {
+    console.warn("[rah] skipped turn file-change snapshot because the artifact store is unavailable", {
+      sessionId,
+      turnId: activity.turnId,
+    });
+    return [];
+  }
+  try {
+    const ownerId = turnArtifactOwnerKey(
+      sessionId,
+      services.sessionStore.getSession(sessionId)?.session,
+    );
+    const fileChanges = await services.turnArtifacts.replaceTurnDiff(
+      ownerId,
+      activity.turnId,
+      activity.unifiedDiff,
+    );
+    return [
+      services.eventBus.publish(
+        withTs(
+          {
+            sessionId,
+            type: "turn.file_changes.updated",
+            source: sourceFromMeta(meta),
+            payload: { fileChanges },
+            turnId: activity.turnId,
+          },
+          meta.ts,
+        ),
+      ),
+    ];
+  } catch (error) {
+    console.warn("[rah] failed to persist turn file-change snapshot", {
+      sessionId,
+      turnId: activity.turnId,
+      error,
+    });
+    return [];
+  }
 }

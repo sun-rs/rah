@@ -13,6 +13,7 @@ import {
   createCodexAppServerTranslationState,
 } from "../codex-app-server-activity";
 import {
+  patchCodexStoredSessionTitle,
   type CodexStoredSessionRecord,
 } from "../codex-stored-sessions";
 import { resolveCodexRuntimeCapabilityState } from "../codex-model-catalog";
@@ -38,6 +39,7 @@ import {
   type CodexAppServerRpcClient,
 } from "../codex-app-server-client";
 import {
+  THREAD_FORK_TIMEOUT_MS,
   TURN_START_TIMEOUT_MS,
   type LiveCodexSession,
 } from "../codex-live-types";
@@ -52,11 +54,13 @@ import {
 } from "../provider-mcp-server-spec";
 import { resolveSessionTitleAndPreview } from "../session-title-resolver";
 import { requestCodexThreadResumeWithoutTranscript } from "../codex-app-server-resume";
+import { requestCodexThreadForkWithoutTranscript } from "../codex-app-server-fork";
 import {
   CODEX_SIDE_DEVELOPER_INSTRUCTIONS,
   codexSideBoundaryItem,
 } from "../codex-side-conversation";
 import { publishSessionStateChanged } from "../runtime-session-events";
+import { allocateForkSessionTitle } from "../session-branch-title";
 
 export type { LiveCodexSession } from "../codex-live-types";
 
@@ -229,6 +233,26 @@ async function setCodexThreadNameIfRequested(
     await client.request("thread/name/set", { threadId, name }, TURN_START_TIMEOUT_MS);
   } catch {
     // Naming is advisory for RAH; a failed native rename should not strand a live session.
+  }
+}
+
+async function setCodexThreadName(
+  client: CodexAppServerRpcClient,
+  threadId: string,
+  title: string,
+): Promise<void> {
+  await client.request(
+    "thread/name/set",
+    { threadId, name: title },
+    TURN_START_TIMEOUT_MS,
+  );
+}
+
+function cacheCodexThreadTitle(threadId: string, title: string): void {
+  try {
+    patchCodexStoredSessionTitle(threadId, title);
+  } catch {
+    // The provider name is authoritative. A rollout/cache race must not roll back a live Fork.
   }
 }
 
@@ -469,6 +493,7 @@ export async function startCodexLiveSession(params: {
     turnStartInFlight: false,
     interruptWhenTurnStarts: false,
     queuedInputs: [],
+    inputQueuePolicy: "queue",
     externalThreadMirrorSubscribeInFlight: false,
     externalThreadMirrorSubscribed: true,
     pendingQuestions: new Map(),
@@ -717,6 +742,7 @@ export async function resumeCodexLiveSession(params: {
       turnStartInFlight: false,
       interruptWhenTurnStarts: false,
       queuedInputs: [],
+      inputQueuePolicy: "queue",
       externalThreadMirrorSubscribeInFlight: false,
       externalThreadMirrorSubscribed: true,
       pendingQuestions: new Map(),
@@ -748,6 +774,7 @@ function createForkedManagedSession(args: {
   mode: CodexForkMode;
   planCollaborationMode: LiveCodexSession["planCollaborationMode"];
   nativeTuiAttachAvailable: boolean;
+  title: string;
 }) {
   const state = args.services.sessionStore.createManagedSession({
     provider: "codex",
@@ -756,10 +783,7 @@ function createForkedManagedSession(args: {
     liveBackend: "native_local_server",
     cwd: args.cwd,
     rootDir: args.parent.rootDir,
-    title:
-      args.request.kind === "side"
-        ? `Side of ${args.parent.title ?? args.parent.preview ?? "Codex"}`
-        : `${args.parent.title ?? args.parent.preview ?? "Codex"} (fork)`,
+    title: args.title,
     relationship: {
       parentSessionId: args.parent.id,
       ...(args.parent.providerSessionId
@@ -909,6 +933,7 @@ function createForkedLiveSession(args: {
     turnStartInFlight: false,
     interruptWhenTurnStarts: false,
     queuedInputs: [],
+    inputQueuePolicy: "queue",
     externalThreadMirrorSubscribeInFlight: false,
     externalThreadMirrorSubscribed: true,
     pendingQuestions: new Map(),
@@ -925,6 +950,30 @@ export async function forkCodexLiveSession(params: {
 }) {
   const { services, parentSummary, parentLive, request } = params;
   const parent = parentSummary.session;
+  const parentTitle = parent.title ?? parent.preview ?? "Codex";
+  const branchTitle =
+    request.kind === "side"
+      ? `Side of ${parentTitle}`
+      : allocateForkSessionTitle(
+          parentTitle,
+          [
+            ...services.sessionStore
+              .listSessions()
+              .filter(
+                (state) =>
+                  (state.session.rootDir || state.session.cwd) ===
+                  (parent.rootDir || parent.cwd),
+              )
+              .map((state) => state.session.title),
+            ...(services.workbenchState?.snapshot().sessions ?? [])
+              .filter(
+                (session) =>
+                  (session.rootDir || session.cwd) === (parent.rootDir || parent.cwd),
+              )
+              .map((session) => session.title),
+          ],
+          { parentIsFork: parent.relationship?.kind === "fork" },
+        );
   const parentThreadId = parent.providerSessionId;
   if (!parentThreadId) {
     throw new Error(`Session ${parent.id} does not have a Codex thread id.`);
@@ -960,9 +1009,9 @@ export async function forkCodexLiveSession(params: {
   let forkThreadStatus: unknown;
   try {
     planCollaborationMode = await loadCodexPlanCollaborationMode(client);
-    const forkResponse = (await client.request(
-      "thread/fork",
-      {
+    const forkResponse = (await requestCodexThreadForkWithoutTranscript({
+      client,
+      params: {
         threadId: parentThreadId,
         ...(request.lastTurnId ? { lastTurnId: request.lastTurnId } : {}),
         cwd: parent.cwd,
@@ -980,8 +1029,8 @@ export async function forkCodexLiveSession(params: {
             }
           : { threadSource: "fork" }),
       },
-      TURN_START_TIMEOUT_MS,
-    )) as {
+      timeoutMs: THREAD_FORK_TIMEOUT_MS,
+    })) as {
       thread?: { id?: string; status?: unknown };
       model?: string;
       reasoningEffort?: string | null;
@@ -997,6 +1046,11 @@ export async function forkCodexLiveSession(params: {
       throw new Error("Codex app-server did not return a forked thread id.");
     }
     forkedThreadId = threadId;
+
+    if (request.kind === "fork") {
+      // A persistent Fork title is part of the transaction, not advisory UI metadata.
+      await setCodexThreadName(client, threadId, branchTitle);
+    }
 
     forkCwd = forkResponse.cwd ?? parent.cwd;
     forkModelId = forkResponse.model ?? forkModelId;
@@ -1039,6 +1093,7 @@ export async function forkCodexLiveSession(params: {
       mode: resolvedMode,
       planCollaborationMode,
       nativeTuiAttachAvailable,
+      title: branchTitle,
     });
     provisionalSessionId = state.session.id;
     const liveSession = createForkedLiveSession({
@@ -1062,6 +1117,13 @@ export async function forkCodexLiveSession(params: {
     attachRequestedClient(services, state.session.id, request.attach);
     const summary = toSessionSummary(services.sessionStore.getSession(state.session.id)!);
     params.onLiveSessionReady(liveSession);
+    if (request.kind === "fork") {
+      cacheCodexThreadTitle(threadId, branchTitle);
+      services.workbenchState?.setSessionTitleOverride(
+        { provider: "codex", providerSessionId: threadId },
+        branchTitle,
+      );
+    }
     return {
       sessionId: state.session.id,
       summary,
@@ -1131,6 +1193,7 @@ export async function forkCodexLiveSession(params: {
             mode: resolvedMode,
             planCollaborationMode,
             nativeTuiAttachAvailable: false,
+            title: branchTitle,
           });
         prepareForkedManagedSessionInfrastructure({
           services,
@@ -1163,6 +1226,13 @@ export async function forkCodexLiveSession(params: {
         bridge.activate(recoveryLive);
         attachRequestedClient(services, failedRecoveryState.session.id, request.attach);
         params.onLiveSessionReady(recoveryLive);
+        if (request.kind === "fork") {
+          cacheCodexThreadTitle(forkedThreadId, branchTitle);
+          services.workbenchState?.setSessionTitleOverride(
+            { provider: "codex", providerSessionId: forkedThreadId },
+            branchTitle,
+          );
+        }
         return {
           sessionId: failedRecoveryState.session.id,
           summary: toSessionSummary(

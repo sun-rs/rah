@@ -8,7 +8,11 @@ import {
   collapseDuplicateCodexTimelineEvents,
   translateCodexRolloutWindowToHistoryEvents,
 } from "./codex-stored-session-history";
-import { summarizeHistoryPage } from "./history-event-projection";
+import {
+  fullHistoryPage,
+  historyEventMatchesItem,
+  summarizeHistoryPage,
+} from "./history-event-projection";
 
 function shouldTranslateLine(line: string): boolean {
   const head = line.slice(0, 1_024);
@@ -31,7 +35,7 @@ function shouldTranslateConversationLine(line: string): boolean {
   if (!/"type"\s*:\s*"event_msg"/.test(head)) {
     return false;
   }
-  return /"type"\s*:\s*"(?:task_started|task_complete|turn_aborted|user_message|agent_message|agent_reasoning|context_compacted)"/.test(
+  return /"type"\s*:\s*"(?:task_started|task_complete|turn_aborted|user_message|agent_message|agent_reasoning|context_compacted|web_search_begin|web_search_end)"/.test(
     head,
   );
 }
@@ -82,11 +86,14 @@ async function translatedTurnEvents(args: {
     lines,
     finalizePendingTools: false,
   });
-  return reanchorTurnEvents(
+  const reanchored = reanchorTurnEvents(
     args.sessionId,
     args.turnId,
-    collapseDuplicateCodexTimelineEvents(translated),
+    translated,
   );
+  return collapseDuplicateCodexTimelineEvents(reanchored, {
+    providerSessionId: args.record.ref.providerSessionId,
+  });
 }
 
 function reanchorTurnEvents(
@@ -128,4 +135,22 @@ export async function readCodexConversationTurnDetail(args: {
     sessionId: args.sessionId,
     events,
   });
+}
+
+export async function readCodexConversationItemDetail(args: {
+  sessionId: string;
+  turnId: string;
+  itemId: string;
+  record: CodexStoredSessionRecord;
+  range: { startOffset: number; endOffset: number };
+}): Promise<ConversationEvidencePage | undefined> {
+  const turnEvents = await translatedTurnEvents({ ...args, includeProcess: true });
+  const events = turnEvents.filter(
+    (event) =>
+      historyEventMatchesItem(event, "tool_call", args.itemId) ||
+      historyEventMatchesItem(event, "observation", args.itemId),
+  );
+  return events.length > 0
+    ? fullHistoryPage({ sessionId: args.sessionId, events })
+    : undefined;
 }

@@ -190,6 +190,8 @@ export interface PatchManagedSessionArgs {
   cwd?: string;
   rootDir?: string;
   nativeTui?: ManagedSession["nativeTui"];
+  inputQueue?: ManagedSession["inputQueue"];
+  inputQueuePolicy?: ManagedSession["inputQueuePolicy"];
   mux?: ManagedSession["mux"];
   capabilities?: Partial<SessionCapabilities>;
   mode?: ManagedSession["mode"];
@@ -546,6 +548,12 @@ export class SessionStore {
     }
     if (patch.nativeTui !== undefined) {
       state.session.nativeTui = patch.nativeTui;
+    }
+    if (patch.inputQueue !== undefined) {
+      state.session.inputQueue = patch.inputQueue;
+    }
+    if (patch.inputQueuePolicy !== undefined) {
+      state.session.inputQueuePolicy = patch.inputQueuePolicy;
     }
     if (patch.mux !== undefined) {
       state.session.mux = patch.mux;

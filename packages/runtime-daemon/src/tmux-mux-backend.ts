@@ -14,6 +14,12 @@ import type {
   MuxSessionState,
   SubscribeMuxPaneOptions,
 } from "./mux-runtime";
+import {
+  isProcessAlive,
+  RAH_TMUX_OWNER_PID_OPTION,
+  RAH_TMUX_OWNER_SCOPE_OPTION,
+  resolveRahTmuxOwnerScope,
+} from "./tmux-session-ownership";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 const SUBSCRIBE_POLL_INTERVAL_MS = 100;
@@ -56,6 +62,8 @@ export type TmuxMuxBackendOptions = {
   env?: NodeJS.ProcessEnv;
   commandTimeoutMs?: number;
   subscribePollIntervalMs?: number;
+  ownerScope?: string;
+  ownerPid?: number;
 };
 
 export function createShortTmuxSessionName(prefix = "rah"): string {
@@ -95,7 +103,7 @@ function shellCommandForRequest(request: CreateMuxPaneRequest): string {
 
 function shellCommandWithRemainOnExit(request: CreateMuxPaneRequest): string {
   return [
-    "tmux set-option remain-on-exit on >/dev/null 2>&1 || true",
+    "tmux set-option -w remain-on-exit on >/dev/null 2>&1 || true",
     shellCommandForRequest(request),
   ].join("; ");
 }
@@ -170,12 +178,16 @@ export class TmuxMuxBackend implements MuxRuntime {
   private readonly baseEnv: NodeJS.ProcessEnv;
   private readonly commandTimeoutMs: number;
   private readonly subscribePollIntervalMs: number;
+  readonly ownerScope: string;
+  readonly ownerPid: number;
 
   constructor(options: TmuxMuxBackendOptions = {}) {
     this.binary = options.binary ?? "tmux";
     this.baseEnv = options.env ?? process.env;
     this.commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.subscribePollIntervalMs = options.subscribePollIntervalMs ?? SUBSCRIBE_POLL_INTERVAL_MS;
+    this.ownerScope = options.ownerScope ?? resolveRahTmuxOwnerScope(this.baseEnv.RAH_HOME);
+    this.ownerPid = options.ownerPid ?? process.pid;
   }
 
   async ensureAvailable(): Promise<void> {
@@ -183,7 +195,11 @@ export class TmuxMuxBackend implements MuxRuntime {
   }
 
   async listSessions(): Promise<MuxSessionState[]> {
-    const result = await this.exec(["list-sessions", "-F", "#{session_name}"]).catch((error) => {
+    const result = await this.exec([
+      "list-sessions",
+      "-F",
+      `#{session_name}\t#{${RAH_TMUX_OWNER_SCOPE_OPTION}}\t#{${RAH_TMUX_OWNER_PID_OPTION}}`,
+    ]).catch((error) => {
       if (isMissingServerOrSession(error)) {
         return { stdout: "", stderr: "" };
       }
@@ -191,9 +207,38 @@ export class TmuxMuxBackend implements MuxRuntime {
     });
     return result.stdout
       .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .map((sessionName) => ({ sessionName }));
+      .map((line) => line.trimEnd())
+      .filter((line) => line.trim().length > 0)
+      .map((line) => {
+        const [sessionName, ownerScope, rawOwnerPid] = line.split("\t");
+        const ownerPid = Number.parseInt(rawOwnerPid ?? "", 10);
+        return {
+          sessionName: sessionName!.trim(),
+          ...(ownerScope ? { ownerScope } : {}),
+          ...(Number.isInteger(ownerPid) && ownerPid > 0 ? { ownerPid } : {}),
+        };
+      });
+  }
+
+  async claimSessionOwnership(sessionName: string): Promise<boolean> {
+    const session = (await this.listSessions()).find(
+      (candidate) => candidate.sessionName === sessionName,
+    );
+    if (!session) {
+      return false;
+    }
+    if (session.ownerScope && session.ownerScope !== this.ownerScope) {
+      return false;
+    }
+    if (
+      session.ownerPid &&
+      session.ownerPid !== this.ownerPid &&
+      isProcessAlive(session.ownerPid)
+    ) {
+      return false;
+    }
+    await this.markSessionOwnership(sessionName);
+    return true;
   }
 
   async createSession(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult> {
@@ -429,8 +474,31 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.title ?? "rah",
       shellCommandWithRemainOnExit(request),
     ]);
+    try {
+      await this.markSessionOwnership(request.sessionName);
+    } catch (error) {
+      await this.killSession(request.sessionName).catch(() => undefined);
+      throw error;
+    }
     const pane = await this.waitForSessionPane(request.sessionName, request.title);
     return { sessionName: request.sessionName, paneId: pane.paneId };
+  }
+
+  private async markSessionOwnership(sessionName: string): Promise<void> {
+    await this.exec([
+      "set-option",
+      "-t",
+      sessionName,
+      RAH_TMUX_OWNER_SCOPE_OPTION,
+      this.ownerScope,
+    ]);
+    await this.exec([
+      "set-option",
+      "-t",
+      sessionName,
+      RAH_TMUX_OWNER_PID_OPTION,
+      String(this.ownerPid),
+    ]);
   }
 
   private async newWindow(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult> {

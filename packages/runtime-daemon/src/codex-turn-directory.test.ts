@@ -67,6 +67,14 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
       call_id: "large-tool-output",
       output: "x".repeat(3 * 1024 * 1024),
     }),
+    line("2026-07-10T00:00:00.600Z", "event_msg", {
+      type: "web_search_end",
+      call_id: "search-turn-1",
+      action: { type: "search", queries: ["turn detail sources"] },
+      results: [
+        { type: "text_result", title: "Source", url: "https://example.com/source" },
+      ],
+    }),
     agentMessage("2026-07-10T00:00:01.000Z", "Checking", "commentary"),
     agentMessage("2026-07-10T00:00:02.000Z", "First answer", "final_answer"),
     line("2026-07-10T00:00:02.010Z", "event_msg", {
@@ -176,6 +184,15 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
     const detailJson = JSON.stringify(detail);
     assert.equal(
       detail.events.some((event) => event.type.startsWith("tool.call.")),
+      true,
+      detailJson,
+    );
+    assert.equal(
+      detail.events.some(
+        (event) =>
+          event.type === "observation.completed" &&
+          event.payload.observation.subject?.urls?.includes("https://example.com/source"),
+      ),
       true,
       detailJson,
     );

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
+  AttachmentPreviewResponse,
   CloseTuiMuxSessionResponse,
   DebugReplayScript,
   IndependentTerminalListResponse,
@@ -10,11 +11,13 @@ import type {
   ListProvidersResponse,
   ProviderKind,
   RuntimeIdentityResponse,
+  UploadAttachmentResponse,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { applyCorsHeaders, validateApiRequest } from "./http-server-cors";
 import {
   type JsonHandler,
+  readBinaryBody,
   readJsonBody,
   requestErrorStatus,
   writeJson,
@@ -28,9 +31,11 @@ import {
   parseClipboardWriteRequest,
   parseCloseSessionRequest,
   parseCouncilMcpRequest,
+  parseCouncilMcpReadyRequest,
   parseCouncilPostMessageRequest,
   parseCreateCouncilRequest,
   parseDetachSessionRequest,
+  parseDeleteQueuedInputRequest,
   parseGitFileActionRequest,
   parseGitHunkActionRequest,
   parseForkSessionRequest,
@@ -43,13 +48,19 @@ import {
   parseReleaseControlRequest,
   parseRenameCouncilRequest,
   parseRenameSessionRequest,
+  parseReorderQueuedInputRequest,
   parseResumeSessionRequest,
   parseSessionInputRequest,
+  parseSetInputQueuePolicyRequest,
   parseSetSessionModeRequest,
   parseSetSessionModelRequest,
+  parseSteerQueuedInputRequest,
   parseStartDebugScenarioRequest,
   parseStartSessionRequest,
   parseStoredSessionRemoveRequest,
+  parseStoredSessionArchiveRequest,
+  parseUpdateQueuedInputRequest,
+  parseUpdateWorkbenchPinnedItemRequest,
   parseWorkspaceDirectoryRequest,
 } from "./http-server-request-validation";
 import { serveClientApp } from "./http-server-static";
@@ -59,6 +70,11 @@ import {
 } from "./http-server-client-address";
 import { writeHostClipboard } from "./host-clipboard";
 import { DeviceAuthManager, handleDeviceAuthRequest } from "./device-auth";
+import {
+  MAX_DEVICE_ATTACHMENT_BYTES,
+  resolveDeviceAttachment,
+  saveDeviceAttachment,
+} from "./device-attachments";
 
 const MAX_QUERY_LIMIT = 500;
 
@@ -73,11 +89,12 @@ function parseQueryLimit(raw: string | null, fallback?: number): number | undefi
   return Math.min(parsed, MAX_QUERY_LIMIT);
 }
 
-function parseStoredSessionsModeFromUrl(url: URL): "all" | "recent" {
-  return url.searchParams.get("storedSessions") === "recent" ? "recent" : "all";
+function parseStoredSessionsModeFromUrl(url: URL): "all" | "cached" | "recent" {
+  const mode = url.searchParams.get("storedSessions");
+  return mode === "all" || mode === "cached" ? mode : "recent";
 }
 
-function parseStoredSessionsModeFromRequest(req: IncomingMessage): "all" | "recent" {
+function parseStoredSessionsModeFromRequest(req: IncomingMessage): "all" | "cached" | "recent" {
   return parseStoredSessionsModeFromUrl(new URL(req.url ?? "", "http://127.0.0.1"));
 }
 
@@ -387,14 +404,51 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/workbench\/pins$/,
+      handler: async (req, res, _match, body) => {
+        const request = parseUpdateWorkbenchPinnedItemRequest(body);
+        writeJson(
+          req,
+          res,
+          200,
+          engine.setWorkbenchPinnedItem(
+            request.workspaceDir,
+            request.itemKey,
+            request.pinned,
+            { storedSessionsMode: parseStoredSessionsModeFromRequest(req) },
+          ),
+        );
+      },
+    },
+    {
       pattern: /^\/api\/history\/sessions\/archive$/,
+      handler: async (req, res, _match, body) => {
+        const request = parseStoredSessionArchiveRequest(body);
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.archiveStoredSession(request.provider, request.providerSessionId, {
+            storedSessionsMode: parseStoredSessionsModeFromRequest(req),
+            ...(request.runtimeSessionId
+              ? {
+                  runtimeSessionId: request.runtimeSessionId,
+                  clientId: request.clientId!,
+                }
+              : {}),
+          }),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/history\/sessions\/restore$/,
       handler: async (req, res, _match, body) => {
         const request = parseStoredSessionRemoveRequest(body);
         writeJson(
           req,
           res,
           200,
-          await engine.archiveStoredSession(request.provider, request.providerSessionId, {
+          await engine.restoreStoredSession(request.provider, request.providerSessionId, {
             storedSessionsMode: parseStoredSessionsModeFromRequest(req),
           }),
         );
@@ -518,6 +572,14 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/council\/mcp-ready$/,
+      handler: async (req, res, _match, body) => {
+        const request = parseCouncilMcpReadyRequest(body);
+        engine.markCouncilMcpReady(request.councilId, request.actorId);
+        writeJson(req, res, 200, { ok: true });
+      },
+    },
+    {
       pattern: /^\/api\/council\/mcp$/,
       handler: async (req, res, _match, body) => {
         writeJson(req, res, 200, await engine.callCouncilMcpTool(parseCouncilMcpRequest(body)));
@@ -577,6 +639,45 @@ export async function handleHttpRequest(args: {
         return;
       }
       writeJson(req, res, 200, runtimeIdentity);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/attachments") {
+      const rawName = req.headers["x-rah-file-name"];
+      if (Array.isArray(rawName)) {
+        throw new Error("Bad Request: attachment file name is invalid.");
+      }
+      let name: string | undefined;
+      if (rawName) {
+        try {
+          name = decodeURIComponent(rawName);
+        } catch {
+          throw new Error("Bad Request: attachment file name is invalid.");
+        }
+      }
+      const contentType = req.headers["content-type"];
+      const mediaType = Array.isArray(contentType) ? contentType[0] : contentType;
+      const attachment = await saveDeviceAttachment({
+        bytes: await readBinaryBody(req, MAX_DEVICE_ATTACHMENT_BYTES),
+        ...(name ? { name } : {}),
+        ...(mediaType ? { mediaType } : {}),
+      });
+      const response: UploadAttachmentResponse = { attachment };
+      writeJson(req, res, 201, response);
+      return;
+    }
+
+    const attachmentMatch = /^\/api\/attachments\/([^/]+)$/.exec(pathname);
+    if (req.method === "GET" && attachmentMatch) {
+      const resolved = resolveDeviceAttachment(decodeURIComponent(attachmentMatch[1]!));
+      const { path, ...attachment } = resolved;
+      const response: AttachmentPreviewResponse = {
+        attachment,
+        file: await engine.readHostFile(path, {
+          imagePreviewMode: parseImagePreviewModeFromRequest(req, url),
+        }),
+      };
+      writeJson(req, res, 200, response);
       return;
     }
 
@@ -805,6 +906,80 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    const queuedInputMatch =
+      /^\/api\/sessions\/([^/]+)\/input\/([^/]+)$/.exec(pathname);
+    const queuedInputPositionMatch =
+      /^\/api\/sessions\/([^/]+)\/input\/([^/]+)\/position$/.exec(pathname);
+    if (req.method === "PATCH" && queuedInputPositionMatch) {
+      const body = await readJsonBody(req);
+      writeJson(req, res, 200, {
+        session: engine.reorderQueuedInput(
+          decodeURIComponent(queuedInputPositionMatch[1]!),
+          decodeURIComponent(queuedInputPositionMatch[2]!),
+          parseReorderQueuedInputRequest(body),
+        ),
+      });
+      return;
+    }
+    const queuedInputSteerMatch =
+      /^\/api\/sessions\/([^/]+)\/input\/([^/]+)\/steer$/.exec(pathname);
+    if (req.method === "POST" && queuedInputSteerMatch) {
+      const body = await readJsonBody(req);
+      writeJson(req, res, 200, {
+        session: await engine.steerQueuedInput(
+          decodeURIComponent(queuedInputSteerMatch[1]!),
+          decodeURIComponent(queuedInputSteerMatch[2]!),
+          parseSteerQueuedInputRequest(body),
+        ),
+      });
+      return;
+    }
+    if (req.method === "PATCH" && queuedInputMatch) {
+      const body = await readJsonBody(req);
+      writeJson(
+        req,
+        res,
+        200,
+        {
+          session: engine.updateQueuedInput(
+            decodeURIComponent(queuedInputMatch[1]!),
+            decodeURIComponent(queuedInputMatch[2]!),
+            parseUpdateQueuedInputRequest(body),
+          ),
+        },
+      );
+      return;
+    }
+
+    const inputQueuePolicyMatch =
+      /^\/api\/sessions\/([^/]+)\/input-policy$/.exec(pathname);
+    if (req.method === "PATCH" && inputQueuePolicyMatch) {
+      const body = await readJsonBody(req);
+      writeJson(req, res, 200, {
+        session: engine.setInputQueuePolicy(
+          decodeURIComponent(inputQueuePolicyMatch[1]!),
+          parseSetInputQueuePolicyRequest(body),
+        ),
+      });
+      return;
+    }
+    if (req.method === "DELETE" && queuedInputMatch) {
+      const body = await readJsonBody(req);
+      writeJson(
+        req,
+        res,
+        200,
+        {
+          session: engine.deleteQueuedInput(
+            decodeURIComponent(queuedInputMatch[1]!),
+            decodeURIComponent(queuedInputMatch[2]!),
+            parseDeleteQueuedInputRequest(body),
+          ),
+        },
+      );
+      return;
+    }
+
     const surfaceMatch = /^\/api\/sessions\/([^/]+)\/tui-surface$/.exec(pathname);
     if (req.method === "GET" && surfaceMatch) {
       writeJson(req, res, 200, engine.getNativeTuiSurface(decodeURIComponent(surfaceMatch[1]!)));
@@ -842,12 +1017,14 @@ export async function handleHttpRequest(args: {
     const gitStatusMatch = /^\/api\/sessions\/([^/]+)\/git-status$/.exec(pathname);
     if (req.method === "GET" && gitStatusMatch) {
       const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+      const baseBranch = url.searchParams.get("baseBranch") ?? undefined;
       writeJson(
         req,
         res,
         200,
         await engine.getGitStatus(gitStatusMatch[1]!, {
           ...(scopeRoot ? { scopeRoot } : {}),
+          ...(baseBranch ? { baseBranch } : {}),
         }),
       );
       return;
@@ -859,6 +1036,7 @@ export async function handleHttpRequest(args: {
       const staged = url.searchParams.get("staged");
       const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
       const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+      const baseBranch = url.searchParams.get("baseBranch") ?? undefined;
       writeJson(
         req,
         res,
@@ -869,7 +1047,44 @@ export async function handleHttpRequest(args: {
             ? { ignoreWhitespace: ignoreWhitespace === "true" }
             : {}),
           ...(scopeRoot ? { scopeRoot } : {}),
+          ...(baseBranch ? { baseBranch } : {}),
         }),
+      );
+      return;
+    }
+
+    const turnFileChangesMatch =
+      /^\/api\/sessions\/([^/]+)\/turns\/([^/]+)\/file-changes$/.exec(pathname);
+    if (req.method === "GET" && turnFileChangesMatch) {
+      writeJson(
+        req,
+        res,
+        200,
+        engine.getTurnFileChanges(
+          decodeURIComponent(turnFileChangesMatch[1]!),
+          decodeURIComponent(turnFileChangesMatch[2]!),
+        ),
+      );
+      return;
+    }
+
+    const turnFileDiffMatch =
+      /^\/api\/sessions\/([^/]+)\/turns\/([^/]+)\/file-diff$/.exec(pathname);
+    if (req.method === "GET" && turnFileDiffMatch) {
+      const diffPath = url.searchParams.get("path");
+      if (!diffPath) {
+        writeJson(req, res, 400, { error: "File path is required." });
+        return;
+      }
+      writeJson(
+        req,
+        res,
+        200,
+        engine.getTurnFileDiff(
+          decodeURIComponent(turnFileDiffMatch[1]!),
+          decodeURIComponent(turnFileDiffMatch[2]!),
+          diffPath,
+        ),
       );
       return;
     }
@@ -917,7 +1132,15 @@ export async function handleHttpRequest(args: {
         writeJson(req, res, 400, { error: "Workspace dir is required." });
         return;
       }
-      writeJson(req, res, 200, await engine.getWorkspaceGitStatus(dir));
+      const baseBranch = url.searchParams.get("baseBranch") ?? undefined;
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getWorkspaceGitStatus(dir, {
+          ...(baseBranch ? { baseBranch } : {}),
+        }),
+      );
       return;
     }
 
@@ -930,6 +1153,7 @@ export async function handleHttpRequest(args: {
       }
       const staged = url.searchParams.get("staged");
       const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
+      const baseBranch = url.searchParams.get("baseBranch") ?? undefined;
       writeJson(
         req,
         res,
@@ -939,6 +1163,7 @@ export async function handleHttpRequest(args: {
           ...(ignoreWhitespace !== null
             ? { ignoreWhitespace: ignoreWhitespace === "true" }
             : {}),
+          ...(baseBranch ? { baseBranch } : {}),
         }),
       );
       return;
@@ -1076,6 +1301,9 @@ export async function handleHttpRequest(args: {
         conversationItemDetailMatch[1]!,
         {
           itemId,
+          ...(url.searchParams.get("turnId")
+            ? { turnId: url.searchParams.get("turnId")! }
+            : {}),
           providerTurnId,
           providerItemId,
         },
