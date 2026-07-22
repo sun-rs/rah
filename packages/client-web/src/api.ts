@@ -1,4 +1,5 @@
 import type {
+  AttachmentPreviewResponse,
   AddCouncilAgentRequest,
   AddCouncilAgentResponse,
   AddManualProviderModelRequest,
@@ -25,6 +26,8 @@ import type {
   DeleteManualProviderModelResponse,
   DebugScenarioDescriptor,
   DetachSessionRequest,
+  DeleteQueuedInputRequest,
+  ReorderQueuedInputRequest,
   EventBatch,
   EventSubscriptionRequest,
   ForkSessionRequest,
@@ -69,18 +72,26 @@ import type {
   SetSessionModeRequest,
   SetSessionModelRequest,
   SessionFileResponse,
+  SessionInputAttachment,
   SessionInputRequest,
   ConversationTurnDirectoryResponse,
   SessionSummary,
   StartDebugScenarioRequest,
   StartSessionRequest,
   StartSessionResponse,
+  SteerQueuedInputRequest,
   StoredSessionsDeltaResponse,
   StoredSessionArchiveRequest,
   StoredSessionRemoveRequest,
+  StoredSessionRestoreRequest,
+  TurnFileChangesResponse,
+  TurnFileDiffResponse,
   WorkspaceDirectoryResponse,
   WorkspaceDirectoryRequest,
   WorkbenchResponse,
+  UpdateQueuedInputRequest,
+  UpdateWorkbenchPinnedItemRequest,
+  UploadAttachmentResponse,
   WorkspaceSnapshotResponse,
   DeviceAuthStatusResponse,
   ListTrustedDevicesResponse,
@@ -93,7 +104,7 @@ import type {
 
 const DEFAULT_DAEMON_PORT = 43111;
 export const RAH_AUTH_REQUIRED_EVENT = "rah:auth-required";
-type StoredSessionsMode = "all" | "recent";
+type StoredSessionsMode = "all" | "cached" | "recent";
 
 function handleAuthenticatedSocketClose(event: CloseEvent): void {
   if (event.code === 4001 && typeof window !== "undefined") {
@@ -210,6 +221,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${getBaseUrl()}${path}`, {
       ...init,
+      cache: init?.cache ?? "no-store",
       credentials: "include",
       headers: buildRequestHeaders(init),
     });
@@ -234,8 +246,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function getDeviceAuthStatus(): Promise<DeviceAuthStatusResponse> {
-  return requestJson<DeviceAuthStatusResponse>("/api/auth/status");
+export async function getDeviceAuthStatus(options?: {
+  signal?: AbortSignal;
+}): Promise<DeviceAuthStatusResponse> {
+  return requestJson<DeviceAuthStatusResponse>(
+    "/api/auth/status",
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function pairDevice(request: PairDeviceRequest): Promise<PairDeviceResponse> {
@@ -275,13 +292,14 @@ export async function revokeTrustedDevice(
 
 export async function listSessions(options?: {
   storedSessions?: StoredSessionsMode;
+  signal?: AbortSignal;
 }): Promise<ListSessionsResponse> {
   const query = new URLSearchParams();
-  if (options?.storedSessions) {
-    query.set("storedSessions", options.storedSessions);
-  }
-  const suffix = query.size > 0 ? `?${query.toString()}` : "";
-  return requestJson<ListSessionsResponse>(`/api/sessions${suffix}`);
+  query.set("storedSessions", options?.storedSessions ?? "recent");
+  return requestJson<ListSessionsResponse>(
+    `/api/sessions?${query.toString()}`,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function listStoredSessionsDelta(sinceRevision: number): Promise<StoredSessionsDeltaResponse> {
@@ -357,6 +375,19 @@ export async function removeWorkspace(
   });
 }
 
+export async function setWorkbenchPinnedItem(
+  request: UpdateWorkbenchPinnedItemRequest,
+  options?: { storedSessions?: StoredSessionsMode },
+): Promise<ListSessionsResponse> {
+  return requestJson<ListSessionsResponse>(
+    `/api/workbench/pins${storedSessionsQuerySuffix(options)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+}
+
 export async function removeStoredSession(
   request: StoredSessionRemoveRequest,
   options?: { storedSessions?: StoredSessionsMode },
@@ -372,6 +403,16 @@ export async function archiveStoredSession(
   options?: { storedSessions?: StoredSessionsMode },
 ): Promise<ListSessionsResponse> {
   return requestJson<ListSessionsResponse>(`/api/history/sessions/archive${storedSessionsQuerySuffix(options)}`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function restoreStoredSession(
+  request: StoredSessionRestoreRequest,
+  options?: { storedSessions?: StoredSessionsMode },
+): Promise<ListSessionsResponse> {
+  return requestJson<ListSessionsResponse>(`/api/history/sessions/restore${storedSessionsQuerySuffix(options)}`, {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -702,6 +743,104 @@ export async function sendSessionInput(
   });
 }
 
+export async function uploadAttachment(file: File): Promise<SessionInputAttachment> {
+  let response: Response;
+  try {
+    response = await fetch(`${getBaseUrl()}/api/attachments`, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "include",
+      headers: buildRequestHeaders({
+        body: file,
+        headers: {
+          "content-type": file.type || "application/octet-stream",
+          "x-rah-file-name": encodeURIComponent(file.name || "attachment"),
+        },
+      }),
+      body: file,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    throw new Error(error instanceof Error ? error.message : "Attachment upload failed.");
+  }
+  if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(RAH_AUTH_REQUIRED_EVENT));
+    }
+    let raw = "";
+    try {
+      raw = await response.text();
+    } catch {
+      raw = "";
+    }
+    throw new Error(extractResponseErrorMessage(response, raw));
+  }
+  const payload = (await response.json()) as UploadAttachmentResponse;
+  return payload.attachment;
+}
+
+export async function updateQueuedSessionInput(
+  sessionId: string,
+  clientMessageId: string,
+  request: UpdateQueuedInputRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/input/${encodeURIComponent(clientMessageId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(request),
+    },
+  );
+  return response.session;
+}
+
+export async function deleteQueuedSessionInput(
+  sessionId: string,
+  clientMessageId: string,
+  request: DeleteQueuedInputRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/input/${encodeURIComponent(clientMessageId)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(request),
+    },
+  );
+  return response.session;
+}
+
+export async function reorderQueuedSessionInput(
+  sessionId: string,
+  clientMessageId: string,
+  request: ReorderQueuedInputRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/input/${encodeURIComponent(clientMessageId)}/position`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(request),
+    },
+  );
+  return response.session;
+}
+
+export async function steerQueuedSessionInput(
+  sessionId: string,
+  clientMessageId: string,
+  request: SteerQueuedInputRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/input/${encodeURIComponent(clientMessageId)}/steer`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+  return response.session;
+}
+
 export async function interruptSession(
   sessionId: string,
   clientId: string,
@@ -801,18 +940,27 @@ export async function readWorkspace(
 
 export async function readGitStatus(
   sessionId: string,
-  options?: { scopeRoot?: string },
+  options?: { scopeRoot?: string; baseBranch?: string },
 ): Promise<GitStatusResponse> {
   const query = new URLSearchParams();
   if (options?.scopeRoot) {
     query.set("scopeRoot", options.scopeRoot);
   }
+  if (options?.baseBranch) {
+    query.set("baseBranch", options.baseBranch);
+  }
   const suffix = query.size ? `?${query.toString()}` : "";
   return requestJson<GitStatusResponse>(`/api/sessions/${sessionId}/git-status${suffix}`);
 }
 
-export async function readWorkspaceGitStatus(dir: string): Promise<GitStatusResponse> {
+export async function readWorkspaceGitStatus(
+  dir: string,
+  options?: { baseBranch?: string },
+): Promise<GitStatusResponse> {
   const query = new URLSearchParams({ dir });
+  if (options?.baseBranch) {
+    query.set("baseBranch", options.baseBranch);
+  }
   return requestJson<GitStatusResponse>(`/api/workspace/git-status?${query.toString()}`);
 }
 
@@ -823,6 +971,7 @@ export async function readGitDiff(
     staged?: boolean;
     ignoreWhitespace?: boolean;
     scopeRoot?: string;
+    baseBranch?: string;
   },
 ): Promise<GitDiffResponse> {
   const query = new URLSearchParams({ path });
@@ -835,8 +984,31 @@ export async function readGitDiff(
   if (options?.scopeRoot) {
     query.set("scopeRoot", options.scopeRoot);
   }
+  if (options?.baseBranch) {
+    query.set("baseBranch", options.baseBranch);
+  }
   return requestJson<GitDiffResponse>(
     `/api/sessions/${sessionId}/git-diff?${query.toString()}`,
+  );
+}
+
+export async function readTurnFileChanges(
+  sessionId: string,
+  turnId: string,
+): Promise<TurnFileChangesResponse> {
+  return requestJson<TurnFileChangesResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/file-changes`,
+  );
+}
+
+export async function readTurnFileDiff(
+  sessionId: string,
+  turnId: string,
+  path: string,
+): Promise<TurnFileDiffResponse> {
+  const query = new URLSearchParams({ path });
+  return requestJson<TurnFileDiffResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/file-diff?${query.toString()}`,
   );
 }
 
@@ -846,6 +1018,7 @@ export async function readWorkspaceGitDiff(
   options?: {
     staged?: boolean;
     ignoreWhitespace?: boolean;
+    baseBranch?: string;
   },
 ): Promise<GitDiffResponse> {
   const query = new URLSearchParams({ dir, path });
@@ -854,6 +1027,9 @@ export async function readWorkspaceGitDiff(
   }
   if (options?.ignoreWhitespace !== undefined) {
     query.set("ignoreWhitespace", options.ignoreWhitespace ? "true" : "false");
+  }
+  if (options?.baseBranch) {
+    query.set("baseBranch", options.baseBranch);
   }
   return requestJson<GitDiffResponse>(`/api/workspace/git-diff?${query.toString()}`);
 }
@@ -905,6 +1081,13 @@ export async function readHostFile(path: string): Promise<SessionFileResponse> {
   return requestJson<SessionFileResponse>(`/api/host/file?${query.toString()}`);
 }
 
+export async function readAttachment(id: string): Promise<AttachmentPreviewResponse> {
+  const query = withImagePreviewClientHint(new URLSearchParams());
+  return requestJson<AttachmentPreviewResponse>(
+    `/api/attachments/${encodeURIComponent(id)}?${query.toString()}`,
+  );
+}
+
 export async function searchSessionFiles(
   sessionId: string,
   queryText: string,
@@ -940,7 +1123,12 @@ export async function searchWorkspaceFilesByDirectory(
 
 export async function readSessionConversationTurns(
   sessionId: string,
-  options?: { cursor?: string; limit?: number; liveOnly?: boolean },
+  options?: {
+    cursor?: string;
+    limit?: number;
+    liveOnly?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<ConversationTurnsPageResponse> {
   const query = new URLSearchParams();
   if (options?.cursor) {
@@ -955,6 +1143,7 @@ export async function readSessionConversationTurns(
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return requestJson<ConversationTurnsPageResponse>(
     `/api/sessions/${sessionId}/conversation/turns${suffix}`,
+    options?.signal ? { signal: options.signal } : undefined,
   );
 }
 
@@ -962,11 +1151,13 @@ export async function readSessionConversationItemDetail(
   sessionId: string,
   options: {
     itemId: string;
+    turnId: string;
     providerTurnId: string;
     providerItemId: string;
   },
 ): Promise<ConversationItemDetailResponse> {
   const query = new URLSearchParams({
+    turnId: options.turnId,
     providerTurnId: options.providerTurnId,
     providerItemId: options.providerItemId,
   });
@@ -977,11 +1168,12 @@ export async function readSessionConversationItemDetail(
 
 export async function readSessionConversationTurnDetail(
   sessionId: string,
-  options: { turnId: string; providerTurnId: string },
+  options: { turnId: string; providerTurnId: string; signal?: AbortSignal },
 ): Promise<ConversationTurnDetailResponse> {
   const query = new URLSearchParams({ providerTurnId: options.providerTurnId });
   return requestJson<ConversationTurnDetailResponse>(
     `/api/sessions/${sessionId}/conversation/turns/${encodeURIComponent(options.turnId)}/detail?${query.toString()}`,
+    options.signal ? { signal: options.signal } : undefined,
   );
 }
 

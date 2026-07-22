@@ -273,7 +273,7 @@ describe("workbench selectors", () => {
     );
   });
 
-  test("ignores stored history activity when sorting live sidebar workspaces", () => {
+  test("uses visible stored history activity when sorting sidebar workspaces", () => {
     const clientId = "web-current";
     const liveValar = controlledSummary({
       id: "live-valar",
@@ -286,7 +286,7 @@ describe("workbench selectors", () => {
       providerSessionId: "stored-code",
       cwd: "/workspace/code",
       rootDir: "/workspace/code",
-      title: "newer archived session",
+      title: "newer stored session",
       updatedAt: "2026-05-01T10:59:00.000Z",
       lastUsedAt: "2026-05-01T10:59:00.000Z",
       source: "provider_history",
@@ -309,6 +309,57 @@ describe("workbench selectors", () => {
       clientId,
       workspaceDirs: ["/workspace/code", "/workspace/repos/valar"],
       storedSessions: [newerStoredCodeSession],
+      workspaceDir: "/workspace/repos/valar",
+      workspaceSortMode: "updated",
+    });
+
+    assert.deepEqual(
+      collections.sortedWorkspaceInfos.map((workspace) => workspace.directory),
+      ["/workspace/code", "/workspace/repos/valar"],
+    );
+  });
+
+  test("ignores archived stored history activity when sorting sidebar workspaces", () => {
+    const clientId = "web-current";
+    const liveValar = controlledSummary({
+      id: "live-valar",
+      clientId,
+      rootDir: "/workspace/repos/valar",
+      updatedAt: "2026-05-01T10:10:00.000Z",
+    });
+    const archivedCodeSession: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "archived-code",
+      cwd: "/workspace/code",
+      rootDir: "/workspace/code",
+      title: "newer archived session",
+      updatedAt: "2026-05-01T10:59:00.000Z",
+      lastUsedAt: "2026-05-01T10:59:00.000Z",
+      source: "provider_history",
+      libraryState: {
+        placement: "archive",
+        backend: "rah_overlay",
+        archivedAt: "2026-05-01T10:59:00.000Z",
+      },
+    };
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [
+          liveValar.session.id,
+          projection(liveValar, [
+            messageEntry(
+              liveValar.session.id,
+              "assistant_message",
+              "live reply",
+              "2026-05-01T10:10:00.000Z",
+            ),
+          ]),
+        ],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/code", "/workspace/repos/valar"],
+      storedSessions: [archivedCodeSession],
       workspaceDir: "/workspace/repos/valar",
       workspaceSortMode: "updated",
     });

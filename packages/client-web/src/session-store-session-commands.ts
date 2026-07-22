@@ -1,6 +1,7 @@
 import type {
   AttachSessionRequest,
   PermissionResponseRequest,
+  SessionInputAttachment,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -282,12 +283,16 @@ export async function sendInputCommand(args: {
   set: SessionCommandSetState;
   sessionId: string;
   text: string;
+  attachments?: SessionInputAttachment[];
+  clientMessageId?: string;
+  clientTurnId?: string;
+  skipOptimisticQueue?: boolean;
 }) {
   const previousProjection = args.get().projections.get(args.sessionId);
   const previousRuntimeState = previousProjection?.summary.session.runtimeState;
   const previousRuntimeStatus = previousProjection?.currentRuntimeStatus;
-  const clientTurnId = createClientSideId("client-turn");
-  const clientMessageId = createClientSideId("client-message");
+  const clientTurnId = args.clientTurnId ?? createClientSideId("client-turn");
+  const clientMessageId = args.clientMessageId ?? createClientSideId("client-message");
   try {
     args.set((state) => {
       const projection = state.projections.get(args.sessionId);
@@ -295,13 +300,42 @@ export async function sendInputCommand(args: {
         return state;
       }
       const next = new Map(state.projections);
-      const optimistic = shouldAppendTranscriptOptimisticUserMessage(projection)
+      const imageCount = args.attachments?.filter(
+        (attachment) => attachment.kind === "image",
+      ).length;
+      const shouldQueueOptimistically =
+        args.skipOptimisticQueue !== true &&
+        projection.summary.session.capabilities.queuedInput === true &&
+        (["starting", "working", "waiting_input", "waiting_permission"].includes(
+          projection.summary.session.phase,
+        ) ||
+          projection.currentRuntimeStatus === "thinking" ||
+          projection.currentRuntimeStatus === "streaming" ||
+          projection.currentRuntimeStatus === "retrying");
+      const optimistic = !shouldQueueOptimistically &&
+        shouldAppendTranscriptOptimisticUserMessage(projection)
         ? appendOptimisticUserMessage(projection, args.text, {
             clientMessageId,
             clientTurnId,
+            ...(args.attachments?.length ? { attachments: args.attachments } : {}),
+            ...(imageCount !== undefined ? { imageCount } : {}),
           })
         : projection;
       const now = new Date().toISOString();
+      const currentInputQueue = optimistic.summary.session.inputQueue ?? [];
+      const nextInputQueue = shouldQueueOptimistically
+        ? [
+            ...currentInputQueue,
+            {
+              clientMessageId,
+              clientTurnId,
+              text: args.text,
+              ...(args.attachments?.length ? { attachments: args.attachments } : {}),
+              queuedAt: now,
+              position: currentInputQueue.length + 1,
+            },
+          ]
+        : optimistic.summary.session.inputQueue;
       const nativeTui = optimistic.summary.session.nativeTui;
       const willQueueInNativeTui =
         nativeTui !== undefined && nativeTui.promptState !== "prompt_clean";
@@ -322,6 +356,7 @@ export async function sendInputCommand(args: {
             ...conversationStateFromRuntimeState("running"),
             runtimeState: "running",
             ...(nextNativeTui ? { nativeTui: nextNativeTui } : {}),
+            ...(nextInputQueue ? { inputQueue: nextInputQueue } : {}),
             updatedAt: now,
           },
           controlLease: {
@@ -338,6 +373,7 @@ export async function sendInputCommand(args: {
       api.sendSessionInput(args.sessionId, {
         clientId: args.get().clientId,
         text: args.text,
+        ...(args.attachments?.length ? { attachments: args.attachments } : {}),
         clientMessageId,
         clientTurnId,
       }),
@@ -355,17 +391,26 @@ export async function sendInputCommand(args: {
         previousProjection && projection.lastSeq === previousProjection.lastSeq
           ? previousProjection
           : removeOptimisticUserMessage(projection, args.text, clientMessageId);
+      const restoredInputQueue = baseRestored.summary.session.inputQueue
+        ?.filter((item) => item.clientMessageId !== clientMessageId)
+        .map((item, index) => ({ ...item, position: index + 1 }));
+      const restoredSession = {
+        ...baseRestored.summary.session,
+        ...conversationStateFromRuntimeState(
+          previousRuntimeState ?? baseRestored.summary.session.runtimeState,
+        ),
+        runtimeState: previousRuntimeState ?? baseRestored.summary.session.runtimeState,
+      };
+      if (restoredInputQueue?.length) {
+        restoredSession.inputQueue = restoredInputQueue;
+      } else {
+        delete restoredSession.inputQueue;
+      }
       const restored: SessionProjection = {
         ...baseRestored,
         summary: {
           ...baseRestored.summary,
-          session: {
-            ...baseRestored.summary.session,
-            ...conversationStateFromRuntimeState(
-              previousRuntimeState ?? baseRestored.summary.session.runtimeState,
-            ),
-            runtimeState: previousRuntimeState ?? baseRestored.summary.session.runtimeState,
-          },
+          session: restoredSession,
         },
       };
       if (previousRuntimeStatus === undefined) {
@@ -375,6 +420,264 @@ export async function sendInputCommand(args: {
       }
       next.set(args.sessionId, restored);
       return { projections: next, error: message };
+    });
+    throw error;
+  }
+}
+
+export async function updateQueuedInputCommand(args: {
+  get: () => SessionCommandState;
+  set: SessionCommandSetState;
+  sessionId: string;
+  clientMessageId: string;
+  text: string;
+}) {
+  try {
+    await serializeSessionTransportCommand(args.sessionId, () =>
+      api.updateQueuedSessionInput(args.sessionId, args.clientMessageId, {
+        clientId: args.get().clientId,
+        text: args.text,
+      }),
+    );
+    args.set((state) => {
+      const projection = state.projections.get(args.sessionId);
+      if (!projection) {
+        return { error: null };
+      }
+      const projections = new Map(state.projections);
+      let nextProjection = projection;
+      const inputQueue = nextProjection.summary.session.inputQueue;
+      if (inputQueue?.some((item) => item.clientMessageId === args.clientMessageId)) {
+        nextProjection = {
+          ...nextProjection,
+          summary: {
+            ...nextProjection.summary,
+            session: {
+              ...nextProjection.summary.session,
+              inputQueue: inputQueue.map((item) =>
+                item.clientMessageId === args.clientMessageId
+                  ? { ...item, text: args.text }
+                  : item,
+              ),
+            },
+          },
+        };
+      }
+      projections.set(args.sessionId, nextProjection);
+      return { projections, error: null };
+    });
+  } catch (error) {
+    args.set({ error: readErrorMessage(error) });
+    throw error;
+  }
+}
+
+export async function deleteQueuedInputCommand(args: {
+  get: () => SessionCommandState;
+  set: SessionCommandSetState;
+  sessionId: string;
+  clientMessageId: string;
+}) {
+  try {
+    await serializeSessionTransportCommand(args.sessionId, () =>
+      api.deleteQueuedSessionInput(args.sessionId, args.clientMessageId, {
+        clientId: args.get().clientId,
+      }),
+    );
+    args.set((state) => {
+      const projection = state.projections.get(args.sessionId);
+      if (!projection) {
+        return { error: null };
+      }
+      const projections = new Map(state.projections);
+      let nextProjection = projection;
+      const inputQueue = nextProjection.summary.session.inputQueue;
+      if (inputQueue?.some((item) => item.clientMessageId === args.clientMessageId)) {
+        nextProjection = {
+          ...nextProjection,
+          summary: {
+            ...nextProjection.summary,
+            session: {
+              ...nextProjection.summary.session,
+              inputQueue: inputQueue.filter(
+                (item) => item.clientMessageId !== args.clientMessageId,
+              ),
+            },
+          },
+        };
+      }
+      projections.set(args.sessionId, nextProjection);
+      return { projections, error: null };
+    });
+  } catch (error) {
+    args.set({ error: readErrorMessage(error) });
+    throw error;
+  }
+}
+
+export async function reorderQueuedInputCommand(args: {
+  get: () => SessionCommandState;
+  set: SessionCommandSetState;
+  sessionId: string;
+  clientMessageId: string;
+  position: number;
+}) {
+  const previousQueue = args.get().projections.get(args.sessionId)?.summary.session.inputQueue;
+  args.set((state) => {
+    const projection = state.projections.get(args.sessionId);
+    const queue = projection?.summary.session.inputQueue;
+    if (!projection || !queue) {
+      return state;
+    }
+    const currentIndex = queue.findIndex(
+      (item) => item.clientMessageId === args.clientMessageId,
+    );
+    if (currentIndex < 0) {
+      return state;
+    }
+    const reordered = [...queue];
+    const [item] = reordered.splice(currentIndex, 1);
+    if (!item) {
+      return state;
+    }
+    reordered.splice(Math.max(0, Math.min(reordered.length, args.position - 1)), 0, item);
+    const projections = new Map(state.projections);
+    projections.set(args.sessionId, {
+      ...projection,
+      summary: {
+        ...projection.summary,
+        session: {
+          ...projection.summary.session,
+          inputQueue: reordered.map((entry, index) => ({
+            ...entry,
+            position: index + 1,
+          })),
+        },
+      },
+    });
+    return { projections };
+  });
+  try {
+    const summary = await serializeSessionTransportCommand(args.sessionId, () =>
+      api.reorderQueuedSessionInput(args.sessionId, args.clientMessageId, {
+        clientId: args.get().clientId,
+        position: args.position,
+      }),
+    );
+    args.set((state) => ({
+      projections: updateSessionSummaryInProjectionMap(state.projections, summary),
+      error: null,
+    }));
+  } catch (error) {
+    args.set((state) => {
+      const projection = state.projections.get(args.sessionId);
+      if (!projection || !previousQueue) {
+        return { error: readErrorMessage(error) };
+      }
+      const projections = new Map(state.projections);
+      projections.set(args.sessionId, {
+        ...projection,
+        summary: {
+          ...projection.summary,
+          session: { ...projection.summary.session, inputQueue: previousQueue },
+        },
+      });
+      return { projections, error: readErrorMessage(error) };
+    });
+    throw error;
+  }
+}
+
+export async function steerQueuedInputCommand(args: {
+  get: () => SessionCommandState;
+  set: SessionCommandSetState;
+  sessionId: string;
+  clientMessageId: string;
+}) {
+  const queuedInput = args.get().projections
+    .get(args.sessionId)
+    ?.summary.session.inputQueue?.find(
+      (item) => item.clientMessageId === args.clientMessageId,
+    );
+  if (!queuedInput) {
+    return;
+  }
+  args.set((state) => {
+    const projection = state.projections.get(args.sessionId);
+    if (!projection) {
+      return state;
+    }
+    const imageCount = queuedInput.attachments?.filter(
+      (attachment) => attachment.kind === "image",
+    ).length;
+    const optimistic = appendOptimisticUserMessage(projection, queuedInput.text, {
+      clientMessageId: queuedInput.clientMessageId,
+      ...(queuedInput.clientTurnId ? { clientTurnId: queuedInput.clientTurnId } : {}),
+      ...(queuedInput.attachments?.length ? { attachments: queuedInput.attachments } : {}),
+      ...(imageCount !== undefined ? { imageCount } : {}),
+    });
+    const projections = new Map(state.projections);
+    projections.set(args.sessionId, {
+      ...optimistic,
+      summary: {
+        ...optimistic.summary,
+        session: {
+          ...optimistic.summary.session,
+          ...(optimistic.summary.session.inputQueue
+            ? {
+                inputQueue: optimistic.summary.session.inputQueue.map((item) =>
+                  item.clientMessageId === args.clientMessageId
+                    ? { ...item, state: "submitting" as const }
+                    : item,
+                ),
+              }
+            : {}),
+        },
+      },
+    });
+    return { projections };
+  });
+  try {
+    const summary = await api.steerQueuedSessionInput(
+      args.sessionId,
+      args.clientMessageId,
+      { clientId: args.get().clientId },
+    );
+    args.set((state) => ({
+      projections: updateSessionSummaryInProjectionMap(state.projections, summary),
+      error: null,
+    }));
+  } catch (error) {
+    args.set((state) => {
+      const projection = state.projections.get(args.sessionId);
+      if (!projection) {
+        return { error: readErrorMessage(error) };
+      }
+      const restored = removeOptimisticUserMessage(
+        projection,
+        queuedInput.text,
+        queuedInput.clientMessageId,
+      );
+      const projections = new Map(state.projections);
+      projections.set(args.sessionId, {
+        ...restored,
+        summary: {
+          ...restored.summary,
+          session: {
+            ...restored.summary.session,
+            ...(restored.summary.session.inputQueue
+              ? {
+                  inputQueue: restored.summary.session.inputQueue.map((item) =>
+                    item.clientMessageId === args.clientMessageId
+                      ? { ...item, state: "queued" as const }
+                      : item,
+                  ),
+                }
+              : {}),
+          },
+        },
+      });
+      return { projections, error: readErrorMessage(error) };
     });
     throw error;
   }

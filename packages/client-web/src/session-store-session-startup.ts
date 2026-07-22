@@ -4,6 +4,7 @@ import type {
   ForkSessionRequest,
   ResumeSessionRequest,
   SessionConfigValue,
+  SessionInputAttachment,
   SessionSummary,
   StartSessionRequest,
   StoredSessionRef,
@@ -43,6 +44,7 @@ import {
 } from "./session-store-workspace";
 import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
 import {
+  appendOptimisticUserMessage,
   initialConversationSyncState,
   providerLabel,
   type SessionProjection,
@@ -60,6 +62,7 @@ type StartSessionOptions = {
   modeId?: string;
   liveBackend?: StartSessionRequest["liveBackend"];
   initialInput?: string;
+  initialAttachments?: SessionInputAttachment[];
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   onSessionCreated?: (sessionId: string) => void;
 };
@@ -79,6 +82,7 @@ type ForkSessionFlight = {
 const FORK_OPERATION_RETRY_TTL_MS = 5 * 60_000;
 const forkSessionFlights = new Map<string, ForkSessionFlight>();
 const forkSessionRetryIds = new Map<string, { operationId: string; expiresAt: number }>();
+const canceledSessionStartupIds = new Set<string>();
 
 type SessionStartupState = {
   clientId: string;
@@ -117,7 +121,16 @@ type SessionStartupDeps = {
   set: SessionStartupSetState;
   ensureConversationLoaded: (sessionId: string) => Promise<void>;
   initializeLiveConversationProjection: (sessionId: string) => Promise<void>;
-  sendInput: (sessionId: string, text: string) => Promise<void>;
+  sendInput: (
+    sessionId: string,
+    text: string,
+    attachments?: SessionInputAttachment[],
+    identity?: {
+      clientMessageId: string;
+      clientTurnId: string;
+      skipOptimisticQueue?: boolean;
+    },
+  ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   resumeStoredSession: (
     ref: StoredSessionRef,
@@ -166,9 +179,139 @@ type SessionStartupDeps = {
   confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
 
+export function cancelPendingSessionStartupCommand(
+  deps: Pick<SessionStartupDeps, "get" | "set">,
+  sessionId: string,
+): boolean {
+  const state = deps.get();
+  const isPendingResume =
+    state.pendingSessionAction?.kind === "resume_history" &&
+    state.pendingSessionAction.sessionId === sessionId;
+  const isPendingStart =
+    state.pendingSessionTransition?.kind === "new" &&
+    state.selectedSessionId === sessionId &&
+    sessionId.startsWith("starting-session:");
+  if (!isPendingResume && !isPendingStart) return false;
+  canceledSessionStartupIds.add(sessionId);
+  deps.set((current) => {
+    const projection = current.projections.get(sessionId);
+    if (!projection) return current;
+    const projections = new Map(current.projections);
+    projections.set(sessionId, {
+      ...projection,
+      currentRuntimeStatus: "stopping",
+      summary: {
+        ...projection.summary,
+        session: {
+          ...projection.summary.session,
+          status: "running",
+          phase: "stopping",
+          runtimeState: "running",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    return { projections };
+  });
+  return true;
+}
+
+function consumeCanceledSessionStartup(sessionId: string | null): boolean {
+  if (!sessionId || !canceledSessionStartupIds.has(sessionId)) return false;
+  canceledSessionStartupIds.delete(sessionId);
+  return true;
+}
+
 function historyOnlyRunningMessage(provider: string): string {
   const label = isCoreLiveProvider(provider) ? providerLabel(provider) : provider;
   return `${label} is not a supported running provider. Use Codex, Claude, or OpenCode.`;
+}
+
+function createPendingLiveSessionProjection(args: {
+  sessionId: string;
+  provider: ProviderChoice;
+  cwd: string;
+  title: string;
+  clientId: string;
+  connectionId: string;
+  text: string;
+  attachments: SessionInputAttachment[];
+  clientMessageId: string;
+  clientTurnId: string;
+}): SessionProjection {
+  const now = new Date().toISOString();
+  const summary: SessionSummary = {
+    session: {
+      id: args.sessionId,
+      provider: args.provider,
+      launchSource: "web",
+      ...(() => {
+        const liveBackend = defaultLiveBackendForProvider(args.provider);
+        return liveBackend ? { liveBackend } : {};
+      })(),
+      status: "running",
+      phase: "starting",
+      cwd: args.cwd,
+      rootDir: args.cwd,
+      runtimeState: "starting",
+      ptyId: args.sessionId,
+      title: args.title,
+      inputQueuePolicy: "queue",
+      capabilities: {
+        liveAttach: true,
+        structuredTimeline: true,
+        nativeTui: args.provider === "claude",
+        rawPtyInput: args.provider === "claude",
+        chatMirror: args.provider === "claude",
+        structuredControl: true,
+        livePermissions: true,
+        contextUsage: true,
+        resumeByProvider: true,
+        listProviderSessions: true,
+        actions: {
+          info: true,
+          stop: true,
+          archive: args.provider === "codex",
+          delete: true,
+          rename: "native",
+        },
+        steerInput: true,
+        queuedInput: args.provider !== "claude",
+        modelSwitch: true,
+        planMode: true,
+        subagents: true,
+      },
+      createdAt: now,
+      updatedAt: now,
+    },
+    attachedClients: [
+      {
+        id: args.clientId,
+        kind: "web",
+        sessionId: args.sessionId,
+        connectionId: args.connectionId,
+        attachMode: "interactive",
+        focus: true,
+        lastSeenAt: now,
+      },
+    ],
+    controlLease: {
+      sessionId: args.sessionId,
+      holderClientId: args.clientId,
+      holderKind: "web",
+      grantedAt: now,
+    },
+  };
+  return appendOptimisticUserMessage(
+    createEmptySessionProjection(summary),
+    args.text,
+    {
+      clientMessageId: args.clientMessageId,
+      clientTurnId: args.clientTurnId,
+      ...(args.attachments.length ? { attachments: args.attachments } : {}),
+      imageCount: args.attachments.filter((attachment) => attachment.kind === "image").length,
+    },
+  );
 }
 
 function pruneReadOnlyReplaysForResumedProviderSession(
@@ -195,6 +338,7 @@ export async function startSessionCommand(
   deps: SessionStartupDeps,
   options?: StartSessionOptions,
 ): Promise<string | null> {
+  let provisionalSessionId: string | null = null;
   try {
     const state = deps.get();
     const cwd = options?.cwd?.trim() || state.workspaceDir.trim();
@@ -208,29 +352,91 @@ export async function startSessionCommand(
       deps.set({ pendingSessionTransition: null, error });
       throw new Error(error);
     }
-    if (!(await ensureLaunchWorkspaceAvailable(deps, cwd))) {
-      return null;
-    }
-    deps.set({
-      pendingSessionTransition: createPendingStartTransition({
+    const initialInput = options?.initialInput?.trim();
+    const initialAttachments = options?.initialAttachments ?? [];
+    const title = options?.title ?? `${providerLabel(provider)} session`;
+    const clientMessageId = createClientSideId("client-message");
+    const clientTurnId = createClientSideId("client-turn");
+    const pendingTransition = createPendingStartTransition({
+      provider,
+      cwd,
+      ...(options?.title ? { title: options.title } : {}),
+    });
+    if (initialInput || initialAttachments.length > 0) {
+      provisionalSessionId = createClientSideId("starting-session");
+      const provisionalProjection = createPendingLiveSessionProjection({
+        sessionId: provisionalSessionId,
         provider,
         cwd,
-        ...(options?.title ? { title: options.title } : {}),
-      }),
-      error: null,
-    });
-    const initialInput = options?.initialInput?.trim();
+        title,
+        clientId: state.clientId,
+        connectionId: state.connectionId,
+        text: initialInput ?? "",
+        attachments: initialAttachments,
+        clientMessageId,
+        clientTurnId,
+      });
+      deps.set((current) => {
+        const projections = new Map(current.projections);
+        projections.set(provisionalProjection.summary.session.id, provisionalProjection);
+        return {
+          projections,
+          selectedSessionId: provisionalProjection.summary.session.id,
+          pendingSessionTransition: pendingTransition,
+          sessionTopologyVersion: current.sessionTopologyVersion + 1,
+          error: null,
+        };
+      });
+    } else {
+      deps.set({ pendingSessionTransition: pendingTransition, error: null });
+    }
+    if (!(await ensureLaunchWorkspaceAvailable(deps, cwd))) {
+      if (provisionalSessionId) {
+        consumeCanceledSessionStartup(provisionalSessionId);
+        deps.set((current) => {
+          const projections = new Map(current.projections);
+          projections.delete(provisionalSessionId!);
+          return {
+            projections,
+            selectedSessionId:
+              current.selectedSessionId === provisionalSessionId
+                ? null
+                : current.selectedSessionId,
+            pendingSessionTransition: null,
+            sessionTopologyVersion: current.sessionTopologyVersion + 1,
+          };
+        });
+      }
+      return null;
+    }
     const liveBackend = options?.liveBackend ?? defaultLiveBackendForProvider(provider);
     const response = await api.startSession({
       provider,
       cwd,
       ...(liveBackend ? { liveBackend } : {}),
-      title: options?.title ?? `${providerLabel(provider)} session`,
+      title,
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
+    if (consumeCanceledSessionStartup(provisionalSessionId)) {
+      await api.closeSession(response.session.session.id, { clientId: state.clientId });
+      deps.set((current) => {
+        const projections = new Map(current.projections);
+        if (provisionalSessionId) projections.delete(provisionalSessionId);
+        projections.delete(response.session.session.id);
+        return {
+          projections,
+          selectedSessionId:
+            current.selectedSessionId === provisionalSessionId ? null : current.selectedSessionId,
+          pendingSessionTransition: null,
+          sessionTopologyVersion: current.sessionTopologyVersion + 1,
+          error: null,
+        };
+      });
+      return null;
+    }
     const session =
       options?.modeId &&
       response.session.session.mode?.mutable &&
@@ -242,27 +448,65 @@ export async function startSessionCommand(
         new Map(current.projections),
         session,
       );
+      const provisionalProjection = provisionalSessionId
+        ? next.get(provisionalSessionId)
+        : undefined;
+      if (provisionalSessionId) next.delete(provisionalSessionId);
+      const existingLiveProjection = next.get(session.session.id);
       const startedState = applyStartedSessionState(current, session, {
         cwd,
         provider,
         projections: next,
       });
+      const startedProjections = startedState.projections ?? next;
+      if (provisionalProjection) {
+        startedProjections.set(
+          session.session.id,
+          mergeResumedHistoryProjection(
+            session,
+            provisionalProjection,
+            existingLiveProjection,
+          ),
+        );
+      }
       return {
         ...startedState,
         projections: deps.applyEventsToMap(
-          startedState.projections ?? next,
+          startedProjections,
           deps.takePendingEventsForSessions(new Set([session.session.id])),
         ),
       };
     });
     options?.onSessionCreated?.(session.session.id);
-    await deps.initializeLiveConversationProjection(session.session.id);
-    if (initialInput) {
-      await deps.sendInput(session.session.id, initialInput);
+    if (initialInput || initialAttachments.length > 0) {
+      void deps.initializeLiveConversationProjection(session.session.id).catch(() => undefined);
+      await deps.sendInput(
+        session.session.id,
+        initialInput ?? "",
+        initialAttachments,
+        { clientMessageId, clientTurnId, skipOptimisticQueue: true },
+      );
+    } else {
+      await deps.initializeLiveConversationProjection(session.session.id);
     }
     return session.session.id;
   } catch (error) {
-    deps.set({ pendingSessionTransition: null, error: readErrorMessage(error) });
+    consumeCanceledSessionStartup(provisionalSessionId);
+    deps.set((state) => {
+      if (!provisionalSessionId || !state.projections.has(provisionalSessionId)) {
+        return { pendingSessionTransition: null, error: readErrorMessage(error) };
+      }
+      const projections = new Map(state.projections);
+      projections.delete(provisionalSessionId);
+      return {
+        projections,
+        selectedSessionId:
+          state.selectedSessionId === provisionalSessionId ? null : state.selectedSessionId,
+        pendingSessionTransition: null,
+        sessionTopologyVersion: state.sessionTopologyVersion + 1,
+        error: readErrorMessage(error),
+      };
+    });
     throw error;
   }
 }
@@ -583,15 +827,164 @@ export async function resumeStoredSessionCommand(
   }
 }
 
-export async function resumeHistorySessionCommand(
+type ResumeHistorySessionOptions = {
+  modeId?: string;
+  modelId?: string;
+  optionValues?: Record<string, SessionConfigValue>;
+  reasoningId?: string | null;
+  initialInput?: string;
+  initialAttachments?: SessionInputAttachment[];
+};
+
+const resumeHistoryOperations = new Map<string, Promise<string | null>>();
+
+function resumeHistoryOperationKey(deps: SessionStartupDeps, sessionId: string): string {
+  const session = deps.get().projections.get(sessionId)?.summary.session;
+  return session?.providerSessionId
+    ? `${session.provider}:${session.providerSessionId}`
+    : `runtime:${sessionId}`;
+}
+
+export function resumeHistorySessionCommand(
   deps: SessionStartupDeps,
   sessionId: string,
-  options?: {
-    modeId?: string;
-    modelId?: string;
-    optionValues?: Record<string, SessionConfigValue>;
-    reasoningId?: string | null;
-  },
+  options?: ResumeHistorySessionOptions,
+): Promise<string | null> {
+  const operationKey = resumeHistoryOperationKey(deps, sessionId);
+  const existing = resumeHistoryOperations.get(operationKey);
+  if (existing) {
+    return existing;
+  }
+
+  const initialInput = options?.initialInput ?? "";
+  const initialAttachments = options?.initialAttachments ?? [];
+  const hasInitialInput = Boolean(initialInput.trim() || initialAttachments.length > 0);
+  const clientMessageId = createClientSideId("client-message");
+  const clientTurnId = createClientSideId("client-turn");
+  const previousProjection = deps.get().projections.get(sessionId);
+  if (hasInitialInput && previousProjection) {
+    const now = new Date().toISOString();
+    const imageCount = initialAttachments.filter(
+      (attachment) => attachment.kind === "image",
+    ).length;
+    const optimistic = appendOptimisticUserMessage(previousProjection, initialInput, {
+      clientMessageId,
+      clientTurnId,
+      ...(initialAttachments.length ? { attachments: initialAttachments } : {}),
+      imageCount,
+    });
+    deps.set((state) => {
+      const projections = new Map(state.projections);
+      projections.set(sessionId, {
+        ...optimistic,
+        currentRuntimeStatus: "thinking",
+        summary: {
+          ...optimistic.summary,
+          session: {
+            ...optimistic.summary.session,
+            status: "running",
+            phase: "starting",
+            runtimeState: "starting",
+            capabilities: {
+              ...optimistic.summary.session.capabilities,
+              structuredControl: true,
+              livePermissions: true,
+              steerInput: true,
+              queuedInput: optimistic.summary.session.provider !== "claude",
+              actions: {
+                ...optimistic.summary.session.capabilities.actions,
+                stop: true,
+              },
+            },
+            updatedAt: now,
+          },
+          attachedClients: [
+            ...optimistic.summary.attachedClients.filter(
+              (client) => client.id !== state.clientId,
+            ),
+            {
+              id: state.clientId,
+              kind: "web",
+              sessionId,
+              connectionId: state.connectionId,
+              attachMode: "interactive",
+              focus: true,
+              lastSeenAt: now,
+            },
+          ],
+          controlLease: {
+            sessionId,
+            holderClientId: state.clientId,
+            holderKind: "web",
+            grantedAt: now,
+          },
+        },
+      });
+      return { projections, error: null };
+    });
+  }
+
+  let resumedSessionId: string | null = null;
+  const operation = resumeHistorySessionCommandInternal(deps, sessionId, options)
+    .then(async (nextSessionId) => {
+      resumedSessionId = nextSessionId;
+      if (consumeCanceledSessionStartup(sessionId)) {
+        try {
+          if (nextSessionId) {
+            await api.closeSession(nextSessionId, { clientId: deps.get().clientId });
+          }
+        } finally {
+          deps.set((state) => {
+            const projections = new Map(state.projections);
+            if (nextSessionId) projections.delete(nextSessionId);
+            if (previousProjection) projections.set(sessionId, previousProjection);
+            return {
+              projections,
+              selectedSessionId: previousProjection ? sessionId : state.selectedSessionId,
+              pendingSessionAction: null,
+              pendingSessionTransition: null,
+              sessionTopologyVersion: state.sessionTopologyVersion + 1,
+              error: null,
+            };
+          });
+        }
+        return null;
+      }
+      if (nextSessionId && hasInitialInput) {
+        await deps.sendInput(
+          nextSessionId,
+          initialInput,
+          initialAttachments,
+          { clientMessageId, clientTurnId, skipOptimisticQueue: true },
+        );
+      }
+      return nextSessionId;
+    })
+    .catch((error) => {
+      consumeCanceledSessionStartup(sessionId);
+      if (resumedSessionId === null && previousProjection) {
+        deps.set((state) => {
+          if (!state.projections.has(sessionId)) return state;
+          const projections = new Map(state.projections);
+          projections.set(sessionId, previousProjection);
+          return { projections };
+        });
+      }
+      throw error;
+    })
+    .finally(() => {
+      if (resumeHistoryOperations.get(operationKey) === operation) {
+        resumeHistoryOperations.delete(operationKey);
+      }
+    });
+  resumeHistoryOperations.set(operationKey, operation);
+  return operation;
+}
+
+async function resumeHistorySessionCommandInternal(
+  deps: SessionStartupDeps,
+  sessionId: string,
+  options?: ResumeHistorySessionOptions,
 ): Promise<string | null> {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
@@ -626,28 +1019,32 @@ export async function resumeHistorySessionCommand(
     pendingSessionTransition: null,
     error: null,
   });
-  await deps.ensureConversationLoaded(sessionId);
-  const hydratedState = deps.get();
-  const hydratedProjection = hydratedState.projections.get(sessionId);
-  const hydratedSummary = hydratedProjection?.summary;
-  if (!hydratedProjection || !hydratedSummary) {
+  const preservedProjection: SessionProjection = {
+    ...projection,
+    summary,
+  };
+  if (!preservedProjection.summary) {
     const error = "The history session disappeared while preparing Resume.";
     deps.set({ pendingSessionAction: null, error });
     throw new Error(error);
   }
-  const preservedProjection: SessionProjection = {
-    ...hydratedProjection,
-    summary: hydratedSummary,
+  const ensureResumedConversationLoaded = (resumedSessionId: string) => {
+    const conversation = deps.get().projections.get(resumedSessionId)?.conversation;
+    if (conversation?.phase === "ready" && conversation.loadedScope === "history") {
+      return;
+    }
+    void deps.ensureConversationLoaded(resumedSessionId).catch(() => undefined);
   };
   const applyResumedSession = (resumedSession: SessionSummary) => {
     deps.set((current) => {
       const next = new Map(current.projections);
+      const sourceProjection = current.projections.get(sessionId) ?? preservedProjection;
       if (next.has(sessionId)) {
         const resumedState = applyResumedHistorySessionState(
           current,
           resumedSession,
           sessionId,
-          preservedProjection,
+          sourceProjection,
           ref,
           next,
         );
@@ -666,7 +1063,7 @@ export async function resumeHistorySessionCommand(
       const existingProjection = next.get(resumedSession.session.id);
       next.set(
         resumedSession.session.id,
-        mergeResumedHistoryProjection(resumedSession, preservedProjection, existingProjection),
+        mergeResumedHistoryProjection(resumedSession, sourceProjection, existingProjection),
       );
       pruneReadOnlyReplaysForResumedProviderSession(next, resumedSession);
       return {
@@ -688,6 +1085,7 @@ export async function resumeHistorySessionCommand(
         error: null,
       };
     });
+    ensureResumedConversationLoaded(resumedSession.session.id);
   };
   const updateResumedSessionSummary = (resumedSession: SessionSummary) => {
     deps.set((current) => ({

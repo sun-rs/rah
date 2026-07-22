@@ -1,12 +1,28 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { KeyRound, LoaderCircle, ShieldCheck } from "lucide-react";
 import {
   getDeviceAuthStatus,
   pairDevice,
   RAH_AUTH_REQUIRED_EVENT,
 } from "../api";
+import {
+  deviceAuthRetryDelay,
+  deviceAuthStateForFailure,
+  deviceAuthStateForStatus,
+  readDeviceAuthTrustHint,
+  writeDeviceAuthTrustHint,
+  type DeviceAuthTrustStorage,
+  type DeviceAuthViewState,
+} from "../device-auth-recovery";
 
-type AuthState = "loading" | "trusted" | "pairing";
+const AUTH_STATUS_TIMEOUT_MS = 8_000;
 
 function suggestedDeviceName(): string {
   if (typeof navigator === "undefined") {
@@ -24,8 +40,24 @@ function normalizePairingCode(value: string): string {
   return value.replace(/\D/g, "").slice(0, 8);
 }
 
+function browserTrustStorage(): DeviceAuthTrustStorage | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
 export function DeviceAuthGate({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>("loading");
+  const initialTrustHint = useMemo(
+    () => readDeviceAuthTrustHint(browserTrustStorage()),
+    [],
+  );
+  const hasReachedTrustedRef = useRef(initialTrustHint);
+  const [state, setState] = useState<DeviceAuthViewState>(
+    initialTrustHint ? "trusted" : "loading",
+  );
   const [hasTrustedDevices, setHasTrustedDevices] = useState(false);
   const [deviceName, setDeviceName] = useState(() => suggestedDeviceName());
   const [pairingCode, setPairingCode] = useState("");
@@ -38,29 +70,95 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    const check = async (unauthenticatedMessage?: string) => {
-      try {
-        const status = await getDeviceAuthStatus();
-        if (cancelled) return;
-        setHasTrustedDevices(status.hasTrustedDevices);
-        setState(status.authenticated ? "trusted" : "pairing");
-        setError(status.authenticated ? null : unauthenticatedMessage ?? null);
-      } catch (statusError) {
-        if (cancelled) return;
-        setState("pairing");
-        setError(statusError instanceof Error ? statusError.message : "Could not reach RAH.");
+    let inFlight = false;
+    let rerunAfterFlight = false;
+    let retryAttempt = 0;
+    let retryTimer: number | undefined;
+    let pendingUnauthenticatedMessage: string | undefined;
+
+    const clearRetry = () => {
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer);
+        retryTimer = undefined;
       }
     };
+
+    const scheduleRetry = () => {
+      clearRetry();
+      const delay = deviceAuthRetryDelay(retryAttempt);
+      retryAttempt += 1;
+      retryTimer = window.setTimeout(() => {
+        retryTimer = undefined;
+        void check();
+      }, delay);
+    };
+
+    const check = async (unauthenticatedMessage?: string) => {
+      if (unauthenticatedMessage) {
+        pendingUnauthenticatedMessage = unauthenticatedMessage;
+      }
+      if (inFlight) {
+        rerunAfterFlight = true;
+        return;
+      }
+
+      clearRetry();
+      inFlight = true;
+      const messageForThisCheck = pendingUnauthenticatedMessage;
+      pendingUnauthenticatedMessage = undefined;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), AUTH_STATUS_TIMEOUT_MS);
+      try {
+        const status = await getDeviceAuthStatus({ signal: controller.signal });
+        if (cancelled) return;
+        retryAttempt = 0;
+        setHasTrustedDevices(status.hasTrustedDevices);
+        hasReachedTrustedRef.current = status.authenticated;
+        writeDeviceAuthTrustHint(browserTrustStorage(), status.authenticated);
+        setState(deviceAuthStateForStatus(status.authenticated));
+        setError(status.authenticated ? null : messageForThisCheck ?? null);
+      } catch {
+        if (cancelled) return;
+        setState(deviceAuthStateForFailure(hasReachedTrustedRef.current));
+        setError(null);
+        scheduleRetry();
+      } finally {
+        window.clearTimeout(timeout);
+        inFlight = false;
+        if (!cancelled && rerunAfterFlight) {
+          rerunAfterFlight = false;
+          void check();
+        }
+      }
+    };
+
     const requireAuth = () => {
-      setState("pairing");
-      setError("This device is no longer trusted.");
       void check("This device is no longer trusted.");
     };
+    const recheck = () => {
+      void check();
+    };
+    const recheckWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void check();
+      }
+    };
+
     window.addEventListener(RAH_AUTH_REQUIRED_EVENT, requireAuth);
+    window.addEventListener("online", recheck);
+    window.addEventListener("focus", recheck);
+    window.addEventListener("pageshow", recheck);
+    document.addEventListener("visibilitychange", recheckWhenVisible);
     void check();
+
     return () => {
       cancelled = true;
+      clearRetry();
       window.removeEventListener(RAH_AUTH_REQUIRED_EVENT, requireAuth);
+      window.removeEventListener("online", recheck);
+      window.removeEventListener("focus", recheck);
+      window.removeEventListener("pageshow", recheck);
+      document.removeEventListener("visibilitychange", recheckWhenVisible);
     };
   }, []);
 
@@ -71,6 +169,8 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await pairDevice({ code: pairingCode, name: deviceName.trim() });
+      hasReachedTrustedRef.current = true;
+      writeDeviceAuthTrustHint(browserTrustStorage(), true);
       setState("trusted");
       setPairingCode("");
     } catch (pairError) {
@@ -89,6 +189,26 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
       <div className="flex min-h-dvh items-center justify-center bg-[var(--app-bg)] text-[var(--app-hint)]">
         <LoaderCircle size={22} className="animate-spin" aria-label="Checking device trust" />
       </div>
+    );
+  }
+
+  if (state === "reconnecting") {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-[var(--app-bg)] px-5 text-[var(--app-fg)]">
+        <div className="flex max-w-sm items-center gap-3">
+          <LoaderCircle
+            size={21}
+            className="shrink-0 animate-spin text-[var(--app-hint)]"
+            aria-label="Reconnecting to RAH"
+          />
+          <div>
+            <h1 className="text-sm font-medium">Reconnecting to RAH</h1>
+            <p className="mt-1 text-xs leading-5 text-[var(--app-hint)]">
+              Waiting for this device to reach the trusted RAH server.
+            </p>
+          </div>
+        </div>
+      </main>
     );
   }
 

@@ -1,4 +1,8 @@
-import type { RahEvent } from "@rah/runtime-protocol";
+import type {
+  RahEvent,
+  SessionQueuedInput,
+  WorkbenchPinnedItemRef,
+} from "@rah/runtime-protocol";
 import {
   coerceSelectedSessionId,
   deriveVisibleWorkspaceDirs,
@@ -22,15 +26,142 @@ function sessionSummaryIsActivelyRunning(summary: SessionProjection["summary"]):
   ].includes(summary.session.phase);
 }
 
+function queuedInputFeedState(projection: SessionProjection): {
+  unresolved: Set<string>;
+  canonical: Set<string>;
+} {
+  const unresolved = new Set<string>();
+  const canonical = new Set<string>();
+  for (const entry of projection.feed) {
+    if (entry.kind !== "timeline" || entry.item.kind !== "user_message") {
+      continue;
+    }
+    const clientMessageId = entry.item.clientMessageId;
+    if (!clientMessageId) {
+      continue;
+    }
+    const isUnresolvedOptimisticMessage =
+      entry.key === `optimistic:user:${clientMessageId}` &&
+      entry.sourceProvider === undefined &&
+      entry.canonicalItemId === undefined &&
+      entry.canonicalTurnId === undefined &&
+      entry.providerTurnId === undefined &&
+      entry.turnId === undefined &&
+      entry.item.messageId === undefined;
+    if (isUnresolvedOptimisticMessage && !canonical.has(clientMessageId)) {
+      unresolved.add(clientMessageId);
+      continue;
+    }
+    canonical.add(clientMessageId);
+    unresolved.delete(clientMessageId);
+  }
+  return { unresolved, canonical };
+}
+
+function queuedInputState(input: SessionQueuedInput): "queued" | "submitting" {
+  return input.state ?? "queued";
+}
+
+function reconcileFreshSummaryInputQueue(
+  projection: SessionProjection,
+  summary: SessionProjection["summary"],
+): SessionProjection["summary"] {
+  const currentQueue = projection.summary.session.inputQueue ?? [];
+  const freshQueue = summary.session.inputQueue ?? [];
+  if (currentQueue.length === 0 && freshQueue.length === 0) {
+    return summary;
+  }
+
+  const { unresolved, canonical } = queuedInputFeedState(projection);
+  const currentById = new Map(
+    currentQueue.map((input) => [input.clientMessageId, input] as const),
+  );
+  const mergedById = new Map<string, SessionQueuedInput>();
+
+  for (const freshInput of freshQueue) {
+    if (canonical.has(freshInput.clientMessageId)) {
+      continue;
+    }
+    const currentInput = currentById.get(freshInput.clientMessageId);
+    const preserveSubmittingState =
+      unresolved.has(freshInput.clientMessageId) &&
+      currentInput !== undefined &&
+      queuedInputState(currentInput) === "submitting" &&
+      queuedInputState(freshInput) !== "submitting";
+    mergedById.set(
+      freshInput.clientMessageId,
+      preserveSubmittingState
+        ? { ...freshInput, state: "submitting" }
+        : freshInput,
+    );
+  }
+
+  for (const currentInput of currentQueue) {
+    if (
+      unresolved.has(currentInput.clientMessageId) &&
+      !canonical.has(currentInput.clientMessageId) &&
+      !mergedById.has(currentInput.clientMessageId)
+    ) {
+      mergedById.set(currentInput.clientMessageId, currentInput);
+    }
+  }
+
+  const inputQueue = [...mergedById.values()]
+    .sort(
+      (left, right) =>
+        left.queuedAt.localeCompare(right.queuedAt) ||
+        left.position - right.position ||
+        left.clientMessageId.localeCompare(right.clientMessageId),
+    )
+    .map((input, position) =>
+      input.position === position ? input : { ...input, position },
+    );
+
+  if (inputQueue.length === 0) {
+    const { inputQueue: _inputQueue, ...session } = summary.session;
+    return { ...summary, session };
+  }
+  return {
+    ...summary,
+    session: {
+      ...summary.session,
+      inputQueue,
+    },
+  };
+}
+
 function projectionWithFreshSummary(
   projection: SessionProjection,
   summary: SessionProjection["summary"],
 ): SessionProjection {
-  const next: SessionProjection = { ...projection, summary };
-  if (!sessionSummaryIsActivelyRunning(summary)) {
+  const reconciledSummary = reconcileFreshSummaryInputQueue(projection, summary);
+  const next: SessionProjection = { ...projection, summary: reconciledSummary };
+  if (!sessionSummaryIsActivelyRunning(reconciledSummary)) {
     delete next.currentRuntimeStatus;
   }
   return next;
+}
+
+function reconcileReplacementInputQueues(
+  next: Map<string, SessionProjection>,
+  current: Map<string, SessionProjection>,
+): Map<string, SessionProjection> {
+  let result = next;
+  for (const [sessionId, existing] of current) {
+    const fresh = next.get(sessionId);
+    if (!fresh) {
+      continue;
+    }
+    const summary = reconcileFreshSummaryInputQueue(existing, fresh.summary);
+    if (summary === fresh.summary) {
+      continue;
+    }
+    if (result === next) {
+      result = new Map(next);
+    }
+    result.set(sessionId, { ...fresh, summary });
+  }
+  return result;
 }
 
 function providerSessionKey(summary: SessionProjection["summary"]): string | null {
@@ -119,6 +250,7 @@ function coerceSelectedProjectionId(
 
 type ProjectionStateSlice = {
   projections: Map<string, SessionProjection>;
+  pinnedSidebarItems?: WorkbenchPinnedItemRef[];
   workspaceDir: string;
   selectedSessionId: string | null;
   hiddenWorkspaceDirs: Set<string>;
@@ -326,6 +458,7 @@ export function applySessionsResponse(
   storedSessions: SessionsResponse["storedSessions"];
   recentSessions: SessionsResponse["recentSessions"];
   workspaceDirs: string[];
+  pinnedSidebarItems: WorkbenchPinnedItemRef[];
 } {
   const projections = mergeSessionsIntoProjections(state.projections, sessionsResponse, replay);
   const hiddenWorkspaceDirs = resolveHiddenWorkspaceDirsFromSessionsResponse({
@@ -352,6 +485,7 @@ export function applySessionsResponse(
     projections,
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
+    pinnedSidebarItems: (sessionsResponse.pinnedSidebarItems ?? []).map((item) => ({ ...item })),
     workspaceDirs: workspace.workspaceDirs,
     hiddenWorkspaceDirs,
     workspaceVisibilityVersion: state.workspaceVisibilityVersion,
@@ -398,7 +532,7 @@ export function replaceSessionsResponse(
   });
   const sessionMap = createSessionMap(sessionsResponse);
   const projections = preservePendingStoredReplayProjections(
-    sessionMap.sessions,
+    reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
     state.projections,
   );
   const workspaceDirs = deriveVisibleWorkspaceDirs({

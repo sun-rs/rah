@@ -10,8 +10,7 @@ import type {
 import { summarizeConversationActivities } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
-  mergeConversationOutputs,
-  mergeConversationSources,
+  mergeConversationTurnResources,
 } from "./conversation-resources";
 import {
   initialConversationSyncState,
@@ -37,9 +36,65 @@ type ConversationDeps = {
   readTurnDetail?: typeof api.readSessionConversationTurnDetail;
 };
 
+export type ConversationRefreshOptions = {
+  signal?: AbortSignal;
+  replaceActive?: boolean;
+  suppressError?: boolean;
+};
+
+type ConversationLoadOptions = ConversationRefreshOptions & {
+  liveOnly?: boolean;
+  requestToken?: symbol;
+};
+
+type ConversationPageRequest = {
+  controller: AbortController;
+  promise: Promise<boolean>;
+  token: symbol;
+};
+
 const MAX_PENDING_DELTAS = 256;
+const INITIAL_TURN_PAGE_LIMIT = 8;
+const OLDER_TURN_PAGE_LIMIT = 20;
 const turnDetailRequests = new Map<string, Promise<boolean>>();
-const conversationPageRequests = new Map<string, Promise<boolean>>();
+const conversationPageRequests = new Map<string, ConversationPageRequest>();
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function currentConversationRequest(sessionId: string, requestToken: symbol | undefined): boolean {
+  return requestToken === undefined || conversationPageRequests.get(sessionId)?.token === requestToken;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  throw error;
+}
+
+function createLinkedAbortController(signal: AbortSignal | undefined): {
+  controller: AbortController;
+  detach: () => void;
+} {
+  const controller = new AbortController();
+  if (!signal) {
+    return { controller, detach: () => undefined };
+  }
+  const abort = () => controller.abort(signal.reason);
+  if (signal.aborted) {
+    abort();
+    return { controller, detach: () => undefined };
+  }
+  signal.addEventListener("abort", abort, { once: true });
+  return {
+    controller,
+    detach: () => signal.removeEventListener("abort", abort),
+  };
+}
 
 function normalizeConversationTurn(
   turn: ConversationTurnProjection,
@@ -71,10 +126,15 @@ function replaceProjectionState(
   if (!projection) {
     return state;
   }
+  const current = projection.conversation ?? initialConversationSyncState();
+  const conversation = update(current);
+  if (conversation === current) {
+    return state;
+  }
   const next = new Map(state.projections);
   next.set(sessionId, {
     ...projection,
-    conversation: update(projection.conversation ?? initialConversationSyncState()),
+    conversation,
   });
   return { projections: next };
 }
@@ -220,13 +280,11 @@ function mergeFullTurnWithSummary(
   items.push(...newFinal);
 
   const final = lastFinalItem(items);
-  const outputs = mergeConversationOutputs(current.outputs, incoming.outputs);
-  const sources = mergeConversationSources(current.sources, incoming.sources);
+  const resources = mergeConversationTurnResources(current, incoming);
   const merged: ConversationTurnProjection = {
     ...incoming,
     items,
-    ...(outputs.length > 0 ? { outputs } : {}),
-    ...(sources.length > 0 ? { sources } : {}),
+    ...resources,
     itemsView: "full",
     failedItemCount: items.filter((item) => item.status === "failed").length,
     activities: summarizeConversationActivities(items),
@@ -308,6 +366,59 @@ function mergeOlderTurns(
     ...incoming.filter((turn) => !currentIds.has(turn.id)),
     ...current,
   ];
+}
+
+function refreshComparableItemContent(item: ConversationItemProjection): unknown {
+  if (item.content.kind === "tool") {
+    const { detail: _detail, ...toolCall } = item.content.toolCall;
+    return { ...item.content, toolCall };
+  }
+  if (item.content.kind === "observation") {
+    const { detail: _detail, ...observation } = item.content.observation;
+    return { ...item.content, observation };
+  }
+  return item.content;
+}
+
+function refreshPageMatchesCurrent(
+  currentTurns: readonly ConversationTurnProjection[],
+  incomingTurns: readonly ConversationTurnProjection[],
+): boolean {
+  return incomingTurns.every((incoming) => {
+    const current = currentTurns.find(
+      (candidate) =>
+        candidate.id === incoming.id ||
+        Boolean(
+          candidate.providerTurnId &&
+            incoming.providerTurnId &&
+            candidate.providerTurnId === incoming.providerTurnId,
+        ),
+    );
+    if (
+      !current ||
+      current.status !== incoming.status ||
+      current.statusAuthority !== incoming.statusAuthority ||
+      current.completedAt !== incoming.completedAt ||
+      current.durationMs !== incoming.durationMs ||
+      JSON.stringify(current.error ?? null) !== JSON.stringify(incoming.error ?? null) ||
+      JSON.stringify(current.usage ?? null) !== JSON.stringify(incoming.usage ?? null)
+    ) {
+      return false;
+    }
+    return incoming.items.every((incomingItem) => {
+      const currentItem = current.items.find(
+        (candidate) =>
+          candidate.role === incomingItem.role &&
+          sameConversationItemIdentity(candidate, incomingItem),
+      );
+      return Boolean(
+        currentItem &&
+          currentItem.status === incomingItem.status &&
+          JSON.stringify(refreshComparableItemContent(currentItem)) ===
+            JSON.stringify(refreshComparableItemContent(incomingItem)),
+      );
+    });
+  });
 }
 
 function applyTurnDelta(
@@ -473,8 +584,9 @@ async function performLoadTurns(
   deps: ConversationDeps,
   sessionId: string,
   mode: "initial" | "refresh" | "older",
-  options: { liveOnly?: boolean } = {},
+  options: ConversationLoadOptions = {},
 ): Promise<boolean> {
+  throwIfAborted(options.signal);
   const projection = deps.get().projections.get(sessionId);
   if (!projection) {
     return false;
@@ -491,20 +603,29 @@ async function performLoadTurns(
     return false;
   }
 
-  deps.set((state) =>
-    replaceProjectionState(state, sessionId, (value) => ({
-      ...value,
-      phase: "loading",
-      lastError: null,
-    })),
-  );
+  const exposeLoadingState = mode !== "refresh" || current.turns.length === 0;
+  if (exposeLoadingState) {
+    deps.set((state) =>
+      replaceProjectionState(state, sessionId, (value) => ({
+        ...value,
+        phase: "loading",
+        lastError: null,
+      })),
+    );
+  }
 
   try {
     const response = await (deps.readTurns ?? api.readSessionConversationTurns)(sessionId, {
       ...(mode === "older" && current.nextCursor ? { cursor: current.nextCursor } : {}),
-      limit: 20,
+      limit:
+        mode === "older" ? OLDER_TURN_PAGE_LIMIT : INITIAL_TURN_PAGE_LIMIT,
       ...(options.liveOnly ? { liveOnly: true } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
+    throwIfAborted(options.signal);
+    if (!currentConversationRequest(sessionId, options.requestToken)) {
+      return false;
+    }
     deps.set((state) =>
       replaceProjectionState(state, sessionId, (value) => {
         const responseTurns = response.turns.map(normalizeConversationTurn);
@@ -515,6 +636,17 @@ async function performLoadTurns(
               ? mergeOlderTurns(value.turns, responseTurns)
               : mergeNewerTurns(value.turns, responseTurns);
         const responseLiveRevision = response.liveRevision ?? response.revision;
+        if (
+          mode === "refresh" &&
+          value.phase === "ready" &&
+          value.daemonRevision !== null &&
+          responseLiveRevision <= value.daemonRevision &&
+          value.pendingDeltas.length === 0 &&
+          !value.needsRefresh &&
+          refreshPageMatchesCurrent(value.turns, responseTurns)
+        ) {
+          return value;
+        }
         const baselineRevision =
           mode === "older"
             ? (value.daemonRevision ?? responseLiveRevision)
@@ -558,6 +690,32 @@ async function performLoadTurns(
     );
     return true;
   } catch (error) {
+    if (options.signal?.aborted || isAbortError(error)) {
+      if (currentConversationRequest(sessionId, options.requestToken)) {
+        deps.set((state) =>
+          replaceProjectionState(state, sessionId, (value) => ({
+            ...value,
+            phase: value.turns.length > 0 ? "ready" : "idle",
+            lastError: null,
+          })),
+        );
+      }
+      return false;
+    }
+    if (options.suppressError) {
+      if (currentConversationRequest(sessionId, options.requestToken)) {
+        deps.set((state) =>
+          replaceProjectionState(state, sessionId, (value) => ({
+            ...value,
+            phase: value.turns.length > 0 ? "ready" : "idle",
+          })),
+        );
+      }
+      return false;
+    }
+    if (!currentConversationRequest(sessionId, options.requestToken)) {
+      return false;
+    }
     deps.set((state) =>
       replaceProjectionState(state, sessionId, (value) => ({
         ...value,
@@ -573,20 +731,31 @@ function loadTurns(
   deps: ConversationDeps,
   sessionId: string,
   mode: "initial" | "refresh" | "older",
-  options: { liveOnly?: boolean } = {},
+  options: ConversationLoadOptions = {},
 ): Promise<boolean> {
   const active = conversationPageRequests.get(sessionId);
-  if (active) {
-    return active.then(() => loadTurns(deps, sessionId, mode, options));
+  if (active && !options.replaceActive) {
+    return active.promise.then(() => loadTurns(deps, sessionId, mode, options));
   }
-  let tracked: Promise<boolean>;
-  tracked = performLoadTurns(deps, sessionId, mode, options).finally(() => {
-    if (conversationPageRequests.get(sessionId) === tracked) {
+  if (active) {
+    active.controller.abort();
+  }
+  const linked = createLinkedAbortController(options.signal);
+  const requestToken = Symbol(sessionId);
+  let request!: ConversationPageRequest;
+  const promise = performLoadTurns(deps, sessionId, mode, {
+    ...options,
+    signal: linked.controller.signal,
+    requestToken,
+  }).finally(() => {
+    linked.detach();
+    if (conversationPageRequests.get(sessionId) === request) {
       conversationPageRequests.delete(sessionId);
     }
   });
-  conversationPageRequests.set(sessionId, tracked);
-  return tracked;
+  request = { controller: linked.controller, promise, token: requestToken };
+  conversationPageRequests.set(sessionId, request);
+  return promise;
 }
 
 export function ensureConversationLoadedCommand(
@@ -606,8 +775,9 @@ export function initializeLiveConversationCommand(
 export function refreshConversationCommand(
   deps: ConversationDeps,
   sessionId: string,
+  options: ConversationRefreshOptions = {},
 ): Promise<boolean> {
-  return loadTurns(deps, sessionId, "refresh");
+  return loadTurns(deps, sessionId, "refresh", options);
 }
 
 export function loadOlderConversationCommand(
@@ -686,6 +856,7 @@ export async function loadConversationItemDetailCommand(
       sessionId,
       {
         itemId: address.itemId,
+        turnId: address.turnId,
         providerTurnId: address.providerTurnId,
         providerItemId: address.providerItemId,
       },
@@ -752,13 +923,27 @@ function applyTurnDetail(
       : turn.items.filter((item) => item.role === "final");
     const items = [...leading, ...hydratedProcess, ...liveOnlyProcess, ...final];
     const finalItem = lastFinalItem(items);
-    const outputs = mergeConversationOutputs(turn.outputs, response.turn.outputs);
-    const sources = mergeConversationSources(turn.sources, response.turn.sources);
+    // Full turn detail is authoritative for resources. Unioning it with the
+    // lightweight summary keeps obsolete inferred outputs/sources alive after
+    // the daemon's projection rules change (or after a summary was produced by
+    // an older build). File changes are a separate provider artifact and may
+    // legitimately exist only on the summary, so retain that field as fallback.
+    const fileChanges = response.turn.fileChanges ?? turn.fileChanges;
+    const resources = {
+      ...(response.turn.outputs?.length ? { outputs: response.turn.outputs } : {}),
+      ...(response.turn.sources?.length ? { sources: response.turn.sources } : {}),
+      ...(fileChanges ? { fileChanges } : {}),
+    };
+    const {
+      outputs: _summaryOutputs,
+      sources: _summarySources,
+      fileChanges: _summaryFileChanges,
+      ...turnBase
+    } = turn;
     const hydrated: ConversationTurnProjection = {
-      ...turn,
+      ...turnBase,
       items,
-      ...(outputs.length > 0 ? { outputs } : {}),
-      ...(sources.length > 0 ? { sources } : {}),
+      ...resources,
       itemsView: "full",
       failedItemCount: items.filter((item) => item.status === "failed").length,
       activities: summarizeConversationActivities(items),

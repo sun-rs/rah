@@ -9,6 +9,7 @@ import type {
   ProviderKind,
   RahEvent,
   RuntimeOperation,
+  SessionInputAttachment,
   SessionSummary,
   ConversationTurnDirectoryItem,
   TimelineIdentity,
@@ -507,7 +508,7 @@ function applyTimelineEvent(
         {
           key: current.key,
           kind: "timeline",
-          item: event.payload.item,
+          item: preserveTimelineMetadata(current.item, event.payload.item),
           ts: event.ts,
           sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(current, identityFields),
@@ -569,7 +570,7 @@ function applyTimelineEvent(
         {
           key: weakEcho.key,
           kind: "timeline",
-          item: event.payload.item,
+          item: preserveTimelineMetadata(weakEcho.item, event.payload.item),
           ts: event.ts,
           sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(weakEcho, identityFields),
@@ -591,7 +592,7 @@ function applyTimelineEvent(
         {
           key: duplicate.key,
           kind: "timeline",
-          item: event.payload.item,
+          item: preserveTimelineMetadata(duplicate.item, event.payload.item),
           ts: event.ts,
           sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(duplicate, identityFields),
@@ -613,7 +614,7 @@ function applyTimelineEvent(
         {
           key: duplicate.key,
           kind: "timeline",
-          item: event.payload.item,
+          item: preserveTimelineMetadata(duplicate.item, event.payload.item),
           ts: event.ts,
           sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(duplicate, identityFields),
@@ -644,7 +645,7 @@ function applyTimelineEvent(
           latestEntry.item as MergeableTimelineItem,
           event.payload.item as MergeableTimelineItem,
         ),
-        ...assistantTimelineMetadataPatch(latestEntry.item, event.payload.item),
+        ...timelineMetadataPatch(latestEntry.item, event.payload.item),
       },
       ts: event.ts,
       sourceProvider: event.source.provider,
@@ -889,10 +890,10 @@ function mergeOrReplaceTimelineItem(
   eventType: "timeline.item.added" | "timeline.item.updated",
 ): TimelineItem {
   if (eventType === "timeline.item.updated") {
-    return preserveAssistantTimelineMetadata(current, incoming);
+    return preserveTimelineMetadata(current, incoming);
   }
   if (!canMergeTimelineText(current, incoming)) {
-    return preserveAssistantTimelineMetadata(current, incoming);
+    return preserveTimelineMetadata(current, incoming);
   }
   const mergeableIncoming = incoming as MergeableTimelineItem;
   const mergeableCurrent = current as MergeableTimelineItem;
@@ -900,7 +901,34 @@ function mergeOrReplaceTimelineItem(
     ...mergeableCurrent,
     ...mergeableIncoming,
     text: mergeTimelineText(mergeableCurrent, mergeableIncoming),
+    ...timelineMetadataPatch(current, incoming),
+  };
+}
+
+function userTimelineMetadataPatch(current: TimelineItem, incoming: TimelineItem) {
+  if (current.kind !== "user_message" || incoming.kind !== "user_message") {
+    return {};
+  }
+  return {
+    ...(incoming.clientMessageId === undefined && current.clientMessageId !== undefined
+      ? { clientMessageId: current.clientMessageId }
+      : {}),
+    ...(incoming.clientTurnId === undefined && current.clientTurnId !== undefined
+      ? { clientTurnId: current.clientTurnId }
+      : {}),
+    ...(incoming.attachments === undefined && current.attachments?.length
+      ? { attachments: current.attachments }
+      : {}),
+    ...(incoming.imageCount === undefined && current.imageCount !== undefined
+      ? { imageCount: current.imageCount }
+      : {}),
+  };
+}
+
+function timelineMetadataPatch(current: TimelineItem, incoming: TimelineItem) {
+  return {
     ...assistantTimelineMetadataPatch(current, incoming),
+    ...userTimelineMetadataPatch(current, incoming),
   };
 }
 
@@ -922,16 +950,10 @@ type RuntimeModelTimelineItem =
   | Extract<TimelineItem, { kind: "reasoning" }>
   | Extract<TimelineItem, { kind: "step" }>;
 
-function preserveAssistantTimelineMetadata(current: TimelineItem, incoming: TimelineItem): TimelineItem {
-  if (
-    !timelineItemSupportsRuntimeModel(current) ||
-    !timelineItemSupportsRuntimeModel(incoming)
-  ) {
-    return incoming;
-  }
+function preserveTimelineMetadata(current: TimelineItem, incoming: TimelineItem): TimelineItem {
   return {
     ...incoming,
-    ...assistantTimelineMetadataPatch(current, incoming),
+    ...timelineMetadataPatch(current, incoming),
   };
 }
 
@@ -2091,6 +2113,24 @@ export function applyEventToProjection(
                           : {}),
                       },
                     }
+                  : event.type === "session.input_queue.changed"
+                    ? {
+                        ...current.summary,
+                        session: {
+                          ...current.summary.session,
+                          inputQueue: event.payload.items,
+                          updatedAt: event.ts,
+                        },
+                      }
+                  : event.type === "session.input_queue.policy_changed"
+                    ? {
+                        ...current.summary,
+                        session: {
+                          ...current.summary.session,
+                          inputQueuePolicy: event.payload.policy,
+                          updatedAt: event.ts,
+                        },
+                      }
                   : event.type === "permission.requested"
                     ? {
                         ...current.summary,
@@ -2236,17 +2276,27 @@ export function sortFeed(feed: FeedEntry[]): FeedEntry[] {
 export function appendOptimisticUserMessage(
   current: SessionProjection,
   text: string,
-  options?: { clientMessageId?: string; clientTurnId?: string },
+  options?: {
+    clientMessageId?: string;
+    clientTurnId?: string;
+    imageCount?: number;
+    attachments?: SessionInputAttachment[];
+  },
 ): SessionProjection {
   const ts = new Date().toISOString();
   const key = options?.clientMessageId
     ? `optimistic:user:${options.clientMessageId}`
     : `optimistic:user:${ts}:${Math.random().toString(36).slice(2, 10)}`;
+  if (current.feed.some((entry) => entry.key === key)) {
+    return current;
+  }
   const item: Extract<TimelineItem, { kind: "user_message" }> = {
     kind: "user_message",
     text,
     ...(options?.clientMessageId !== undefined ? { clientMessageId: options.clientMessageId } : {}),
     ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
+    ...(options?.imageCount ? { imageCount: options.imageCount } : {}),
+    ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
   };
   return {
     ...current,
@@ -2285,6 +2335,34 @@ export function removeOptimisticUserMessage(
     ...current,
     feed,
   };
+}
+
+export function updateOptimisticUserMessage(
+  current: SessionProjection,
+  clientMessageId: string,
+  text: string,
+): SessionProjection {
+  let changed = false;
+  const feed = current.feed.map((entry) => {
+    if (
+      entry.kind !== "timeline" ||
+      !entry.key.startsWith("optimistic:user:") ||
+      entry.item.kind !== "user_message" ||
+      entry.item.clientMessageId !== clientMessageId ||
+      entry.item.text === text
+    ) {
+      return entry;
+    }
+    changed = true;
+    return {
+      ...entry,
+      item: {
+        ...entry.item,
+        text,
+      },
+    };
+  });
+  return changed ? { ...current, feed } : current;
 }
 
 export function providerLabel(provider: ManagedSession["provider"]): string {

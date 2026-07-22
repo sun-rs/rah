@@ -6,7 +6,7 @@ import {
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
 import { applySessionsResponse, replaceSessionsResponse } from "./session-store-projections";
-import type { SessionProjection } from "./types";
+import { appendOptimisticUserMessage, type SessionProjection } from "./types";
 
 function sessionsResponse(
   sessions: SessionSummary[] = [],
@@ -74,6 +74,36 @@ const replayNoop = {
   clearPendingSession: () => undefined,
   queuePendingEvent: () => undefined,
 };
+
+function projectionWithQueuedInput(
+  state: "queued" | "submitting" = "queued",
+): SessionProjection {
+  const queuedSummary = summary("queued-session", "queued-thread", { running: true });
+  queuedSummary.session.capabilities.queuedInput = true;
+  queuedSummary.session.inputQueue = [
+    {
+      clientMessageId: "queued-message",
+      clientTurnId: "queued-turn",
+      text: "Follow-up question",
+      queuedAt: "2026-06-06T12:01:00.000Z",
+      position: 0,
+      state,
+    },
+  ];
+  return appendOptimisticUserMessage(
+    {
+      summary: queuedSummary,
+      feed: [],
+      events: [],
+      lastSeq: 0,
+    },
+    "Follow-up question",
+    {
+      clientMessageId: "queued-message",
+      clientTurnId: "queued-turn",
+    },
+  );
+}
 
 test("replaceSessionsResponse keeps a pending stored replay projection until the server returns it", () => {
   const ref: StoredSessionRef = {
@@ -180,4 +210,178 @@ test("replaceSessionsResponse derives missing workspace dirs from running sessio
   );
 
   assert.deepEqual(next.workspaceDirs, ["/workspace/existing", "/workspace/new"]);
+});
+
+test("replaceSessionsResponse preserves a submitting input across a stale replay-gap rebuild", () => {
+  const projection = projectionWithQueuedInput("submitting");
+  const freshSummary = summary("queued-session", "queued-thread", { running: true });
+  freshSummary.session.capabilities.queuedInput = true;
+
+  const next = replaceSessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([freshSummary]),
+  );
+
+  assert.deepEqual(next.projections.get("queued-session")?.summary.session.inputQueue, [
+    projection.summary.session.inputQueue?.[0],
+  ]);
+  assert.deepEqual(next.projections.get("queued-session")?.feed, []);
+});
+
+test("replaceSessionsResponse cannot resurrect a queue item after canonical handoff", () => {
+  const projection = projectionWithQueuedInput();
+  projection.feed = projection.feed.map((entry) =>
+    entry.kind === "timeline" && entry.item.kind === "user_message"
+      ? {
+          ...entry,
+          sourceProvider: "codex",
+          canonicalItemId: "canonical-user-message",
+          canonicalTurnId: "canonical-turn",
+          turnId: "canonical-turn",
+          item: {
+            ...entry.item,
+            messageId: "provider-user-message",
+          },
+        }
+      : entry,
+  );
+  const staleSummary = summary("queued-session", "queued-thread", { running: true });
+  staleSummary.session.capabilities.queuedInput = true;
+  staleSummary.session.inputQueue = projection.summary.session.inputQueue;
+
+  const next = replaceSessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([staleSummary]),
+  );
+
+  assert.equal(
+    next.projections.get("queued-session")?.summary.session.inputQueue,
+    undefined,
+  );
+});
+
+test("applySessionsResponse preserves a queued input omitted by a stale summary", () => {
+  const projection = projectionWithQueuedInput("submitting");
+  const freshSummary = summary("queued-session", "queued-thread", { running: true });
+  freshSummary.session.capabilities.queuedInput = true;
+
+  const next = applySessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([freshSummary]),
+    replayNoop,
+  );
+
+  assert.deepEqual(next.projections.get("queued-session")?.summary.session.inputQueue, [
+    projection.summary.session.inputQueue?.[0],
+  ]);
+});
+
+test("applySessionsResponse does not preserve an unrepresented stale queue item", () => {
+  const projection = projectionWithQueuedInput();
+  projection.feed = [];
+  const freshSummary = summary("queued-session", "queued-thread", { running: true });
+  freshSummary.session.capabilities.queuedInput = true;
+
+  const next = applySessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([freshSummary]),
+    replayNoop,
+  );
+
+  assert.equal(
+    next.projections.get("queued-session")?.summary.session.inputQueue,
+    undefined,
+  );
+});
+
+test("applySessionsResponse cannot resurrect a queue item after canonical handoff", () => {
+  const projection = projectionWithQueuedInput();
+  projection.feed = projection.feed.map((entry) =>
+    entry.kind === "timeline" && entry.item.kind === "user_message"
+      ? {
+          ...entry,
+          sourceProvider: "codex",
+          canonicalItemId: "canonical-user-message",
+          canonicalTurnId: "canonical-turn",
+          turnId: "canonical-turn",
+          item: {
+            ...entry.item,
+            messageId: "provider-user-message",
+          },
+        }
+      : entry,
+  );
+  const staleSummary = summary("queued-session", "queued-thread", { running: true });
+  staleSummary.session.capabilities.queuedInput = true;
+  staleSummary.session.inputQueue = projection.summary.session.inputQueue;
+
+  const next = applySessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([staleSummary]),
+    replayNoop,
+  );
+
+  assert.equal(
+    next.projections.get("queued-session")?.summary.session.inputQueue,
+    undefined,
+  );
+});
+
+test("applySessionsResponse keeps submitting state without duplicating the queue item", () => {
+  const projection = projectionWithQueuedInput("submitting");
+  const staleSummary = summary("queued-session", "queued-thread", { running: true });
+  staleSummary.session.capabilities.queuedInput = true;
+  staleSummary.session.inputQueue = [
+    {
+      ...projection.summary.session.inputQueue![0]!,
+      state: "queued",
+    },
+  ];
+
+  const next = applySessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([staleSummary]),
+    replayNoop,
+  );
+
+  const queue = next.projections.get("queued-session")?.summary.session.inputQueue;
+  assert.equal(queue?.length, 1);
+  assert.equal(queue?.[0]?.clientMessageId, "queued-message");
+  assert.equal(queue?.[0]?.state, "submitting");
 });

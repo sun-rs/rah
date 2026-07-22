@@ -8,6 +8,8 @@ import type {
 } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
+  applyStoredSessionDiscoveryEvents,
+  applyStoredSessionsDeltaToCatalog,
   applyStoredSessionsDeltaToRecent,
   coerceSelectedSessionId,
   computeUnreadSessionIds,
@@ -77,6 +79,165 @@ test("stored-session discovery deltas keep the bounded Recent catalog current", 
   assert.equal(next.length, 15);
   assert.equal(next[0]?.providerSessionId, "newest");
   assert.ok(!next.some((session) => session.providerSessionId === "existing-14"));
+});
+
+test("the complete catalog never reorders from navigation-only last-used updates", () => {
+  const current: StoredSessionRef[] = [
+    {
+      provider: "codex",
+      providerSessionId: "newer-conversation",
+      source: "provider_history",
+      updatedAt: "2026-02-01T00:02:00.000Z",
+      lastUsedAt: "2026-02-01T00:02:00.000Z",
+    },
+    {
+      provider: "claude",
+      providerSessionId: "older-conversation",
+      source: "provider_history",
+      updatedAt: "2026-02-01T00:01:00.000Z",
+      lastUsedAt: "2026-02-01T00:01:00.000Z",
+    },
+  ];
+
+  const next = applyStoredSessionsDeltaToCatalog(current, {
+    remove: [],
+    upsert: [{
+      ...current[1]!,
+      lastUsedAt: "2026-02-01T00:10:00.000Z",
+    }],
+  });
+
+  assert.deepEqual(
+    next.map((session) => session.providerSessionId),
+    ["newer-conversation", "older-conversation"],
+  );
+});
+
+test("pin-only workbench discovery updates shared pins without dirtying stored catalogs", () => {
+  const originalState = useSessionStore.getState();
+  const storedSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "stored-1",
+    cwd: "/workspace/current",
+    rootDir: "/workspace/current",
+    title: "Stored session",
+    source: "provider_history",
+  };
+  useSessionStore.setState({
+    storedSessions: [storedSession],
+    recentSessions: [storedSession],
+    storedSessionsCatalogLoaded: true,
+    storedSessionsCatalogDirty: false,
+    storedSessionsCatalogRevision: 7,
+    pinnedSidebarItems: [],
+  });
+
+  try {
+    const needsNetworkRefresh = applyStoredSessionDiscoveryEvents([
+      {
+        id: "event-pin-1",
+        seq: 1,
+        ts: "2026-07-20T00:00:00.000Z",
+        sessionId: "workbench:stored-sessions",
+        type: "session.discovery",
+        source: {
+          provider: "system",
+          channel: "system",
+          authority: "authoritative",
+        },
+        payload: {
+          version: 1,
+          workbench: {
+            pinnedSidebarItems: [
+              {
+                workspaceDir: "/workspace/current",
+                itemKey: "session:codex:stored-1",
+              },
+            ],
+          },
+        },
+      } satisfies RahEvent,
+    ]);
+
+    assert.equal(needsNetworkRefresh, false);
+    const state = useSessionStore.getState();
+    assert.deepEqual(state.pinnedSidebarItems, [
+      {
+        workspaceDir: "/workspace/current",
+        itemKey: "session:codex:stored-1",
+      },
+    ]);
+    assert.deepEqual(state.storedSessions, [storedSession]);
+    assert.deepEqual(state.recentSessions, [storedSession]);
+    assert.equal(state.storedSessionsCatalogDirty, false);
+    assert.equal(state.storedSessionsCatalogRevision, 7);
+  } finally {
+    useSessionStore.setState(originalState, true);
+  }
+});
+
+test("archive hides a session optimistically and requests only the recent response", async () => {
+  const originalState = useSessionStore.getState();
+  const session: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "archive-now",
+    source: "provider_history",
+    cwd: "/workspace/current",
+    rootDir: "/workspace/current",
+    title: "Archive now",
+  };
+  let resolveArchive: ((response: Response) => void) | undefined;
+  let requestedUrl = "";
+  (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return new Promise<Response>((resolve) => {
+      resolveArchive = resolve;
+    });
+  }) as typeof fetch;
+  useSessionStore.setState({
+    storedSessions: [session],
+    recentSessions: [session],
+    storedSessionsCatalogLoaded: true,
+    optimisticallyArchivedSessionKeys: new Set(),
+    workspaceDirs: ["/workspace/current"],
+    workspaceDir: "/workspace/current",
+  });
+
+  try {
+    const pending = useSessionStore.getState().archiveHistorySession(session);
+    const optimistic = useSessionStore.getState();
+    assert.equal(
+      optimistic.optimisticallyArchivedSessionKeys.has("codex:archive-now"),
+      true,
+    );
+    assert.equal(optimistic.storedSessions[0]?.libraryState?.placement, "archive");
+    assert.match(requestedUrl, /storedSessions=recent/);
+    assert.ok(resolveArchive);
+    resolveArchive(
+      new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/workspace/current"],
+          hiddenWorkspaces: [],
+          activeWorkspaceDir: "/workspace/current",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await pending;
+    assert.equal(
+      useSessionStore.getState().optimisticallyArchivedSessionKeys.has("codex:archive-now"),
+      false,
+    );
+    assert.equal(useSessionStore.getState().storedSessions[0]?.libraryState?.placement, "archive");
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+    useSessionStore.setState(originalState, true);
+  }
 });
 
 describe("provider model catalog isolation", () => {
@@ -372,6 +533,145 @@ describe("workspace response reconciliation", () => {
     });
 
     assert.deepEqual([...hiddenWorkspaceDirs], ["/workspace/a"]);
+  });
+
+  test("hydrates every provider from the cached catalog before background refresh", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    const cachedSessions: StoredSessionRef[] = (["codex", "claude", "opencode"] as const).map(
+      (provider) => ({
+        provider,
+        providerSessionId: `${provider}-cached`,
+        cwd: "/workspace/current",
+        rootDir: "/workspace/current",
+        title: `${provider} cached`,
+        source: "provider_history",
+      }),
+    );
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({
+        sessions: [],
+        storedSessions: cachedSessions,
+        recentSessions: cachedSessions,
+        storedSessionsRevision: 9,
+        workspaceDirs: ["/workspace/current"],
+        activeWorkspaceDir: "/workspace/current",
+        hiddenWorkspaces: [],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: false,
+      storedSessionsCatalogDirty: false,
+      storedSessionsCatalogRevision: null,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().refreshWorkbenchState({ storedSessions: "cached" });
+
+      assert.equal(new URL(urls[0]!).search, "?storedSessions=cached");
+      const state = useSessionStore.getState();
+      assert.deepEqual(
+        state.storedSessions.map((session) => session.provider),
+        ["codex", "claude", "opencode"],
+      );
+      assert.equal(state.storedSessionsCatalogLoaded, true);
+      assert.equal(state.storedSessionsCatalogDirty, true);
+      assert.equal(state.storedSessionsCatalogRevision, null);
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("keeps an authoritative full catalog when live-session topology changes in flight", async () => {
+    const originalState = useSessionStore.getState();
+    let resolveResponse: ((response: Response) => void) | undefined;
+    const fullCatalog: StoredSessionRef[] = [
+      {
+        provider: "claude",
+        providerSessionId: "claude-full",
+        cwd: "/workspace/current",
+        rootDir: "/workspace/current",
+        title: "Claude full",
+        source: "provider_history",
+      },
+      {
+        provider: "opencode",
+        providerSessionId: "opencode-full",
+        cwd: "/workspace/current",
+        rootDir: "/workspace/current",
+        title: "OpenCode full",
+        source: "provider_history",
+      },
+    ];
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (() => new Promise<Response>((resolve) => {
+      resolveResponse = resolve;
+    })) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: false,
+      storedSessionsCatalogDirty: false,
+      storedSessionsCatalogRevision: null,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      const pending = useSessionStore.getState().refreshWorkbenchState({ storedSessions: "all" });
+      await Promise.resolve();
+      useSessionStore.setState({ sessionTopologyVersion: 1 });
+      assert.ok(resolveResponse);
+      resolveResponse(new Response(JSON.stringify({
+        sessions: [],
+        storedSessions: fullCatalog,
+        recentSessions: fullCatalog,
+        storedSessionsRevision: 12,
+        workspaceDirs: ["/workspace/current"],
+        hiddenWorkspaces: [],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+      await pending;
+
+      const state = useSessionStore.getState();
+      assert.deepEqual(
+        state.storedSessions.map((session) => session.providerSessionId),
+        ["claude-full", "opencode-full"],
+      );
+      assert.equal(state.storedSessionsCatalogLoaded, true);
+      assert.equal(state.storedSessionsCatalogDirty, false);
+      assert.equal(state.storedSessionsCatalogRevision, 12);
+      assert.equal(state.sessionTopologyVersion, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
   });
 
   test("keeps Chats All catalog loading isolated from left sidebar workspaces", async () => {
@@ -922,7 +1222,7 @@ describe("workspace response reconciliation", () => {
       assert.deepEqual(urls, [
         "GET /api/fs/list?path=%2Fworkspace%2Fcurrent",
         "POST /api/sessions/start",
-        "GET /api/sessions/live-created-session/conversation/turns?limit=20&liveOnly=true",
+        "GET /api/sessions/live-created-session/conversation/turns?limit=8&liveOnly=true",
         "POST /api/sessions/live-created-session/close",
         "GET /api/sessions?storedSessions=recent",
         "POST /api/history/sessions/remove?storedSessions=recent",

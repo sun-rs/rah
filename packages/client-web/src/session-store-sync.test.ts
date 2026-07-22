@@ -108,7 +108,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSessions"]>) {
+function createRecoverHarness(
+  listSessions: NonNullable<RecoverArgs["listSessions"]>,
+  restartTransport: NonNullable<RecoverArgs["restartTransport"]> = () => undefined,
+) {
   let state: RecoverState = {
     projections: new Map<string, SessionProjection>(),
     unreadSessionIds: new Set<string>(),
@@ -125,6 +128,7 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
   let applyCalls = 0;
   let restartCalls = 0;
   let restoreCalls = 0;
+  let lastApplyOptions: Parameters<RecoverArgs["applySessionsResponse"]>[2];
 
   const args: RecoverArgs = {
     get: () => state,
@@ -132,8 +136,9 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
       const patch = typeof partial === "function" ? partial(state) : partial;
       state = { ...state, ...patch };
     },
-    applySessionsResponse: (currentState, sessionsResponse) => {
+    applySessionsResponse: (currentState, sessionsResponse, options) => {
       applyCalls += 1;
+      lastApplyOptions = options;
       return {
         projections: currentState.projections,
         selectedSessionId: currentState.selectedSessionId,
@@ -145,8 +150,9 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
         workspaceDirs: sessionsResponse.workspaceDirs,
       };
     },
-    restartTransport: () => {
+    restartTransport: (options) => {
       restartCalls += 1;
+      return restartTransport(options);
     },
     maybeRestoreLastHistorySelection: async () => {
       restoreCalls += 1;
@@ -159,6 +165,7 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
     getApplyCalls: () => applyCalls,
     getRestartCalls: () => restartCalls,
     getRestoreCalls: () => restoreCalls,
+    getLastApplyOptions: () => lastApplyOptions,
   };
 }
 
@@ -256,6 +263,11 @@ describe("session store recovery", () => {
       readOnlyReplay: true,
     });
     const historyProjection = createEmptySessionProjection(history);
+    historyProjection.summary.session.status = "running";
+    historyProjection.summary.session.phase = "starting";
+    historyProjection.summary.session.runtimeState = "starting";
+    historyProjection.summary.session.capabilities.steerInput = true;
+    historyProjection.summary.session.capabilities.livePermissions = true;
     historyProjection.feed = [
       {
         key: "assistant:history-answer",
@@ -363,6 +375,95 @@ describe("session store recovery", () => {
 
     assert.equal(harness.getApplyCalls(), 1);
     assert.equal(harness.getRestartCalls(), 1);
+    assert.equal(harness.getRestoreCalls(), 1);
+  });
+
+  test("restarts the event transport before a slow sessions refresh settles", async () => {
+    let requestOptions: Parameters<NonNullable<RecoverArgs["listSessions"]>>[0];
+    const pendingListSessions = deferred<ListSessionsResponse>();
+    const harness = createRecoverHarness((options) => {
+      requestOptions = options;
+      return pendingListSessions.promise;
+    });
+
+    const recovery = recoverTransportCommand(harness.args);
+    await Promise.resolve();
+
+    assert.equal(harness.getRestartCalls(), 1);
+    assert.equal(harness.getApplyCalls(), 0);
+    assert.equal(requestOptions?.storedSessions, "recent");
+
+    pendingListSessions.resolve(emptySessionsResponse());
+    await recovery;
+
+    assert.equal(harness.getApplyCalls(), 1);
+    assert.equal(harness.getRestoreCalls(), 1);
+  });
+
+  test("preserves the loaded provider catalog during a recent-only foreground refresh", async () => {
+    const harness = createRecoverHarness(async () => emptySessionsResponse());
+    harness.args.get().storedSessionsCatalogLoaded = true;
+
+    await recoverTransportCommand(harness.args);
+
+    assert.deepEqual(harness.getLastApplyOptions(), {
+      workspaceVisibilityVersionAtRequest: 0,
+      preserveStoredSessionCatalog: true,
+    });
+  });
+
+  test("does not finish recovery until both initial replay and session metadata settle", async () => {
+    const initialReplay = deferred<void>();
+    const pendingListSessions = deferred<ListSessionsResponse>();
+    const harness = createRecoverHarness(
+      () => pendingListSessions.promise,
+      () => initialReplay.promise,
+    );
+
+    let settled = false;
+    const recovery = recoverTransportCommand(harness.args).then(() => {
+      settled = true;
+    });
+    pendingListSessions.resolve(emptySessionsResponse());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(settled, false);
+    assert.equal(harness.getApplyCalls(), 0);
+
+    initialReplay.resolve();
+    await recovery;
+
+    assert.equal(settled, true);
+    assert.equal(harness.getApplyCalls(), 1);
+    assert.equal(harness.getRestoreCalls(), 1);
+  });
+
+  test("replaces a stuck foreground recovery without letting its late response apply", async () => {
+    const firstResponse = deferred<ListSessionsResponse>();
+    let listCalls = 0;
+    const harness = createRecoverHarness(() => {
+      listCalls += 1;
+      return listCalls === 1
+        ? firstResponse.promise
+        : Promise.resolve(emptySessionsResponse());
+    });
+
+    const firstRecovery = recoverTransportCommand(harness.args);
+    await Promise.resolve();
+    const replacementRecovery = recoverTransportCommand(harness.args, {
+      replaceActive: true,
+    });
+
+    await replacementRecovery;
+    assert.equal(listCalls, 2);
+    assert.equal(harness.getRestartCalls(), 2);
+    assert.equal(harness.getApplyCalls(), 1);
+
+    firstResponse.resolve(emptySessionsResponse());
+    await assert.rejects(firstRecovery, /aborted/i);
+
+    assert.equal(harness.getApplyCalls(), 1);
     assert.equal(harness.getRestoreCalls(), 1);
   });
 

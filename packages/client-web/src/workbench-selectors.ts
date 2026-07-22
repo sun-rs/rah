@@ -13,6 +13,7 @@ import {
 import { deriveSessionConversationActivityAt } from "./session-conversation-activity";
 import type { SessionProjection } from "./types";
 import type { PendingSessionTransition } from "./session-transition-contract";
+import { visibleStoredSessionRefs } from "./session-history-grouping";
 
 export interface PrimaryPaneState {
   kind: "active" | "opening" | "empty";
@@ -44,7 +45,9 @@ function sortSessionEntries(projections: Map<string, SessionProjection>): Sessio
 }
 
 function storedSessionActivityAt(ref: StoredSessionRef | undefined): string | undefined {
-  return ref?.lastUsedAt ?? ref?.updatedAt ?? ref?.createdAt;
+  // `lastUsedAt` is navigation activity. Using it here makes a row jump merely
+  // because it was opened, even when the conversation itself did not change.
+  return ref?.updatedAt ?? ref?.createdAt ?? ref?.lastUsedAt;
 }
 
 function runningStoredSessionKey(session: SessionSummary["session"]): string | null {
@@ -156,9 +159,9 @@ export function deriveWorkbenchSessionCollections(args: {
   const workspaceInfos = deriveWorkspaceInfos(
     args.workspaceDirs,
     runningSessionSummaries,
-    args.storedSessions,
+    visibleStoredSessionRefs(args.storedSessions),
     runningSessionSummaries,
-    { sessionActivityAtById, includeStoredSessionActivity: false },
+    { sessionActivityAtById, includeStoredSessionActivity: true },
   );
   const sortedWorkspaceInfos = sortWorkspaceInfos(workspaceInfos, args.workspaceSortMode);
   const workspaceSections = deriveWorkspaceSections(

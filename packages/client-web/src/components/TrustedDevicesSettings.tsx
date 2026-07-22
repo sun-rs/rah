@@ -158,7 +158,7 @@ export function TrustedDevicesSettings() {
         </button>
       </div>
 
-      <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+      <div className="border-y border-[var(--app-border)] py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-[var(--app-fg)]">
@@ -208,7 +208,7 @@ export function TrustedDevicesSettings() {
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)]">
+      <div className="overflow-hidden border-y border-[var(--app-border)]">
         {loading && devices.length === 0 ? (
           <div className="flex h-24 items-center justify-center text-[var(--app-hint)]">
             <LoaderCircle size={16} className="animate-spin" />

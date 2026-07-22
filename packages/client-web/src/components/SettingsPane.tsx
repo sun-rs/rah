@@ -57,6 +57,10 @@ const MODEL_REFRESH_POLL_INTERVAL_MS = 1000;
 const MODEL_REFRESH_POLL_ATTEMPTS = 20;
 const SETTINGS_REFRESH_BUTTON_CLASS =
   "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-60 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-2 sm:py-1";
+const SETTINGS_SECTION_CLASS =
+  "divide-y divide-[var(--app-border)] rounded-lg border border-[var(--app-border)] bg-[color:color-mix(in_oklab,var(--app-subtle-bg)_72%,var(--app-bg)_28%)] px-4";
+const SETTINGS_NAV_ITEM_CLASS =
+  "flex h-9 items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium transition-colors";
 
 type ModelRefreshStatus = "idle" | "loading" | "success" | "error";
 type ModelRefreshState = {
@@ -71,6 +75,42 @@ type ManualModelActionState = {
   loading?: boolean;
   error?: string;
 };
+
+function SettingsToggleRow(props: {
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-4">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-[var(--app-fg)]">{props.label}</div>
+        <div className="mt-1 text-xs leading-5 text-[var(--app-hint)]">{props.description}</div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-label={props.label}
+        aria-checked={props.checked}
+        disabled={props.disabled}
+        onClick={props.onToggle}
+        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors disabled:cursor-default disabled:opacity-60 ${
+          props.checked
+            ? "border-primary bg-primary"
+            : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
+            props.checked ? "translate-x-5" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
 
 function emptyManualModelForm(): ManualModelFormState {
   return {
@@ -825,9 +865,11 @@ export function SettingsPane() {
     activeTab === "version" ? providerDiagnosticsError : runtimeDiagnosticsError;
 
   return (
-    <div className="flex h-full min-h-0 flex-col md:flex-row">
-      <div className="shrink-0 border-b border-[var(--app-border)] p-2 md:w-48 md:border-b-0 md:border-r md:p-3">
-        <div className="grid grid-cols-2 gap-1 sm:grid-cols-7 md:grid-cols-1">
+    <div className="flex h-full min-h-0 flex-col bg-[var(--app-subtle-bg)] md:flex-row">
+      <nav
+        className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-2 md:hidden"
+        aria-label="Settings sections"
+      >
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const selected = activeTab === tab.id;
@@ -836,29 +878,57 @@ export function SettingsPane() {
               key={tab.id}
               type="button"
               onClick={() => selectSettingsTab(tab.id)}
-              className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-medium transition-colors ${
+              className={`${SETTINGS_NAV_ITEM_CLASS} shrink-0 ${
                 selected
-                  ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                  : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]/60 hover:text-[var(--app-fg)]"
+                  ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
+                  : "text-[var(--app-hint)] hover:bg-[var(--app-bg)]/65 hover:text-[var(--app-fg)]"
               }`}
             >
               <Icon size={14} />
-              <span className="truncate">{tab.label}</span>
+              <span>{tab.label}</span>
             </button>
           );
         })}
-        </div>
-      </div>
+      </nav>
 
-      <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full p-4 md:p-6">
+      <aside className="hidden w-52 shrink-0 flex-col border-r border-[var(--app-border)] bg-[color:color-mix(in_oklab,var(--app-subtle-bg)_88%,var(--app-bg)_12%)] p-2 md:flex">
+        <nav className="space-y-0.5" aria-label="Settings sections">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const selected = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => selectSettingsTab(tab.id)}
+                className={`${SETTINGS_NAV_ITEM_CLASS} w-full ${
+                  selected
+                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                    : "text-[var(--app-hint)] hover:bg-[var(--app-bg)]/65 hover:text-[var(--app-fg)]"
+                }`}
+              >
+                <Icon size={14} />
+                <span className="truncate">{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <OverlayScrollArea
+        className="min-h-0 flex-1"
+        viewportClassName="h-full bg-[color:color-mix(in_oklab,var(--app-bg)_90%,var(--app-subtle-bg)_10%)] p-4 md:p-6"
+      >
         {activeTab === "appearance" ? (
           <div className="space-y-5">
             <div>
               <div className="text-base font-semibold text-[var(--app-fg)]">Appearance</div>
               <div className="mt-1 text-sm text-[var(--app-hint)]">Choose how RAH looks.</div>
             </div>
-            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
-              <ThemeToggle />
+            <div className={SETTINGS_SECTION_CLASS}>
+              <div className="py-4">
+                <ThemeToggle />
+              </div>
             </div>
           </div>
         ) : activeTab === "chat" ? (
@@ -867,116 +937,36 @@ export function SettingsPane() {
               <div className="text-base font-semibold text-[var(--app-fg)]">Chat</div>
               <div className="mt-1 text-sm text-[var(--app-hint)]">Choose what the chat thread shows.</div>
             </div>
-            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--app-fg)]">Hide completed tool calls</div>
-                  <div className="mt-1 text-xs text-[var(--app-hint)]">
-                    Completed tool cards disappear from the thread. Failed command or test results stay visible as result events.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={hideToolCallsInChat}
-                  onClick={() => setHideToolCallsInChat(!hideToolCallsInChat)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
-                    hideToolCallsInChat
-                      ? "border-primary bg-primary"
-                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
-                      hideToolCallsInChat ? "translate-x-5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-              <div className="mt-5 flex items-start justify-between gap-4 border-t border-[var(--app-border)] pt-5">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--app-fg)]">Hide OpenCode reasoning</div>
-                  <div className="mt-1 text-xs text-[var(--app-hint)]">
-                    OpenCode thinking entries stay in the timeline data but are hidden from chat by default.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={hideOpenCodeReasoningInChat}
-                  onClick={() => setHideOpenCodeReasoningInChat(!hideOpenCodeReasoningInChat)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
-                    hideOpenCodeReasoningInChat
-                      ? "border-primary bg-primary"
-                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
-                      hideOpenCodeReasoningInChat ? "translate-x-5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--app-fg)]">Notify on unread replies</div>
-                  <div className="mt-1 text-xs text-[var(--app-hint)]">
-                    Show a system notification when a session or Council gets a new reply while RAH is hidden or unfocused.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={browserNotifications.enabled}
-                  disabled={
-                    browserNotifications.pending ||
-                    !browserNotifications.supported ||
-                    browserNotifications.permission === "denied"
-                  }
-                  onClick={() => void browserNotifications.toggle()}
-                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors disabled:cursor-default disabled:opacity-60 ${
-                    browserNotifications.enabled
-                      ? "border-primary bg-primary"
-                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
-                      browserNotifications.enabled ? "translate-x-5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--app-fg)]">Show model on assistant replies</div>
-                  <div className="mt-1 text-xs text-[var(--app-hint)]">
-                    Display a subtle model / effort label on replies for every provider when the provider exposes it.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={showModelInfoInChat}
-                  onClick={() => setShowModelInfoInChat(!showModelInfoInChat)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
-                    showModelInfoInChat
-                      ? "border-primary bg-primary"
-                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
-                      showModelInfoInChat ? "translate-x-5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
+            <div className={SETTINGS_SECTION_CLASS}>
+              <SettingsToggleRow
+                label="Hide completed tool calls"
+                description="Completed tool cards disappear from the thread. Failed command or test results stay visible as result events."
+                checked={hideToolCallsInChat}
+                onToggle={() => setHideToolCallsInChat(!hideToolCallsInChat)}
+              />
+              <SettingsToggleRow
+                label="Hide OpenCode reasoning"
+                description="OpenCode thinking entries stay in the timeline data but are hidden from chat by default."
+                checked={hideOpenCodeReasoningInChat}
+                onToggle={() => setHideOpenCodeReasoningInChat(!hideOpenCodeReasoningInChat)}
+              />
+              <SettingsToggleRow
+                label="Notify on unread replies"
+                description="Show a system notification when a session or Council gets a new reply while RAH is hidden or unfocused."
+                checked={browserNotifications.enabled}
+                disabled={
+                  browserNotifications.pending ||
+                  !browserNotifications.supported ||
+                  browserNotifications.permission === "denied"
+                }
+                onToggle={() => void browserNotifications.toggle()}
+              />
+              <SettingsToggleRow
+                label="Show model on assistant replies"
+                description="Display a subtle model / effort label on replies for every provider when the provider exposes it."
+                checked={showModelInfoInChat}
+                onToggle={() => setShowModelInfoInChat(!showModelInfoInChat)}
+              />
             </div>
           </div>
         ) : activeTab === "models" ? (
@@ -1176,7 +1166,7 @@ export function SettingsPane() {
                   </>
                 ) : (
                   <>
-                <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+                <div className="border-y border-[var(--app-border)] py-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-[var(--app-fg)]">Native TUI diagnostics</div>
@@ -1233,7 +1223,7 @@ export function SettingsPane() {
                     </div>
                   )}
                 </div>
-                <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+                <div className="border-y border-[var(--app-border)] py-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-[var(--app-fg)]">Terminal replay health</div>
@@ -1481,12 +1471,12 @@ export function SettingsPane() {
             <div>
               <div className="text-base font-semibold text-[var(--app-fg)]">About</div>
             </div>
-            <div className="space-y-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5 text-xs text-[var(--app-hint)]">
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] py-2">
+            <div className={`${SETTINGS_SECTION_CLASS} text-xs text-[var(--app-hint)]`}>
+              <div className="flex items-center justify-between gap-3 py-4">
                 <span>Workbench</span>
                 <span className="font-medium text-[var(--app-fg)]">{__RAH_WORKBENCH_VERSION__}</span>
               </div>
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] py-2">
+              <div className="flex items-center justify-between gap-3 py-4">
                 <span>Client</span>
                 <span className="font-medium text-[var(--app-fg)]">{__RAH_APP_VERSION__}</span>
               </div>

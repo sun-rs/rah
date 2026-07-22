@@ -22,6 +22,16 @@ export function deriveWorkbenchNoticeState(args: {
 }): WorkbenchNoticeState {
   const { selectedSummary, selectedProjection, nativeTuiDiagnostics = [], error } = args;
 
+  const sideRelationship = selectedSummary?.session.relationship;
+  const sideLifecycleMessage =
+    sideRelationship?.kind === "side" && sideRelationship.sideState === "cleanup_failed"
+      ? sideRelationship.sideStateDetail ??
+        "Side cleanup failed. Discard it again to retry provider cleanup."
+      : sideRelationship?.kind === "side" && sideRelationship.sideState === "expired"
+        ? sideRelationship.sideStateDetail ??
+          "This Side expired in the provider. Start a new Side to continue."
+        : null;
+
   const nativeTuiDiagnosticMessage = nativeTuiDiagnostics[0]
     ? nativeTuiDiagnosticNoticeMessage(nativeTuiDiagnostics[0])
     : null;
@@ -46,7 +56,12 @@ export function deriveWorkbenchNoticeState(args: {
   const interactionMessage = selectedSummary
     ? sessionInteractionNotice(selectedSummary)
     : null;
-  const interactionNotice = nativeTuiDiagnosticMessage
+  const interactionNotice = sideLifecycleMessage
+    ? {
+        tone: "warning" as const,
+        message: sideLifecycleMessage,
+      }
+    : nativeTuiDiagnosticMessage
     ? {
         tone: "warning" as const,
         message: nativeTuiDiagnosticMessage,

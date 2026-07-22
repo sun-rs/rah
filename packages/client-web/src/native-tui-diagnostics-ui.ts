@@ -4,6 +4,8 @@ export function nativeTuiDiagnosticLabel(kind: NativeTuiDiagnostic["kind"]): str
   switch (kind) {
     case "binding_missing":
       return "Provider binding";
+    case "binding_failed":
+      return "Provider binding failed";
     case "mirror_source_missing":
     case "mirror_failed":
       return "Chat mirror";

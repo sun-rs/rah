@@ -4,12 +4,14 @@ import {
   canSessionRespondToPermissions,
   isReadOnlyReplay,
 } from "./session-capabilities";
+import { isTransportErrorMessage } from "./transport-error";
 
 export type RecoveryAction = "refresh" | "claim_control" | "dismiss";
 
 export interface ErrorRecoveryDescriptor {
   title: string;
   body: string;
+  presentation?: "callout" | "passive";
   primaryAction?: RecoveryAction;
   primaryLabel?: string;
 }
@@ -69,19 +71,12 @@ export function describeWorkbenchError(
     };
   }
 
-  if (
-    lower.includes("events socket failed") ||
-    lower.includes("transport") ||
-    lower.includes("unable to connect") ||
-    lower.includes("networkerror") ||
-    lower.includes("fetch")
-  ) {
+  if (isTransportErrorMessage(message)) {
     return {
-      title: "Connection issue",
+      title: "Reconnecting",
       body:
-        "The workbench lost contact with the daemon or event stream. Reconnect now; if the problem continues, reload the page.",
-      primaryAction: "refresh",
-      primaryLabel: "Reconnect",
+        "RAH will reconnect and catch up automatically when the network is available.",
+      presentation: "passive",
     };
   }
 

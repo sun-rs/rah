@@ -85,7 +85,17 @@ export function appendVisibleWorkspaceDir(
   if (!normalized || isHiddenWorkspace(hiddenWorkspaceDirs, normalized)) {
     return visibleWorkspaceDirs;
   }
-  if (visibleWorkspaceDirs.some((workspaceDir) => sameWorkspaceDirectory(workspaceDir, normalized))) {
+  if (
+    visibleWorkspaceDirs.some((workspaceDir) => {
+      const normalizedWorkspace = normalizeWorkspaceDirectory(workspaceDir);
+      return Boolean(
+        normalizedWorkspace &&
+          (normalizedWorkspace === normalized ||
+            normalized.startsWith(`${normalizedWorkspace}/`) ||
+            normalized.startsWith(`${normalizedWorkspace}\\`)),
+      );
+    })
+  ) {
     return visibleWorkspaceDirs;
   }
   return [...visibleWorkspaceDirs, normalized];

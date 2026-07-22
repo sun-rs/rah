@@ -244,6 +244,47 @@ describe("workbench notice contract", () => {
     });
   });
 
+  test("places Side cleanup failures in the conversation notice channel", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        relationship: {
+          kind: "side",
+          parentSessionId: "parent-1",
+          persistence: "ephemeral",
+          sideState: "cleanup_failed",
+          sideStateDetail: "Provider cleanup must be retried.",
+        },
+      }),
+      selectedProjection: null,
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message: "Provider cleanup must be retried.",
+    });
+  });
+
+  test("places expired Side guidance in the conversation notice channel", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        relationship: {
+          kind: "side",
+          parentSessionId: "parent-1",
+          persistence: "ephemeral",
+          sideState: "expired",
+        },
+      }),
+      selectedProjection: null,
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message: "This Side expired in the provider. Start a new Side to continue.",
+    });
+  });
+
   test("derives global error descriptor from workbench error text", () => {
     const state = deriveWorkbenchNoticeState({
       selectedSummary: summary(),
@@ -251,8 +292,37 @@ describe("workbench notice contract", () => {
       error: "Events socket failed",
     });
 
-    assert.equal(state.errorDescriptor?.title, "Connection issue");
-    assert.equal(state.errorDescriptor?.primaryAction, "refresh");
-    assert.equal(state.errorDescriptor?.primaryLabel, "Reconnect");
+    assert.equal(state.errorDescriptor?.title, "Reconnecting");
+    assert.equal(state.errorDescriptor?.presentation, "passive");
+    assert.equal(state.errorDescriptor?.primaryAction, undefined);
+  });
+
+  test("uses one passive reconnect notice for Safari and gateway failures", () => {
+    for (const error of [
+      "Load failed",
+      "The network connection was lost.",
+      "Request failed: 503 Service Unavailable",
+    ]) {
+      const state = deriveWorkbenchNoticeState({
+        selectedSummary: summary(),
+        selectedProjection: projection(summary()),
+        error,
+      });
+
+      assert.equal(state.errorDescriptor?.title, "Reconnecting");
+      assert.equal(state.errorDescriptor?.presentation, "passive");
+      assert.equal(state.errorDescriptor?.primaryAction, undefined);
+    }
+  });
+
+  test("keeps payload limit failures actionable", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary(),
+      selectedProjection: projection(summary()),
+      error: "Max payload size exceeded",
+    });
+
+    assert.equal(state.errorDescriptor?.title, "Action failed");
+    assert.equal(state.errorDescriptor?.presentation, undefined);
   });
 });

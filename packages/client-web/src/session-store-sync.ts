@@ -10,9 +10,58 @@ import { readErrorMessage } from "./session-store-bootstrap";
 import { mergeResumedHistoryProjection } from "./session-store-session-lifecycle";
 import { connectSessionStoreTransport } from "./session-store-transport";
 import type { PendingSessionTransition } from "./session-transition-contract";
+import { isTransportErrorMessage } from "./transport-error";
 import type { SessionProjection } from "./types";
 
-let recoverTransportInFlight: Promise<void> | null = null;
+export type RecoverTransportOptions = {
+  signal?: AbortSignal;
+  replaceActive?: boolean;
+  suppressError?: boolean;
+};
+
+type RecoverTransportRequest = {
+  controller: AbortController;
+  promise: Promise<void>;
+};
+
+let recoverTransportInFlight: RecoverTransportRequest | null = null;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function createAbortError(): Error {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw createAbortError();
+}
+
+function createLinkedAbortController(signal: AbortSignal | undefined): {
+  controller: AbortController;
+  detach: () => void;
+} {
+  const controller = new AbortController();
+  if (!signal) {
+    return { controller, detach: () => undefined };
+  }
+  const abort = () => controller.abort(signal.reason);
+  if (signal.aborted) {
+    abort();
+    return { controller, detach: () => undefined };
+  }
+  signal.addEventListener("abort", abort, { once: true });
+  return {
+    controller,
+    detach: () => signal.removeEventListener("abort", abort),
+  };
+}
 
 type SessionSyncState = {
   projections: Map<string, SessionProjection>;
@@ -23,6 +72,7 @@ type SessionSyncState = {
   eventStreamOpenRevision: number;
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
+  storedSessionsCatalogLoaded?: boolean;
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
@@ -109,7 +159,10 @@ function selectedResumedReplayClosedByEvents(
     return null;
   }
   const selectedProjection = state.projections.get(pendingAction.sessionId);
-  if (!selectedProjection || !isReadOnlyReplay(selectedProjection.summary)) {
+  // Sending from history deliberately upgrades the local replay projection to
+  // Starting before the daemon closes that replay. The explicit pending Resume
+  // action, rather than its now-interactive capability flags, owns this handoff.
+  if (!selectedProjection) {
     return null;
   }
   return events.some(
@@ -383,7 +436,8 @@ export function connectStoreSyncTransport(args: {
                 args.getVisibleSessionIds(),
                 unreadEvents,
               ),
-        error: state.error === "Events socket failed" ? null : state.error,
+        error:
+          state.error && isTransportErrorMessage(state.error) ? null : state.error,
       };
     });
     args.onConversationDeltasApplied?.(conversationDeltas);
@@ -452,7 +506,8 @@ export function connectStoreSyncTransport(args: {
     onOpen: () => {
       args.set((state) => ({
         eventStreamOpenRevision: state.eventStreamOpenRevision + 1,
-        error: state.error === "Events socket failed" ? null : state.error,
+        error:
+          state.error && isTransportErrorMessage(state.error) ? null : state.error,
       }));
     },
     onReplayGap: (batch) => {
@@ -480,7 +535,10 @@ export async function recoverTransportCommand(args: {
       hiddenWorkspaceDirs: Set<string>;
     },
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
-    options?: { workspaceVisibilityVersionAtRequest?: number },
+    options?: {
+      workspaceVisibilityVersionAtRequest?: number;
+      preserveStoredSessionCatalog?: boolean;
+    },
   ) => {
     projections: Map<string, SessionProjection>;
     selectedSessionId: string | null;
@@ -491,19 +549,31 @@ export async function recoverTransportCommand(args: {
     recentSessions: StoredSessionRef[];
     workspaceDirs: string[];
   };
-  restartTransport: () => void;
+  restartTransport: (options?: { signal?: AbortSignal }) => void | Promise<void>;
   maybeRestoreLastHistorySelection: (
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
   ) => Promise<void>;
   listSessions?: typeof api.listSessions;
-}) {
-  if (recoverTransportInFlight) {
-    return recoverTransportInFlight;
+}, options: RecoverTransportOptions = {}) {
+  if (recoverTransportInFlight && !options.replaceActive) {
+    return recoverTransportInFlight.promise;
   }
-  recoverTransportInFlight = recoverTransportCommandInner(args).finally(() => {
-    recoverTransportInFlight = null;
+  recoverTransportInFlight?.controller.abort();
+  const linked = createLinkedAbortController(options.signal);
+  let request!: RecoverTransportRequest;
+  const promise = recoverTransportCommandInner(
+    args,
+    linked.controller.signal,
+    options.suppressError ?? false,
+  ).finally(() => {
+    linked.detach();
+    if (recoverTransportInFlight === request) {
+      recoverTransportInFlight = null;
+    }
   });
-  return recoverTransportInFlight;
+  request = { controller: linked.controller, promise };
+  recoverTransportInFlight = request;
+  return promise;
 }
 
 async function recoverTransportCommandInner(args: {
@@ -521,7 +591,10 @@ async function recoverTransportCommandInner(args: {
       hiddenWorkspaceDirs: Set<string>;
     },
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
-    options?: { workspaceVisibilityVersionAtRequest?: number },
+    options?: {
+      workspaceVisibilityVersionAtRequest?: number;
+      preserveStoredSessionCatalog?: boolean;
+    },
   ) => {
     projections: Map<string, SessionProjection>;
     selectedSessionId: string | null;
@@ -532,17 +605,26 @@ async function recoverTransportCommandInner(args: {
     recentSessions: StoredSessionRef[];
     workspaceDirs: string[];
   };
-  restartTransport: () => void;
+  restartTransport: (options?: { signal?: AbortSignal }) => void | Promise<void>;
   maybeRestoreLastHistorySelection: (
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
   ) => Promise<void>;
   listSessions?: typeof api.listSessions;
-}) {
+}, signal?: AbortSignal, suppressError = false) {
   try {
+    throwIfAborted(signal);
     const requestState = args.get();
     const workspaceVisibilityVersionAtRequest = requestState.workspaceVisibilityVersion;
     const sessionTopologyVersionAtRequest = requestState.sessionTopologyVersion;
-    const sessionsResponse = await (args.listSessions ?? api.listSessions)();
+    const transportReady = Promise.resolve(
+      args.restartTransport(signal ? { signal } : undefined),
+    );
+    const sessionsRequest = (args.listSessions ?? api.listSessions)({
+      storedSessions: "recent",
+      ...(signal ? { signal } : {}),
+    });
+    const [sessionsResponse] = await Promise.all([sessionsRequest, transportReady]);
+    throwIfAborted(signal);
     args.set((state) => {
       if (shouldSkipSessionsResponse(state, sessionTopologyVersionAtRequest)) {
         return { error: null };
@@ -550,14 +632,20 @@ async function recoverTransportCommandInner(args: {
       return {
         ...args.applySessionsResponse(state as never, sessionsResponse, {
           workspaceVisibilityVersionAtRequest,
+          preserveStoredSessionCatalog: state.storedSessionsCatalogLoaded === true,
         }),
         error: null,
       };
     });
-    args.restartTransport();
+    throwIfAborted(signal);
     await args.maybeRestoreLastHistorySelection(sessionsResponse);
   } catch (error) {
-    args.set({ error: readErrorMessage(error) });
+    if (signal?.aborted || isAbortError(error)) {
+      throw createAbortError();
+    }
+    if (!suppressError) {
+      args.set({ error: readErrorMessage(error) });
+    }
     throw error;
   }
 }

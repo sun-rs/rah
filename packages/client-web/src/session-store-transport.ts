@@ -11,12 +11,87 @@ type SessionStoreTransportCallbacks = {
   onStoredSessionsRefresh: (events: RahEvent[]) => void;
 };
 
+type RestartSessionStoreTransportOptions = {
+  signal?: AbortSignal;
+};
+
+type InitialReplayWaiter = {
+  socket: WebSocket;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  detachAbort: () => void;
+};
+
 let callbacks: SessionStoreTransportCallbacks | null = null;
 let eventsSocket: WebSocket | null = null;
+let initialReplayReadySocket: WebSocket | null = null;
+let initialReplayWaiter: InitialReplayWaiter | null = null;
 let reconnectTimer: number | null = null;
 let storedSessionsRefreshTimer: number | null = null;
 let pendingStoredSessionEvents: RahEvent[] = [];
 let reconnectAttempt = 0;
+
+function createAbortError(): Error {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+function settleInitialReplayWaiter(socket: WebSocket, error?: Error) {
+  const waiter = initialReplayWaiter;
+  if (!waiter || waiter.socket !== socket) {
+    return;
+  }
+  initialReplayWaiter = null;
+  waiter.detachAbort();
+  if (error) {
+    waiter.reject(error);
+  } else {
+    waiter.resolve();
+  }
+}
+
+function rejectCurrentInitialReplayWaiter(error: Error) {
+  const waiter = initialReplayWaiter;
+  if (!waiter) {
+    return;
+  }
+  settleInitialReplayWaiter(waiter.socket, error);
+}
+
+function waitForInitialReplay(
+  socket: WebSocket,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (initialReplayReadySocket === socket) {
+    return Promise.resolve();
+  }
+  if (signal?.aborted) {
+    return Promise.reject(createAbortError());
+  }
+  if (initialReplayWaiter?.socket === socket) {
+    return initialReplayWaiter.promise;
+  }
+  rejectCurrentInitialReplayWaiter(createAbortError());
+
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  const handleAbort = () => settleInitialReplayWaiter(socket, createAbortError());
+  signal?.addEventListener("abort", handleAbort, { once: true });
+  initialReplayWaiter = {
+    socket,
+    promise,
+    resolve,
+    reject,
+    detachAbort: () => signal?.removeEventListener("abort", handleAbort),
+  };
+  return promise;
+}
 
 export function sessionStoreSocketCloseDecision(
   isCurrentSocket: boolean,
@@ -56,10 +131,10 @@ function scheduleStoredSessionsRefresh(events: RahEvent[]) {
 
 export function connectSessionStoreTransport(
   nextCallbacks: SessionStoreTransportCallbacks,
-) {
+): WebSocket | null {
   callbacks = nextCallbacks;
   if (eventsSocket && eventsSocket.readyState < WebSocket.CLOSING) {
-    return;
+    return eventsSocket;
   }
   const replayFromSeq = nextCallbacks.getReplayFromSeq();
   const socket = api.createEventsSocket(
@@ -74,14 +149,19 @@ export function connectSessionStoreTransport(
       }
       if (batch.replayGap) {
         nextCallbacks.onReplayGap(batch);
-        return;
+      } else {
+        nextCallbacks.onBatch(batch);
       }
-      nextCallbacks.onBatch(batch);
+      if (batch.initial) {
+        initialReplayReadySocket = socket;
+        settleInitialReplayWaiter(socket);
+      }
     },
     (error) => {
       if (eventsSocket !== socket) {
         return;
       }
+      settleInitialReplayWaiter(socket, error);
       nextCallbacks.onError(error);
       if (socket.readyState < WebSocket.CLOSING) {
         socket.close();
@@ -100,6 +180,13 @@ export function connectSessionStoreTransport(
         if (decision === "ignore") {
           return;
         }
+        if (initialReplayReadySocket === socket) {
+          initialReplayReadySocket = null;
+        }
+        settleInitialReplayWaiter(
+          socket,
+          new Error("Events socket closed before initial replay completed."),
+        );
         eventsSocket = null;
         clearReconnectTimer();
         if (decision === "reconnect" && callbacks) {
@@ -119,18 +206,31 @@ export function connectSessionStoreTransport(
   if (!nextCallbacks.isInitialLoaded()) {
     eventsSocket = null;
     socket.close();
+    return null;
   }
+  return socket;
 }
 
-export function restartSessionStoreTransport() {
+export function restartSessionStoreTransport(
+  options: RestartSessionStoreTransportOptions = {},
+): Promise<void> {
   clearReconnectTimer();
   reconnectAttempt = 0;
+  rejectCurrentInitialReplayWaiter(createAbortError());
   const socket = eventsSocket;
   eventsSocket = null;
+  if (initialReplayReadySocket === socket) {
+    initialReplayReadySocket = null;
+  }
   if (socket && socket.readyState < WebSocket.CLOSING) {
     socket.close();
   }
-  if (callbacks) {
-    connectSessionStoreTransport(callbacks);
+  if (!callbacks) {
+    return Promise.reject(new Error("Events transport is not initialized."));
   }
+  const restartedSocket = connectSessionStoreTransport(callbacks);
+  if (!restartedSocket) {
+    return Promise.reject(new Error("Events transport is not ready to connect."));
+  }
+  return waitForInitialReplay(restartedSocket, options.signal);
 }

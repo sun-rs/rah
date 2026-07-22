@@ -20,6 +20,7 @@ import { TERMINAL_TUI_SHORTCUTS, type TerminalShortcut } from "./terminal-shortc
 import { isMeaningfulTerminalOutput } from "./terminal-startup-output";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
 import { TERMINAL_LAYOUT_SETTLE_DELAYS_MS } from "./tui-surface-lifecycle";
+import { COMPACT_MAX_WIDTH_PX } from "./responsive-layout";
 
 export interface TerminalPaneProps {
   terminalId: string;
@@ -73,7 +74,7 @@ function shouldShowMobileInputBridge(): boolean {
   const iosLike =
     /iPad|iPhone|iPod/.test(userAgent) ||
     (/Macintosh/.test(userAgent) && (navigator.maxTouchPoints > 1 || coarsePointer));
-  const touchSmallScreen = touchCapable && window.matchMedia("(max-width: 768px)").matches;
+  const touchSmallScreen = touchCapable && window.innerWidth <= COMPACT_MAX_WIDTH_PX;
   return iosLike || touchSmallScreen;
 }
 
