@@ -11,12 +11,14 @@ import {
   type ErrorInfo,
   type ReactNode,
 } from "react";
-import { MessageCircleMore, Plus } from "lucide-react";
+import { Eraser, MessageCircleMore, Plus, RotateCcw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionQueuedInput, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
+import type { SessionProjection } from "./types";
 import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
+import { readErrorMessage } from "./session-store-bootstrap";
 import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
 import { SessionHistoryDialog } from "./components/SessionHistoryDialog";
@@ -27,11 +29,9 @@ import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessio
 import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
 import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
 import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
-import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
+import { CanvasWorkbench } from "./components/workbench/canvas/CanvasWorkbench";
 import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
-import { mergeCouncilLists, mergeCouncilMessageEvent, mergeCouncilSnapshot } from "./council/council-message-window";
-import type { CouncilStateUpdater } from "./council/CouncilPage";
-import { useCouncilTransport } from "./council/useCouncilTransport";
+import { useCouncilController } from "./council/useCouncilController";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
@@ -52,6 +52,8 @@ import { useWorkbenchComposerState } from "./hooks/useWorkbenchComposerState";
 import { useWorkbenchSelectionState } from "./hooks/useWorkbenchSelectionState";
 import { initializeTheme } from "./hooks/useTheme";
 import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
+import { useCanvasController } from "./hooks/useCanvasController";
+import { useWorkbenchPageController } from "./hooks/useWorkbenchPageController";
 import {
   useHistoryWorkspaceSortModeState,
   useWorkbenchSidebarPreferences,
@@ -88,33 +90,79 @@ import {
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
 import { importWithStaleReload } from "./lazy-module-reload";
-import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import {
-  applyCanvasPaneTarget,
+  foregroundClockWasSuspended,
+  runForegroundRecoveryLoop,
+} from "./foreground-recovery";
+import { latestCompletedProviderTurnId } from "./session-branch-boundary";
+import {
+  resolveResponsiveTier,
+  resolveSidePanelOpenForTier,
+} from "./responsive-layout";
+import { resolveStoredSessionRef } from "./session-store-session-lifecycle";
+import { isStoredSessionArchived } from "./session-history-grouping";
+import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
+import type { InspectorOpenFileRequest } from "./inspector/shared";
+import {
   CANVAS_PANE_IDS,
-  canvasOpeningTransitionForTarget,
+  canvasPaneLabel,
+  canvasRestorableTargetKey,
   canvasStoredRefKey,
+  canvasOpeningTransitionForTarget,
   clearCanvasCouncilTargets,
   clearCanvasSessionTargets,
   clearCanvasTargetsForStoredSession,
-  createCanvasLayoutRatios,
-  createDefaultCanvasRightPanelsOpen,
+  createCanvasSessionTarget,
   createEmptyCanvasTargets,
-  getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
-  MOBILE_CANVAS_LAYOUT,
-  MOBILE_CANVAS_LAYOUTS,
-  shouldUseMobileCanvasLayout,
-  readRememberedCanvasState,
-  rememberCanvasState,
   resolveCanvasResumedSessionId,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   resolveCanvasVisibleSessionId,
-  shouldInitializeCanvasPaneFromSelection,
-  type CanvasPendingSessionAction,
   type CanvasPaneId,
-  type CanvasPaneTarget,
 } from "./canvas-state";
+
+type BranchOperationKind = "fork" | "side";
+
+function projectionHasLatestTurnError(projection: SessionProjection): boolean {
+  let latestAt = "";
+  let failed = false;
+  for (const turn of projection.conversation?.turns ?? []) {
+    const at = turn.completedAt ?? turn.startedAt ?? "";
+    if (at >= latestAt) {
+      latestAt = at;
+      failed = turn.status === "failed";
+    }
+  }
+  for (const event of projection.events) {
+    if (
+      event.type !== "turn.started" &&
+      event.type !== "turn.completed" &&
+      event.type !== "turn.failed" &&
+      event.type !== "turn.canceled"
+    ) {
+      continue;
+    }
+    if (event.ts >= latestAt) {
+      latestAt = event.ts;
+      failed = event.type === "turn.failed";
+    }
+  }
+  return failed;
+}
+
+type ArchiveConfirmationTarget =
+  | {
+      kind: "runtime";
+      sessionId: string;
+      title: string;
+      running: boolean;
+    }
+  | {
+      kind: "stored";
+      session: Pick<StoredSessionRef, "provider" | "providerSessionId">;
+      title: string;
+      running: false;
+    };
 
 const loadSettingsDialog = () =>
   importWithStaleReload(() => import("./components/workbench/dialogs/SettingsDialog"));
@@ -140,7 +188,6 @@ type ModelDraft = {
   optionValues?: Record<string, SessionConfigValue>;
 };
 
-type WorkbenchMode = "single" | "canvas" | "council";
 type CanvasNewSessionDraft = {
   provider: ProviderChoice;
   modeDrafts: Record<ProviderChoice, SessionModeDraft>;
@@ -217,7 +264,11 @@ const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
 const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
 const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "opencode"];
 const FOREGROUND_RECOVERY_DEBOUNCE_MS = 120;
+const FOREGROUND_RECOVERY_TIMEOUT_MS = 12_000;
+const FOREGROUND_RECOVERY_RETRY_DELAYS_MS = [600, 1_800, 4_000, 8_000, 12_000] as const;
 const VISIBLE_HISTORY_CATCHUP_FRESH_MS = 2_000;
+const FOREGROUND_WAKE_HEARTBEAT_MS = 1_000;
+const FOREGROUND_WAKE_SUSPENSION_MS = 5_000;
 
 function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
   return {
@@ -249,6 +300,10 @@ function createEmptyCanvasNewSessionDrafts(): Record<CanvasPaneId, CanvasNewSess
     "canvas-2": createCanvasNewSessionDraft(),
     "canvas-3": createCanvasNewSessionDraft(),
     "canvas-4": createCanvasNewSessionDraft(),
+    "canvas-5": createCanvasNewSessionDraft(),
+    "canvas-6": createCanvasNewSessionDraft(),
+    "canvas-7": createCanvasNewSessionDraft(),
+    "canvas-8": createCanvasNewSessionDraft(),
   };
 }
 
@@ -363,25 +418,6 @@ function draftModelIdForCatalog(
   return catalogHasModel(catalog, draft?.modelId) ? draft!.modelId! : null;
 }
 
-function storedRefFromSessionSummary(summary: SessionSummary): StoredSessionRef | null {
-  const providerSessionId = summary.session.providerSessionId;
-  if (!providerSessionId) {
-    return null;
-  }
-  return {
-    provider: summary.session.provider,
-    providerSessionId,
-    ...(summary.session.cwd ? { cwd: summary.session.cwd } : {}),
-    ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
-    ...(summary.session.title ? { title: summary.session.title } : {}),
-    ...(summary.session.preview ? { preview: summary.session.preview } : {}),
-    createdAt: summary.session.createdAt,
-    updatedAt: summary.session.updatedAt,
-    lastUsedAt: summary.session.updatedAt,
-    source: "previous_running",
-  };
-}
-
 export function App() {
   const {
     init,
@@ -391,8 +427,12 @@ export function App() {
     projections,
     unreadSessionIds,
     storedSessions,
+    optimisticallyArchivedSessionKeys,
+    storedSessionsCatalogLoaded,
+    storedSessionsCatalogDirty,
     recentSessions,
     workspaceDirs,
+    pinnedSidebarItems,
     debugScenarios,
     modelCatalogs,
     selectedSessionId,
@@ -407,6 +447,7 @@ export function App() {
     setWorkspaceDir,
     addWorkspace,
     removeWorkspace,
+    setSidebarItemPinned,
     setSelectedSessionId,
     setNewSessionProvider,
     loadProviderModels,
@@ -421,14 +462,21 @@ export function App() {
     setSessionModel,
     resumeHistorySession,
     archiveHistorySession,
+    restoreHistorySession,
     removeHistorySession,
     setVisibleSessionIds,
     markSessionsRead,
     reconcileUnreadFromLastSeen,
     claimControl,
     interruptSession,
+    cancelPendingSessionStartup,
     sendInput,
+    updateQueuedInput,
+    deleteQueuedInput,
+    reorderQueuedInput,
+    steerQueuedInput,
     ensureConversationLoaded,
+    refreshConversation,
     loadOlderConversation,
     ensureSessionConversationDirectory,
     loadConversationDirectoryTurn,
@@ -444,8 +492,12 @@ export function App() {
       projections: state.projections,
       unreadSessionIds: state.unreadSessionIds,
       storedSessions: state.storedSessions,
+      optimisticallyArchivedSessionKeys: state.optimisticallyArchivedSessionKeys,
+      storedSessionsCatalogLoaded: state.storedSessionsCatalogLoaded,
+      storedSessionsCatalogDirty: state.storedSessionsCatalogDirty,
       recentSessions: state.recentSessions,
       workspaceDirs: state.workspaceDirs,
+      pinnedSidebarItems: state.pinnedSidebarItems,
       debugScenarios: state.debugScenarios,
       modelCatalogs: state.modelCatalogs,
       selectedSessionId: state.selectedSessionId,
@@ -460,6 +512,7 @@ export function App() {
       setWorkspaceDir: state.setWorkspaceDir,
       addWorkspace: state.addWorkspace,
       removeWorkspace: state.removeWorkspace,
+      setSidebarItemPinned: state.setSidebarItemPinned,
       setSelectedSessionId: state.setSelectedSessionId,
       setNewSessionProvider: state.setNewSessionProvider,
       loadProviderModels: state.loadProviderModels,
@@ -474,14 +527,21 @@ export function App() {
       setSessionModel: state.setSessionModel,
       resumeHistorySession: state.resumeHistorySession,
       archiveHistorySession: state.archiveHistorySession,
+      restoreHistorySession: state.restoreHistorySession,
       removeHistorySession: state.removeHistorySession,
       setVisibleSessionIds: state.setVisibleSessionIds,
       markSessionsRead: state.markSessionsRead,
       reconcileUnreadFromLastSeen: state.reconcileUnreadFromLastSeen,
       claimControl: state.claimControl,
       interruptSession: state.interruptSession,
+      cancelPendingSessionStartup: state.cancelPendingSessionStartup,
       sendInput: state.sendInput,
+      updateQueuedInput: state.updateQueuedInput,
+      deleteQueuedInput: state.deleteQueuedInput,
+      reorderQueuedInput: state.reorderQueuedInput,
+      steerQueuedInput: state.steerQueuedInput,
       ensureConversationLoaded: state.ensureConversationLoaded,
+      refreshConversation: state.refreshConversation,
       loadOlderConversation: state.loadOlderConversation,
       ensureSessionConversationDirectory: state.ensureSessionConversationDirectory,
       loadConversationDirectoryTurn: state.loadConversationDirectoryTurn,
@@ -490,15 +550,11 @@ export function App() {
       respondToPermission: state.respondToPermission,
     })),
   );
-  const rememberedCanvasState = useMemo(
-    () =>
-      typeof window === "undefined"
-        ? null
-        : readRememberedCanvasState(window.localStorage),
-    [],
-  );
   const [stopConfirmSessionId, setStopConfirmSessionId] = useState<string | null>(null);
   const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
+  const [archiveConfirmTarget, setArchiveConfirmTarget] =
+    useState<ArchiveConfirmationTarget | null>(null);
+  const [archivePending, setArchivePending] = useState(false);
   const [deleteConfirmSessionId, setDeleteConfirmSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renameDialogSessionId, setRenameDialogSessionId] = useState<string | null>(null);
@@ -516,7 +572,6 @@ export function App() {
   const [resumeModelDrafts, setResumeModelDrafts] = useState<Record<string, ModelDraft>>({});
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
-  const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("single");
   const [sideLayoutByParentId, setSideLayoutByParentId] = useState<
     Record<string, SessionSideLayout>
   >(() =>
@@ -530,52 +585,40 @@ export function App() {
       sideLayoutByParentId,
     );
   }, [sideLayoutByParentId]);
-  const pendingBranchSessionIdsRef = useRef(new Set<string>());
-  const [pendingBranchSessionIds, setPendingBranchSessionIds] = useState<Set<string>>(
-    () => new Set(),
+  const pendingBranchOperationsRef = useRef(new Map<string, BranchOperationKind>());
+  const [pendingBranchOperations, setPendingBranchOperations] = useState<
+    Map<string, BranchOperationKind>
+  >(
+    () => new Map(),
   );
-  const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
-  const councilsRef = useRef<CouncilSnapshot[]>([]);
-  const councilRefreshRef = useRef<Promise<void> | null>(null);
-  const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
+  const {
+    councils,
+    councilsLoaded,
+    selectedCouncilId,
+    setSelectedCouncilId,
+    unreadCouncilIds,
+    updateCouncils,
+    refreshCouncils,
+    upsertCouncil,
+    removeCouncil: removeCouncilFromChats,
+    renameCouncil: renameCouncilFromChats,
+  } = useCouncilController();
   const [homeNewCouncilDialogOpen, setHomeNewCouncilDialogOpen] = useState(false);
   const [pendingNewSessionWorkspaceDir, setPendingNewSessionWorkspaceDir] = useState<string | null>(
     null,
   );
-  const previousWorkspaceDirRef = useRef(workspaceDir);
-  const [canvasLayout, setCanvasLayoutState] = useState<CanvasLayout>(
-    () => rememberedCanvasState?.layout ?? "two-horizontal",
-  );
-  const [canvasMaximizedPaneId, setCanvasMaximizedPaneId] = useState<CanvasPaneId | null>(null);
-  const [activeCanvasPaneId, setActiveCanvasPaneId] = useState<CanvasPaneId>(
-    () => rememberedCanvasState?.activePaneId ?? "canvas-1",
-  );
-  const [canvasRatios, setCanvasRatios] = useState<number[]>(() =>
-    rememberedCanvasState?.ratios ??
-    createCanvasLayoutRatios(rememberedCanvasState?.layout ?? "two-horizontal"),
-  );
-  const [mobileCanvasRatios, setMobileCanvasRatios] = useState<number[]>(() =>
-    createCanvasLayoutRatios(MOBILE_CANVAS_LAYOUT),
-  );
-  const [canvasPaneTargets, setCanvasPaneTargets] =
-    useState<Record<CanvasPaneId, CanvasPaneTarget>>(
-      () => rememberedCanvasState?.targets ?? createEmptyCanvasTargets(),
-    );
-  const [canvasPaneRightPanelsOpen, setCanvasPaneRightPanelsOpen] = useState<
-    Record<CanvasPaneId, boolean>
-  >(() => rememberedCanvasState?.rightPanelsOpen ?? createDefaultCanvasRightPanelsOpen());
-  const canvasStoredActivationInFlightRef = useRef<Set<string>>(new Set());
-  const canvasResumingStoredKeysRef = useRef<Set<string>>(new Set());
-  const [canvasResumingStoredKeys, setCanvasResumingStoredKeys] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [canvasPendingSessionActions, setCanvasPendingSessionActions] =
-    useState<Record<string, CanvasPendingSessionAction>>({});
+  const [newTaskWorkspaceDir, setNewTaskWorkspaceDir] = useState("");
   const [canvasNewSessionDrafts, setCanvasNewSessionDrafts] =
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
       createEmptyCanvasNewSessionDrafts(),
     );
   const [linkedFilePreviewPath, setLinkedFilePreviewPath] = useState<string | null>(null);
+  const inspectorOpenRequestIdRef = useRef(0);
+  const [mainInspectorOpenRequest, setMainInspectorOpenRequest] =
+    useState<InspectorOpenFileRequest | null>(null);
+  const [canvasInspectorOpenRequests, setCanvasInspectorOpenRequests] = useState<
+    Partial<Record<CanvasPaneId, InspectorOpenFileRequest>>
+  >({});
   const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
   const [terminalDialogMounted, setTerminalDialogMounted] = useState(false);
   const {
@@ -619,6 +662,50 @@ export function App() {
     selectedSessionId,
     workspaceDirs,
   });
+  const pageController = useWorkbenchPageController({
+    setSelectedSessionId,
+    setSelectedCouncilId,
+    setSelectedWorkspaceOnlyDir,
+    setLeftOpen,
+    setRightOpen,
+    setRightSidebarOpen,
+  });
+  const workbenchMode = pageController.mode;
+  const viewportTier = resolveResponsiveTier(viewportWidthPx);
+  const {
+    canvasMaximizedPaneId,
+    activeCanvasPaneId,
+    canvasPaneTargets,
+    canvasPaneRightPanelsOpen,
+    canvasStoredActivationInFlightRef,
+    canvasResumingStoredKeysRef,
+    canvasResumingStoredKeys,
+    canvasPendingSessionActions,
+    canvasRestoreErrors,
+    mobileCanvasLayoutOnly,
+    effectiveCanvasLayout,
+    visibleCanvasPaneIds,
+    setActiveCanvasPaneId,
+    setMobileCanvasLayout,
+    setCanvasPaneTargets,
+    setCanvasMaximizedPaneId,
+    setCanvasPendingSessionActions,
+    setCanvasPaneRightPanelOpen,
+    toggleCanvasPaneRightPanel,
+    markCanvasResumePending,
+    clearCanvasResumePending,
+    setCanvasLayout,
+    splitCanvasPane,
+    removeCanvasPane,
+    setCanvasPaneTarget,
+    reportCanvasRestoreError,
+    clearCanvasRestoreError,
+    toggleCanvasPaneMaximize,
+  } = useCanvasController({
+    projections,
+    viewportWidthPx,
+    workbenchMode,
+  });
 
   useEffect(() => {
     initializeTheme();
@@ -626,134 +713,60 @@ export function App() {
   }, [init]);
 
   useEffect(() => {
-    rememberCanvasState(
-      typeof window === "undefined" ? undefined : window.localStorage,
-      {
-        layout: canvasLayout,
-        activePaneId: activeCanvasPaneId,
-        ratios: canvasRatios,
-        targets: canvasPaneTargets,
-        rightPanelsOpen: canvasPaneRightPanelsOpen,
-      },
-    );
-  }, [
-    activeCanvasPaneId,
-    canvasLayout,
-    canvasPaneRightPanelsOpen,
-    canvasPaneTargets,
-    canvasRatios,
-  ]);
-
-  const updateCouncils = useCallback((update: CouncilStateUpdater): CouncilSnapshot[] => {
-    const next = update(councilsRef.current);
-    councilsRef.current = next;
-    setCouncils(next);
-    return next;
-  }, []);
-
-  const refreshCouncils = useCallback((): Promise<void> => {
-    if (councilRefreshRef.current) {
-      return councilRefreshRef.current;
+    if (!isInitialLoaded) {
+      return;
     }
-    const operation = api.listCouncils()
-      .then((response) => {
-        const mergedCouncils = updateCouncils((current) =>
-          mergeCouncilLists(current, response.councils),
-        );
-        setSelectedCouncilId((current) => {
-          if (!current || mergedCouncils.some((council) => council.id === current)) {
-            return current;
-          }
-          return null;
-        });
-      })
-      .catch(() => {
-        // The full Council page owns user-visible council loading errors.
-      })
-      .finally(() => {
-        if (councilRefreshRef.current === operation) {
-          councilRefreshRef.current = null;
-        }
-      });
-    councilRefreshRef.current = operation;
-    return operation;
-  }, [updateCouncils]);
-
-  const handleCouncilMessage = useCallback((council: Parameters<typeof mergeCouncilMessageEvent>[1], message: Parameters<typeof mergeCouncilMessageEvent>[2]) => {
-    updateCouncils((current) => {
-      const index = current.findIndex((candidate) => candidate.id === council.id);
-      const nextCouncil = mergeCouncilMessageEvent(index >= 0 ? current[index] : undefined, council, message);
-      return index >= 0
-        ? current.map((candidate, candidateIndex) => candidateIndex === index ? nextCouncil : candidate)
-        : [nextCouncil, ...current];
-    });
-  }, [updateCouncils]);
-
-  useCouncilTransport({
-    onMessage: handleCouncilMessage,
-    onRefresh: refreshCouncils,
-  });
-
-  const removeCouncilFromChats = useCallback(async (councilId: string) => {
-    await api.deleteCouncil(councilId);
-    await refreshCouncils();
-  }, [refreshCouncils]);
-
-  const renameCouncilFromChats = useCallback(async (councilId: string, title: string) => {
-    const response = await api.renameCouncil(councilId, { title });
-    updateCouncils((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.id === response.council.id);
-      const next = [...current];
-      if (existingIndex >= 0) {
-        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], response.council);
-      } else {
-        next.unshift(response.council);
-      }
-      return next;
-    });
-  }, [updateCouncils]);
-
-  const openCreatedCouncil = useCallback((council: CouncilSnapshot) => {
-    updateCouncils((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
-      const next = [...current];
-      if (existingIndex >= 0) {
-        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
-      } else {
-        next.unshift(council);
-      }
-      return next;
-    });
-    setSelectedSessionId(null);
-    setSelectedWorkspaceOnlyDir(null);
-    setWorkspaceDir(council.workspace);
-    setSelectedCouncilId(council.id);
-    setWorkbenchMode("council");
-    setRightSidebarOpen(false);
-    setRightOpen(false);
-    setLeftOpen(false);
-    void refreshCouncils();
-  }, [refreshCouncils, setSelectedSessionId, setWorkspaceDir, updateCouncils]);
+    void loadStoredSessionsCatalog();
+  }, [isInitialLoaded, loadStoredSessionsCatalog]);
 
   useEffect(() => {
-    const preloadSettingsDialog = window.setTimeout(() => {
-      void loadSettingsDialog();
-    }, 1200);
-    return () => window.clearTimeout(preloadSettingsDialog);
-  }, []);
+    if (newTaskWorkspaceDir) {
+      return;
+    }
+    const initialWorkspaceDir = workspaceDir.trim() || workspaceDirs[0] || "";
+    if (initialWorkspaceDir) {
+      setNewTaskWorkspaceDir(initialWorkspaceDir);
+    }
+  }, [newTaskWorkspaceDir, workspaceDir, workspaceDirs]);
 
-  const sessionCollections = useMemo(
-    () =>
-      deriveWorkbenchSessionCollections({
-        projections,
+  const openCreatedCouncil = useCallback((council: CouncilSnapshot) => {
+    upsertCouncil(council);
+    pageController.openCouncil(council.workspace, council.id);
+    void refreshCouncils();
+  }, [pageController.openCouncil, refreshCouncils, upsertCouncil]);
+
+  const sessionCollections = useMemo(() => {
+    const visibleProjections = new Map(
+      [...projections].filter(([, projection]) => {
+        const providerSessionId = projection.summary.session.providerSessionId;
+        return !providerSessionId || !optimisticallyArchivedSessionKeys.has(
+          `${projection.summary.session.provider}:${providerSessionId}`,
+        );
+      }),
+    );
+    const visibleStoredSessions = storedSessions.filter(
+      (session) =>
+        !optimisticallyArchivedSessionKeys.has(
+          `${session.provider}:${session.providerSessionId}`,
+        ),
+    );
+    return deriveWorkbenchSessionCollections({
+        projections: visibleProjections,
         clientId,
         workspaceDirs,
-        storedSessions,
+        storedSessions: visibleStoredSessions,
         workspaceDir,
         workspaceSortMode,
-      }),
-    [clientId, projections, storedSessions, workspaceDir, workspaceDirs, workspaceSortMode],
-  );
+      });
+  }, [
+    clientId,
+    optimisticallyArchivedSessionKeys,
+    projections,
+    storedSessions,
+    workspaceDir,
+    workspaceDirs,
+    workspaceSortMode,
+  ]);
   const {
     runningSessionEntries,
     runningSessionActivityAtById,
@@ -761,9 +774,18 @@ export function App() {
     workspaceSections,
   } = sessionCollections;
   const {
-    sanitizedPinnedSessionIdByWorkspace,
-    togglePinnedSession,
-  } = useWorkbenchSidebarPreferences(workspaceSections, councils);
+    sanitizedPinnedSidebarItems,
+    togglePinnedSidebarItem,
+  } = useWorkbenchSidebarPreferences(
+    pinnedSidebarItems,
+    workspaceSections,
+    storedSessions,
+    {
+      sessions: isInitialLoaded,
+      storedSessions: storedSessionsCatalogLoaded && !storedSessionsCatalogDirty,
+    },
+    setSidebarItemPinned,
+  );
 
   const sideProjectionsByParentId = useMemo(() => {
     const grouped = new Map<string, typeof sideSessionEntries>();
@@ -780,23 +802,27 @@ export function App() {
   }, [sideSessionEntries]);
 
   const handleForkSession = useCallback(
-    (parentSessionId: string, kind: "fork" | "side") => {
-      if (pendingBranchSessionIdsRef.current.has(parentSessionId)) {
+    (parentSessionId: string, kind: BranchOperationKind) => {
+      if (pendingBranchOperationsRef.current.has(parentSessionId)) {
         return;
       }
-      pendingBranchSessionIdsRef.current.add(parentSessionId);
-      setPendingBranchSessionIds(new Set(pendingBranchSessionIdsRef.current));
+      const lastTurnId = latestCompletedProviderTurnId(
+        projections.get(parentSessionId)?.conversation?.turns,
+      );
+      pendingBranchOperationsRef.current.set(parentSessionId, kind);
+      setPendingBranchOperations(new Map(pendingBranchOperationsRef.current));
       void forkSession(parentSessionId, {
         kind,
         workspaceMode: "shared",
+        ...(lastTurnId ? { lastTurnId } : {}),
       })
         .catch(() => undefined)
         .finally(() => {
-          pendingBranchSessionIdsRef.current.delete(parentSessionId);
-          setPendingBranchSessionIds(new Set(pendingBranchSessionIdsRef.current));
+          pendingBranchOperationsRef.current.delete(parentSessionId);
+          setPendingBranchOperations(new Map(pendingBranchOperationsRef.current));
         });
     },
-    [forkSession],
+    [forkSession, projections],
   );
 
   const handleRecreateSide = useCallback(
@@ -806,6 +832,32 @@ export function App() {
         .catch(() => undefined);
     },
     [closeSession, handleForkSession],
+  );
+
+  const handleOpenQueuedInputSide = useCallback(
+    async (parentSessionId: string, item: SessionQueuedInput) => {
+      if (pendingBranchOperationsRef.current.has(parentSessionId)) {
+        return;
+      }
+      const lastTurnId = latestCompletedProviderTurnId(
+        projections.get(parentSessionId)?.conversation?.turns,
+      );
+      pendingBranchOperationsRef.current.set(parentSessionId, "side");
+      setPendingBranchOperations(new Map(pendingBranchOperationsRef.current));
+      try {
+        const sideSessionId = await forkSession(parentSessionId, {
+          kind: "side",
+          workspaceMode: "shared",
+          ...(lastTurnId ? { lastTurnId } : {}),
+        });
+        await sendInput(sideSessionId, item.text, item.attachments);
+        await deleteQueuedInput(parentSessionId, item.clientMessageId);
+      } finally {
+        pendingBranchOperationsRef.current.delete(parentSessionId);
+        setPendingBranchOperations(new Map(pendingBranchOperationsRef.current));
+      }
+    },
+    [deleteQueuedInput, forkSession, projections, sendInput],
   );
 
   const runtimeStatusBySessionId = useMemo(
@@ -823,17 +875,17 @@ export function App() {
       ),
     [projections],
   );
-
-  const mobileCanvasLayoutOnly = shouldUseMobileCanvasLayout(viewportWidthPx);
-  const effectiveCanvasLayout = mobileCanvasLayoutOnly ? MOBILE_CANVAS_LAYOUT : canvasLayout;
-  const effectiveCanvasMaximizedPaneId = canvasMaximizedPaneId;
-  const effectiveCanvasRatios = mobileCanvasLayoutOnly
-    ? mobileCanvasRatios
-    : canvasRatios;
-  const visibleCanvasPaneIds = getCanvasVisiblePaneIds(
-    effectiveCanvasLayout,
-    effectiveCanvasMaximizedPaneId,
+  const erroredSessionIds = useMemo(
+    () =>
+      new Set(
+        [...projections.entries()]
+          .filter(([, projection]) => projectionHasLatestTurnError(projection))
+          .map(([sessionId]) => sessionId),
+      ),
+    [projections],
   );
+
+  const effectiveCanvasMaximizedPaneId = canvasMaximizedPaneId;
   const resolveCanvasProjection = (paneId: CanvasPaneId) => {
     const target = canvasPaneTargets[paneId];
     return resolveCanvasTargetProjectionFromState(target, projections);
@@ -901,10 +953,10 @@ export function App() {
   const visibleSessionIdsRef = useRef(visibleSessionIds);
   const projectionsRef = useRef(projections);
   const isInitialLoadedRef = useRef(isInitialLoaded);
-  const visibleConversationCatchupInFlightRef = useRef(new Map<string, Promise<void>>());
   const visibleConversationCatchupFreshRef = useRef(new Map<string, { key: string; at: number }>());
   const foregroundRecoveryTimerRef = useRef<number | null>(null);
-  const foregroundRecoveryInFlightRef = useRef<Promise<void> | null>(null);
+  const foregroundRecoveryControllerRef = useRef<AbortController | null>(null);
+  const foregroundWakeTickAtRef = useRef(Date.now());
 
   useEffect(() => {
     visibleSessionIdsRef.current = visibleSessionIds;
@@ -926,17 +978,12 @@ export function App() {
     return document.visibilityState === "visible" && document.hasFocus();
   }, []);
 
-  const catchUpVisibleConversations = useCallback(async () => {
+  const catchUpVisibleConversations = useCallback(async (signal: AbortSignal) => {
     if (!isInitialLoadedRef.current) {
-      return;
+      return true;
     }
-    const requests: Promise<void>[] = [];
+    const requests: Promise<boolean>[] = [];
     for (const sessionId of visibleSessionIdsRef.current) {
-      const inFlight = visibleConversationCatchupInFlightRef.current.get(sessionId);
-      if (inFlight) {
-        requests.push(inFlight);
-        continue;
-      }
       const projection = projectionsRef.current.get(sessionId);
       if (!projection?.summary.session.providerSessionId) {
         continue;
@@ -949,49 +996,83 @@ export function App() {
       ) {
         continue;
       }
-      const request = ensureConversationLoaded(sessionId)
-        .then(() => undefined)
-        .catch(() => undefined)
-        .finally(() => {
+      const request = refreshConversation(sessionId, {
+        signal,
+        replaceActive: true,
+        suppressError: true,
+      }).then((succeeded) => {
+        if (!succeeded || signal.aborted) {
+          return false;
+        }
+        const refreshedProjection = useSessionStore.getState().projections.get(sessionId);
+        if (refreshedProjection) {
           visibleConversationCatchupFreshRef.current.set(sessionId, {
-            key: freshnessKey,
+            key: `${refreshedProjection.summary.session.updatedAt ?? ""}:${refreshedProjection.lastSeq}`,
             at: Date.now(),
           });
-          visibleConversationCatchupInFlightRef.current.delete(sessionId);
-        });
-      visibleConversationCatchupInFlightRef.current.set(sessionId, request);
+        }
+        return true;
+      });
       requests.push(request);
     }
-    await Promise.all(requests);
-  }, [ensureConversationLoaded]);
+    const results = await Promise.all(requests);
+    return results.every(Boolean);
+  }, [refreshConversation]);
 
-  const reconcileVisibleUnreadState = useCallback(async () => {
-    await catchUpVisibleConversations();
+  const reconcileVisibleUnreadState = useCallback(() => {
     const activeVisibleSessionIds = workbenchHasForegroundAttention()
       ? visibleSessionIdsRef.current
       : [];
     reconcileUnreadFromLastSeen(activeVisibleSessionIds);
   }, [
-    catchUpVisibleConversations,
     reconcileUnreadFromLastSeen,
     workbenchHasForegroundAttention,
   ]);
 
   const runForegroundRecovery = useCallback(async () => {
-    if (foregroundRecoveryInFlightRef.current) {
-      return foregroundRecoveryInFlightRef.current;
-    }
-    const request = recoverTransport()
-      .catch(() => undefined)
-      .then(() => reconcileVisibleUnreadState())
-      .finally(() => {
-        if (foregroundRecoveryInFlightRef.current === request) {
-          foregroundRecoveryInFlightRef.current = null;
-        }
+    foregroundRecoveryControllerRef.current?.abort();
+    const recoveryController = new AbortController();
+    foregroundRecoveryControllerRef.current = recoveryController;
+    try {
+      await runForegroundRecoveryLoop({
+        signal: recoveryController.signal,
+        retryDelaysMs: FOREGROUND_RECOVERY_RETRY_DELAYS_MS,
+        isVisible: () =>
+          typeof document === "undefined" || document.visibilityState === "visible",
+        onConversationRecovered: reconcileVisibleUnreadState,
+        runAttempt: async ({ signal }) => {
+          const attemptController = new AbortController();
+          const abortAttempt = () => attemptController.abort(signal.reason);
+          signal.addEventListener("abort", abortAttempt, { once: true });
+          const timeout = window.setTimeout(
+            () => attemptController.abort(),
+            FOREGROUND_RECOVERY_TIMEOUT_MS,
+          );
+          try {
+            const [transportRecovered, conversationRecovered] = await Promise.all([
+              recoverTransport({
+                signal: attemptController.signal,
+                replaceActive: true,
+                suppressError: true,
+              }).then(
+                () => true,
+                () => false,
+              ),
+              catchUpVisibleConversations(attemptController.signal).catch(() => false),
+            ]);
+            return { transportRecovered, conversationRecovered };
+          } finally {
+            window.clearTimeout(timeout);
+            signal.removeEventListener("abort", abortAttempt);
+          }
+        },
       });
-    foregroundRecoveryInFlightRef.current = request;
-    return request;
-  }, [reconcileVisibleUnreadState, recoverTransport]);
+    } finally {
+      if (foregroundRecoveryControllerRef.current === recoveryController) {
+        foregroundRecoveryControllerRef.current = null;
+      }
+    }
+  }, [catchUpVisibleConversations, reconcileVisibleUnreadState, recoverTransport]);
 
   const scheduleForegroundRecovery = useCallback(() => {
     if (typeof document !== "undefined" && document.visibilityState !== "visible") {
@@ -1023,103 +1104,83 @@ export function App() {
     workbenchHasForegroundAttention,
   ]);
 
-  useEffect(() => {
-    if (!mobileCanvasLayoutOnly || workbenchMode !== "canvas") {
-      return;
-    }
-    if (!getCanvasVisiblePaneIds(MOBILE_CANVAS_LAYOUT).includes(activeCanvasPaneId)) {
-      setActiveCanvasPaneId("canvas-1");
-    }
-  }, [activeCanvasPaneId, mobileCanvasLayoutOnly, workbenchMode]);
-
-  const setCanvasPaneRightPanelOpen = useCallback((paneId: CanvasPaneId, open: boolean) => {
-    setCanvasPaneRightPanelsOpen((current) => ({
-      ...current,
-      [paneId]: open,
-    }));
-  }, []);
-
   const openLinkedFilePreview = useCallback((path: string) => {
     setLinkedFilePreviewPath(path);
   }, []);
 
-  const toggleCanvasPaneRightPanel = useCallback((paneId: CanvasPaneId) => {
-    setCanvasPaneRightPanelsOpen((current) => ({
-      ...current,
-      [paneId]: !current[paneId],
-    }));
-  }, []);
-
-  const markCanvasResumePending = useCallback((sessionId: string, ref: StoredSessionRef) => {
-    const key = canvasStoredRefKey(ref);
-    canvasResumingStoredKeysRef.current.add(key);
-    setCanvasResumingStoredKeys((current) => {
-      if (current.has(key)) {
-        return current;
-      }
-      const next = new Set(current);
-      next.add(key);
-      return next;
-    });
-    setCanvasPendingSessionActions((current) => {
-      if (current[sessionId]?.kind === "resume_history") {
-        return current;
-      }
+  const createTurnFileOpenRequest = useCallback(
+    (sessionId: string, turnId: string, path: string): InspectorOpenFileRequest => {
+      inspectorOpenRequestIdRef.current += 1;
       return {
-        ...current,
-        [sessionId]: { kind: "resume_history", sessionId },
+        id: inspectorOpenRequestIdRef.current,
+        kind: "turn_changes",
+        sessionId,
+        turnId,
+        path,
       };
-    });
-  }, []);
+    },
+    [],
+  );
 
-  const clearCanvasResumePending = useCallback((sessionId: string, ref: StoredSessionRef) => {
-    const key = canvasStoredRefKey(ref);
-    canvasResumingStoredKeysRef.current.delete(key);
-    setCanvasResumingStoredKeys((current) => {
-      if (!current.has(key)) {
-        return current;
-      }
-      const next = new Set(current);
-      next.delete(key);
-      return next;
-    });
-    setCanvasPendingSessionActions((current) => {
-      if (!current[sessionId]) {
+  const openMainTurnFile = useCallback(
+    (sessionId: string, turnId: string, path: string) => {
+      setMainInspectorOpenRequest(createTurnFileOpenRequest(sessionId, turnId, path));
+      setRightSidebarOpen(true);
+      setRightOpen(true);
+    },
+    [createTurnFileOpenRequest, setRightOpen, setRightSidebarOpen],
+  );
+
+  const openCanvasTurnFile = useCallback(
+    (paneId: CanvasPaneId, sessionId: string, turnId: string, path: string) => {
+      const request = createTurnFileOpenRequest(sessionId, turnId, path);
+      setCanvasInspectorOpenRequests((current) => ({
+        ...current,
+        [paneId]: request,
+      }));
+      setCanvasPaneRightPanelOpen(paneId, true);
+    },
+    [createTurnFileOpenRequest, setCanvasPaneRightPanelOpen],
+  );
+
+  useEffect(() => {
+    setMainInspectorOpenRequest(null);
+  }, [selectedSessionId]);
+
+  const setCanvasPaneSession = (paneId: CanvasPaneId, sessionId: string) => {
+    setCanvasInspectorOpenRequests((current) => {
+      if (!current[paneId]) {
         return current;
       }
       const next = { ...current };
-      delete next[sessionId];
+      delete next[paneId];
       return next;
     });
-  }, []);
-
-  const setCanvasLayout = (layout: CanvasLayout) => {
-    setCanvasLayoutState(layout);
-    setCanvasMaximizedPaneId(null);
-    setCanvasRatios(createCanvasLayoutRatios(layout));
-    if (!getCanvasVisiblePaneIds(layout).includes(activeCanvasPaneId)) {
-      setActiveCanvasPaneId("canvas-1");
-    }
-  };
-
-  const setCanvasPaneTarget = (paneId: CanvasPaneId, target: CanvasPaneTarget) => {
-    setCanvasPaneTargets((current) =>
-      applyCanvasPaneTarget(current, paneId, target, useSessionStore.getState().projections),
-    );
-    setActiveCanvasPaneId(paneId);
-  };
-
-  const setCanvasPaneSession = (paneId: CanvasPaneId, sessionId: string) => {
-    setCanvasPaneTarget(paneId, { kind: "session", sessionId });
+    setCanvasPaneTarget(paneId, createCanvasSessionTarget(sessionId, projections));
     setSelectedSessionId(sessionId);
   };
 
   const setCanvasPaneStoredRef = (paneId: CanvasPaneId, ref: StoredSessionRef) => {
+    setCanvasInspectorOpenRequests((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     setCanvasPaneTarget(paneId, { kind: "stored", ref });
-    void activateHistorySession(ref, { confirmCreateMissingWorkspace });
   };
 
   const setCanvasPaneCouncil = (paneId: CanvasPaneId, councilId: string) => {
+    setCanvasInspectorOpenRequests((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     setCanvasPaneTarget(paneId, { kind: "council", councilId });
     setSelectedCouncilId(councilId);
   };
@@ -1129,7 +1190,43 @@ export function App() {
     const council = resolveCanvasCouncil(paneId);
     const sessionId = projection?.summary.session.id;
     const shouldCloseReadOnlyReplay = projection ? isReadOnlyReplay(projection.summary) : false;
+    setCanvasInspectorOpenRequests((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     setCanvasPaneTarget(paneId, { kind: "empty" });
+    setCanvasPaneRightPanelOpen(paneId, false);
+    if (sessionId && selectedSessionId === sessionId) {
+      setSelectedSessionId(null);
+    }
+    if (council?.id && selectedCouncilId === council.id) {
+      setSelectedCouncilId(null);
+    }
+    if (sessionId && shouldCloseReadOnlyReplay) {
+      void closeSession(sessionId);
+    }
+  };
+
+  const removeCanvasPaneAndContent = (paneId: CanvasPaneId) => {
+    const projection = resolveCanvasProjection(paneId);
+    const council = resolveCanvasCouncil(paneId);
+    const sessionId = projection?.summary.session.id;
+    const shouldCloseReadOnlyReplay = projection ? isReadOnlyReplay(projection.summary) : false;
+    if (!removeCanvasPane(paneId)) {
+      return;
+    }
+    setCanvasInspectorOpenRequests((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     if (sessionId && selectedSessionId === sessionId) {
       setSelectedSessionId(null);
     }
@@ -1180,6 +1277,28 @@ export function App() {
       clearCanvasTargetsForStoredSession(current, session, options),
     );
   };
+  const archiveHistorySessionAndClearCanvasTargets = async (
+    session: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+  ) => {
+    const replay = [...useSessionStore.getState().projections.values()].find(
+      (entry) =>
+        entry.summary.session.provider === session.provider &&
+        entry.summary.session.providerSessionId === session.providerSessionId &&
+        isReadOnlyReplay(entry.summary),
+    );
+    await archiveHistorySession(
+      session,
+      replay ? { runtimeSessionId: replay.summary.session.id } : undefined,
+    );
+    setCanvasPaneTargets((current) =>
+      clearCanvasTargetsForStoredSession(current, session, {
+        ...(replay ? { sessionId: replay.summary.session.id } : {}),
+      }),
+    );
+    if (replay && useSessionStore.getState().selectedSessionId === replay.summary.session.id) {
+      setSelectedSessionId(null);
+    }
+  };
   const archiveSessionAndClearCanvasTargets = async (sessionId: string) => {
     const summary = useSessionStore.getState().projections.get(sessionId)?.summary;
     const providerSessionId = summary?.session.providerSessionId;
@@ -1190,14 +1309,41 @@ export function App() {
       provider: summary.session.provider,
       providerSessionId,
     };
-    await closeSession(sessionId);
-    await archiveHistorySession(storedRef);
+    await archiveHistorySession(storedRef, { runtimeSessionId: sessionId });
     setCanvasPaneTargets((current) =>
       clearCanvasTargetsForStoredSession(current, storedRef, { sessionId }),
     );
     if (useSessionStore.getState().selectedSessionId === sessionId) {
       setSelectedSessionId(null);
     }
+  };
+  const requestArchiveHistorySession = (
+    session: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+  ) => {
+    const current = useSessionStore.getState();
+    const stored = [...current.storedSessions, ...current.recentSessions].find(
+      (candidate) =>
+        candidate.provider === session.provider &&
+        candidate.providerSessionId === session.providerSessionId,
+    );
+    setArchiveConfirmTarget({
+      kind: "stored",
+      session,
+      title: stored?.title ?? stored?.preview ?? session.providerSessionId,
+      running: false,
+    });
+  };
+  const requestArchiveRuntimeSession = (sessionId: string) => {
+    const summary = useSessionStore.getState().projections.get(sessionId)?.summary;
+    if (!summary?.session.providerSessionId) {
+      return;
+    }
+    setArchiveConfirmTarget({
+      kind: "runtime",
+      sessionId,
+      title: summary.session.title ?? summary.session.preview ?? summary.session.id,
+      running: summary.session.status === "running" && !isReadOnlyReplay(summary),
+    });
   };
   const removeFilteredHistoryWorkspaceSessions = async (
     _workspaceDir: string,
@@ -1212,11 +1358,13 @@ export function App() {
   };
 
   const stopSessionAndClearCanvasPane = async (sessionId: string) => {
-    const affectedPaneIds = CANVAS_PANE_IDS.filter((paneId) => {
+    const affectedPaneTargets = new Map(CANVAS_PANE_IDS.flatMap((paneId) => {
       const target = canvasPaneTargets[paneId];
-      return target.kind === "session" && target.sessionId === sessionId;
-    });
-    if (affectedPaneIds.length === 0) {
+      return target.kind === "session" && target.sessionId === sessionId
+        ? [[paneId, target] as const]
+        : [];
+    }));
+    if (affectedPaneTargets.size === 0) {
       await closeSession(sessionId);
       return;
     }
@@ -1228,9 +1376,9 @@ export function App() {
       setCanvasPaneTargets((current) => {
         let changed = false;
         const next = { ...current };
-        for (const paneId of affectedPaneIds) {
+        for (const [paneId, target] of affectedPaneTargets) {
           if (current[paneId].kind === "empty") {
-            next[paneId] = { kind: "session", sessionId };
+            next[paneId] = target;
             changed = true;
           }
         }
@@ -1240,50 +1388,19 @@ export function App() {
     }
   };
 
-  const toggleCanvasPaneMaximize = (paneId: CanvasPaneId) => {
-    setActiveCanvasPaneId(paneId);
-    setCanvasMaximizedPaneId((current) => (current === paneId ? null : paneId));
-  };
-
   const enterCanvasMode = () => {
-    if (
-      selectedSessionId &&
-      shouldInitializeCanvasPaneFromSelection(canvasPaneTargets[activeCanvasPaneId])
-    ) {
-      setCanvasPaneTarget(activeCanvasPaneId, { kind: "session", sessionId: selectedSessionId });
-    }
-    setWorkbenchMode("canvas");
-    setRightSidebarOpen(false);
-    setRightOpen(false);
+    pageController.enterCanvas();
   };
 
   const exitCanvasMode = () => {
-    if (activeCanvasSummary) {
-      setSelectedSessionId(activeCanvasSummary.session.id);
-    }
-    if (activeCanvasCouncil) {
-      setSelectedCouncilId(activeCanvasCouncil.id);
-    }
-    setWorkbenchMode("single");
+    pageController.exitCanvas({
+      sessionId: activeCanvasSummary?.session.id ?? null,
+      councilId: activeCanvasCouncil?.id ?? null,
+    });
   };
 
-  const hideCouncilMode = () => {
-    setSelectedCouncilId(null);
-    setWorkbenchMode("single");
-    setRightSidebarOpen(false);
-    setRightOpen(false);
-    setLeftOpen(false);
-  };
-
-  const goHome = () => {
-    setWorkbenchMode("single");
-    setSelectedWorkspaceOnlyDir(null);
-    setSelectedSessionId(null);
-    setSelectedCouncilId(null);
-    setRightSidebarOpen(false);
-    setRightOpen(false);
-    setLeftOpen(false);
-  };
+  const hideCouncilMode = pageController.hideCouncil;
+  const goHome = pageController.goHome;
 
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
   const selectedSummary = selectedProjection?.summary ?? null;
@@ -1296,6 +1413,9 @@ export function App() {
     ? canSessionRespondToPermissions(selectedSummary)
     : false;
   const selectedIsReadOnlyReplay = selectedSummary ? isReadOnlyReplay(selectedSummary) : false;
+  const selectedStoredRef = selectedSummary
+    ? resolveStoredSessionRef(selectedSummary, recentSessions, storedSessions)
+    : null;
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary,
     selectedProjection,
@@ -1309,6 +1429,7 @@ export function App() {
     : false;
   const composerSurface = deriveComposerSurface({
     selectedSummary,
+    historyArchived: selectedStoredRef ? isStoredSessionArchived(selectedStoredRef) : false,
     hasControl: Boolean(hasControl),
     isGenerating,
     pendingSessionAction,
@@ -1350,7 +1471,18 @@ export function App() {
     for (const paneId of visibleCanvasPaneIds) {
       const target = canvasPaneTargets[paneId];
       const projection = resolveCanvasProjection(paneId);
-      if (target.kind === "stored" && !projection) {
+      const restorableRef =
+        target.kind === "stored"
+          ? target.ref
+          : target.kind === "session"
+            ? target.ref
+            : undefined;
+      const restoreKey = canvasRestorableTargetKey(target);
+      const restoreError = restoreKey ? canvasRestoreErrors[restoreKey] : undefined;
+      if (restorableRef && !projection) {
+        if (restoreError) {
+          continue;
+        }
         const globalOpeningTransition = canvasOpeningTransitionForTarget(
           target,
           pendingSessionAction,
@@ -1360,15 +1492,36 @@ export function App() {
         if (globalOpeningTransition?.kind === "resume_history") {
           continue;
         }
-        const activationKey = `${target.ref.provider}:${target.ref.providerSessionId}`;
+        const activationKey = `${restorableRef.provider}:${restorableRef.providerSessionId}`;
         if (!canvasStoredActivationInFlightRef.current.has(activationKey)) {
           canvasStoredActivationInFlightRef.current.add(activationKey);
-          void activateHistorySession(target.ref, { confirmCreateMissingWorkspace })
-            .catch(() => undefined)
+          void activateHistorySession(restorableRef, { confirmCreateMissingWorkspace })
+            .catch((error) => {
+              reportCanvasRestoreError(target, readErrorMessage(error));
+            })
             .finally(() => {
               canvasStoredActivationInFlightRef.current.delete(activationKey);
             });
         }
+        continue;
+      }
+      if (projection && restoreError) {
+        clearCanvasRestoreError(target);
+      }
+      if (
+        target.kind === "session" &&
+        !projection &&
+        !target.ref &&
+        isInitialLoaded
+      ) {
+        setCanvasPaneTargets((current) => {
+          const currentTarget = current[paneId];
+          return currentTarget.kind === "session" &&
+            currentTarget.sessionId === target.sessionId &&
+            !currentTarget.ref
+            ? { ...current, [paneId]: { kind: "empty" } }
+            : current;
+        });
         continue;
       }
       if (
@@ -1387,10 +1540,14 @@ export function App() {
     activateHistorySession,
     canvasResumingStoredKeys,
     canvasPaneTargets,
+    canvasRestoreErrors,
+    clearCanvasRestoreError,
     ensureConversationLoaded,
     pendingSessionAction,
     pendingSessionTransition,
     projections,
+    reportCanvasRestoreError,
+    isInitialLoaded,
     visibleCanvasPaneKey,
     workbenchMode,
   ]);
@@ -1399,13 +1556,48 @@ export function App() {
     selectedSummary,
     pendingSessionTransition,
   });
+  const sessionInspectorAvailable =
+    workbenchMode === "single" &&
+    primaryPaneState.kind === "active" &&
+    selectedSummary !== null;
+  useEffect(() => {
+    if (sessionInspectorAvailable) {
+      return;
+    }
+    setRightSidebarOpen(false);
+    setRightOpen(false);
+  }, [sessionInspectorAvailable, setRightOpen, setRightSidebarOpen]);
   const activeOpeningSession = primaryPaneState.openingSession;
-  const sidebarWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const sidebarWorkspaceDir = workspaceDirs.length > 0
+    ? newTaskWorkspaceDir || workspaceDirs[0] || ""
+    : "";
   const emptyStateAvailableWorkspaceDir =
     pendingNewSessionWorkspaceDir ?? sidebarWorkspaceDir;
   const currentProvider = newSessionProvider as ProviderChoice;
   const currentModelCatalogState =
     modelCatalogs[providerModelCatalogKey(currentProvider, emptyStateAvailableWorkspaceDir)];
+  useEffect(() => {
+    if (
+      !isInitialLoaded ||
+      workbenchMode !== "single" ||
+      primaryPaneState.kind !== "empty" ||
+      !emptyStateAvailableWorkspaceDir
+    ) {
+      return;
+    }
+    void loadProviderModels(currentProvider, {
+      cwd: emptyStateAvailableWorkspaceDir,
+      background: true,
+      reason: "new-session-visible",
+    }).catch(() => undefined);
+  }, [
+    currentProvider,
+    emptyStateAvailableWorkspaceDir,
+    isInitialLoaded,
+    loadProviderModels,
+    primaryPaneState.kind,
+    workbenchMode,
+  ]);
   const startModeControl = resolveSessionModeControlState({
     provider: currentProvider,
     draft: startModeDrafts[currentProvider],
@@ -1471,36 +1663,75 @@ export function App() {
         catalog: selectedModelCatalogState?.catalog ?? null,
       })
     : null;
-  useEffect(() => {
-    const previousWorkspaceDir = previousWorkspaceDirRef.current;
-    previousWorkspaceDirRef.current = workspaceDir;
-    if (previousWorkspaceDir === workspaceDir) {
-      return;
+  const selectedHistoryResumeRequest = (() => {
+    const optionValues =
+      (resumeDraftModelId ? resumeModelDraft?.optionValues : undefined) ??
+      (resumeDraftModelId
+        ? buildModelOptionValuesFromReasoning({
+            catalog: selectedModelCatalogState?.catalog,
+            modelId: resumeDraftModelId,
+            reasoningId: resumeModelDraft?.reasoningId ?? null,
+          })
+        : undefined);
+    return {
+      confirmCreateMissingWorkspace,
+      ...(resumeModeControl?.effectiveModeId
+        ? { modeId: resumeModeControl.effectiveModeId }
+        : {}),
+      ...(resumeDraftModelId ? { modelId: resumeDraftModelId } : {}),
+      ...(optionValues !== undefined ? { optionValues } : {}),
+      ...(resumeDraftModelId && resumeModelDraft?.reasoningId
+        ? { reasoningId: resumeModelDraft.reasoningId }
+        : {}),
+    };
+  })();
+  const sendSelectedInput: typeof sendInput = async (sessionId, text, attachments) => {
+    if (
+      !selectedIsReadOnlyReplay ||
+      selectedSummary?.session.id !== sessionId
+    ) {
+      return sendInput(sessionId, text, attachments);
     }
-    if (pendingNewSessionWorkspaceDir) {
-      setPendingNewSessionWorkspaceDir(null);
+    if (selectedStoredRef?.providerState?.archived === true) {
+      throw new Error("Archived sessions are read-only.");
     }
-  }, [pendingNewSessionWorkspaceDir, workspaceDir]);
+    const resumedSessionId = await resumeHistorySession(
+      sessionId,
+      {
+        ...selectedHistoryResumeRequest,
+        initialInput: text,
+        ...(attachments !== undefined ? { initialAttachments: attachments } : {}),
+      },
+    );
+    if (!resumedSessionId) {
+      throw new Error("The session could not be resumed.");
+    }
+    return;
+  };
   const {
     composerRef,
     draft,
-    draftImageDataUrls,
-    draftImageCount,
+    draftAttachments,
+    draftAttachmentCount,
+    draftAttachmentUploadPending,
+    draftAttachmentError,
     emptyStateComposerRef,
     emptyStateDraft,
-    emptyStateImageDataUrls,
-    emptyStateImageCount,
+    emptyStateAttachments,
+    emptyStateAttachmentCount,
+    emptyStateAttachmentUploadPending,
+    emptyStateAttachmentError,
     sendPending,
     setDraft,
     setEmptyStateDraft,
     handleDraftPaste,
     handleEmptyStatePaste,
-    clearDraftImages,
-    clearEmptyStateImages,
-    removeDraftImage,
-    removeEmptyStateImage,
-    removeLastDraftImage,
-    removeLastEmptyStateImage,
+    uploadDraftFiles,
+    uploadEmptyStateFiles,
+    removeDraftAttachment,
+    removeEmptyStateAttachment,
+    removeLastDraftAttachment,
+    removeLastEmptyStateAttachment,
     handleSend,
     handleEmptyStateSend,
     insertDraftReference,
@@ -1514,9 +1745,12 @@ export function App() {
     startReasoningId: startModelId ? startReasoningId : null,
     ...(startOptionValues !== undefined ? { startOptionValues } : {}),
     confirmCreateMissingWorkspace,
-    sendInput,
+    sendInput: sendSelectedInput,
     startSession: async (options) => {
       const result = await startSession(options);
+      if (result && options?.cwd) {
+        setNewTaskWorkspaceDir(options.cwd);
+      }
       setPendingNewSessionWorkspaceDir(null);
       return result;
     },
@@ -1620,23 +1854,66 @@ export function App() {
   };
 
   useEffect(() => {
-    const handleForegroundResume = () => scheduleForegroundRecovery();
-    const handlePageShow = () => scheduleForegroundRecovery();
-    const handleOnline = () => scheduleForegroundRecovery();
-
-    document.addEventListener("visibilitychange", handleForegroundResume);
-    window.addEventListener("focus", handleForegroundResume);
-    window.addEventListener("pageshow", handlePageShow);
-    window.addEventListener("online", handleOnline);
-    return () => {
-      document.removeEventListener("visibilitychange", handleForegroundResume);
-      window.removeEventListener("focus", handleForegroundResume);
-      window.removeEventListener("pageshow", handlePageShow);
-      window.removeEventListener("online", handleOnline);
+    const cancelForegroundRecovery = () => {
       if (foregroundRecoveryTimerRef.current !== null) {
         window.clearTimeout(foregroundRecoveryTimerRef.current);
         foregroundRecoveryTimerRef.current = null;
       }
+      foregroundRecoveryControllerRef.current?.abort();
+      foregroundRecoveryControllerRef.current = null;
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        foregroundWakeTickAtRef.current = Date.now();
+        scheduleForegroundRecovery();
+        return;
+      }
+      cancelForegroundRecovery();
+    };
+    const handleForegroundResume = () => {
+      foregroundWakeTickAtRef.current = Date.now();
+      scheduleForegroundRecovery();
+    };
+    const handlePageShow = () => handleForegroundResume();
+    const handleOnline = () => handleForegroundResume();
+    const detectForegroundWake = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      const now = Date.now();
+      const previousTickAt = foregroundWakeTickAtRef.current;
+      if (now - previousTickAt < FOREGROUND_WAKE_HEARTBEAT_MS) {
+        return;
+      }
+      foregroundWakeTickAtRef.current = now;
+      if (
+        foregroundClockWasSuspended(
+          previousTickAt,
+          now,
+          FOREGROUND_WAKE_SUSPENSION_MS,
+        )
+      ) {
+        scheduleForegroundRecovery();
+      }
+    };
+    const wakeTimer = window.setInterval(
+      detectForegroundWake,
+      FOREGROUND_WAKE_HEARTBEAT_MS,
+    );
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleForegroundResume);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("pointerdown", detectForegroundWake, { passive: true });
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleForegroundResume);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("pointerdown", detectForegroundWake);
+      window.clearInterval(wakeTimer);
+      cancelForegroundRecovery();
     };
   }, [scheduleForegroundRecovery]);
 
@@ -1652,9 +1929,9 @@ export function App() {
       ? councils.find((council) => council.id === selectedCouncilId) ?? null
       : null;
   const selectedInspectorWorkspaceDir = selectedSummary
-    ? availableWorkspaceDir ||
-      selectedSummary.session.rootDir ||
+    ? selectedSummary.session.rootDir ||
       selectedSummary.session.cwd ||
+      availableWorkspaceDir ||
       ""
     : selectedCouncil?.workspace ?? selectedWorkspaceOnlyDir ?? availableWorkspaceDir ?? "";
   const terminalCwd = selectedInspectorWorkspaceDir || "~";
@@ -1680,22 +1957,34 @@ export function App() {
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
+      storedSessions={storedSessions}
       workspaceSortMode={workspaceSortMode}
       onWorkspaceSortModeChange={setWorkspaceSortMode}
       runningSessionActivityAtById={runningSessionActivityAtById}
-      pinnedSessionIdByWorkspace={sanitizedPinnedSessionIdByWorkspace}
-      onTogglePinSession={togglePinnedSession}
-      onTogglePinCouncil={(workspaceDir, councilId) =>
-        togglePinnedSession(workspaceDir, `council:${councilId}`)
+      pinnedItems={sanitizedPinnedSidebarItems}
+      onTogglePinSession={(workspaceDir, itemKey) =>
+        togglePinnedSidebarItem(workspaceDir, itemKey)
       }
       onAddWorkspace={(dir) => {
         void addWorkspace(dir);
         setLeftOpen(false);
       }}
-      onRemoveWorkspace={(dir) => void removeWorkspace(dir)}
+      onRemoveWorkspace={(dir) => {
+        if (dir === newTaskWorkspaceDir) {
+          setNewTaskWorkspaceDir(
+            workspaceDirs.find((workspace) => workspace !== dir) ?? "",
+          );
+        }
+        void removeWorkspace(dir);
+      }}
       selectedWorkspaceDir={selectedInspectorWorkspaceDir}
       selectedSessionId={
         workbenchMode === "canvas" ? activeCanvasSummary?.session.id ?? null : selectedSessionId
+      }
+      selectedStoredSessionKey={
+        selectedStoredRef
+          ? `${selectedStoredRef.provider}:${selectedStoredRef.providerSessionId}`
+          : null
       }
       selectedCouncilId={
         workbenchMode === "canvas"
@@ -1706,34 +1995,27 @@ export function App() {
       }
       unreadSessionIds={unreadSessionIds}
       runtimeStatusBySessionId={runtimeStatusBySessionId}
+      erroredSessionIds={erroredSessionIds}
       councils={councils}
+      unreadCouncilIds={unreadCouncilIds}
       onSelectSession={(workspaceDir, id) => {
-        if (workbenchMode !== "single") {
-          setWorkbenchMode("single");
-        }
-        setSelectedWorkspaceOnlyDir(null);
-        setWorkspaceDir(workspaceDir);
-        setSelectedSessionId(id);
-        setLeftOpen(false);
+        pageController.openSession(workspaceDir, id);
+      }}
+      onSelectStoredSession={(_workspaceDir, session) => {
+        pageController.prepareHistorySession();
+        void activateHistorySession(session, { confirmCreateMissingWorkspace });
+      }}
+      onArchiveRunningSession={(sessionId) => {
+        requestArchiveRuntimeSession(sessionId);
+      }}
+      onArchiveStoredSession={(session) => {
+        requestArchiveHistorySession(session);
       }}
       onSelectCouncil={(workspaceDir, councilId) => {
-        setSelectedWorkspaceOnlyDir(null);
-        setWorkspaceDir(workspaceDir);
-        setSelectedSessionId(null);
-        setSelectedCouncilId(councilId);
-        setWorkbenchMode("council");
-        setRightSidebarOpen(false);
-        setRightOpen(false);
-        setLeftOpen(false);
+        pageController.openCouncil(workspaceDir, councilId);
       }}
       onSelectWorkspace={(dir) => {
-        if (workbenchMode !== "single") {
-          setWorkbenchMode("single");
-        }
-        setSelectedWorkspaceOnlyDir(dir);
-        setWorkspaceDir(dir);
-        setSelectedSessionId(null);
-        setLeftOpen(false);
+        pageController.openWorkspace(dir);
       }}
       enableSessionDrag={workbenchMode === "canvas"}
       enableCouncilDrag={workbenchMode === "canvas"}
@@ -1746,42 +2028,34 @@ export function App() {
   );
 
   const handleActivateHistorySession = (ref: typeof storedSessions[number]) => {
-    setLeftOpen(false);
-    if (workbenchMode !== "single") {
-      setWorkbenchMode("single");
-    }
+    pageController.prepareHistorySession();
     void activateHistorySession(ref, { confirmCreateMissingWorkspace });
   };
 
   const handleActivateRunningSession = (sessionId: string) => {
-    setLeftOpen(false);
-    if (workbenchMode !== "single") {
-      setWorkbenchMode("single");
-    }
     const projection = projections.get(sessionId);
     const summary = projection?.summary;
     if (summary) {
-      setSelectedWorkspaceOnlyDir(null);
-      setWorkspaceDir(summary.session.rootDir || summary.session.cwd);
+      pageController.openSession(
+        summary.session.rootDir || summary.session.cwd,
+        sessionId,
+      );
+      return;
     }
+    pageController.prepareHistorySession();
     setSelectedSessionId(sessionId);
   };
 
   const handleActivateCouncil = (councilId: string) => {
-    setLeftOpen(false);
     const council = councils.find((candidate) => candidate.id === councilId) ?? null;
     if (council) {
-      setSelectedWorkspaceOnlyDir(null);
-      setWorkspaceDir(council.workspace);
+      pageController.openCouncil(council.workspace, councilId);
+      return;
     }
-    setSelectedSessionId(null);
-    setSelectedCouncilId(councilId);
-    setWorkbenchMode("council");
-    setRightSidebarOpen(false);
-    setRightOpen(false);
+    pageController.openCouncilLanding(councilId);
   };
 
-  const inspectorContent = selectedSummary || selectedInspectorWorkspaceDir ? (
+  const inspectorContent = selectedSummary ? (
     <WorkbenchErrorBoundary
       resetKey={`inspector:${selectedSummary?.session.id ?? selectedInspectorWorkspaceDir ?? "none"}`}
       title="Inspector crashed"
@@ -1796,28 +2070,20 @@ export function App() {
         <InspectorPane
           sessionId={selectedSummary?.session.id ?? null}
           workspaceRoot={selectedInspectorWorkspaceDir}
-          events={selectedProjection?.events ?? []}
           conversationTurns={selectedProjection?.conversation?.turns ?? []}
+          openFileRequest={mainInspectorOpenRequest}
           onOpenTerminal={() => {
             setTerminalDialogMounted(true);
             setTerminalOpen(true);
           }}
+          onClosePanel={() => {
+            setRightSidebarOpen(false);
+            setRightOpen(false);
+          }}
         />
       </Suspense>
     </WorkbenchErrorBoundary>
-  ) : (
-      <div className="flex h-full flex-col">
-      <div className="h-14 px-4 pr-11 flex items-center justify-between shrink-0">
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
-          <div className="text-xs text-[var(--app-hint)] truncate">No workspace or session selected</div>
-        </div>
-      </div>
-      <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-[var(--app-hint)]">
-        Select a workspace or session to inspect files and changes.
-      </div>
-    </div>
-  );
+  ) : null;
 
   const rootStyle = {
     "--workbench-keyboard-inset": `${visualViewportBottomInsetPx}px`,
@@ -1825,11 +2091,18 @@ export function App() {
     "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
   const mobileCanvasEnabled = true;
-  const inspectorToggleOpen = rightSidebarOpen || rightOpen;
-  const reserveInspectorToggleSlot = !rightSidebarOpen && !rightOpen;
+  const inspectorToggleOpen = resolveSidePanelOpenForTier(
+    viewportTier,
+    rightSidebarOpen,
+    rightOpen,
+    "wide",
+  );
   const showPrimaryLeftSidebarControls = !leftOpen;
   const toggleInspectorFromHeader = () => {
-    if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
+    if (!sessionInspectorAvailable) {
+      return;
+    }
+    if (viewportTier === "wide") {
       setRightSidebarOpen((open) => !open);
       return;
     }
@@ -1885,20 +2158,40 @@ export function App() {
             [draftProvider]: nextDraft.modelId ? nextDraft : {},
           }));
         }}
-        onSendInput={(sessionId, text) => sendInput(sessionId, text)}
+        onSendInput={(sessionId, text, attachments) =>
+          sendInput(sessionId, text, attachments)
+        }
+        onUpdateQueuedInput={(sessionId, clientMessageId, text) =>
+          updateQueuedInput(sessionId, clientMessageId, text)
+        }
+        onDeleteQueuedInput={(sessionId, clientMessageId) =>
+          deleteQueuedInput(sessionId, clientMessageId)
+        }
+        onReorderQueuedInput={(sessionId, clientMessageId, position) =>
+          reorderQueuedInput(sessionId, clientMessageId, position)
+        }
+        onSteerQueuedInput={(sessionId, clientMessageId) =>
+          steerQueuedInput(sessionId, clientMessageId)
+        }
+        onOpenQueuedInputSide={handleOpenQueuedInputSide}
         onRespondToPermission={(sessionId, requestId, response) =>
           respondToPermission(sessionId, requestId, response)
         }
         onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
+        onOpenTurnFileChange={(sessionId, turnId, path) =>
+          openMainTurnFile(sessionId, turnId, path)
+        }
         onLoadConversationItemDetail={(sessionId, kind, itemId) =>
           loadConversationItemDetail(sessionId, kind, itemId)
         }
         onLoadConversationTurnDetail={(sessionId, turnId) =>
           loadConversationTurnDetail(sessionId, turnId)
         }
-        onResumeHistory={() => undefined}
+        onResumeHistory={async () => null}
         onClaimControl={(sessionId) => claimControl(sessionId)}
-        onInterrupt={(sessionId) => void interruptSession(sessionId)}
+        onInterrupt={(sessionId) => {
+          if (!cancelPendingSessionStartup(sessionId)) void interruptSession(sessionId);
+        }}
         onLoadOlderHistory={(sessionId) => loadOlderConversation(sessionId)}
         onEnsureTurnDirectory={(sessionId) =>
           ensureSessionConversationDirectory(sessionId)
@@ -1931,7 +2224,8 @@ export function App() {
         sideLayout="columns"
         onSideLayoutChange={() => undefined}
         onForkSession={handleForkSession}
-        branchOperationPending={pendingBranchSessionIds.has(summary.session.id)}
+        onRecreateSide={handleRecreateSide}
+        branchOperationKind={pendingBranchOperations.get(summary.session.id) ?? null}
       />
     );
   };
@@ -1961,16 +2255,13 @@ export function App() {
         onWorkspaceSortModeChange={setHistoryWorkspaceSortMode}
         canvasActive={workbenchMode === "canvas"}
         councilActive={workbenchMode === "council"}
+        homeActive={workbenchMode === "single" && selectedSessionId === null}
         onOpenCouncil={() => {
           if (workbenchMode === "council") {
             hideCouncilMode();
             return;
           }
-          setSelectedCouncilId(defaultRunningCouncilId(councils));
-          setWorkbenchMode("council");
-          setRightSidebarOpen(false);
-          setRightOpen(false);
-          setLeftOpen(false);
+          pageController.openCouncilLanding(defaultRunningCouncilId(councils));
         }}
         onDesktopToggleCanvas={() => {
           if (workbenchMode === "canvas") {
@@ -1996,6 +2287,8 @@ export function App() {
         onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
         onRemoveCouncil={removeCouncilFromChats}
         onRemoveHistorySession={(session) => void removeHistorySessionAndClearCanvasTargets(session)}
+        onArchiveHistorySession={requestArchiveHistorySession}
+        onRestoreHistorySession={(session) => void restoreHistorySession(session)}
         onRemoveHistoryWorkspace={(workspaceDir, sessions) =>
           void removeFilteredHistoryWorkspaceSessions(workspaceDir, sessions)
         }
@@ -2005,6 +2298,7 @@ export function App() {
           setSettingsOpen(true);
         }}
         onCollapseSidebar={() => setSidebarOpen(false)}
+        onExpandSidebar={() => setSidebarOpen(true)}
       />
 
       {settingsDialogMounted ? (
@@ -2054,6 +2348,46 @@ export function App() {
           void stopSessionAndClearCanvasPane(stopConfirmSessionId)
             .then(() => setStopConfirmSessionId(null))
             .finally(() => setStoppingSessionId(null));
+        }}
+      />
+      <ConfirmDialog
+        open={archiveConfirmTarget !== null}
+        pending={archivePending}
+        title="Archive session?"
+        description={
+          archiveConfirmTarget ? (
+            <>
+              {archiveConfirmTarget.running
+                ? "This session is running. Archiving will stop it and move it out of the workspace sidebar."
+                : "Move this session out of the workspace sidebar?"}
+              <div className="mt-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2.5 py-2 font-medium text-[var(--app-fg)]">
+                {archiveConfirmTarget.title}
+              </div>
+              <div className="mt-2 text-xs">
+                Nothing will be deleted. You can browse or restore it from Chats → Archived.
+              </div>
+            </>
+          ) : null
+        }
+        confirmLabel={archivePending ? "Archiving…" : "Archive"}
+        onOpenChange={(open) => {
+          if (!open && !archivePending) {
+            setArchiveConfirmTarget(null);
+          }
+        }}
+        onConfirm={() => {
+          if (!archiveConfirmTarget || archivePending) {
+            return;
+          }
+          const target = archiveConfirmTarget;
+          setArchiveConfirmTarget(null);
+          setArchivePending(true);
+          const operation = target.kind === "runtime"
+            ? archiveSessionAndClearCanvasTargets(target.sessionId)
+            : archiveHistorySessionAndClearCanvasTargets(target.session);
+          void operation
+            .catch(() => undefined)
+            .finally(() => setArchivePending(false));
         }}
       />
       <ConfirmDialog
@@ -2201,8 +2535,9 @@ export function App() {
       />
 
       <WorkbenchErrorBoundary resetKey={`${workbenchMode}:${selectedSessionId ?? primaryPaneState.kind}`}>
-        {/* Center chat */}
-        <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {/* Center chat */}
+          <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
           {workbenchMode === "council" ? (
             <Suspense
               fallback={
@@ -2213,6 +2548,7 @@ export function App() {
             >
               <CouncilPage
                 clientId={clientId}
+                viewportTier={viewportTier}
                 workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
                 workspaceDirs={workspaceDirs}
                 selectedCouncilId={selectedCouncilId}
@@ -2229,37 +2565,35 @@ export function App() {
             </Suspense>
           ) : workbenchMode === "canvas" ? (
             <CanvasWorkbench
-              panes={visibleCanvasPaneIds.map((paneId, index) => {
+              panes={visibleCanvasPaneIds.map((paneId) => {
                 const target = canvasPaneTargets[paneId];
                 return {
                   id: paneId,
-                  label: `Pane ${index + 1}`,
+                  label: canvasPaneLabel(paneId),
                   active: paneId === activeCanvasPaneId,
                   clearable: target.kind !== "empty",
                 };
               })}
               layout={effectiveCanvasLayout}
-              {...(mobileCanvasLayoutOnly ? { availableLayouts: MOBILE_CANVAS_LAYOUTS } : {})}
+              layoutEditingDisabled={mobileCanvasLayoutOnly}
               maximizedPaneId={effectiveCanvasMaximizedPaneId}
-              ratios={effectiveCanvasRatios}
               sidebarOpen={sidebarOpen}
-              onLayoutChange={setCanvasLayout}
-              onResizeRatios={mobileCanvasLayoutOnly ? setMobileCanvasRatios : setCanvasRatios}
+              showLeftSidebarControls={showPrimaryLeftSidebarControls}
+              onLayoutChange={mobileCanvasLayoutOnly ? setMobileCanvasLayout : setCanvasLayout}
+              onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
-              onActivatePane={(paneId) => setActiveCanvasPaneId(paneId as CanvasPaneId)}
-              onToggleMaximize={(paneId) => toggleCanvasPaneMaximize(paneId as CanvasPaneId)}
-              onClearPane={(paneId) => clearCanvasPane(paneId as CanvasPaneId)}
+              onActivatePane={setActiveCanvasPaneId}
+              onToggleMaximize={toggleCanvasPaneMaximize}
+              onSplitPane={splitCanvasPane}
+              onRemovePane={removeCanvasPaneAndContent}
+              onClearPane={clearCanvasPane}
               onClearAllPanes={clearAllCanvasPanes}
               clearAllPanesDisabled={!hasAnyCanvasPaneTarget(canvasPaneTargets)}
               onExitCanvas={exitCanvasMode}
-              onDropSession={(paneId, sessionId) =>
-                setCanvasPaneSession(paneId as CanvasPaneId, sessionId)
-              }
-              onDropCouncil={(paneId, councilId) =>
-                setCanvasPaneCouncil(paneId as CanvasPaneId, councilId)
-              }
+              onDropSession={setCanvasPaneSession}
+              onDropCouncil={setCanvasPaneCouncil}
               renderPane={(paneId) => {
-                const typedPaneId = paneId as CanvasPaneId;
+                const typedPaneId = paneId;
                 const target = canvasPaneTargets[typedPaneId];
                 const projection = resolveCanvasProjection(typedPaneId);
                 const openingTransition = canvasOpeningTransitionForTarget(
@@ -2269,8 +2603,7 @@ export function App() {
                   canvasResumingStoredKeys,
                 );
                 const paneExpanded = effectiveCanvasMaximizedPaneId === typedPaneId;
-                const paneRightPanelOpen =
-                  paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] === true;
+                const paneRightPanelOpen = canvasPaneRightPanelsOpen[typedPaneId] === true;
                 if (target.kind === "council") {
                   return (
                     <Suspense
@@ -2282,6 +2615,7 @@ export function App() {
                     >
                       <CouncilPage
                         clientId={clientId}
+                        viewportTier={viewportTier}
                         workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
                         workspaceDirs={workspaceDirs}
                         initialCouncils={councils}
@@ -2309,8 +2643,8 @@ export function App() {
                         onAgentsPanelModeChange={(mode) =>
                           setCanvasPaneRightPanelOpen(typedPaneId, mode === "open")
                         }
-                        agentsToggleDisabled={!paneExpanded}
                         showAgentsToggle
+                        containedAgentsPanel
                         showLeftSidebarControls={false}
                         showCloseButton={false}
                       />
@@ -2324,14 +2658,8 @@ export function App() {
                         <WorkbenchOpeningPane
                           openingSession={openingTransition}
                           sidebarOpen
-                          rightSidebarOpen={false}
                           onOpenLeft={() => undefined}
                           onExpandSidebar={() => undefined}
-                          onOpenRight={() => undefined}
-                          onExpandInspector={() => undefined}
-                          onToggleInspector={() => undefined}
-                          inspectorToggleOpen={false}
-                          showInspectorToggle={false}
                         />
                       </div>
                     );
@@ -2505,12 +2833,19 @@ export function App() {
                             })(),
                           }));
                         }}
-                        onStart={(initialInput, selectedWorkspaceDir) => {
-                          void startSession({
+                        onStart={async (
+                          initialInput,
+                          selectedWorkspaceDir,
+                          initialAttachments,
+                        ) => {
+                          await startSession({
                             provider: paneProvider,
                             cwd: selectedWorkspaceDir,
                             title: initialInput.slice(0, 50),
                             initialInput,
+                            ...(initialAttachments?.length
+                              ? { initialAttachments }
+                              : {}),
                             ...(paneModeControl.effectiveModeId
                               ? { modeId: paneModeControl.effectiveModeId }
                               : {}),
@@ -2525,13 +2860,58 @@ export function App() {
                             onSessionCreated: (sessionId) => {
                               setCanvasPaneSession(typedPaneId, sessionId);
                             },
-                          })
-                            .catch(() => undefined);
+                          });
                         }}
                         onOpenNewCouncil={() => setHomeNewCouncilDialogOpen(true)}
                         onBack={() => setCanvasPaneTarget(typedPaneId, { kind: "empty" })}
                         onCancel={() => setCanvasPaneTarget(typedPaneId, { kind: "empty" })}
                       />
+                    );
+                  }
+                  if (target.kind === "stored" || target.kind === "session") {
+                    const restoreKey = canvasRestorableTargetKey(target);
+                    const restoreError = restoreKey ? canvasRestoreErrors[restoreKey] : undefined;
+                    if (restoreError) {
+                      return (
+                        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
+                          <div className="space-y-1">
+                            <div className="text-sm font-medium text-[var(--app-fg)]">
+                              Session unavailable
+                            </div>
+                            <div className="max-w-sm text-xs text-[var(--app-hint)]">
+                              {restoreError}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--app-line)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-hover)]"
+                              onClick={() => clearCanvasRestoreError(target)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--app-line)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-hover)]"
+                              onClick={() => clearCanvasPane(typedPaneId)}
+                            >
+                              <Eraser className="h-3.5 w-3.5" aria-hidden="true" />
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-1.5 px-6 text-center">
+                        <div className="text-sm font-medium text-[var(--app-fg)]">
+                          {target.kind === "stored" ? "Opening history…" : "Restoring session…"}
+                        </div>
+                        <div className="max-w-xs text-xs text-[var(--app-hint)]">
+                          The pane binding is preserved while RAH resolves its conversation.
+                        </div>
+                      </div>
                     );
                   }
                   return (
@@ -2562,6 +2942,10 @@ export function App() {
                           onRemoveSession={(session) =>
                             void removeHistorySessionAndClearCanvasTargets(session)
                           }
+                          onArchiveSession={(session) =>
+                            requestArchiveHistorySession(session)
+                          }
+                          onRestoreSession={(session) => void restoreHistorySession(session)}
                           onRemoveWorkspace={(workspaceDir, sessions) =>
                             void removeFilteredHistoryWorkspaceSessions(workspaceDir, sessions)
                           }
@@ -2605,7 +2989,7 @@ export function App() {
                   <CanvasSessionPane
                     variant={paneExpanded ? "expanded" : "compact"}
                     sidePanelOpen={paneRightPanelOpen}
-                    sidePanelToggleDisabled={!paneExpanded}
+                    sidePanelToggleDisabled={false}
                     onToggleSidePanel={() => toggleCanvasPaneRightPanel(typedPaneId)}
                     sideProjections={
                       sideProjectionsByParentId.get(summary.session.id) ?? []
@@ -2620,43 +3004,53 @@ export function App() {
                     }}
                     onForkSession={handleForkSession}
                     onRecreateSide={handleRecreateSide}
-                    branchOperationPending={pendingBranchSessionIds.has(summary.session.id)}
-                    {...(paneExpanded
-                      ? {
-                        inspector: (
-                            <WorkbenchErrorBoundary
-                              resetKey={`canvas-inspector:${summary.session.id}`}
-                              title="Inspector crashed"
-                            >
-                              <Suspense
-                                fallback={
-                                  <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
-                                    Loading inspector...
-                                  </div>
-                                }
-                              >
-                                <InspectorPane
-                                  sessionId={summary.session.id}
-                                  workspaceRoot={
-                                    summary.session.rootDir ||
-                                    summary.session.cwd ||
-                                    availableWorkspaceDir ||
-                                    ""
-                                  }
-                                  events={projection.events ?? []}
-                                  conversationTurns={projection.conversation?.turns ?? []}
-                                  onOpenTerminal={() => {
-                                    setTerminalDialogMounted(true);
-                                    setTerminalOpen(true);
-                                  }}
-                                />
-                              </Suspense>
-                            </WorkbenchErrorBoundary>
-                          ),
-                        }
-                      : {})}
+                    branchOperationKind={
+                      pendingBranchOperations.get(summary.session.id) ?? null
+                    }
+                    inspector={(
+                      <WorkbenchErrorBoundary
+                        resetKey={`canvas-inspector:${summary.session.id}`}
+                        title="Inspector crashed"
+                      >
+                        <Suspense
+                          fallback={
+                            <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+                              Loading inspector...
+                            </div>
+                          }
+                        >
+                          <InspectorPane
+                            sessionId={summary.session.id}
+                            workspaceRoot={
+                              summary.session.rootDir ||
+                              summary.session.cwd ||
+                              availableWorkspaceDir ||
+                              ""
+                            }
+                            conversationTurns={projection.conversation?.turns ?? []}
+                            openFileRequest={
+                              canvasInspectorOpenRequests[typedPaneId] ?? null
+                            }
+                            onOpenTerminal={() => {
+                              setTerminalDialogMounted(true);
+                              setTerminalOpen(true);
+                            }}
+                            onClosePanel={() =>
+                              setCanvasPaneRightPanelOpen(typedPaneId, false)
+                            }
+                          />
+                        </Suspense>
+                      </WorkbenchErrorBoundary>
+                    )}
                     summary={summary}
                     projection={projection}
+                    historyArchived={
+                      resolveStoredSessionRef(
+                        summary,
+                        recentSessions,
+                        storedSessions,
+                      )?.providerState?.archived === true
+                    }
                     clientId={clientId}
                     hideToolCallsInChat={hideToolCallsInChat}
                     hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
@@ -2701,69 +3095,96 @@ export function App() {
                         [draftProvider]: nextDraft.modelId ? nextDraft : {},
                       }));
                     }}
-                    onSendInput={(sessionId, text) => sendInput(sessionId, text)}
+                    onSendInput={(sessionId, text, attachments) =>
+                      sendInput(sessionId, text, attachments)
+                    }
+                    onUpdateQueuedInput={(sessionId, clientMessageId, text) =>
+                      updateQueuedInput(sessionId, clientMessageId, text)
+                    }
+                    onDeleteQueuedInput={(sessionId, clientMessageId) =>
+                      deleteQueuedInput(sessionId, clientMessageId)
+                    }
+                    onReorderQueuedInput={(sessionId, clientMessageId, position) =>
+                      reorderQueuedInput(sessionId, clientMessageId, position)
+                    }
+                    onSteerQueuedInput={(sessionId, clientMessageId) =>
+                      steerQueuedInput(sessionId, clientMessageId)
+                    }
+                    onOpenQueuedInputSide={handleOpenQueuedInputSide}
                     onRespondToPermission={(sessionId, requestId, response) =>
                       respondToPermission(sessionId, requestId, response)
                     }
                     onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
+                    onOpenTurnFileChange={(sessionId, turnId, path) =>
+                      openCanvasTurnFile(typedPaneId, sessionId, turnId, path)
+                    }
                     onLoadConversationItemDetail={(sessionId, kind, itemId) =>
                       loadConversationItemDetail(sessionId, kind, itemId)
                     }
                     onLoadConversationTurnDetail={(sessionId, turnId) =>
                       loadConversationTurnDetail(sessionId, turnId)
                     }
-                    onResumeHistory={(sessionId, request) => {
-                      const ref = storedRefFromSessionSummary(summary);
+                    onResumeHistory={async (sessionId, request) => {
+                      const ref = resolveStoredSessionRef(
+                        summary,
+                        recentSessions,
+                        storedSessions,
+                      );
                       if (!ref) {
-                        return;
+                        return null;
                       }
                       const resumeKey = canvasStoredRefKey(ref);
-                      if (canvasResumingStoredKeysRef.current.has(resumeKey)) {
-                        return;
+                      const alreadyPending =
+                        canvasResumingStoredKeysRef.current.has(resumeKey);
+                      if (!alreadyPending) {
+                        markCanvasResumePending(sessionId, ref);
                       }
-                      markCanvasResumePending(sessionId, ref);
-                      void (async () => {
-                        let resumedSessionId: string | null = null;
-                        try {
-                          resumedSessionId = await resumeHistorySession(sessionId, {
-                            confirmCreateMissingWorkspace,
-                            ...request,
-                          });
-                          const resolvedSessionId = resolveCanvasResumedSessionId(
-                            useSessionStore.getState().projections,
-                            resumedSessionId,
-                            ref,
-                          );
-                          if (resolvedSessionId) {
-                            setCanvasPaneSession(typedPaneId, resolvedSessionId);
-                          }
-                        } catch {
-                          const latestProjections = useSessionStore.getState().projections;
-                          const resolvedSessionId = resolveCanvasResumedSessionId(
-                            latestProjections,
-                            null,
-                            ref,
-                          );
-                          const resolvedProjection = resolvedSessionId
-                            ? latestProjections.get(resolvedSessionId) ?? null
-                            : null;
-                          if (
-                            resolvedSessionId &&
-                            resolvedProjection?.summary.controlLease.holderClientId === clientId
-                          ) {
-                            setCanvasPaneSession(typedPaneId, resolvedSessionId);
-                          }
-                        } finally {
+                      try {
+                        const resumedSessionId = await resumeHistorySession(sessionId, {
+                          confirmCreateMissingWorkspace,
+                          ...request,
+                        });
+                        const resolvedSessionId = resolveCanvasResumedSessionId(
+                          useSessionStore.getState().projections,
+                          resumedSessionId,
+                          ref,
+                        );
+                        if (resolvedSessionId) {
+                          setCanvasPaneSession(typedPaneId, resolvedSessionId);
+                        }
+                        return resolvedSessionId;
+                      } catch (resumeError) {
+                        const latestProjections = useSessionStore.getState().projections;
+                        const resolvedSessionId = resolveCanvasResumedSessionId(
+                          latestProjections,
+                          null,
+                          ref,
+                        );
+                        const resolvedProjection = resolvedSessionId
+                          ? latestProjections.get(resolvedSessionId) ?? null
+                          : null;
+                        if (
+                          resolvedSessionId &&
+                          resolvedProjection?.summary.controlLease.holderClientId === clientId
+                        ) {
+                          setCanvasPaneSession(typedPaneId, resolvedSessionId);
+                          return resolvedSessionId;
+                        }
+                        throw resumeError;
+                      } finally {
+                        if (!alreadyPending) {
                           clearCanvasResumePending(sessionId, ref);
                         }
-                      })();
+                      }
                     }}
                     onClaimControl={(sessionId) =>
                       claimControl(sessionId).then(() => {
                         setCanvasPaneSession(typedPaneId, sessionId);
                       })
                     }
-                    onInterrupt={(sessionId) => void interruptSession(sessionId)}
+                    onInterrupt={(sessionId) => {
+                      if (!cancelPendingSessionStartup(sessionId)) void interruptSession(sessionId);
+                    }}
                     onLoadOlderHistory={(sessionId) => loadOlderConversation(sessionId)}
                     onEnsureTurnDirectory={(sessionId) =>
                       ensureSessionConversationDirectory(sessionId)
@@ -2773,7 +3194,7 @@ export function App() {
                     }
                     onStop={(sessionId) => setStopConfirmSessionId(sessionId)}
                     onCloseHistory={() => clearCanvasPane(typedPaneId)}
-                    onArchive={(sessionId) => void archiveSessionAndClearCanvasTargets(sessionId)}
+                    onArchive={requestArchiveRuntimeSession}
                     onDelete={(sessionId) => setDeleteConfirmSessionId(sessionId)}
                     onRename={(sessionId) => setRenameDialogSessionId(sessionId)}
                     onSetSessionMode={async (sessionId, modeId) => {
@@ -2803,10 +3224,14 @@ export function App() {
           ) : primaryPaneState.kind === "active" && selectedSummary ? (
             <SessionSideDock
               dockId={selectedSummary.session.id}
-              main={<WorkbenchSelectedPane
+              main={(
+                <div className="conversation-panel-surface relative flex h-full min-h-0 min-w-0">
+                  <div className="min-w-0 flex-1">
+                    <WorkbenchSelectedPane
               selectedSummary={selectedSummary}
               clientId={clientId}
               selectedProjection={selectedProjection}
+              conversationNavigationRevision={pageController.sessionNavigationRevision}
               selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
               sidebarOpen={sidebarOpen}
               rightSidebarOpen={rightSidebarOpen}
@@ -2826,6 +3251,9 @@ export function App() {
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
               onOpenLocalFile={openLinkedFilePreview}
+              onOpenTurnFileChange={(turnId, path) =>
+                openMainTurnFile(selectedSummary.session.id, turnId, path)
+              }
               onLoadConversationItemDetail={(kind, itemId) =>
                 loadConversationItemDetail(selectedSummary.session.id, kind, itemId)
               }
@@ -2835,43 +3263,32 @@ export function App() {
               composerSurface={composerSurface}
               composerRef={composerRef}
               draft={draft}
-              draftImageUrls={draftImageDataUrls}
-              draftImageCount={draftImageCount}
+              draftAttachments={draftAttachments}
+              draftAttachmentCount={draftAttachmentCount}
+              attachmentUploadPending={draftAttachmentUploadPending}
+              attachmentError={draftAttachmentError}
               sendPending={sendPending}
               onDraftChange={setDraft}
               onComposerPaste={handleDraftPaste}
-              onClearDraftImages={clearDraftImages}
-              onRemoveDraftImage={removeDraftImage}
-              onRemoveLastDraftImage={removeLastDraftImage}
+              onUploadFiles={uploadDraftFiles}
+              onRemoveDraftAttachment={removeDraftAttachment}
+              onRemoveLastDraftAttachment={removeLastDraftAttachment}
               onSend={() => void handleSend()}
-              onResumeHistory={() => {
-                const sessionId = selectedSummary.session.id;
-                const modelDraft = resumeModelDrafts[sessionId];
-                const modelDraftId = draftModelIdForCatalog(
-                  selectedModelCatalogState?.catalog,
-                  modelDraft,
-                );
-                const optionValues =
-                  (modelDraftId ? modelDraft?.optionValues : undefined) ??
-                  (modelDraftId
-                    ? buildModelOptionValuesFromReasoning({
-                        catalog: selectedModelCatalogState?.catalog,
-                        modelId: modelDraftId,
-                        reasoningId: modelDraft?.reasoningId ?? null,
-                      })
-                    : undefined);
-                void resumeHistorySession(sessionId, {
-                  confirmCreateMissingWorkspace,
-                  ...(resumeModeControl?.effectiveModeId
-                    ? { modeId: resumeModeControl.effectiveModeId }
-                    : {}),
-                  ...(modelDraftId ? { modelId: modelDraftId } : {}),
-                  ...(optionValues !== undefined ? { optionValues } : {}),
-                  ...(modelDraftId && modelDraft?.reasoningId
-                    ? { reasoningId: modelDraft.reasoningId }
-                    : {}),
-                });
-              }}
+              onUpdateQueuedInput={(clientMessageId, text) =>
+                updateQueuedInput(selectedSummary.session.id, clientMessageId, text)
+              }
+              onDeleteQueuedInput={(clientMessageId) =>
+                deleteQueuedInput(selectedSummary.session.id, clientMessageId)
+              }
+              onReorderQueuedInput={(clientMessageId, position) =>
+                reorderQueuedInput(selectedSummary.session.id, clientMessageId, position)
+              }
+              onSteerQueuedInput={(clientMessageId) =>
+                steerQueuedInput(selectedSummary.session.id, clientMessageId)
+              }
+              onOpenQueuedInputSide={(item) =>
+                handleOpenQueuedInputSide(selectedSummary.session.id, item)
+              }
               resumeAccessModes={resumeModeControl?.accessModes ?? []}
               selectedResumeAccessModeId={resumeModeControl?.selectedAccessModeId ?? null}
               resumePlanModeAvailable={resumeModeControl?.planModeAvailable ?? false}
@@ -3008,12 +3425,19 @@ export function App() {
                   }
                 })();
               }}
-              onInterrupt={() => void interruptSession(selectedSummary.session.id)}
+              onInterrupt={() => {
+                if (!cancelPendingSessionStartup(selectedSummary.session.id)) {
+                  void interruptSession(selectedSummary.session.id);
+                }
+              }}
               onOpenFileReference={() => setFileReferenceOpen(true)}
               onLoadOlderHistory={() => loadOlderConversation(selectedSummary.session.id)}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
-              showLeftSidebarControls={showPrimaryLeftSidebarControls}
+              showLeftSidebarControls={
+                showPrimaryLeftSidebarControls &&
+                (sideProjectionsByParentId.get(selectedSummary.session.id)?.length ?? 0) === 0
+              }
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={toggleInspectorFromHeader}
@@ -3038,7 +3462,7 @@ export function App() {
               }}
               onDeleteSession={() => setDeleteConfirmSessionId(selectedSummary.session.id)}
               onArchiveSession={() => {
-                void archiveSessionAndClearCanvasTargets(selectedSummary.session.id);
+                requestArchiveRuntimeSession(selectedSummary.session.id);
               }}
               canStopSession={canSessionStop(selectedSummary)}
               canArchiveSession={canSessionArchive(selectedSummary)}
@@ -3050,9 +3474,9 @@ export function App() {
               }
               onForkSession={() => handleForkSession(selectedSummary.session.id, "fork")}
               onCreateSide={() => handleForkSession(selectedSummary.session.id, "side")}
-              branchOperationPending={pendingBranchSessionIds.has(
-                selectedSummary.session.id,
-              )}
+              branchOperationKind={
+                pendingBranchOperations.get(selectedSummary.session.id) ?? null
+              }
               canDeleteSession={canSessionDelete(selectedSummary)}
               canShowSessionInfo={canSessionShowInfo(selectedSummary)}
               canRenameSession={canSessionRename(selectedSummary)}
@@ -3109,10 +3533,33 @@ export function App() {
                   ),
                 );
               }}
-              showInspectorToggle={!rightOpen && !rightSidebarOpen}
-              inspectorToggleClassName="md:hidden"
-              reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
-            />}
+              sideTaskCount={
+                sideProjectionsByParentId.get(selectedSummary.session.id)?.length ?? 0
+              }
+              sideTaskLayout={
+                sideLayoutByParentId[selectedSummary.session.id] ?? "columns"
+              }
+              onSideTaskLayoutChange={(layout) => {
+                setSideLayoutByParentId((current) => ({
+                  ...current,
+                  [selectedSummary.session.id]: layout,
+                }));
+              }}
+              showInspectorToggle={sessionInspectorAvailable && !inspectorToggleOpen}
+                    />
+                  </div>
+                  {inspectorContent ? (
+                    <WorkbenchInspectorShell
+                      showDesktop={viewportTier === "wide"}
+                      desktopOpen={inspectorToggleOpen}
+                      rightOpen={rightOpen}
+                      onRightOpenChange={setRightOpen}
+                      content={inspectorContent}
+                      contained
+                    />
+                  ) : null}
+                </div>
+              )}
               sides={(sideProjectionsByParentId.get(selectedSummary.session.id) ?? []).map(
                 (sideProjection) => ({
                   id: sideProjection.summary.session.id,
@@ -3120,60 +3567,38 @@ export function App() {
                   unread: unreadSessionIds.has(sideProjection.summary.session.id),
                   onDiscard: () =>
                     setStopConfirmSessionId(sideProjection.summary.session.id),
-                  onRecreate: () =>
-                    handleRecreateSide(
-                      selectedSummary.session.id,
-                      sideProjection.summary.session.id,
-                    ),
                   content: renderSideSessionPane(sideProjection),
                 }),
               )}
+              showMobileSidebarControl={showPrimaryLeftSidebarControls}
+              onOpenMobileSidebar={() => setLeftOpen(true)}
               layout={sideLayoutByParentId[selectedSummary.session.id] ?? "columns"}
-              onLayoutChange={(layout) => {
-                setSideLayoutByParentId((current) => ({
-                  ...current,
-                  [selectedSummary.session.id]: layout,
-                }));
-              }}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane
               openingSession={activeOpeningSession}
               sidebarOpen={sidebarOpen}
-              rightSidebarOpen={rightSidebarOpen}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
               showLeftSidebarControls={showPrimaryLeftSidebarControls}
-              onOpenRight={() => setRightOpen(true)}
-              onExpandInspector={() => setRightSidebarOpen(true)}
-              onToggleInspector={toggleInspectorFromHeader}
-              inspectorToggleOpen={inspectorToggleOpen}
-              showInspectorToggle={!rightOpen && !rightSidebarOpen}
-              inspectorToggleClassName="md:hidden"
-              reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
             />
           ) : (
             <WorkbenchEmptyPane
               sidebarOpen={sidebarOpen}
-              rightSidebarOpen={rightSidebarOpen}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
               showLeftSidebarControls={showPrimaryLeftSidebarControls}
-              onOpenRight={() => setRightOpen(true)}
-              onExpandInspector={() => setRightSidebarOpen(true)}
-              onToggleInspector={toggleInspectorFromHeader}
-              inspectorToggleOpen={inspectorToggleOpen}
-              showInspectorToggle={!rightOpen && !rightSidebarOpen}
-              inspectorToggleClassName="md:hidden"
               emptyStateComposerRef={emptyStateComposerRef}
               emptyStateDraft={emptyStateDraft}
-              emptyStateImageUrls={emptyStateImageDataUrls}
-              emptyStateImageCount={emptyStateImageCount}
+              emptyStateAttachments={emptyStateAttachments}
+              emptyStateAttachmentCount={emptyStateAttachmentCount}
+              emptyStateAttachmentUploadPending={emptyStateAttachmentUploadPending}
+              emptyStateAttachmentError={emptyStateAttachmentError}
               onEmptyStateDraftChange={setEmptyStateDraft}
               onEmptyStatePaste={handleEmptyStatePaste}
-              onClearEmptyStateImages={clearEmptyStateImages}
-              onRemoveEmptyStateImage={removeEmptyStateImage}
-              onRemoveLastEmptyStateImage={removeLastEmptyStateImage}
+              onUploadEmptyStateFiles={uploadEmptyStateFiles}
+              onRemoveEmptyStateAttachment={removeEmptyStateAttachment}
+              onRemoveLastEmptyStateAttachment={removeLastEmptyStateAttachment}
               onEmptyStateSend={handleEmptyStateSend}
               workspacePickerRef={workspacePickerRef}
               onOpenFileReference={() => setFileReferenceOpen(true)}
@@ -3183,6 +3608,7 @@ export function App() {
               onToggleWorkspacePicker={() => setWorkspacePickerOpen((v) => !v)}
               onSelectWorkspace={(dir) => {
                 setPendingNewSessionWorkspaceDir(null);
+                setNewTaskWorkspaceDir(dir);
                 setWorkspaceDir(dir);
                 setWorkspacePickerOpen(false);
               }}
@@ -3277,18 +3703,9 @@ export function App() {
               onOpenNewCouncil={() => setHomeNewCouncilDialogOpen(true)}
             />
           )}
-        </main>
+          </main>
 
-        {workbenchMode === "single" ? (
-          <WorkbenchInspectorShell
-            showDesktop
-            desktopOpen={rightSidebarOpen}
-            rightOpen={rightOpen}
-            onRightOpenChange={setRightOpen}
-            onToggle={toggleInspectorFromHeader}
-            content={inspectorContent}
-          />
-        ) : null}
+        </div>
       </WorkbenchErrorBoundary>
 
       {linkedFilePreviewPath ? (
@@ -3312,11 +3729,7 @@ export function App() {
       <GlobalWorkbenchCallout
         errorDescriptor={errorDescriptor}
         selectedSummary={workbenchMode === "canvas" ? activeCanvasSummary : selectedSummary}
-        onRefresh={() =>
-          void (errorDescriptor?.title === "Connection issue"
-            ? recoverTransport()
-            : refreshWorkbenchState())
-        }
+        onRefresh={() => void refreshWorkbenchState()}
         onClaimControl={(sessionId) => void claimControl(sessionId)}
         onDismiss={clearError}
       />

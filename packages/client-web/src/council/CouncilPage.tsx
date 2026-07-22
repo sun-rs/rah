@@ -11,6 +11,7 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Trash2,
   Unplug,
@@ -56,7 +57,6 @@ import {
 import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
-  CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
   ConversationStateMetaBadge,
   type ConversationHeaderMetaItem,
 } from "../components/workbench/ConversationMetaBadge";
@@ -101,6 +101,8 @@ import {
   isCouncilHistory,
   reconcileCouncilSelection,
 } from "./CouncilsBrowser";
+import type { CouncilStateUpdater } from "./useCouncilController";
+import { isInlinePanelTier, type ResponsiveTier } from "../responsive-layout";
 import {
   canLoadOlderCouncilMessages,
   councilNeedsLatestMessages,
@@ -110,17 +112,10 @@ import {
   prependCouncilMessagesPage,
 } from "./council-message-window";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
-
-type CouncilMessage = CouncilSnapshot["messages"][number];
-type CouncilDisplayItem =
-  | { kind: "message"; message: CouncilMessage }
-  | {
-    kind: "agent-status";
-    key: string;
-    actorId: string;
-    status: "sent" | "joined" | "listening";
-    messageId: number;
-  };
+import {
+  projectCouncilDisplayItems,
+  type CouncilMessage,
+} from "./council-display-items";
 
 const COUNCIL_SYSTEM_NOTICE_CLASS =
   "mx-auto flex w-fit max-w-[92%] items-center gap-2 rounded-full bg-[var(--app-subtle-bg)]/35 px-2.5 py-1 text-[10.5px] leading-relaxed text-[var(--app-hint)] sm:max-w-[78%]";
@@ -167,7 +162,6 @@ function CouncilMessageContent(props: { role: CouncilMessage["role"]; text: stri
     <MarkdownRenderer
       className="prose-chat max-w-none text-sm leading-relaxed"
       content={props.text}
-      fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed"
     />
   ) : (
     <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
@@ -215,60 +209,6 @@ function councilSystemText(council: CouncilSnapshot, text: string): string {
     cleaned = cleaned.replace(new RegExp(`\\s+${escapeRegExp(council.id)}\\b`, "g"), "");
   }
   return cleaned.trim();
-}
-
-function isCouncilSystemNoise(text: string): boolean {
-  return /\bwait timed out;\s*no active listener is currently blocking on channel_wait_new\b/i.test(text);
-}
-
-function councilAgentSystemStatus(message: CouncilMessage): "sent" | "joined" | "listening" | null {
-  if (message.role !== "system" || message.actorId === "system") {
-    return null;
-  }
-  const text = textFromParts(message.parts).trim();
-  if (text === `${message.actorId} sent`) {
-    return "sent";
-  }
-  if (text === `${message.actorId} joined`) {
-    return "joined";
-  }
-  if (text === `${message.actorId} listening`) {
-    return "listening";
-  }
-  return null;
-}
-
-function councilDisplayItems(council: CouncilSnapshot): CouncilDisplayItem[] {
-  const items: CouncilDisplayItem[] = [];
-  const statusIndexByActor = new Map<string, number>();
-  for (const message of council.messages) {
-    if (message.role === "system" && isCouncilSystemNoise(textFromParts(message.parts))) {
-      continue;
-    }
-    const status = councilAgentSystemStatus(message);
-    if (!status) {
-      items.push({ kind: "message", message });
-      continue;
-    }
-    const previousIndex = statusIndexByActor.get(message.actorId);
-    if (previousIndex !== undefined) {
-      items.splice(previousIndex, 1);
-      for (const [actorId, index] of statusIndexByActor) {
-        if (index > previousIndex) {
-          statusIndexByActor.set(actorId, index - 1);
-        }
-      }
-    }
-    statusIndexByActor.set(message.actorId, items.length);
-    items.push({
-      kind: "agent-status",
-      key: `agent-status:${message.actorId}`,
-      actorId: message.actorId,
-      status,
-      messageId: message.id,
-    });
-  }
-  return items;
 }
 
 function agentStatusClass(status: CouncilAgent["status"]): string {
@@ -376,12 +316,9 @@ function CouncilAgentOptionValues(props: {
   );
 }
 
-export type CouncilStateUpdater = (
-  current: readonly CouncilSnapshot[],
-) => CouncilSnapshot[];
-
 export function CouncilPage(props: {
   clientId: string;
+  viewportTier: ResponsiveTier;
   workspaceDir: string;
   workspaceDirs: string[];
   initialCouncils?: readonly CouncilSnapshot[];
@@ -398,6 +335,7 @@ export function CouncilPage(props: {
   onAgentsPanelModeChange?: (mode: "open" | "closed") => void;
   agentsToggleDisabled?: boolean;
   showAgentsToggle?: boolean;
+  containedAgentsPanel?: boolean;
   showLeftSidebarControls?: boolean;
   showCloseButton?: boolean;
 }) {
@@ -447,6 +385,7 @@ export function CouncilPage(props: {
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [loadingOlderCouncilMessages, setLoadingOlderCouncilMessages] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState("");
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const [councilMenuOpen, setCouncilMenuOpen] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
@@ -455,12 +394,8 @@ export function CouncilPage(props: {
   const [localCouncilSidebarOpen, setLocalCouncilSidebarOpen] = useState(
     () => props.agentsPanelMode === "open",
   );
-  const [isCouncilWide, setIsCouncilWide] = useState(() =>
-    typeof window === "undefined" ? false : window.matchMedia("(min-width: 768px)").matches,
-  );
-  const [isCouncilHeaderCompact, setIsCouncilHeaderCompact] = useState(() =>
-    typeof window === "undefined" ? false : window.matchMedia("(max-width: 520px)").matches,
-  );
+  const isCouncilWide = isInlinePanelTier(props.viewportTier, "wide");
+  const isCouncilHeaderCompact = props.viewportTier === "compact";
   const isPwaDisplayMode = usePwaDisplayMode();
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [pendingDeleteHistoryCouncil, setPendingDeleteHistoryCouncil] = useState<CouncilSnapshot | null>(null);
@@ -562,7 +497,7 @@ export function CouncilPage(props: {
   }, [selectedCouncil]);
 
   const selectedCouncilDisplayItems = useMemo(
-    () => selectedCouncil ? councilDisplayItems(selectedCouncil) : [],
+    () => selectedCouncil ? projectCouncilDisplayItems(selectedCouncil) : [],
     [selectedCouncil],
   );
   const liveTerminalAgents = useMemo(
@@ -594,28 +529,6 @@ export function CouncilPage(props: {
       mentionTrigger.query,
     ).slice(0, 8);
   }, [mentionTrigger, selectedCouncil]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const query = window.matchMedia("(min-width: 768px)");
-    const handleChange = () => {
-      setIsCouncilWide(query.matches);
-    };
-    handleChange();
-    query.addEventListener("change", handleChange);
-    return () => query.removeEventListener("change", handleChange);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const query = window.matchMedia("(max-width: 520px)");
-    const handleChange = () => {
-      setIsCouncilHeaderCompact(query.matches);
-    };
-    handleChange();
-    query.addEventListener("change", handleChange);
-    return () => query.removeEventListener("change", handleChange);
-  }, []);
 
   useEffect(() => {
     setMentionTrigger(null);
@@ -1374,7 +1287,7 @@ export function CouncilPage(props: {
     : councilSidebarButtonLabel;
   const agentsSidebarContent = (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-subtle-bg)]">
-      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 pr-11">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--app-fg)]">Agents</div>
           <div className="truncate text-xs text-[var(--app-hint)]">
@@ -1383,6 +1296,14 @@ export function CouncilPage(props: {
               : "No running Council selected"}
           </div>
         </div>
+        {showAgentsToggle && councilSidebarOpen && (props.containedAgentsPanel || isCouncilWide) ? (
+          <ConversationHeaderPanelToggleButton
+            onClick={() => setCouncilSidebarOpen(false)}
+            ariaLabel="Hide agents"
+            title="Hide agents"
+            open
+          />
+        ) : null}
       </div>
       <OverlayScrollArea
         className="min-h-0 flex-1"
@@ -1536,6 +1457,7 @@ export function CouncilPage(props: {
             node: (
               <ConversationStateMetaBadge
                 state={selectedCouncilHeaderState}
+                appearance="inline"
               />
             ),
           },
@@ -1544,11 +1466,11 @@ export function CouncilPage(props: {
             node: (
               <ConversationMetaBadge
                 tone="council"
+                appearance="inline"
                 title={selectedCouncilAgentCountLabel}
                 ariaLabel={selectedCouncilAgentCountLabel}
                 icon={<Bot className="h-3.5 w-3.5" aria-hidden="true" />}
                 label={compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}
-                paddingClassName={CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS}
               />
             ),
           },
@@ -1564,7 +1486,7 @@ export function CouncilPage(props: {
         : "Delete Council";
   const showCouncilOverflowMenu = selectedCouncil !== null || isCouncilHeaderCompact;
   const councilHeaderMeta = selectedCouncil ? (
-    <ConversationHeaderMetaList items={selectedCouncilHeaderMetaItems} />
+    <ConversationHeaderMetaList items={selectedCouncilHeaderMetaItems} appearance="inline" />
   ) : (
     <span className="block min-w-0 truncate">
       Start or open a Council to coordinate agents.
@@ -1573,7 +1495,11 @@ export function CouncilPage(props: {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div
+        className={`flex min-h-0 min-w-0 flex-1 overflow-hidden ${
+          props.containedAgentsPanel ? "canvas-conversation-surface relative" : ""
+        }`}
+      >
         <ConversationPageShell as="section" className={chatPanelClass}>
           <ConversationHeader
             sidebarOpen={props.sidebarOpen}
@@ -1591,7 +1517,7 @@ export function CouncilPage(props: {
               <>
               <ConversationHeaderIconButton
                 onClick={() => setHistoryDialogOpen(true)}
-                className="max-[520px]:hidden"
+                className="max-md:hidden"
                 aria-label="Chats"
                 title="Chats"
               >
@@ -1599,7 +1525,7 @@ export function CouncilPage(props: {
               </ConversationHeaderIconButton>
               <ConversationHeaderIconButton
                 onClick={() => setNewCouncilDialogOpen(true)}
-                className="max-[520px]:hidden"
+                className="max-md:hidden"
                 title="New Council"
                 aria-label="New Council"
               >
@@ -1712,7 +1638,7 @@ export function CouncilPage(props: {
                 : null
             }
             trailingActions={
-              showAgentsToggle && !isCouncilWide ? (
+              showAgentsToggle && !councilSidebarOpen ? (
                 <ConversationHeaderPanelToggleButton
                   onClick={() => setCouncilSidebarOpen((open) => !open)}
                   disabled={agentsToggleDisabled}
@@ -1722,7 +1648,6 @@ export function CouncilPage(props: {
                 />
               ) : null
             }
-            reserveRightPanelToggleSpace={showAgentsToggle && isCouncilWide && !councilSidebarOpen}
           />
           {error ? (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-danger)]">
@@ -1765,25 +1690,25 @@ export function CouncilPage(props: {
                 if (item.kind === "agent-status") {
                   const agent = actorAgent(selectedCouncil, item.actorId);
                   const label = actorLabel(selectedCouncil, item.actorId);
-                  const isListening = item.status === "listening";
+                  const isReady = item.status === "ready";
                   const isJoined = item.status === "joined";
                   return (
                     <div
-                      key={`${item.key}:${item.messageId}`}
+                      key={item.key}
                       className={COUNCIL_SYSTEM_NOTICE_CLASS}
                     >
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        isListening ? "bg-emerald-500" : isJoined ? "bg-amber-500" : "bg-zinc-400"
+                        isReady ? "bg-emerald-500" : isJoined ? "bg-amber-500" : "bg-zinc-400"
                       }`} />
                       {agent ? <ProviderLogo provider={agent.provider} className="h-3 w-3 shrink-0" variant="bare" /> : null}
                       <span className="min-w-0 truncate">{label}</span>
                       <span className={`shrink-0 ${
-                        isListening
+                        isReady
                           ? "text-emerald-600 dark:text-emerald-300"
                           : isJoined
                             ? "text-amber-600 dark:text-amber-300"
                             : "text-[var(--app-hint)]"
-                      }`}>{isListening ? "ready" : item.status}</span>
+                      }`}>{item.status}</span>
                     </div>
                   );
                 }
@@ -1992,15 +1917,14 @@ export function CouncilPage(props: {
 
         <ConversationSidePanelShell
           desktopOpen={councilSidebarOpen}
-          desktopBreakpoint="md"
+          desktopBreakpoint="wide"
           mobileOpen={councilSidebarOpen && !isCouncilWide}
           onMobileOpenChange={handleCouncilSidebarOpenChange}
           mobileTitle="Agents"
           mobileModal={false}
           mobileFloatingCloseLabel="Hide agents"
-          toggleLabel={councilSidebarButtonTitle}
-          toggleDisabled={agentsToggleDisabled}
-          onToggle={() => setCouncilSidebarOpen((open) => !open)}
+          desktopStorageKey="rah-council-agents-panel-width"
+          contained={props.containedAgentsPanel === true}
         >
           {agentsSidebarContent}
         </ConversationSidePanelShell>
@@ -2254,6 +2178,9 @@ export function CouncilPage(props: {
         open={historyDialogOpen}
         onOpenChange={(open) => {
           setHistoryDialogOpen(open);
+          if (!open) {
+            setHistoryQuery("");
+          }
         }}
       >
         <Dialog.Portal>
@@ -2264,9 +2191,9 @@ export function CouncilPage(props: {
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
                   Council Chats
                 </Dialog.Title>
-                <div className="text-xs text-[var(--app-hint)]">
+                <Dialog.Description className="text-xs text-[var(--app-hint)]">
                   Running Councils can receive messages; stopped Councils are read-only transcripts.
-                </div>
+                </Dialog.Description>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <button
@@ -2291,14 +2218,31 @@ export function CouncilPage(props: {
                 </Dialog.Close>
               </div>
             </div>
+            <div className="border-b border-[var(--app-border)] px-3 py-2">
+              <div className="relative">
+                <Search
+                  size={14}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--app-hint)]"
+                />
+                <input
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                  placeholder="Search Councils"
+                  aria-label="Search Councils"
+                  className="h-9 w-full rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] pl-8 pr-3 text-sm text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary/60"
+                />
+              </div>
+            </div>
             <OverlayScrollArea
-              className="max-h-[calc(84vh-4.5rem)]"
-              viewportClassName="max-h-[calc(84vh-4.5rem)] p-3"
+              className="max-h-[calc(84vh-8rem)]"
+              viewportClassName="max-h-[calc(84vh-8rem)] p-3"
               scrollAriaLabel="Councils"
             >
               <CouncilsBrowser
                 councils={councils}
                 selectedCouncilId={selectedCouncil?.id ?? null}
+                query={historyQuery}
                 loading={loading}
                 onOpenCouncil={(council) => {
                   setSelectedCouncilId(council.id);

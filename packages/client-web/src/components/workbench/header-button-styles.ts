@@ -14,7 +14,7 @@ export const SIDEBAR_HEADER_ICON_SIZE = 20;
 export const SIDEBAR_HEADER_LOGO_CLASS = "h-5 w-5";
 
 export const HEADER_IDENTITY_SLOT_CLASS =
-  "inline-flex h-6 w-6 shrink-0 items-center justify-center";
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center";
 
 export const HEADER_ICON_BUTTON_BASE_CLASS =
   "icon-click-feedback rah-stable-border h-8 w-8 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";
@@ -23,10 +23,13 @@ export const HEADER_ICON_BUTTON_CLASS = `inline-flex ${HEADER_ICON_BUTTON_BASE_C
 
 export const HEADER_EDGE_TOGGLE_ICON_SIZE = 20;
 
-export const HEADER_EDGE_TOGGLE_BUTTON_CLASS =
-  "icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";
+export const HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS =
+  "icon-click-feedback h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";
 
-export const HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS = HEADER_EDGE_TOGGLE_BUTTON_CLASS;
+export const HEADER_EDGE_TOGGLE_BUTTON_CLASS =
+  `inline-flex ${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS}`;
+
+export const HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS = HEADER_ICON_BUTTON_CLASS;
 
 export const HEADER_TEXT_BUTTON_BASE_CLASS =
   "icon-click-feedback rah-stable-border h-8 items-center justify-center rounded-md border border-transparent px-2 text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";

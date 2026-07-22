@@ -1,9 +1,34 @@
-import { useRef } from "react";
-import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
-import { Columns2, Columns3, Eraser, Grid2X2, Maximize2, Menu, Minimize2, Rows2, X } from "lucide-react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import {
+  Columns2,
+  Columns3,
+  Eraser,
+  Grid2X2,
+  Maximize2,
+  Menu,
+  Minus,
+  Minimize2,
+  Rows2,
+  X,
+} from "lucide-react";
+import {
+  canvasLayoutPaneCount,
+  createCanvasGridLayout,
+  createCanvasPresetLayout,
+  deriveCanvasSplitJunctions,
+  getCanvasLayoutPresetId,
+  MAX_CANVAS_PANES,
+  updateCanvasSplitRatio,
+  type CanvasGridDimensions,
+  type CanvasLayoutNode,
+  type CanvasLayoutPresetId,
+  type CanvasPaneId,
+  type CanvasSplitAxis,
+  type CanvasSplitJunctionDirections,
+} from "../../../canvas-layout";
 import {
   HEADER_ACTION_GROUP_CLASS,
-  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
@@ -13,18 +38,17 @@ import {
   HEADER_SEGMENTED_LABEL_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
+import { CanvasLayoutDesigner, CanvasPaneSplitButton } from "./CanvasLayoutControls";
 
 export type CanvasPaneView = {
-  id: string;
+  id: CanvasPaneId;
   label: string;
   active: boolean;
   clearable: boolean;
 };
 
-export type CanvasLayout = "two-horizontal" | "two-vertical" | "three-horizontal" | "four-grid";
-
 const LAYOUT_OPTIONS: Array<{
-  id: CanvasLayout;
+  id: CanvasLayoutPresetId;
   label: string;
   title: string;
   icon: typeof Columns2;
@@ -35,119 +59,150 @@ const LAYOUT_OPTIONS: Array<{
   { id: "four-grid", label: "4", title: "Four panes", icon: Grid2X2 },
 ];
 
+function CanvasDividerMarker(props: {
+  axis: CanvasSplitAxis;
+  position: number;
+  directions?: CanvasSplitJunctionDirections;
+}) {
+  const directions = props.directions ?? (
+    props.axis === "horizontal"
+      ? { left: false, right: false, up: true, down: true }
+      : { left: true, right: true, up: false, down: false }
+  );
+  const style = props.axis === "horizontal"
+    ? { left: "50%", top: `${props.position * 100}%` }
+    : { left: `${props.position * 100}%`, top: "50%" };
+  const armClassName =
+    "pointer-events-none absolute bg-[var(--app-hint)]/20 transition-colors duration-150 group-hover:bg-[var(--app-hint)]/45";
+  return (
+    <span
+      className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2"
+      style={style}
+      aria-hidden="true"
+    >
+      {directions.left ? (
+        <span className={`${armClassName} right-1/2 top-1/2 h-px w-2.5 -translate-y-1/2`} />
+      ) : null}
+      {directions.right ? (
+        <span className={`${armClassName} left-1/2 top-1/2 h-px w-2.5 -translate-y-1/2`} />
+      ) : null}
+      {directions.up ? (
+        <span className={`${armClassName} bottom-1/2 left-1/2 h-2.5 w-px -translate-x-1/2`} />
+      ) : null}
+      {directions.down ? (
+        <span className={`${armClassName} left-1/2 top-1/2 h-2.5 w-px -translate-x-1/2`} />
+      ) : null}
+    </span>
+  );
+}
+
+function createFrameCommit<T>(commit: (value: T) => void) {
+  let frameId: number | null = null;
+  let pendingValue: T | null = null;
+
+  const flush = () => {
+    frameId = null;
+    const value = pendingValue;
+    pendingValue = null;
+    if (value !== null) {
+      commit(value);
+    }
+  };
+
+  return {
+    schedule(value: T) {
+      pendingValue = value;
+      if (frameId === null) {
+        frameId = window.requestAnimationFrame(flush);
+      }
+    },
+    finish() {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      flush();
+    },
+  };
+}
+
 export function CanvasWorkbench(props: {
   panes: CanvasPaneView[];
-  layout: CanvasLayout;
-  availableLayouts?: readonly CanvasLayout[];
-  maximizedPaneId: string | null;
-  ratios: number[];
+  layout: CanvasLayoutNode;
+  layoutEditingDisabled?: boolean;
+  maximizedPaneId: CanvasPaneId | null;
   sidebarOpen: boolean;
-  onLayoutChange: (layout: CanvasLayout) => void;
-  onResizeRatios: (ratios: number[]) => void;
+  showLeftSidebarControls: boolean;
+  onLayoutChange: (layout: CanvasLayoutNode) => void;
+  onOpenLeft: () => void;
   onExpandSidebar: () => void;
-  onActivatePane: (paneId: string) => void;
-  onToggleMaximize: (paneId: string) => void;
-  onClearPane: (paneId: string) => void;
+  onActivatePane: (paneId: CanvasPaneId) => void;
+  onToggleMaximize: (paneId: CanvasPaneId) => void;
+  onSplitPane: (paneId: CanvasPaneId, axis: CanvasSplitAxis) => void;
+  onRemovePane: (paneId: CanvasPaneId) => void;
+  onClearPane: (paneId: CanvasPaneId) => void;
   onClearAllPanes: () => void;
   clearAllPanesDisabled: boolean;
   onExitCanvas: () => void;
-  onDropSession: (paneId: string, sessionId: string) => void;
-  onDropCouncil: (paneId: string, councilId: string) => void;
-  renderPane: (paneId: string) => ReactNode;
+  onDropSession: (paneId: CanvasPaneId, sessionId: string) => void;
+  onDropCouncil: (paneId: CanvasPaneId, councilId: string) => void;
+  renderPane: (paneId: CanvasPaneId) => ReactNode;
 }) {
-  const linearRef = useRef<HTMLDivElement | null>(null);
-  const gridRef = useRef<HTMLDivElement | null>(null);
-  const availableLayouts = props.availableLayouts ?? LAYOUT_OPTIONS.map((layout) => layout.id);
-  const layoutOptions = LAYOUT_OPTIONS.filter((layout) => availableLayouts.includes(layout.id));
+  const panesById = new Map(props.panes.map((pane) => [pane.id, pane] as const));
+  const paneCount = canvasLayoutPaneCount(props.layout);
+  const activePreset = getCanvasLayoutPresetId(props.layout);
+  const splitJunctions = deriveCanvasSplitJunctions(props.layout);
+  const layoutOptions = props.layoutEditingDisabled
+    ? LAYOUT_OPTIONS.filter((option) => option.id === "two-vertical")
+    : LAYOUT_OPTIONS;
 
-  const startLinearResize = (
-    axis: "column" | "row",
-    dividerIndex: number,
+  const startSplitResize = (
+    splitNodeId: string,
+    axis: CanvasSplitAxis,
+    startRatio: number,
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
-    if (props.layout === "four-grid" || props.maximizedPaneId) return;
-    const container = linearRef.current;
-    if (!container) return;
+    if (props.maximizedPaneId) {
+      return;
+    }
+    const container = event.currentTarget.parentElement;
+    if (!container) {
+      return;
+    }
 
     event.preventDefault();
     const rect = container.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    const startRatios = [...props.ratios];
+    const layoutCommit = createFrameCommit(props.onLayoutChange);
 
     const onPointerMove = (moveEvent: PointerEvent) => {
-      const totalPair = startRatios[dividerIndex]! + startRatios[dividerIndex + 1]!;
-      const basis = axis === "column" ? rect.width : rect.height;
+      const basis = axis === "horizontal" ? rect.width : rect.height;
       const deltaPixels =
-        axis === "column" ? moveEvent.clientX - startX : moveEvent.clientY - startY;
-      const deltaUnits = (deltaPixels / Math.max(basis, 1)) * props.panes.length;
-      const min = 0.28;
-      const nextLeft = Math.max(min, Math.min(totalPair - min, startRatios[dividerIndex]! + deltaUnits));
-      const next = [...startRatios];
-      next[dividerIndex] = nextLeft;
-      next[dividerIndex + 1] = totalPair - nextLeft;
-      props.onResizeRatios(next);
-    };
-
-    const onPointerUp = () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp, { once: true });
-  };
-
-  const startGridResize = (
-    axis: "column" | "row",
-    event: ReactPointerEvent<HTMLDivElement>,
-  ) => {
-    if (props.layout !== "four-grid" || props.maximizedPaneId) return;
-    const container = gridRef.current;
-    if (!container) return;
-
-    event.preventDefault();
-    const rect = container.getBoundingClientRect();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startRatios = [...props.ratios];
-    const firstIndex = axis === "column" ? 0 : 2;
-    const secondIndex = axis === "column" ? 1 : 3;
-
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      const totalPair =
-        (startRatios[firstIndex] ?? 1) + (startRatios[secondIndex] ?? 1);
-      const deltaPixels =
-        axis === "column" ? moveEvent.clientX - startX : moveEvent.clientY - startY;
-      const basis = axis === "column" ? rect.width : rect.height;
-      const deltaUnits = (deltaPixels / Math.max(basis, 1)) * 2;
-      const min = 0.35;
-      const nextFirst = Math.max(
-        min,
-        Math.min(totalPair - min, (startRatios[firstIndex] ?? 1) + deltaUnits),
+        axis === "horizontal" ? moveEvent.clientX - startX : moveEvent.clientY - startY;
+      layoutCommit.schedule(
+        updateCanvasSplitRatio(props.layout, splitNodeId, startRatio + deltaPixels / Math.max(1, basis)),
       );
-      const next = [...startRatios];
-      next[firstIndex] = nextFirst;
-      next[secondIndex] = totalPair - nextFirst;
-      props.onResizeRatios(next);
     };
 
     const onPointerUp = () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      layoutCommit.finish();
     };
 
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp, { once: true });
+    window.addEventListener("pointercancel", onPointerUp, { once: true });
   };
 
   const renderFrame = (pane: CanvasPaneView) => (
     <section
       key={pane.id}
-      className={`min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border bg-[var(--app-bg)] shadow-sm transition-colors ${
-        pane.active
-          ? "border-primary/60 ring-1 ring-primary/30"
-          : "border-[var(--app-border)]"
+      data-canvas-pane-id={pane.id}
+      className={`relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] transition-colors ${
+        pane.active ? "z-[1]" : ""
       }`}
       onClick={() => props.onActivatePane(pane.id)}
       onDragOver={(event) => {
@@ -168,7 +223,7 @@ export function CanvasWorkbench(props: {
       }}
     >
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2">
+        <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2">
           <button
             type="button"
             className="min-w-0 flex-1 truncate text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]"
@@ -177,26 +232,10 @@ export function CanvasWorkbench(props: {
             {pane.label}
           </button>
           <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-              onClick={(event) => {
-                event.stopPropagation();
-                props.onToggleMaximize(pane.id);
-              }}
-              aria-label={props.maximizedPaneId === pane.id ? "Restore panes" : "Maximize pane"}
-              title={props.maximizedPaneId === pane.id ? "Restore panes" : "Maximize pane"}
-            >
-              {props.maximizedPaneId === pane.id ? (
-                <Minimize2 size={14} />
-              ) : (
-                <Maximize2 size={14} />
-              )}
-            </button>
             {pane.clearable ? (
               <button
                 type="button"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
                 onClick={(event) => {
                   event.stopPropagation();
                   props.onClearPane(pane.id);
@@ -204,35 +243,129 @@ export function CanvasWorkbench(props: {
                 aria-label="Clear pane content"
                 title="Clear pane content"
               >
-                <Eraser size={14} />
+                <Eraser size={13} />
+              </button>
+            ) : null}
+            {!props.layoutEditingDisabled ? (
+              <CanvasPaneSplitButton
+                disabled={paneCount >= MAX_CANVAS_PANES}
+                onSplit={(axis) => props.onSplitPane(pane.id, axis)}
+              />
+            ) : null}
+            {paneCount > 1 ? (
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onToggleMaximize(pane.id);
+                }}
+                aria-label={props.maximizedPaneId === pane.id ? "Restore panes" : "Maximize pane"}
+                title={props.maximizedPaneId === pane.id ? "Restore panes" : "Maximize pane"}
+              >
+                {props.maximizedPaneId === pane.id ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              </button>
+            ) : null}
+            {paneCount > 1 ? (
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onRemovePane(pane.id);
+                }}
+                aria-label="Remove pane"
+                title="Remove pane"
+              >
+                <Minus size={13} />
               </button>
             ) : null}
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">{props.renderPane(pane.id)}</div>
       </div>
+      {pane.active ? (
+        <div className="pointer-events-none absolute inset-0 z-[20] rounded-lg ring-1 ring-inset ring-sky-400/70" />
+      ) : null}
     </section>
   );
 
+  const renderLayout = (layout: CanvasLayoutNode): ReactNode => {
+    if (layout.kind === "pane") {
+      const pane = panesById.get(layout.paneId);
+      return pane ? renderFrame(pane) : null;
+    }
+    const horizontal = layout.axis === "horizontal";
+    return (
+      <div
+        key={layout.id}
+        data-canvas-split-id={layout.id}
+        data-canvas-split-axis={layout.axis}
+        className={`flex h-full w-full min-h-0 min-w-0 flex-1 ${horizontal ? "flex-row" : "flex-col"}`}
+      >
+        <div
+          className="flex min-h-0 min-w-0"
+          style={{ flex: `${layout.ratio} 1 0` }}
+        >
+          {renderLayout(layout.first)}
+        </div>
+        <div
+          className={`group relative z-[2] shrink-0 touch-none ${
+            horizontal ? "w-2 cursor-col-resize" : "h-2 cursor-row-resize"
+          }`}
+          onPointerDown={(event) =>
+            startSplitResize(layout.id, layout.axis, layout.ratio, event)
+          }
+          title={horizontal ? "Drag to resize columns" : "Drag to resize rows"}
+        >
+          {(splitJunctions.get(layout.id) ?? [{ position: 0.5 }]).map((junction, index) => (
+            <CanvasDividerMarker
+              key={`${layout.id}:${index}`}
+              axis={layout.axis}
+              position={junction.position}
+              {...("directions" in junction ? { directions: junction.directions } : {})}
+            />
+          ))}
+        </div>
+        <div
+          className="flex min-h-0 min-w-0"
+          style={{ flex: `${1 - layout.ratio} 1 0` }}
+        >
+          {renderLayout(layout.second)}
+        </div>
+      </div>
+    );
+  };
+
+  const selectGrid = (dimensions: CanvasGridDimensions) => {
+    props.onLayoutChange(createCanvasGridLayout(dimensions.columns, dimensions.rows));
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)]">
+    <div
+      data-canvas-pane-count={paneCount}
+      className="flex h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)]"
+    >
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-2 backdrop-blur-sm">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-          {!props.sidebarOpen ? (
+          {props.showLeftSidebarControls ? (
             <button
               type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden min-[700px]:inline-flex`}
-              onClick={props.onExpandSidebar}
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} inline-flex min-[700px]:hidden`}
+              onClick={props.onOpenLeft}
+              aria-label="Open sidebar"
+              title="Open sidebar"
             >
               <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
             </button>
           ) : null}
+          {props.showLeftSidebarControls && !props.sidebarOpen ? (
+            <span className="hidden h-8 w-8 shrink-0 min-[700px]:block" aria-hidden="true" />
+          ) : null}
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-[var(--app-fg)]">Canvas</div>
             <div className="truncate text-xs text-[var(--app-hint)]">
-              Split running sessions and Councils. Close without stopping work.
+              Arrange sessions, history, and Councils without stopping work.
             </div>
           </div>
         </div>
@@ -244,20 +377,25 @@ export function CanvasWorkbench(props: {
                 <button
                   key={layout.id}
                   type="button"
-                  className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 ${
-                    props.layout === layout.id && !props.maximizedPaneId
+                  className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 max-[699px]:gap-0 ${
+                    activePreset === layout.id && !props.maximizedPaneId
                       ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
                       : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
                   }`}
-                  onClick={() => props.onLayoutChange(layout.id)}
+                  onClick={() => props.onLayoutChange(createCanvasPresetLayout(layout.id))}
                   title={layout.title}
                 >
                   <Icon size={14} />
-                  <span className={HEADER_SEGMENTED_LABEL_CLASS}>{layout.label}</span>
+                  <span className={`${HEADER_SEGMENTED_LABEL_CLASS} max-[699px]:hidden`}>
+                    {layout.label}
+                  </span>
                 </button>
               );
             })}
           </div>
+          {!props.layoutEditingDisabled ? (
+            <CanvasLayoutDesigner layout={props.layout} onSelect={selectGrid} />
+          ) : null}
           <button
             type="button"
             className={HEADER_ICON_BUTTON_CLASS}
@@ -281,84 +419,10 @@ export function CanvasWorkbench(props: {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 p-3">
-        {props.maximizedPaneId ? (
-          <div className="flex h-full min-h-0">
-            {props.panes[0] ? renderFrame(props.panes[0]) : null}
-          </div>
-        ) : props.layout === "four-grid" ? (
-          <div
-            ref={gridRef}
-            className="grid h-full min-h-0"
-            style={{
-              gridTemplateColumns: `${props.ratios[0] ?? 1}fr 0.75rem ${props.ratios[1] ?? 1}fr`,
-              gridTemplateRows: `${props.ratios[2] ?? 1}fr 0.75rem ${props.ratios[3] ?? 1}fr`,
-            }}
-          >
-            <div className="flex min-h-0 min-w-0" style={{ gridColumn: 1, gridRow: 1 }}>
-              {props.panes[0] ? renderFrame(props.panes[0]) : null}
-            </div>
-            <div
-              className="group flex cursor-col-resize items-center justify-center"
-              style={{ gridColumn: 2, gridRow: "1 / 4" }}
-              onPointerDown={(event) => startGridResize("column", event)}
-              title="Drag to resize columns"
-            >
-              <div className="h-16 w-1 rounded-full bg-[var(--app-border)] transition-colors group-hover:bg-primary/50" />
-            </div>
-            <div className="flex min-h-0 min-w-0" style={{ gridColumn: 3, gridRow: 1 }}>
-              {props.panes[1] ? renderFrame(props.panes[1]) : null}
-            </div>
-            <div
-              className="group flex cursor-row-resize items-center justify-center"
-              style={{ gridColumn: "1 / 4", gridRow: 2 }}
-              onPointerDown={(event) => startGridResize("row", event)}
-              title="Drag to resize rows"
-            >
-              <div className="h-1 w-16 rounded-full bg-[var(--app-border)] transition-colors group-hover:bg-primary/50" />
-            </div>
-            <div className="flex min-h-0 min-w-0" style={{ gridColumn: 1, gridRow: 3 }}>
-              {props.panes[2] ? renderFrame(props.panes[2]) : null}
-            </div>
-            <div className="flex min-h-0 min-w-0" style={{ gridColumn: 3, gridRow: 3 }}>
-              {props.panes[3] ? renderFrame(props.panes[3]) : null}
-            </div>
-          </div>
-        ) : props.layout === "two-vertical" ? (
-          <div ref={linearRef} className="flex h-full min-h-0 flex-col">
-            {props.panes.map((pane, index) => (
-              <div key={pane.id} className="flex min-h-0 flex-col" style={{ flex: `${props.ratios[index] ?? 1} 1 0` }}>
-                {renderFrame(pane)}
-                {index < props.panes.length - 1 ? (
-                  <div
-                    className="group flex h-3 shrink-0 cursor-row-resize items-center justify-center"
-                    onPointerDown={(event) => startLinearResize("row", index, event)}
-                    title="Drag to resize"
-                  >
-                    <div className="h-1 w-16 rounded-full bg-[var(--app-border)] transition-colors group-hover:bg-primary/50" />
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div ref={linearRef} className="flex h-full min-h-0">
-            {props.panes.map((pane, index) => (
-              <div key={pane.id} className="flex min-w-0" style={{ flex: `${props.ratios[index] ?? 1} 1 0` }}>
-                {renderFrame(pane)}
-                {index < props.panes.length - 1 ? (
-                  <div
-                    className="group flex w-3 shrink-0 cursor-col-resize items-center justify-center"
-                    onPointerDown={(event) => startLinearResize("column", index, event)}
-                    title="Drag to resize"
-                  >
-                    <div className="h-16 w-1 rounded-full bg-[var(--app-border)] transition-colors group-hover:bg-primary/50" />
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
+      <div className="flex min-h-0 flex-1 overflow-hidden p-2 max-[699px]:p-1">
+        {props.maximizedPaneId && props.panes[0]
+          ? renderFrame(props.panes[0])
+          : renderLayout(props.layout)}
       </div>
     </div>
   );

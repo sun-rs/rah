@@ -5,11 +5,14 @@ import * as api from "../api";
 export function useCouncilTransport(options: {
   onMessage: (council: CouncilSummary, message: CouncilMessage) => void;
   onRefresh: () => void | Promise<void>;
+  shouldRefresh: () => boolean;
 }): void {
   const onMessageRef = useRef(options.onMessage);
   const onRefreshRef = useRef(options.onRefresh);
+  const shouldRefreshRef = useRef(options.shouldRefresh);
   onMessageRef.current = options.onMessage;
   onRefreshRef.current = options.onRefresh;
+  shouldRefreshRef.current = options.shouldRefresh;
 
   useEffect(() => {
     let cancelled = false;
@@ -18,6 +21,9 @@ export function useCouncilTransport(options: {
     let reconnectAttempt = 0;
 
     const refresh = () => {
+      if (!shouldRefreshRef.current()) {
+        return;
+      }
       void Promise.resolve(onRefreshRef.current()).catch(() => {
         // The owning surface decides whether a refresh failure is user-visible.
       });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronDown, ChevronRight, HardDrive, History, ListFilter, Pencil, PlusCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { providerLabel } from "../types";
 import { formatRelativeTime, type RelativeTimeFormat, type WorkspaceSortMode } from "../session-browser";
 import { chooseChatListSubtitle } from "../chat-list-display";
@@ -13,42 +13,41 @@ import { CouncilsBrowser } from "../council/CouncilsBrowser";
 import { runningSessionActivityAt } from "../session-conversation-activity";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
 import {
+  archivedStoredSessionRefs,
   filterSessionHistoryGroups,
   filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
+  isStoredSessionArchived,
   sessionIdentityKey,
   visibleStoredSessionRefs,
 } from "../session-history-grouping";
+import {
+  formatExactHistoryBytes,
+  formatHistoryBytes,
+  historySizeRiskClassName,
+  parseMaxHistoryBytes,
+  type HistorySizeFilterUnit,
+} from "../session-history-size";
 
 const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
 const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "opencode"] as const;
 
-type ChatTab = "active" | "all" | "council";
+type ChatTab = "active" | "all" | "archived" | "council";
 type HistoryProviderFilter = (typeof HISTORY_PROVIDER_OPTIONS)[number];
 
 function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provider is HistoryProviderFilter {
   return (HISTORY_PROVIDER_OPTIONS as readonly string[]).includes(provider);
 }
 
-function parseMaxLineCountFilter(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return null;
-  }
-  return parsed;
-}
-
 function HistoryFilterMenu(props: {
   sortMode: WorkspaceSortMode;
   onSortModeChange: (value: WorkspaceSortMode) => void;
   showWorkspaceSort: boolean;
-  maxLineCount: string;
-  onMaxLineCountChange: (value: string) => void;
+  maxHistorySize: string;
+  maxHistorySizeUnit: HistorySizeFilterUnit;
+  onMaxHistorySizeChange: (value: string) => void;
+  onMaxHistorySizeUnitChange: (value: HistorySizeFilterUnit) => void;
   selectedProviders: ReadonlySet<HistoryProviderFilter>;
   onToggleProvider: (provider: HistoryProviderFilter) => void;
   onToggleAllProviders: () => void;
@@ -131,19 +130,33 @@ function HistoryFilterMenu(props: {
               ))}
               <div className="my-1 h-px bg-[var(--app-border)]" />
               <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
-                Max lines
+                Max history size
               </div>
               <label className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--app-fg)]">
                 <input
                   type="number"
                   min={0}
-                  inputMode="numeric"
+                  step="any"
+                  inputMode="decimal"
                   className="h-8 min-w-0 flex-1 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 text-sm text-[var(--app-fg)] outline-none focus:border-[var(--ring)]"
                   placeholder="No limit"
-                  value={props.maxLineCount}
-                  onChange={(event) => props.onMaxLineCountChange(event.currentTarget.value)}
+                  value={props.maxHistorySize}
+                  onChange={(event) => props.onMaxHistorySizeChange(event.currentTarget.value)}
                 />
-                <span className="shrink-0 text-xs text-[var(--app-hint)]">lines</span>
+                <select
+                  className="h-8 shrink-0 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 text-xs text-[var(--app-fg)] outline-none focus:border-[var(--ring)]"
+                  value={props.maxHistorySizeUnit}
+                  onChange={(event) =>
+                    props.onMaxHistorySizeUnitChange(
+                      event.currentTarget.value as HistorySizeFilterUnit,
+                    )
+                  }
+                  aria-label="Maximum history size unit"
+                >
+                  <option value="KB">KB</option>
+                  <option value="MB">MB</option>
+                  <option value="GB">GB</option>
+                </select>
               </label>
               <div className="my-1 h-px bg-[var(--app-border)]" />
             </>
@@ -187,6 +200,19 @@ function sessionTitle(session: StoredSessionRef): string {
   return session.title ?? session.preview ?? session.providerSessionId;
 }
 
+function bulkRemovalDispositionSummary(sessions: readonly StoredSessionRef[]): string {
+  const trashCount = sessions.filter((session) => session.removalDisposition === "trash").length;
+  const permanentCount = sessions.filter(
+    (session) => session.removalDisposition === "permanent",
+  ).length;
+  const unknownCount = sessions.length - trashCount - permanentCount;
+  return [
+    trashCount > 0 ? `${trashCount} moved to system Trash` : null,
+    permanentCount > 0 ? `${permanentCount} permanently deleted` : null,
+    unknownCount > 0 ? `${unknownCount} removed by its provider` : null,
+  ].filter(Boolean).join(" · ");
+}
+
 function formatCount(value: number, unit: string): string {
   if (value >= 1_000_000) {
     return `${(value / 1_000_000).toFixed(1)}m ${unit}`;
@@ -207,26 +233,6 @@ function formatCompactCount(value: number): string {
   return String(value);
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)} KB`;
-  }
-  return `${bytes} B`;
-}
-
-function formatCompactBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)}m`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)}k`;
-  }
-  return String(bytes);
-}
-
 function hasHistoryMeta(session: StoredSessionRef): boolean {
   const meta = session.historyMeta;
   if (!meta) {
@@ -242,7 +248,10 @@ function hasHistoryMeta(session: StoredSessionRef): boolean {
 function historyMetaLabel(session: StoredSessionRef | undefined): string {
   const meta = session?.historyMeta;
   if (!meta) {
-    return formatCount(0, "lines");
+    return "Unknown";
+  }
+  if (typeof meta.bytes === "number") {
+    return formatHistoryBytes(meta.bytes);
   }
   if (typeof meta.lines === "number") {
     return formatCount(meta.lines, "lines");
@@ -250,16 +259,16 @@ function historyMetaLabel(session: StoredSessionRef | undefined): string {
   if (typeof meta.messages === "number") {
     return formatCount(meta.messages, "msgs");
   }
-  if (typeof meta.bytes === "number") {
-    return formatBytes(meta.bytes);
-  }
-  return formatCount(0, "lines");
+  return "Unknown";
 }
 
 function historyMetaCompactLabel(session: StoredSessionRef | undefined): string {
   const meta = session?.historyMeta;
   if (!meta) {
-    return "0";
+    return "—";
+  }
+  if (typeof meta.bytes === "number") {
+    return formatHistoryBytes(meta.bytes, { compact: true });
   }
   if (typeof meta.lines === "number") {
     return formatCompactCount(meta.lines);
@@ -267,22 +276,21 @@ function historyMetaCompactLabel(session: StoredSessionRef | undefined): string 
   if (typeof meta.messages === "number") {
     return formatCompactCount(meta.messages);
   }
-  if (typeof meta.bytes === "number") {
-    return formatCompactBytes(meta.bytes);
-  }
-  return "0";
+  return "—";
 }
 
 function historyMetaTitle(session: StoredSessionRef | undefined): string {
   const meta = session?.historyMeta;
   if (!meta) {
-    return formatCount(0, "lines");
+    return "History size unavailable";
   }
   return [
+    typeof meta.bytes === "number"
+      ? `${formatHistoryBytes(meta.bytes)} (${formatExactHistoryBytes(meta.bytes)})`
+      : null,
     typeof meta.lines === "number" ? formatCount(meta.lines, "lines") : null,
     typeof meta.messages === "number" ? formatCount(meta.messages, "msgs") : null,
-    typeof meta.bytes === "number" ? formatBytes(meta.bytes) : null,
-  ].filter(Boolean).join(" · ") || formatCount(0, "lines");
+  ].filter(Boolean).join(" · ") || "History size unavailable";
 }
 
 function sessionHistoryTimestamp(session: StoredSessionRef): string {
@@ -400,6 +408,8 @@ function SessionChatRow(props: {
   onActivate: (ref: StoredSessionRef) => void;
   onActivateRunning?: ((sessionId: string) => void) | undefined;
   onRequestRemove: (ref: StoredSessionRef) => void;
+  onRequestArchive?: ((ref: StoredSessionRef) => void) | undefined;
+  onRequestRestore?: ((ref: StoredSessionRef) => void) | undefined;
   runningActivityAt?: string | undefined;
   relativeTimeFormat: RelativeTimeFormat;
 }) {
@@ -415,9 +425,15 @@ function SessionChatRow(props: {
     props.session?.cwd ??
     (props.runningSummary ? runningSessionPath(props.runningSummary) : null);
   const running = props.runningSummary !== undefined;
+  const archived = props.session ? isStoredSessionArchived(props.session) : false;
+  const removeLabel =
+    props.session?.removalDisposition === "permanent"
+      ? "Delete archived session permanently"
+      : "Move archived session to Trash";
   const metaLabel = historyMetaLabel(props.session);
   const compactMetaLabel = historyMetaCompactLabel(props.session);
   const metaTitle = historyMetaTitle(props.session);
+  const historyBytes = props.session?.historyMeta?.bytes;
   const timeLabel = props.runningSummary
     ? formatRelativeTime(runningSessionActivityAt(props.runningSummary, props.runningActivityAt), {
         format: props.relativeTimeFormat,
@@ -436,8 +452,42 @@ function SessionChatRow(props: {
       props.onActivate(props.session);
     }
   };
-  const deleteDisabled = running || !props.session;
-  const showDelete = running || props.session !== undefined;
+  const storedActions = !running && props.session ? (
+    <div className="flex items-center gap-1">
+      {archived ? (
+        <button
+          type="button"
+          onClick={() => props.onRequestRestore?.(props.session!)}
+          className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+          aria-label="Restore session"
+          title="Restore session"
+        >
+          <ArchiveRestore size={14} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => props.onRequestArchive?.(props.session!)}
+          className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+          aria-label="Archive session"
+          title="Archive session"
+        >
+          <Archive size={14} />
+        </button>
+      )}
+      {archived ? (
+        <button
+          type="button"
+          onClick={() => props.onRequestRemove(props.session!)}
+          className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
+          aria-label={removeLabel}
+          title={removeLabel}
+        >
+          <Trash2 size={14} />
+        </button>
+      ) : null}
+    </div>
+  ) : undefined;
 
   return (
     <ChatBrowserRow
@@ -450,20 +500,16 @@ function SessionChatRow(props: {
           ? { label: "Running", tone: "running" }
           : null
       }
-      meta={{ label: metaLabel, compactLabel: compactMetaLabel, title: metaTitle }}
+      meta={{
+        label: metaLabel,
+        compactLabel: compactMetaLabel,
+        title: metaTitle,
+        icon: <HardDrive size={12} />,
+        className: historySizeRiskClassName(historyBytes),
+      }}
       timeLabel={timeLabel}
       onOpen={activate}
-      onDelete={
-        showDelete
-          ? () => {
-              if (props.session && !deleteDisabled) {
-                props.onRequestRemove(props.session);
-              }
-            }
-          : undefined
-      }
-      deleteDisabled={deleteDisabled}
-      deleteLabel={deleteDisabled ? "Running sessions cannot be deleted" : "Delete session"}
+      actions={storedActions}
       dataSessionId={props.runningSummary?.session.id}
       dataProviderSessionId={props.session?.providerSessionId ?? props.runningSummary?.session.providerSessionId}
       dataSessionSource={running ? "running" : props.session?.source ?? "provider_history"}
@@ -488,6 +534,8 @@ export function SessionHistoryDialog(props: {
   onRenameCouncil?: ((council: CouncilSnapshot) => void) | undefined;
   onRemoveCouncil?: ((councilId: string) => void | Promise<void>) | undefined;
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
+  onArchiveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
+  onRestoreSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string, sessions: readonly StoredSessionRef[]) => void;
   defaultTab?: ChatTab;
   children: React.ReactNode;
@@ -499,12 +547,14 @@ export function SessionHistoryDialog(props: {
   const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspace, setPendingRemoveWorkspace] = useState<{
-    workspaceDir: string;
+    workspaceDir: string | null;
     sessions: StoredSessionRef[];
   } | null>(null);
   const [pendingRemoveCouncil, setPendingRemoveCouncil] = useState<CouncilSnapshot | null>(null);
   const [councilRefreshPending, setCouncilRefreshPending] = useState(false);
-  const [maxLineCountFilter, setMaxLineCountFilter] = useState("");
+  const [maxHistorySizeFilter, setMaxHistorySizeFilter] = useState("");
+  const [maxHistorySizeUnit, setMaxHistorySizeUnit] =
+    useState<HistorySizeFilterUnit>("MB");
   const relativeTimeFormat: RelativeTimeFormat = usePwaDisplayMode() ? "compact" : "long";
   const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
     () => new Set(HISTORY_PROVIDER_OPTIONS),
@@ -548,20 +598,25 @@ export function SessionHistoryDialog(props: {
       ),
     [props.runningSessions],
   );
-  const mergedHistorySessions = useMemo(
-    () =>
-      visibleStoredSessionRefs(
-        mergeSessionHistoryRefsByIdentity([...props.storedSessions, ...props.recentSessions]),
-      ),
+  const allHistorySessions = useMemo(
+    () => mergeSessionHistoryRefsByIdentity([...props.storedSessions, ...props.recentSessions]),
     [props.storedSessions, props.recentSessions],
   );
+  const mergedHistorySessions = useMemo(
+    () => visibleStoredSessionRefs(allHistorySessions),
+    [allHistorySessions],
+  );
+  const archivedHistorySessions = useMemo(
+    () => archivedStoredSessionRefs(allHistorySessions),
+    [allHistorySessions],
+  );
   const historySessionByIdentity = useMemo(
-    () => new Map(mergedHistorySessions.map((session) => [sessionIdentityKey(session), session] as const)),
-    [mergedHistorySessions],
+    () => new Map(allHistorySessions.map((session) => [sessionIdentityKey(session), session] as const)),
+    [allHistorySessions],
   );
 
   useEffect(() => {
-    if (open && tab === "all") {
+    if (open && (tab === "all" || tab === "archived")) {
       void props.onLoadStoredSessions?.();
     }
   }, [open, props.onLoadStoredSessions, tab]);
@@ -573,22 +628,48 @@ export function SessionHistoryDialog(props: {
       }),
     [mergedHistorySessions, props.workspaceSortMode],
   );
+  const archivedGroups = useMemo(
+    () =>
+      groupAllStoredSessionsByDirectory(archivedHistorySessions, {
+        workspaceSortMode: props.workspaceSortMode,
+      }),
+    [archivedHistorySessions, props.workspaceSortMode],
+  );
 
   const filteredGroups = useMemo(() => {
-    const parsedMaxLineCount = parseMaxLineCountFilter(maxLineCountFilter);
+    const parsedMaxHistoryBytes = parseMaxHistoryBytes(
+      maxHistorySizeFilter,
+      maxHistorySizeUnit,
+    );
     const matchesProvider = (session: StoredSessionRef) => {
       if (!isHistoryProviderFilter(session.provider)) {
         return selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
       }
       return selectedProviders.has(session.provider);
     };
-    return filterSessionHistoryGroups(groups, {
+    return filterSessionHistoryGroups(tab === "archived" ? archivedGroups : groups, {
       query,
-      maxLineCount: parsedMaxLineCount,
+      maxHistoryBytes: parsedMaxHistoryBytes,
       matchesProvider,
       matchesSessionQuery: matchesQuery,
     });
-  }, [groups, maxLineCountFilter, query, selectedProviders]);
+  }, [
+    archivedGroups,
+    groups,
+    maxHistorySizeFilter,
+    maxHistorySizeUnit,
+    query,
+    selectedProviders,
+    tab,
+  ]);
+  const filteredArchivedSessions = useMemo(
+    () => (tab === "archived" ? filteredGroups.flatMap((group) => group.items) : []),
+    [filteredGroups, tab],
+  );
+  const archiveFiltersActive =
+    query.trim().length > 0 ||
+    maxHistorySizeFilter.trim().length > 0 ||
+    selectedProviders.size !== HISTORY_PROVIDER_OPTIONS.length;
 
   const matchesSelectedProvider = (provider: StoredSessionRef["provider"] | SessionSummary["session"]["provider"]) => {
     if (!isHistoryProviderFilter(provider)) {
@@ -685,6 +766,11 @@ export function SessionHistoryDialog(props: {
     </div>
   );
   const searchPlaceholder = "Search chats by title, id, provider, agent, or workspace...";
+  const pendingSingleRemovalIsPermanent =
+    pendingRemoveSession?.removalDisposition === "permanent";
+  const pendingBulkRemovalSummary = pendingRemoveWorkspace
+    ? bulkRemovalDispositionSummary(pendingRemoveWorkspace.sessions)
+    : "";
 
   return (
     <>
@@ -693,6 +779,9 @@ export function SessionHistoryDialog(props: {
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[90dvh] max-h-[56rem] w-[92vw] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-[699px]:inset-0 max-[699px]:h-[100dvh] max-[699px]:max-h-[100dvh] max-[699px]:w-screen max-[699px]:max-w-none max-[699px]:translate-x-0 max-[699px]:translate-y-0 max-[699px]:rounded-none max-[699px]:border-0 max-[699px]:pt-[env(safe-area-inset-top)] max-[699px]:pb-[env(safe-area-inset-bottom)]">
+          <Dialog.Description className="sr-only">
+            Browse running, recent, stored, and Council conversations.
+          </Dialog.Description>
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
               Chats
@@ -711,7 +800,7 @@ export function SessionHistoryDialog(props: {
           <div className="px-4 pt-3 pb-2 shrink-0">
             <SegmentedControl
               size="dialog"
-              className="grid grid-cols-3 gap-1"
+              className="grid grid-cols-4 gap-1"
               role="tablist"
               ariaLabel="Chat sections"
             >
@@ -732,6 +821,15 @@ export function SessionHistoryDialog(props: {
                 aria-selected={tab === "all"}
               >
                 <SegmentedButtonLabel size="dialog">All</SegmentedButtonLabel>
+              </SegmentedButton>
+              <SegmentedButton
+                size="dialog"
+                selected={tab === "archived"}
+                onClick={() => setTab("archived")}
+                role="tab"
+                aria-selected={tab === "archived"}
+              >
+                <SegmentedButtonLabel size="dialog">Archived</SegmentedButtonLabel>
               </SegmentedButton>
               <SegmentedButton
                 size="dialog"
@@ -768,16 +866,37 @@ export function SessionHistoryDialog(props: {
                   <RefreshCw size={14} className={councilRefreshPending ? "animate-spin" : ""} />
                 </button>
               ) : (
-                <HistoryFilterMenu
-                  sortMode={props.workspaceSortMode}
-                  onSortModeChange={props.onWorkspaceSortModeChange}
-                  showWorkspaceSort={tab === "all"}
-                  selectedProviders={selectedProviders}
-                  maxLineCount={maxLineCountFilter}
-                  onMaxLineCountChange={setMaxLineCountFilter}
-                  onToggleProvider={toggleProvider}
-                  onToggleAllProviders={toggleAllProviders}
-                />
+                <>
+                  {tab === "archived" && filteredArchivedSessions.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingRemoveWorkspace({
+                          workspaceDir: null,
+                          sessions: filteredArchivedSessions,
+                        })
+                      }
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                      aria-label={archiveFiltersActive ? "Remove filtered archived sessions" : "Remove all archived sessions"}
+                      title={archiveFiltersActive ? "Remove filtered archived sessions" : "Remove all archived sessions"}
+                    >
+                      <Trash2 size={14} />
+                      <span>{archiveFiltersActive ? "Remove filtered" : "Remove all"}</span>
+                    </button>
+                  ) : null}
+                  <HistoryFilterMenu
+                    sortMode={props.workspaceSortMode}
+                    onSortModeChange={props.onWorkspaceSortModeChange}
+                    showWorkspaceSort={tab === "all" || tab === "archived"}
+                    selectedProviders={selectedProviders}
+                    maxHistorySize={maxHistorySizeFilter}
+                    maxHistorySizeUnit={maxHistorySizeUnit}
+                    onMaxHistorySizeChange={setMaxHistorySizeFilter}
+                    onMaxHistorySizeUnitChange={setMaxHistorySizeUnit}
+                    onToggleProvider={toggleProvider}
+                    onToggleAllProviders={toggleAllProviders}
+                  />
+                </>
               )}
             </div>
           </div>
@@ -859,6 +978,8 @@ export function SessionHistoryDialog(props: {
                           }}
                           onActivateRunning={props.onActivateRunning}
                           onRequestRemove={setPendingRemoveSession}
+                          onRequestArchive={(ref) => props.onArchiveSession(ref)}
+                          onRequestRestore={(ref) => props.onRestoreSession(ref)}
                         />
                       ))}
                     </div>
@@ -881,46 +1002,50 @@ export function SessionHistoryDialog(props: {
                       key={group.directory}
                       className="rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] overflow-hidden"
                     >
-                      <button
-                        type="button"
-                        onClick={() => toggleGroup(group.directory)}
-                        className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-[var(--app-bg)] transition-colors"
-                      >
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          {isExpanded ? (
-                            <ChevronDown size={16} className="text-[var(--app-hint)] shrink-0" />
-                          ) : (
-                            <ChevronRight size={16} className="text-[var(--app-hint)] shrink-0" />
-                          )}
-                          <span className="text-sm font-medium truncate text-[var(--app-fg)]">
-                            {group.displayName}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-end gap-3 shrink-0 min-w-0">
-                          {group.isWorkspaceGroup ? (
-                            <span
-                              className="text-xs text-[var(--app-hint)] truncate max-w-[160px] text-right"
-                              title={group.directory}
-                            >
-                              {group.directory}
+                      <div className="flex items-center transition-colors hover:bg-[var(--app-bg)]">
+                        <button
+                          type="button"
+                          onClick={() => toggleGroup(group.directory)}
+                          className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-2 text-left"
+                        >
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            {isExpanded ? (
+                              <ChevronDown size={16} className="text-[var(--app-hint)] shrink-0" />
+                            ) : (
+                              <ChevronRight size={16} className="text-[var(--app-hint)] shrink-0" />
+                            )}
+                            <span className="text-sm font-medium truncate text-[var(--app-fg)]">
+                              {group.displayName}
                             </span>
-                          ) : (
-                            <span className="text-xs text-[var(--app-hint)]">
-                              Missing workspace metadata
-                            </span>
-                          )}
-                          <span className="inline-flex items-center justify-center rounded-full bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-0.5 text-xs font-medium text-[var(--app-fg)] tabular-nums min-w-[1.5rem]">
-                            {group.items.length}
                           </span>
-                          {group.isWorkspaceGroup ? (
+                          <span className="flex min-w-0 shrink-0 items-center justify-end gap-3">
+                            {group.isWorkspaceGroup ? (
+                              <span
+                                className="text-xs text-[var(--app-hint)] truncate max-w-[160px] text-right"
+                                title={group.directory}
+                              >
+                                {group.directory}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-[var(--app-hint)]">
+                                Missing workspace metadata
+                              </span>
+                            )}
+                            <span className="inline-flex items-center justify-center rounded-full bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-0.5 text-xs font-medium text-[var(--app-fg)] tabular-nums min-w-[1.5rem]">
+                              {group.items.length}
+                            </span>
+                          </span>
+                        </button>
+                        {group.isWorkspaceGroup && tab === "archived" ? (
+                          <div className="pr-2">
                             <WorkspaceRemoveButton
                               workspaceDir={group.directory}
                               sessions={group.items}
                               onRequestRemove={setPendingRemoveWorkspace}
                             />
-                          ) : null}
-                        </div>
-                      </button>
+                          </div>
+                        ) : null}
+                      </div>
 
                       {isExpanded ? (
                         <div className="border-t border-[var(--app-border)] px-2 pb-2 pt-1 space-y-1">
@@ -948,6 +1073,8 @@ export function SessionHistoryDialog(props: {
                                   closeAfterActivation();
                                 }}
                                 onRequestRemove={setPendingRemoveSession}
+                                onRequestArchive={(ref) => props.onArchiveSession(ref)}
+                                onRequestRestore={(ref) => props.onRestoreSession(ref)}
                               />
                             );
                           })}
@@ -969,10 +1096,16 @@ export function SessionHistoryDialog(props: {
                 })}
               </div>
             ) : renderEmpty(
-              query.trim() ? "No matching results" : "No session history",
+              query.trim()
+                ? "No matching results"
+                : tab === "archived"
+                  ? "No archived sessions"
+                  : "No session history",
               query.trim()
                 ? "Try a different search term."
-                : "Stopped sessions and provider history will appear here.",
+                : tab === "archived"
+                  ? "Archived sessions will appear here until restored or deleted."
+                  : "Stopped sessions and provider history will appear here.",
             )}
           </OverlayScrollArea>
           </Dialog.Content>
@@ -992,7 +1125,9 @@ export function SessionHistoryDialog(props: {
           <Dialog.Content className="fixed left-1/2 top-1/2 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-[70] flex flex-col">
             <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                Delete session?
+                {pendingSingleRemovalIsPermanent
+                  ? "Delete archived session permanently?"
+                  : "Move archived session to Trash?"}
               </Dialog.Title>
               <button
                 type="button"
@@ -1009,11 +1144,13 @@ export function SessionHistoryDialog(props: {
             <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
               {pendingRemoveSession ? (
                 <>
-                  Move{" "}
+                  {pendingSingleRemovalIsPermanent ? "Permanently delete " : "Move "}
                   <span className="font-medium text-[var(--app-fg)]">
                     {sessionTitle(pendingRemoveSession)}
                   </span>{" "}
-                  to the trash?
+                  {pendingSingleRemovalIsPermanent
+                    ? "? This cannot be undone."
+                    : " to the system Trash?"}
                 </>
               ) : null}
             </div>
@@ -1043,7 +1180,7 @@ export function SessionHistoryDialog(props: {
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
               >
-                Delete
+                {pendingSingleRemovalIsPermanent ? "Delete permanently" : "Move to Trash"}
               </button>
             </div>
           </Dialog.Content>
@@ -1063,7 +1200,9 @@ export function SessionHistoryDialog(props: {
           <Dialog.Content className="fixed left-1/2 top-1/2 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-[70] flex flex-col">
             <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                Delete workspace sessions?
+                {pendingRemoveWorkspace?.workspaceDir
+                  ? "Remove workspace archives?"
+                  : "Remove archived sessions?"}
               </Dialog.Title>
               <button
                 type="button"
@@ -1080,15 +1219,25 @@ export function SessionHistoryDialog(props: {
             <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
               {pendingRemoveWorkspace ? (
                 <>
-                  Move{" "}
+                  Remove{" "}
                   <span className="font-medium text-[var(--app-fg)]">
                     {pendingRemoveWorkspace.sessions.length}
                   </span>{" "}
-                  filtered session{pendingRemoveWorkspace.sessions.length === 1 ? "" : "s"} in{" "}
-                  <span className="font-medium text-[var(--app-fg)]">
-                    {pendingRemoveWorkspace.workspaceDir}
-                  </span>{" "}
-                  to the trash?
+                  archived session{pendingRemoveWorkspace.sessions.length === 1 ? "" : "s"}
+                  {pendingRemoveWorkspace.workspaceDir ? (
+                    <>
+                      {" "}in{" "}
+                      <span className="font-medium text-[var(--app-fg)]">
+                        {pendingRemoveWorkspace.workspaceDir}
+                      </span>
+                    </>
+                  ) : null}
+                  ?
+                  {pendingBulkRemovalSummary ? (
+                    <span className="mt-2 block text-xs">
+                      {pendingBulkRemovalSummary}.
+                    </span>
+                  ) : null}
                 </>
               ) : null}
             </div>
@@ -1110,7 +1259,7 @@ export function SessionHistoryDialog(props: {
                     return;
                   }
                   props.onRemoveWorkspace(
-                    pendingRemoveWorkspace.workspaceDir,
+                    pendingRemoveWorkspace.workspaceDir ?? "",
                     pendingRemoveWorkspace.sessions,
                   );
                   setPendingRemoveWorkspace(null);
@@ -1118,7 +1267,7 @@ export function SessionHistoryDialog(props: {
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
               >
-                Delete
+                Remove sessions
               </button>
             </div>
           </Dialog.Content>

@@ -4,6 +4,7 @@ export function ConversationPageShell(props: {
   as?: "div" | "section";
   rootRef?: Ref<HTMLDivElement>;
   className?: string;
+  fileViewerAnchorId?: string;
   header?: ReactNode;
   notices?: ReactNode;
   body?: ReactNode;
@@ -12,7 +13,10 @@ export function ConversationPageShell(props: {
 }) {
   if (props.as === "section") {
     return (
-      <section className={props.className ?? "flex h-full min-h-0 flex-col"}>
+      <section
+        className={props.className ?? "flex h-full min-h-0 flex-col"}
+        data-inspector-file-viewer-anchor={props.fileViewerAnchorId}
+      >
         {props.header}
         {props.notices}
         {props.body}
@@ -23,7 +27,11 @@ export function ConversationPageShell(props: {
   }
 
   return (
-    <div ref={props.rootRef} className={props.className ?? "flex h-full min-h-0 flex-col"}>
+    <div
+      ref={props.rootRef}
+      className={props.className ?? "flex h-full min-h-0 flex-col"}
+      data-inspector-file-viewer-anchor={props.fileViewerAnchorId}
+    >
       {props.header}
       {props.notices}
       {props.body}

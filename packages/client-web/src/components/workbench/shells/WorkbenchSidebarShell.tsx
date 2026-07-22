@@ -1,17 +1,17 @@
 import { type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { House, Menu } from "lucide-react";
-import { DesktopWorkbenchSidebarHeader } from "../actions/DesktopWorkbenchSidebarHeader";
-import { MobileWorkbenchHeaderActions } from "../actions/MobileWorkbenchHeaderActions";
+import { Menu } from "lucide-react";
+import {
+  WorkbenchSidebarNavigation,
+  WorkbenchSidebarSettingsAction,
+} from "../actions/WorkbenchSidebarNavigation";
 import { Sheet } from "../../Sheet";
 import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { SIDEBAR_LAYOUT } from "../../../sidebar-layout-contract";
 import type { WorkspaceSortMode } from "../../../session-browser";
 import {
-  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
-  SIDEBAR_HEADER_ICON_BUTTON_CLASS,
-  SIDEBAR_HEADER_ICON_SIZE,
 } from "../header-button-styles";
 
 export function WorkbenchSidebarShell(props: {
@@ -32,6 +32,7 @@ export function WorkbenchSidebarShell(props: {
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
   councilActive: boolean;
+  homeActive: boolean;
   mobileCanvasEnabled: boolean;
   onOpenCouncil: () => void;
   onDesktopToggleCanvas: () => void;
@@ -44,61 +45,77 @@ export function WorkbenchSidebarShell(props: {
   onRenameCouncil: (council: CouncilSnapshot) => void;
   onRemoveCouncil: (councilId: string) => void | Promise<void>;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
+  onArchiveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
+  onRestoreHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string, sessions: readonly StoredSessionRef[]) => void;
   onHome: () => void;
   onOpenSettings: () => void;
   onCollapseSidebar: () => void;
+  onExpandSidebar: () => void;
 }) {
+  const commonNavigationProps = {
+    storedSessions: props.storedSessions,
+    recentSessions: props.recentSessions,
+    runningSessions: props.runningSessions,
+    runningSessionActivityAtById: props.runningSessionActivityAtById,
+    councils: props.councils,
+    selectedCouncilId: props.selectedCouncilId,
+    workspaceSortMode: props.workspaceSortMode,
+    onWorkspaceSortModeChange: props.onWorkspaceSortModeChange,
+    homeActive: props.homeActive,
+    canvasActive: props.canvasActive,
+    councilActive: props.councilActive,
+    onLoadStoredSessions: props.onLoadStoredSessions,
+    onRefreshCouncils: props.onRefreshCouncils,
+    onRenameCouncil: props.onRenameCouncil,
+    onRemoveCouncil: props.onRemoveCouncil,
+    onRemoveHistorySession: props.onRemoveHistorySession,
+    onArchiveHistorySession: props.onArchiveHistorySession,
+    onRestoreHistorySession: props.onRestoreHistorySession,
+    onRemoveHistoryWorkspace: props.onRemoveHistoryWorkspace,
+  };
+  const closeMobileSidebar = () => props.onLeftOpenChange(false);
+  const runMobileAction = (action: () => void) => {
+    action();
+    closeMobileSidebar();
+  };
+
   return (
     <>
+      <button
+        type="button"
+        className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} fixed left-2 top-2 z-40 hidden md:inline-flex`}
+        onClick={props.sidebarOpen ? props.onCollapseSidebar : props.onExpandSidebar}
+        aria-label={props.sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+        title={props.sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+      >
+        <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+      </button>
       <aside
-        className={`hidden md:flex flex-col bg-[var(--app-subtle-bg)] shrink-0 transition-[width] ${
-          props.isResizing ? "duration-0" : "duration-200"
-        } ${props.sidebarOpen ? "border-r border-[var(--app-border)]" : "border-r-0"} overflow-hidden`}
+        data-sidebar-open={props.sidebarOpen ? "true" : "false"}
+        className={`rah-workbench-sidebar hidden shrink-0 flex-col overflow-hidden md:flex ${
+          props.isResizing ? "" : "transition-[width] duration-150 ease-out"
+        }`}
         style={{
           width: props.sidebarOpen ? `var(--rah-sidebar-width, ${props.sidebarWidth}px)` : 0,
         }}
       >
-        <div className="rah-sidebar-header h-14 px-2 flex min-w-0 items-center shrink-0">
+        <div className="rah-sidebar-header flex h-12 min-w-0 shrink-0 items-center pl-12 pr-2">
           {props.sidebarOpen ? (
-            <>
-              <button
-                type="button"
-                className={HEADER_EDGE_TOGGLE_BUTTON_CLASS}
-                onClick={props.onCollapseSidebar}
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-              >
-                <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-              </button>
-              <DesktopWorkbenchSidebarHeader
-                storedSessions={props.storedSessions}
-                recentSessions={props.recentSessions}
-                runningSessions={props.runningSessions}
-                runningSessionActivityAtById={props.runningSessionActivityAtById}
-                councils={props.councils}
-                selectedCouncilId={props.selectedCouncilId}
-                workspaceSortMode={props.workspaceSortMode}
-                onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
-                canvasActive={props.canvasActive}
-                councilActive={props.councilActive}
-                onOpenCouncil={props.onOpenCouncil}
-                onToggleCanvas={props.onDesktopToggleCanvas}
-                onActivateHistory={props.onActivateHistory}
-                onActivateRunning={props.onActivateRunning}
-                onActivateCouncil={props.onActivateCouncil}
-                onLoadStoredSessions={props.onLoadStoredSessions}
-                onRefreshCouncils={props.onRefreshCouncils}
-                onRenameCouncil={props.onRenameCouncil}
-                onRemoveCouncil={props.onRemoveCouncil}
-                onRemoveHistorySession={props.onRemoveHistorySession}
-                onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
-                onHome={props.onHome}
-                onOpenSettings={props.onOpenSettings}
-              />
-            </>
+            <span className="truncate text-[13px] font-semibold text-[var(--app-fg)]">RAH</span>
           ) : null}
         </div>
+        {props.sidebarOpen ? (
+          <WorkbenchSidebarNavigation
+            {...commonNavigationProps}
+            onOpenCouncil={props.onOpenCouncil}
+            onToggleCanvas={props.onDesktopToggleCanvas}
+            onActivateHistory={props.onActivateHistory}
+            onActivateRunning={props.onActivateRunning}
+            onActivateCouncil={props.onActivateCouncil}
+            onHome={props.onHome}
+          />
+        ) : null}
         <OverlayScrollArea
           className={SIDEBAR_LAYOUT.sidebarScrollShellClassName}
           viewportClassName={SIDEBAR_LAYOUT.sidebarScrollClassName}
@@ -107,6 +124,9 @@ export function WorkbenchSidebarShell(props: {
         >
           {props.sidebarContent}
         </OverlayScrollArea>
+        {props.sidebarOpen ? (
+          <WorkbenchSidebarSettingsAction onOpenSettings={props.onOpenSettings} />
+        ) : null}
       </aside>
 
       {props.sidebarOpen ? (
@@ -122,47 +142,32 @@ export function WorkbenchSidebarShell(props: {
         side="left"
         headerLayout="inline"
         closePlacement="start"
-        viewportClassName="md:hidden"
-        title={
-          <button
-            type="button"
-            onClick={props.onHome}
-            className={SIDEBAR_HEADER_ICON_BUTTON_CLASS}
-            aria-label="Home"
-            title="Home"
-          >
-            <House size={SIDEBAR_HEADER_ICON_SIZE} />
-          </button>
-        }
-        headerRight={
-          <MobileWorkbenchHeaderActions
-            storedSessions={props.storedSessions}
-            recentSessions={props.recentSessions}
-            runningSessions={props.runningSessions}
-            runningSessionActivityAtById={props.runningSessionActivityAtById}
-            councils={props.councils}
-            selectedCouncilId={props.selectedCouncilId}
-            workspaceSortMode={props.workspaceSortMode}
-            onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
-            canvasActive={props.canvasActive}
-            councilActive={props.councilActive}
-            canvasEnabled={props.mobileCanvasEnabled}
-            onOpenCouncil={props.onOpenCouncil}
-            onToggleCanvas={props.onMobileToggleCanvas}
-            onActivateHistory={props.onActivateHistory}
-            onActivateRunning={props.onActivateRunning}
-            onActivateCouncil={props.onActivateCouncil}
-            onLoadStoredSessions={props.onLoadStoredSessions}
-            onRefreshCouncils={props.onRefreshCouncils}
-            onRenameCouncil={props.onRenameCouncil}
-            onRemoveCouncil={props.onRemoveCouncil}
-            onRemoveHistorySession={props.onRemoveHistorySession}
-            onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
-            onOpenSettings={props.onOpenSettings}
-          />
-        }
+        viewportClassName="md:!hidden"
+        title={<span>RAH</span>}
+        bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
-        <div className={SIDEBAR_LAYOUT.sidebarSheetContentClassName}>{props.sidebarContent}</div>
+        <WorkbenchSidebarNavigation
+          {...commonNavigationProps}
+          canvasEnabled={props.mobileCanvasEnabled}
+          onOpenCouncil={() => runMobileAction(props.onOpenCouncil)}
+          onToggleCanvas={() => runMobileAction(props.onMobileToggleCanvas)}
+          onActivateHistory={(ref) => runMobileAction(() => props.onActivateHistory(ref))}
+          onActivateRunning={(sessionId) =>
+            runMobileAction(() => props.onActivateRunning(sessionId))
+          }
+          onActivateCouncil={(councilId) =>
+            runMobileAction(() => props.onActivateCouncil(councilId))
+          }
+          onHome={() => runMobileAction(props.onHome)}
+        />
+        <div
+          className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain rah-scroll-panel rah-scroll-panel-y ${SIDEBAR_LAYOUT.sidebarSheetContentClassName}`}
+        >
+          {props.sidebarContent}
+        </div>
+        <WorkbenchSidebarSettingsAction
+          onOpenSettings={() => runMobileAction(props.onOpenSettings)}
+        />
       </Sheet>
     </>
   );

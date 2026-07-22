@@ -2,6 +2,8 @@ import { useState, type ReactNode } from "react";
 import type {
   PermissionResponseRequest,
   ProviderModelCatalog,
+  SessionInputAttachment,
+  SessionQueuedInput,
   SessionConfigValue,
   ConversationItemDetailKind,
   SessionSummary,
@@ -51,6 +53,7 @@ export function CanvasSessionPane(props: {
   variant: ObjectPaneVariant;
   summary: SessionSummary;
   projection: SessionProjection | null;
+  historyArchived?: boolean;
   inspector?: ReactNode;
   sidePanelOpen: boolean;
   sidePanelToggleDisabled: boolean;
@@ -75,13 +78,34 @@ export function CanvasSessionPane(props: {
   onResumeModeDraftChange: (sessionId: string, draft: SessionModeDraft) => void;
   onResumeModelDraftChange: (sessionId: string, draft: ModelDraft) => void;
   onRememberModelDraft: (provider: ProviderChoice, draft: ModelDraft) => void;
-  onSendInput: (sessionId: string, text: string) => Promise<unknown>;
+  onSendInput: (
+    sessionId: string,
+    text: string,
+    attachments?: SessionInputAttachment[],
+  ) => Promise<unknown>;
+  onUpdateQueuedInput: (
+    sessionId: string,
+    clientMessageId: string,
+    text: string,
+  ) => Promise<void>;
+  onDeleteQueuedInput: (sessionId: string, clientMessageId: string) => Promise<void>;
+  onReorderQueuedInput: (
+    sessionId: string,
+    clientMessageId: string,
+    position: number,
+  ) => Promise<void>;
+  onSteerQueuedInput: (sessionId: string, clientMessageId: string) => Promise<void>;
+  onOpenQueuedInputSide?: (
+    sessionId: string,
+    item: SessionQueuedInput,
+  ) => Promise<void> | void;
   onRespondToPermission: (
     sessionId: string,
     requestId: string,
     response: PermissionResponseRequest,
   ) => Promise<void>;
   onOpenLocalFile?: (sessionId: string, path: string) => void;
+  onOpenTurnFileChange?: (sessionId: string, turnId: string, path: string) => void;
   onLoadConversationItemDetail?: (
     sessionId: string,
     kind: ConversationItemDetailKind,
@@ -95,8 +119,10 @@ export function CanvasSessionPane(props: {
       modelId?: string;
       reasoningId?: string;
       optionValues?: Record<string, SessionConfigValue>;
+      initialInput?: string;
+      initialAttachments?: SessionInputAttachment[];
     },
-  ) => void;
+  ) => Promise<string | null>;
   onClaimControl: (sessionId: string) => Promise<void>;
   onInterrupt: (sessionId: string) => void;
   onLoadOlderHistory: (sessionId: string) => void | Promise<void>;
@@ -120,12 +146,12 @@ export function CanvasSessionPane(props: {
   onSideLayoutChange?: (layout: SessionSideLayout) => void;
   onForkSession?: (sessionId: string, kind: "fork" | "side") => void;
   onRecreateSide?: (parentSessionId: string, sideSessionId: string) => void;
-  branchOperationPending?: boolean;
+  branchOperationKind?: "fork" | "side" | null;
 }) {
   const provider = props.summary.session.provider as ProviderChoice;
   const expanded = props.variant === "expanded";
-  const sidePanelAvailable = expanded && Boolean(props.inspector);
-  const inspectorOpen = expanded && props.sidePanelOpen;
+  const sidePanelAvailable = Boolean(props.inspector);
+  const inspectorOpen = sidePanelAvailable && props.sidePanelOpen;
   const selectedIsReadOnlyReplay = isReadOnlyReplay(props.summary);
   const isAttached = isSessionAttachedToClient(props.summary, props.clientId);
   const hasControl = props.summary.controlLease.holderClientId === props.clientId;
@@ -137,6 +163,7 @@ export function CanvasSessionPane(props: {
   );
   const composerSurface = deriveComposerSurface({
     selectedSummary: props.summary,
+    historyArchived: props.historyArchived === true,
     hasControl,
     isGenerating,
     pendingSessionAction: props.pendingSessionAction,
@@ -150,6 +177,7 @@ export function CanvasSessionPane(props: {
     nativeTuiDiagnostics,
     error: null,
   });
+  const sideRelationship = props.summary.session.relationship;
   const modeControl = resolveSessionModeControlState({
     provider,
     draft: props.resumeModeDraft ?? null,
@@ -171,17 +199,63 @@ export function CanvasSessionPane(props: {
       null,
     preserveMissingSelectedModel: resumeDraftModelId === null,
   });
+  const buildResumeRequest = () => {
+    const modelDraft = props.resumeModelDraft;
+    const optionValues =
+      (resumeDraftModelId ? modelDraft?.optionValues : undefined) ??
+      (resumeDraftModelId
+        ? buildModelOptionValuesFromReasoning({
+            catalog: props.modelCatalog,
+            modelId: resumeDraftModelId,
+            reasoningId: modelDraft?.reasoningId ?? null,
+          })
+        : undefined);
+    return {
+      ...(modeControl.effectiveModeId ? { modeId: modeControl.effectiveModeId } : {}),
+      ...(resumeDraftModelId ? { modelId: resumeDraftModelId } : {}),
+      ...(resumeDraftModelId && modelDraft?.reasoningId
+        ? { reasoningId: modelDraft.reasoningId }
+        : {}),
+      ...(optionValues !== undefined ? { optionValues } : {}),
+    };
+  };
+  const sendCanvasInput: typeof props.onSendInput = async (
+    sessionId,
+    text,
+    attachments,
+  ) => {
+    if (!selectedIsReadOnlyReplay) {
+      return props.onSendInput(sessionId, text, attachments);
+    }
+    if (props.historyArchived === true) {
+      throw new Error("Archived sessions are read-only.");
+    }
+    const resumedSessionId = await props.onResumeHistory(
+      sessionId,
+      {
+        ...buildResumeRequest(),
+        initialInput: text,
+        ...(attachments !== undefined ? { initialAttachments: attachments } : {}),
+      },
+    );
+    if (!resumedSessionId) {
+      throw new Error("The session could not be resumed.");
+    }
+    return;
+  };
   const {
     composerRef,
     draft,
-    draftImageDataUrls,
-    draftImageCount,
+    draftAttachments,
+    draftAttachmentCount,
+    draftAttachmentUploadPending,
+    draftAttachmentError,
     sendPending,
     setDraft,
     handleDraftPaste,
-    clearDraftImages,
-    removeDraftImage,
-    removeLastDraftImage,
+    uploadDraftFiles,
+    removeDraftAttachment,
+    removeLastDraftAttachment,
     handleSend,
     insertDraftReference,
   } = useWorkbenchComposerState({
@@ -189,7 +263,7 @@ export function CanvasSessionPane(props: {
     availableWorkspaceDir: "",
     newSessionProvider: provider,
     startModeId: null,
-    sendInput: props.onSendInput,
+    sendInput: sendCanvasInput,
     startSession: async () => undefined,
   });
 
@@ -247,38 +321,44 @@ export function CanvasSessionPane(props: {
               props.onOpenLocalFile?.(props.summary.session.id, path),
           }
         : {})}
+      {...(props.onOpenTurnFileChange
+        ? {
+            onOpenTurnFileChange: (turnId: string, path: string) =>
+              props.onOpenTurnFileChange?.(props.summary.session.id, turnId, path),
+          }
+        : {})}
       composerSurface={composerSurface}
       composerRef={composerRef}
       draft={draft}
-      draftImageUrls={draftImageDataUrls}
-      draftImageCount={draftImageCount}
+      draftAttachments={draftAttachments}
+      draftAttachmentCount={draftAttachmentCount}
+      attachmentUploadPending={draftAttachmentUploadPending}
+      attachmentError={draftAttachmentError}
       sendPending={sendPending}
       onDraftChange={setDraft}
       onComposerPaste={handleDraftPaste}
-      onClearDraftImages={clearDraftImages}
-      onRemoveDraftImage={removeDraftImage}
-      onRemoveLastDraftImage={removeLastDraftImage}
+      onUploadFiles={uploadDraftFiles}
+      onRemoveDraftAttachment={removeDraftAttachment}
+      onRemoveLastDraftAttachment={removeLastDraftAttachment}
       onSend={() => void handleSend()}
-      onResumeHistory={() => {
-        const modelDraft = props.resumeModelDraft;
-        const optionValues =
-          (resumeDraftModelId ? modelDraft?.optionValues : undefined) ??
-          (resumeDraftModelId
-            ? buildModelOptionValuesFromReasoning({
-                catalog: props.modelCatalog,
-                modelId: resumeDraftModelId,
-                reasoningId: modelDraft?.reasoningId ?? null,
-              })
-            : undefined);
-        props.onResumeHistory(props.summary.session.id, {
-          ...(modeControl.effectiveModeId ? { modeId: modeControl.effectiveModeId } : {}),
-          ...(resumeDraftModelId ? { modelId: resumeDraftModelId } : {}),
-          ...(resumeDraftModelId && modelDraft?.reasoningId
-            ? { reasoningId: modelDraft.reasoningId }
-            : {}),
-          ...(optionValues !== undefined ? { optionValues } : {}),
-        });
-      }}
+      onUpdateQueuedInput={(clientMessageId, text) =>
+        props.onUpdateQueuedInput(props.summary.session.id, clientMessageId, text)
+      }
+      onDeleteQueuedInput={(clientMessageId) =>
+        props.onDeleteQueuedInput(props.summary.session.id, clientMessageId)
+      }
+      onReorderQueuedInput={(clientMessageId, position) =>
+        props.onReorderQueuedInput(props.summary.session.id, clientMessageId, position)
+      }
+      onSteerQueuedInput={(clientMessageId) =>
+        props.onSteerQueuedInput(props.summary.session.id, clientMessageId)
+      }
+      {...(props.onOpenQueuedInputSide
+        ? {
+            onOpenQueuedInputSide: (item: SessionQueuedInput) =>
+              props.onOpenQueuedInputSide?.(props.summary.session.id, item),
+          }
+        : {})}
       resumeAccessModes={modeControl.accessModes}
       selectedResumeAccessModeId={modeControl.selectedAccessModeId}
       resumePlanModeAvailable={modeControl.planModeAvailable}
@@ -346,22 +426,14 @@ export function CanvasSessionPane(props: {
       onLoadOlderHistory={() => props.onLoadOlderHistory(props.summary.session.id)}
       onOpenLeft={() => undefined}
       onExpandSidebar={() => undefined}
+      showLeftSidebarControls={false}
       onOpenRight={() => undefined}
       onExpandInspector={() => undefined}
       onToggleInspector={props.onToggleSidePanel}
-      showInspectorToggle={!inspectorOpen}
-      inspectorToggleClassName={sidePanelAvailable ? "min-[900px]:hidden" : ""}
+      showInspectorToggle={sidePanelAvailable && !inspectorOpen}
       inspectorToggleOpen={inspectorOpen}
       inspectorToggleDisabled={props.sidePanelToggleDisabled}
-      inspectorToggleTitle={
-        props.sidePanelToggleDisabled
-          ? "Maximize pane to use inspector"
-          : inspectorOpen
-            ? "Collapse inspector"
-            : "Expand inspector"
-      }
-      reserveRightPanelToggleSpace={sidePanelAvailable && !inspectorOpen}
-      reserveRightPanelBreakpoint="wide"
+      inspectorToggleTitle={inspectorOpen ? "Collapse inspector" : "Expand inspector"}
       onFloatingAnchorOffsetChange={() => undefined}
       onStopOrClose={() => {
         if (selectedIsReadOnlyReplay) {
@@ -378,7 +450,18 @@ export function CanvasSessionPane(props: {
       canCreateSide={props.summary.session.capabilities.branching?.side === true}
       onForkSession={() => props.onForkSession?.(props.summary.session.id, "fork")}
       onCreateSide={() => props.onForkSession?.(props.summary.session.id, "side")}
-      branchOperationPending={props.branchOperationPending ?? false}
+      onRecreateSide={
+        sideRelationship?.kind === "side" &&
+        sideRelationship.parentSessionId &&
+        props.onRecreateSide
+          ? () =>
+              props.onRecreateSide?.(
+                sideRelationship.parentSessionId,
+                props.summary.session.id,
+              )
+          : undefined
+      }
+      branchOperationKind={props.branchOperationKind ?? null}
       canDeleteSession={canSessionDelete(props.summary)}
       canShowSessionInfo={canSessionShowInfo(props.summary)}
       canRenameSession={canSessionRename(props.summary)}
@@ -407,7 +490,9 @@ export function CanvasSessionPane(props: {
         props.onRememberModelDraft(provider, next);
         void props.onSetSessionModel(props.summary.session.id, modelId, reasoningId, optionValues);
       }}
-      sideTaskCount={expanded ? 0 : props.sideProjections?.length ?? 0}
+      sideTaskCount={props.sideProjections?.length ?? 0}
+      sideTaskLayout={props.sideLayout ?? "columns"}
+      onSideTaskLayoutChange={props.onSideLayoutChange ?? (() => undefined)}
       />
       <FileReferencePicker
         open={fileReferenceOpen}
@@ -419,15 +504,13 @@ export function CanvasSessionPane(props: {
   );
 
   const sessionSurface = sidePanelAvailable && props.inspector ? (
-      <div className="flex h-full min-h-0 min-w-0">
+      <div className="canvas-conversation-surface relative flex h-full min-h-0 min-w-0">
         <div className="min-w-0 flex-1">{selectedPane}</div>
         <ConversationSidePanelShell
           desktopOpen={inspectorOpen}
           desktopBreakpoint="wide"
-          desktopWidth="clamp(20rem, 28vw, 28rem)"
-          toggleLabel={inspectorOpen ? "Collapse inspector" : "Expand inspector"}
-          toggleDisabled={props.sidePanelToggleDisabled}
-          onToggle={props.onToggleSidePanel}
+          desktopStorageKey="rah-canvas-inspector-panel-width"
+          contained
         >
           {props.inspector}
         </ConversationSidePanelShell>
@@ -464,15 +547,6 @@ export function CanvasSessionPane(props: {
         summary: sideProjection.summary,
         unread: props.sideUnreadSessionIds?.has(sideProjection.summary.session.id) ?? false,
         onDiscard: () => props.onStop(sideProjection.summary.session.id),
-        ...(props.onRecreateSide
-          ? {
-              onRecreate: () =>
-                props.onRecreateSide?.(
-                  props.summary.session.id,
-                  sideProjection.summary.session.id,
-                ),
-            }
-          : {}),
         content: (
           <CanvasSessionPane
             {...childProps}
@@ -487,7 +561,6 @@ export function CanvasSessionPane(props: {
         ),
       }))}
       layout={props.sideLayout ?? "columns"}
-      onLayoutChange={props.onSideLayoutChange ?? (() => undefined)}
     />
   );
 }

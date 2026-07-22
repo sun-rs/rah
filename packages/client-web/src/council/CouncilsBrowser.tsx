@@ -219,17 +219,21 @@ export function CouncilsBrowser(props: {
             {activeCouncils.length}
           </span>
         </div>
-        {activeCouncils.length > 0 ? activeCouncils.map((council) => (
-          <CouncilRow
-            key={council.id}
-            council={council}
-            selected={props.selectedCouncilId === council.id}
-            variant="running"
-            loading={props.loading}
-            relativeTimeFormat={relativeTimeFormat}
-            onOpenCouncil={props.onOpenCouncil}
-          />
-        )) : (
+        {activeCouncils.length > 0 ? (
+          <div className="space-y-1" data-council-group="running">
+            {activeCouncils.map((council) => (
+              <CouncilRow
+                key={council.id}
+                council={council}
+                selected={props.selectedCouncilId === council.id}
+                variant="running"
+                loading={props.loading}
+                relativeTimeFormat={relativeTimeFormat}
+                onOpenCouncil={props.onOpenCouncil}
+              />
+            ))}
+          </div>
+        ) : (
           <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
             {queryActive ? "No matching running Councils." : "No running Councils."}
           </div>
@@ -245,18 +249,22 @@ export function CouncilsBrowser(props: {
             {historyCouncils.length}
           </span>
         </div>
-        {historyCouncils.length > 0 ? historyCouncils.map((council) => (
-          <CouncilRow
-            key={council.id}
-            council={council}
-            selected={props.selectedCouncilId === council.id}
-            variant="history"
-            loading={props.loading}
-            relativeTimeFormat={relativeTimeFormat}
-            onOpenCouncil={props.onOpenCouncil}
-            onRequestDeleteCouncil={props.onRequestDeleteCouncil}
-          />
-        )) : (
+        {historyCouncils.length > 0 ? (
+          <div className="space-y-1" data-council-group="stopped">
+            {historyCouncils.map((council) => (
+              <CouncilRow
+                key={council.id}
+                council={council}
+                selected={props.selectedCouncilId === council.id}
+                variant="history"
+                loading={props.loading}
+                relativeTimeFormat={relativeTimeFormat}
+                onOpenCouncil={props.onOpenCouncil}
+                onRequestDeleteCouncil={props.onRequestDeleteCouncil}
+              />
+            ))}
+          </div>
+        ) : (
           <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
             {queryActive ? "No matching stopped Councils." : "No stopped Councils yet."}
           </div>

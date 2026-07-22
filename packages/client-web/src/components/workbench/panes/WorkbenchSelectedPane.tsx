@@ -4,18 +4,22 @@ import type {
   PermissionResponseRequest,
   ProviderModelCatalog,
   ConversationItemDetailKind,
+  SessionQueuedInput,
   SessionSummary,
   ConversationTurnDirectoryItem,
 } from "@rah/runtime-protocol";
 import {
   Archive,
   ArrowUp,
+  Columns3,
   Info,
   GitFork,
+  LoaderCircle,
   MessageSquareText,
   PanelRightOpen,
   PencilLine,
-  Plus,
+  RefreshCcw,
+  Rows3,
   SquareTerminal,
   Trash2,
 } from "lucide-react";
@@ -25,7 +29,10 @@ import { ProviderLogo } from "../../ProviderLogo";
 import { CouncilLogo } from "../../CouncilLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
-import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
+import { ComposerAttachmentBadge } from "../../ComposerAttachmentBadge";
+import { ComposerAttachmentControl } from "../../ComposerAttachmentControl";
+import { ComposerInputQueue } from "./ComposerInputQueue";
+import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
 import { shouldSubmitComposerOnEnter } from "../../../composer-keyboard";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
@@ -37,6 +44,7 @@ import {
   HEADER_SEGMENTED_CONTROL_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
   HEADER_SEGMENTED_LABEL_CLASS,
+  HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
 import {
   ConversationHeader,
@@ -49,8 +57,6 @@ import { ConversationPageShell } from "../shells/ConversationPageShell";
 import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
-  CONVERSATION_META_BADGE_PADDING_CLASS,
-  CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
   ConversationStateMetaBadge,
   type ConversationHeaderMetaItem,
 } from "../ConversationMetaBadge";
@@ -75,6 +81,7 @@ import {
 } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
 import { conversationTurnsToFeed } from "../../../conversation-feed";
+import type { SessionSideLayout } from "../session/session-side-state";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
 const TerminalPane = lazy(async () => ({
@@ -163,6 +170,7 @@ export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
   clientId: string;
   selectedProjection: SessionProjection | null;
+  conversationNavigationRevision?: number;
   selectedIsReadOnlyReplay: boolean;
   sidebarOpen: boolean;
   rightSidebarOpen: boolean;
@@ -178,6 +186,7 @@ export function WorkbenchSelectedPane(props: {
   canRespondToPermission: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
+  onOpenTurnFileChange?: (turnId: string, path: string) => void;
   onLoadConversationItemDetail?: (
     kind: ConversationItemDetailKind,
     itemId: string,
@@ -186,8 +195,10 @@ export function WorkbenchSelectedPane(props: {
   composerSurface: ComposerSurface;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
-  draftImageUrls?: readonly string[] | undefined;
-  draftImageCount?: number | undefined;
+  draftAttachments?: readonly ComposerAttachmentItem[] | undefined;
+  draftAttachmentCount?: number | undefined;
+  attachmentUploadPending?: boolean | undefined;
+  attachmentError?: string | null | undefined;
   sendPending: boolean;
   resumeAccessModes: SessionModeChoice[];
   selectedResumeAccessModeId: string | null;
@@ -198,11 +209,15 @@ export function WorkbenchSelectedPane(props: {
   selectedResumeReasoningId: string | null;
   onDraftChange: (value: string) => void;
   onComposerPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
-  onClearDraftImages?: (() => void) | undefined;
-  onRemoveDraftImage?: ((index: number) => void) | undefined;
-  onRemoveLastDraftImage?: (() => void) | undefined;
+  onUploadFiles?: ((files: readonly File[]) => void | Promise<void>) | undefined;
+  onRemoveDraftAttachment?: ((index: number) => void) | undefined;
+  onRemoveLastDraftAttachment?: (() => void) | undefined;
   onSend: () => void;
-  onResumeHistory: () => void;
+  onUpdateQueuedInput: (clientMessageId: string, text: string) => Promise<void> | void;
+  onDeleteQueuedInput: (clientMessageId: string) => Promise<void> | void;
+  onReorderQueuedInput: (clientMessageId: string, position: number) => Promise<void> | void;
+  onSteerQueuedInput: (clientMessageId: string) => Promise<void> | void;
+  onOpenQueuedInputSide?: (item: SessionQueuedInput) => Promise<void> | void;
   onResumeAccessModeChange: (modeId: string) => void;
   onResumePlanModeToggle: (enabled: boolean) => void;
   onResumeModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
@@ -225,11 +240,12 @@ export function WorkbenchSelectedPane(props: {
   onArchiveSession: () => void;
   onForkSession?: (() => void) | undefined;
   onCreateSide?: (() => void) | undefined;
+  onRecreateSide?: (() => void) | undefined;
   canStopSession: boolean;
   canArchiveSession: boolean;
   canForkSession?: boolean;
   canCreateSide?: boolean;
-  branchOperationPending?: boolean;
+  branchOperationKind?: "fork" | "side" | null;
   canDeleteSession: boolean;
   canShowSessionInfo: boolean;
   canRenameSession: boolean;
@@ -250,10 +266,9 @@ export function WorkbenchSelectedPane(props: {
   inspectorToggleOpen?: boolean;
   inspectorToggleDisabled?: boolean;
   inspectorToggleTitle?: string;
-  inspectorToggleClassName?: string;
-  reserveRightPanelToggleSpace?: boolean;
-  reserveRightPanelBreakpoint?: "md" | "wide";
   sideTaskCount?: number;
+  sideTaskLayout?: SessionSideLayout;
+  onSideTaskLayoutChange?: (layout: SessionSideLayout) => void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -280,11 +295,13 @@ export function WorkbenchSelectedPane(props: {
   const onLoadConversationItemDetailRef = useRef(props.onLoadConversationItemDetail);
   const onPermissionRespondRef = useRef(props.onPermissionRespond);
   const onOpenLocalFileRef = useRef(props.onOpenLocalFile);
+  const onOpenTurnFileChangeRef = useRef(props.onOpenTurnFileChange);
 
   onLoadOlderHistoryRef.current = props.onLoadOlderHistory;
   onLoadConversationItemDetailRef.current = props.onLoadConversationItemDetail;
   onPermissionRespondRef.current = props.onPermissionRespond;
   onOpenLocalFileRef.current = props.onOpenLocalFile;
+  onOpenTurnFileChangeRef.current = props.onOpenTurnFileChange;
 
   const handleChatLoadOlderHistory = useCallback(() => {
     return onLoadOlderHistoryRef.current();
@@ -304,6 +321,9 @@ export function WorkbenchSelectedPane(props: {
 
   const handleChatOpenLocalFile = useCallback((path: string) => {
     onOpenLocalFileRef.current?.(path);
+  }, []);
+  const handleChatOpenTurnFileChange = useCallback((turnId: string, path: string) => {
+    onOpenTurnFileChangeRef.current?.(turnId, path);
   }, []);
   const isPwaDisplayMode = usePwaDisplayMode();
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
@@ -359,7 +379,7 @@ export function WorkbenchSelectedPane(props: {
   const sessionHeaderMetaItems: ConversationHeaderMetaItem[] = [
     {
       slot: "status",
-      node: <ConversationStateMetaBadge state={sessionHeaderState} />,
+      node: <ConversationStateMetaBadge state={sessionHeaderState} appearance="inline" />,
     },
   ];
   if (contextUsageDisplay) {
@@ -373,6 +393,7 @@ export function WorkbenchSelectedPane(props: {
         >
           <ConversationMetaBadge
             tone="context"
+            appearance="inline"
             title={contextUsageDisplay.tooltip}
             label={compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}
           />
@@ -392,15 +413,11 @@ export function WorkbenchSelectedPane(props: {
       node: (
         <ConversationMetaBadge
           tone="council"
+          appearance="inline"
           title="Council agent session"
           ariaLabel="Council agent session"
           icon={<CouncilLogo className="h-3.5 w-3.5" variant="bare" />}
           label={compactSessionMeta ? undefined : "Council"}
-          paddingClassName={
-            compactSessionMeta
-              ? CONVERSATION_META_BADGE_PADDING_CLASS
-              : CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS
-          }
         />
       ),
     });
@@ -480,6 +497,9 @@ export function WorkbenchSelectedPane(props: {
     props.canSwitchSessionModes && liveModeControl.planModeAvailable;
   const showLiveModelControl =
     props.canSwitchSessionModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
+  const resumeOnSend =
+    props.composerSurface.kind === "compose" &&
+    props.composerSurface.resumeOnSend === true;
   const runningSessionControlUnavailableMessage =
     !showLiveAccessModeControl &&
     !showLivePlanModeControl &&
@@ -488,25 +508,21 @@ export function WorkbenchSelectedPane(props: {
       ? `${providerLabel(props.selectedSummary.session.provider)} runs as a native TUI session here. Change model or permissions inside the provider TUI, or choose them before launch/resume.`
       : undefined;
   const composerActionPending =
-    props.composerSurface.kind === "resume_history" ||
     props.composerSurface.kind === "claim_control"
       ? props.composerSurface.actionPending
       : false;
   const sessionControlBusy = isSessionControlLocked(props.selectedSummary);
   const nativeTuiPromptDirty =
     props.composerSurface.kind === "compose" && nativeTui?.promptState === "prompt_dirty";
-  const resumeSessionControlDisabled =
-    sessionControlBusy ||
-    props.resumeModePending ||
-    props.modelChangePending ||
-    composerActionPending;
+  const resumeSessionControlPending =
+    props.resumeModePending || props.sendPending || composerActionPending;
   const stopDisabled =
     props.composerSurface.kind === "compose" && props.composerSurface.stopDisabled === true;
   const sendDisabled = !canSubmitComposerInput({
     composerSurface: props.composerSurface,
     draft: props.draft,
-    attachmentCount: props.draftImageCount ?? 0,
-    sendPending: props.sendPending,
+    attachmentCount: props.draftAttachmentCount ?? 0,
+    sendPending: props.sendPending || props.attachmentUploadPending === true,
     nativeTuiPromptState: nativeTui?.promptState,
   });
   const resumeComposerButtonClassName =
@@ -532,13 +548,13 @@ export function WorkbenchSelectedPane(props: {
           selectedAccessModeId={props.selectedResumeAccessModeId}
           planModeAvailable={props.resumePlanModeAvailable}
           planModeEnabled={props.resumePlanModeEnabled}
-          modeDisabled={props.resumeModePending || args.actionPending}
+          modeDisabled={resumeSessionControlPending || args.actionPending}
           modelCatalog={props.modelCatalog}
           modelCatalogLoading={props.modelCatalogLoading}
           selectedModelId={props.selectedResumeModelId}
           selectedReasoningId={props.selectedResumeReasoningId}
-          modelDisabled={props.modelChangePending || args.actionPending}
-          disabled={resumeSessionControlDisabled}
+          modelDisabled={resumeSessionControlPending || args.actionPending}
+          disabled={resumeSessionControlPending || args.actionPending}
           showModel
           align="right"
           buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
@@ -636,27 +652,25 @@ export function WorkbenchSelectedPane(props: {
   }, [sessionMenuOpen]);
 
   const inspectorToggleOpen = props.inspectorToggleOpen ?? props.rightSidebarOpen;
-  const draftImageUrls = props.draftImageUrls ?? [];
-  const textareaHasImages = draftImageUrls.length > 0;
+  const draftAttachments = props.draftAttachments ?? [];
 
   return (
-    <ConversationPageShell rootRef={rootRef}>
+    <ConversationPageShell
+      rootRef={rootRef}
+      fileViewerAnchorId={props.selectedSummary.session.id}
+    >
       <ConversationHeader
         sidebarOpen={props.sidebarOpen}
         onOpenLeft={props.onOpenLeft}
         onExpandSidebar={props.onExpandSidebar}
         showLeftSidebarControls={props.showLeftSidebarControls ?? true}
-        reserveRightPanelToggleSpace={Boolean(props.reserveRightPanelToggleSpace)}
-        {...(props.reserveRightPanelBreakpoint
-          ? { reserveRightPanelBreakpoint: props.reserveRightPanelBreakpoint }
-          : {})}
         compactCloseAction={isPwaDisplayMode}
         identity={
           <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
         }
         title={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
         titleText={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
-        meta={<ConversationHeaderMetaList items={sessionHeaderMetaItems} />}
+        meta={<ConversationHeaderMetaList items={sessionHeaderMetaItems} appearance="inline" />}
         actions={
           <>
           {nativeTuiAvailable ? (
@@ -708,14 +722,60 @@ export function WorkbenchSelectedPane(props: {
               ) : null}
             </>
           ) : null}
-          {(props.sideTaskCount ?? 0) > 0 ? (
+          {(props.sideTaskCount ?? 0) > 1 &&
+          props.sideTaskLayout &&
+          props.onSideTaskLayoutChange ? (
+            <button
+              type="button"
+              className={`${HEADER_TEXT_BUTTON_CLASS} gap-1 bg-[var(--app-subtle-bg)]`}
+              onClick={() =>
+                props.onSideTaskLayoutChange?.(
+                  props.sideTaskLayout === "columns" ? "stack" : "columns",
+                )
+              }
+              aria-label={
+                props.sideTaskLayout === "columns"
+                  ? `Stack ${props.sideTaskCount} Side tasks`
+                  : `Show ${props.sideTaskCount} Side tasks side by side`
+              }
+              title={
+                props.sideTaskLayout === "columns"
+                  ? `Stack ${props.sideTaskCount} Side tasks`
+                  : `Show ${props.sideTaskCount} Side tasks side by side`
+              }
+            >
+              {props.sideTaskLayout === "columns" ? (
+                <Columns3 size={13} />
+              ) : (
+                <Rows3 size={13} />
+              )}
+              <span>{props.sideTaskCount}</span>
+            </button>
+          ) : (props.sideTaskCount ?? 0) === 1 ? (
             <span
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 text-xs font-medium text-[var(--app-hint)]"
-              title={`${props.sideTaskCount} open Side ${props.sideTaskCount === 1 ? "task" : "tasks"}`}
+              className="inline-flex h-8 items-center gap-1 rounded-md border border-transparent bg-[var(--app-subtle-bg)] px-2 text-xs font-medium text-[var(--app-hint)]"
+              title="1 open Side task"
             >
               <PanelRightOpen size={13} />
-              {props.sideTaskCount}
+              1
             </span>
+          ) : null}
+          {props.branchOperationKind ? (
+            <ConversationHeaderIconButton
+              disabled
+              aria-label={
+                props.branchOperationKind === "fork"
+                  ? "Creating new task"
+                  : "Opening Side task"
+              }
+              title={
+                props.branchOperationKind === "fork"
+                  ? "Creating new task from the latest completed turn"
+                  : "Opening Side task from the latest completed turn"
+              }
+            >
+              <LoaderCircle size={15} className="animate-spin" />
+            </ConversationHeaderIconButton>
           ) : null}
           {!props.selectedIsReadOnlyReplay ? (
             <ConversationHeaderStopButton
@@ -770,7 +830,7 @@ export function WorkbenchSelectedPane(props: {
                   <button
                     type="button"
                     className={HEADER_MENU_ITEM_CLASS}
-                    disabled={props.branchOperationPending}
+                    disabled={Boolean(props.branchOperationKind)}
                     aria-label="Continue in new task"
                     title="Starts another task in the same workspace. File changes are shared."
                     onClick={() => {
@@ -780,7 +840,11 @@ export function WorkbenchSelectedPane(props: {
                   >
                     <GitFork size={14} />
                     <span className="flex min-w-0 flex-col items-start">
-                      <span>{props.branchOperationPending ? "Starting..." : "Continue in new task"}</span>
+                      <span>
+                        {props.branchOperationKind === "fork"
+                          ? "Creating..."
+                          : "Continue in new task"}
+                      </span>
                       <span className="text-[10px] font-normal text-[var(--app-hint)]">
                         Shares this workspace
                       </span>
@@ -791,7 +855,7 @@ export function WorkbenchSelectedPane(props: {
                   <button
                     type="button"
                     className={HEADER_MENU_ITEM_CLASS}
-                    disabled={props.branchOperationPending}
+                    disabled={Boolean(props.branchOperationKind)}
                     aria-label="Open Side task"
                     title="Opens an ephemeral Side task in the same workspace. File changes are shared."
                     onClick={() => {
@@ -801,11 +865,30 @@ export function WorkbenchSelectedPane(props: {
                   >
                     <PanelRightOpen size={14} />
                     <span className="flex min-w-0 flex-col items-start">
-                      <span>{props.branchOperationPending ? "Starting..." : "Open Side task"}</span>
+                      <span>
+                        {props.branchOperationKind === "side"
+                          ? "Opening..."
+                          : "Open Side task"}
+                      </span>
                       <span className="text-[10px] font-normal text-[var(--app-hint)]">
                         Ephemeral, shared workspace
                       </span>
                     </span>
+                  </button>
+                ) : null}
+                {props.selectedSummary.session.relationship?.kind === "side" &&
+                props.selectedSummary.session.relationship.sideState === "expired" &&
+                props.onRecreateSide ? (
+                  <button
+                    type="button"
+                    className={HEADER_MENU_ITEM_CLASS}
+                    onClick={() => {
+                      setSessionMenuOpen(false);
+                      props.onRecreateSide?.();
+                    }}
+                  >
+                    <RefreshCcw size={14} />
+                    <span>Start replacement Side</span>
                   </button>
                 ) : null}
                 {showSessionArchiveMenuItem ? (
@@ -876,7 +959,6 @@ export function WorkbenchSelectedPane(props: {
               disabled={props.inspectorToggleDisabled || !props.onToggleInspector}
               ariaLabel={inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
               open={inspectorToggleOpen}
-              className={props.inspectorToggleClassName ?? ""}
               title={
                 props.inspectorToggleTitle ??
                 (inspectorToggleOpen ? "Collapse inspector" : "Expand inspector")
@@ -927,6 +1009,7 @@ export function WorkbenchSelectedPane(props: {
         <ChatThread
           key={chatThreadKey}
           sessionId={props.selectedSummary.session.id}
+          navigationRevision={props.conversationNavigationRevision ?? 0}
           feed={chatFeed}
           conversationTurns={conversation?.turns ?? []}
           hideToolCalls={props.hideToolCallsInChat}
@@ -955,6 +1038,9 @@ export function WorkbenchSelectedPane(props: {
           canRespondToPermission={props.canRespondToPermission}
           onPermissionRespond={handleChatPermissionRespond}
           {...(props.onOpenLocalFile ? { onOpenLocalFile: handleChatOpenLocalFile } : {})}
+          {...(props.onOpenTurnFileChange
+            ? { onOpenTurnFileChange: handleChatOpenTurnFileChange }
+            : {})}
         />
       )}
 
@@ -965,14 +1051,7 @@ export function WorkbenchSelectedPane(props: {
           style={COMPOSER_LAYOUT.bottomPaddingStyle}
         >
         <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
-          {props.composerSurface.kind === "resume_history" ? (
-            renderResumeComposer({
-              title: "History only",
-              actionLabel: props.composerSurface.actionLabel,
-              actionPending: props.composerSurface.actionPending,
-              onResume: props.onResumeHistory,
-            })
-          ) : props.composerSurface.kind === "unavailable" ? (
+          {props.composerSurface.kind === "unavailable" ? (
             <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
               Input is unavailable for this session.
             </div>
@@ -985,6 +1064,22 @@ export function WorkbenchSelectedPane(props: {
             })
           ) : (
             <div className="relative">
+              <ComposerInputQueue
+                items={props.selectedSummary.session.inputQueue ?? []}
+                canSteer={
+                  props.selectedSummary.session.provider === "codex" &&
+                  props.selectedSummary.session.capabilities.steerInput === true &&
+                  props.selectedSummary.session.phase === "working"
+                }
+                onUpdate={props.onUpdateQueuedInput}
+                onDelete={props.onDeleteQueuedInput}
+                onReorder={props.onReorderQueuedInput}
+                onSteer={props.onSteerQueuedInput}
+                {...(props.onOpenQueuedInputSide &&
+                props.selectedSummary.session.capabilities.branching?.side
+                  ? { onOpenSide: props.onOpenQueuedInputSide }
+                  : {})}
+              />
               {/* Compose grid: attach | settings | textarea | [stop] | send */}
               <div
                 className={
@@ -993,43 +1088,81 @@ export function WorkbenchSelectedPane(props: {
                     : COMPOSER_LAYOUT.composeGridWithoutStopClassName
                 }
               >
-                <button
-                  type="button"
-                  onClick={props.onOpenFileReference}
-                  disabled={props.fileReferenceDisabled}
-                  className={`${COMPOSER_LAYOUT.attachButtonClassName} disabled:cursor-not-allowed disabled:opacity-40`}
-                  title={
-                    props.fileReferenceDisabled
-                      ? "File references are available in single-session view."
-                      : "Insert file or folder reference"
-                  }
-                >
-                  <Plus size={18} />
-                </button>
+                {props.onUploadFiles ? (
+                  <ComposerAttachmentControl
+                    buttonClassName={COMPOSER_LAYOUT.attachButtonClassName}
+                    {...(props.fileReferenceDisabled !== undefined
+                      ? { referenceDisabled: props.fileReferenceDisabled }
+                      : {})}
+                    referenceDisabledTitle="File references are available in single-session view."
+                    onReferenceWorkspaceFile={props.onOpenFileReference}
+                    onUploadFiles={props.onUploadFiles}
+                    {...(props.attachmentUploadPending !== undefined
+                      ? { uploadPending: props.attachmentUploadPending }
+                      : {})}
+                  />
+                ) : null}
 
                 <SessionControlPopover
-                  accessModes={showLiveAccessModeControl ? liveModeControl.accessModes : []}
-                  selectedAccessModeId={liveModeControl.selectedAccessModeId}
-                  planModeAvailable={showLivePlanModeControl}
-                  planModeEnabled={liveModeControl.planModeEnabled}
-                  modeDisabled={sessionControlBusy || props.modeChangePending}
+                  accessModes={
+                    resumeOnSend
+                      ? props.resumeAccessModes
+                      : showLiveAccessModeControl
+                        ? liveModeControl.accessModes
+                        : []
+                  }
+                  selectedAccessModeId={
+                    resumeOnSend
+                      ? props.selectedResumeAccessModeId
+                      : liveModeControl.selectedAccessModeId
+                  }
+                  planModeAvailable={
+                    resumeOnSend ? props.resumePlanModeAvailable : showLivePlanModeControl
+                  }
+                  planModeEnabled={
+                    resumeOnSend
+                      ? props.resumePlanModeEnabled
+                      : liveModeControl.planModeEnabled
+                  }
+                  modeDisabled={
+                    resumeOnSend
+                      ? resumeSessionControlPending
+                      : sessionControlBusy || props.modeChangePending
+                  }
                   modelCatalog={props.modelCatalog}
                   modelCatalogLoading={props.modelCatalogLoading}
-                  selectedModelId={props.selectedSummary.session.model?.currentModelId ?? null}
-                  selectedReasoningId={
-                    props.selectedSummary.session.model?.currentReasoningId ?? null
+                  selectedModelId={
+                    resumeOnSend
+                      ? props.selectedResumeModelId
+                      : props.selectedSummary.session.model?.currentModelId ?? null
                   }
-                  modelDisabled={sessionControlBusy || props.modelChangePending}
-                  disabled={props.modeChangePending || props.modelChangePending}
-                  locked={sessionControlBusy}
-                  lockedMessage="Session controls are locked while this session is thinking."
-                  {...(runningSessionControlUnavailableMessage
+                  selectedReasoningId={
+                    resumeOnSend
+                      ? props.selectedResumeReasoningId
+                      : props.selectedSummary.session.model?.currentReasoningId ?? null
+                  }
+                  modelDisabled={
+                    resumeOnSend
+                      ? resumeSessionControlPending
+                      : sessionControlBusy || props.modelChangePending
+                  }
+                  disabled={
+                    resumeOnSend
+                      ? resumeSessionControlPending
+                      : props.modeChangePending || props.modelChangePending
+                  }
+                  locked={!resumeOnSend && sessionControlBusy}
+                  {...(!resumeOnSend && runningSessionControlUnavailableMessage
                     ? { unavailableMessage: runningSessionControlUnavailableMessage }
                     : {})}
-                  showModel={showLiveModelControl}
+                  showModel={resumeOnSend || showLiveModelControl}
                   buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
                   onOpen={props.onRequestModelCatalogRefresh}
                   onAccessModeChange={(modeId) => {
+                    if (resumeOnSend) {
+                      props.onResumeAccessModeChange(modeId);
+                      return;
+                    }
                     props.onSetSessionMode(
                       props.selectedSummary.session.provider === "codex" &&
                         liveModeControl.planModeEnabled
@@ -1038,6 +1171,10 @@ export function WorkbenchSelectedPane(props: {
                     );
                   }}
                   onPlanModeToggle={(enabled) => {
+                    if (resumeOnSend) {
+                      props.onResumePlanModeToggle(enabled);
+                      return;
+                    }
                     props.onSetSessionMode(
                       enabled
                         ? props.selectedSummary.session.provider === "codex"
@@ -1047,9 +1184,17 @@ export function WorkbenchSelectedPane(props: {
                     );
                   }}
                   onModelChange={(modelId, defaultReasoningId) => {
+                    if (resumeOnSend) {
+                      props.onResumeModelChange(modelId, defaultReasoningId);
+                      return;
+                    }
                     props.onSetSessionModel(modelId, defaultReasoningId);
                   }}
                   onReasoningChange={(reasoningId) => {
+                    if (resumeOnSend) {
+                      props.onResumeReasoningChange(reasoningId);
+                      return;
+                    }
                     props.onSetSessionModel(
                       props.selectedSummary.session.model?.currentModelId ?? "",
                       reasoningId,
@@ -1057,17 +1202,16 @@ export function WorkbenchSelectedPane(props: {
                   }}
                 />
 
-                <div className="relative min-w-0">
-                  <ComposerImageAttachmentBadge
-                    imageUrls={draftImageUrls}
-                    onRemove={props.onRemoveDraftImage}
-                    className="pointer-events-auto absolute left-2 top-1.5 z-20"
+                <div className="relative flex min-w-0 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]">
+                  <ComposerAttachmentBadge
+                    items={draftAttachments}
+                    onRemove={props.onRemoveDraftAttachment}
+                    layout={isPwaDisplayMode && draftAttachments.length > 1 ? "stack" : "row"}
+                    className="pointer-events-auto px-2 pt-1.5"
                   />
                   <TokenizedTextarea
                     ref={props.composerRef}
-                    textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${
-                      textareaHasImages ? "pt-12 md:pt-12 lg:pt-12" : ""
-                    }`}
+                    textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} border-0 bg-transparent rounded-none focus:ring-0 ${draftAttachments.length > 0 ? "pt-1" : ""}`}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={props.draft}
                     scopeKey={`session:${props.selectedSummary.session.id}`}
@@ -1080,10 +1224,10 @@ export function WorkbenchSelectedPane(props: {
                       if (
                         e.key === "Backspace" &&
                         props.draft.length === 0 &&
-                        draftImageUrls.length > 0
+                        draftAttachments.length > 0
                       ) {
                         e.preventDefault();
-                        props.onRemoveLastDraftImage?.();
+                        props.onRemoveLastDraftAttachment?.();
                         return;
                       }
                       if (shouldSubmitComposerOnEnter(e)) {
@@ -1147,6 +1291,11 @@ export function WorkbenchSelectedPane(props: {
                   <ArrowUp size={18} />
                 </button>
               </div>
+              {props.attachmentError ? (
+                <p className="mt-1 px-2 text-xs text-destructive" role="status">
+                  {props.attachmentError}
+                </p>
+              ) : null}
             </div>
           )}
         </div>

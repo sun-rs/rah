@@ -2,21 +2,13 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Ellipsis, Menu, PanelRight, Square, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
-  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
   HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
   HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
 } from "../header-button-styles";
-
-type ReserveBreakpoint = "md" | "wide";
-
-function reserveClassName(breakpoint: ReserveBreakpoint): string {
-  return breakpoint === "wide"
-    ? "min-[900px]:pr-11"
-    : "md:pr-11";
-}
 
 export function ConversationHeader(props: {
   title: ReactNode;
@@ -36,8 +28,6 @@ export function ConversationHeader(props: {
   showLeftSidebarControls?: boolean;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
-  reserveRightPanelToggleSpace?: boolean;
-  reserveRightPanelBreakpoint?: ReserveBreakpoint;
   compactCloseAction?: boolean;
   backgroundClassName?: string;
   className?: string;
@@ -45,27 +35,26 @@ export function ConversationHeader(props: {
 }) {
   const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
   const presentation = props.presentation ?? "conversation";
-  const reserveRightPanelClassName = props.reserveRightPanelToggleSpace
-    ? reserveClassName(props.reserveRightPanelBreakpoint ?? "md")
-    : "";
   const titleClassName =
     presentation === "page"
-      ? "truncate text-sm font-semibold text-[var(--app-fg)]"
-      : "truncate text-sm font-medium text-[var(--app-fg)]";
+      ? "truncate text-sm font-semibold leading-5 text-[var(--app-fg)]"
+      : "truncate text-sm font-medium leading-5 text-[var(--app-fg)]";
   const metaClassName =
     presentation === "page"
       ? "min-w-0 overflow-hidden text-xs text-[var(--app-hint)]"
-      : "mt-0.5 flex min-h-[22px] min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]";
+      : "flex h-4 min-w-0 items-center overflow-hidden text-[11px] text-[var(--app-hint)]";
+  const headerHeightClassName = presentation === "page" ? "h-14" : "h-12";
 
   return (
     <header
-      className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] ${props.backgroundClassName ?? "bg-[var(--app-bg)]/80"} px-2 backdrop-blur-sm ${reserveRightPanelClassName} ${props.className ?? ""}`}
+      className={`relative z-20 flex ${headerHeightClassName} shrink-0 items-center justify-between gap-2 border-b border-[var(--app-border)] ${props.backgroundClassName ?? "bg-[var(--app-bg)]/80"} px-2 backdrop-blur-sm ${props.className ?? ""}`}
+      data-presentation={presentation}
     >
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {showLeftSidebarControls ? (
           <button
             type="button"
-            className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} md:hidden`}
+            className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} inline-flex md:hidden`}
             onClick={props.onOpenLeft}
             aria-label="Open sidebar"
             title="Open sidebar"
@@ -74,20 +63,12 @@ export function ConversationHeader(props: {
           </button>
         ) : null}
         {showLeftSidebarControls && !props.sidebarOpen ? (
-          <button
-            type="button"
-            className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden md:inline-flex`}
-            onClick={props.onExpandSidebar}
-            aria-label="Expand sidebar"
-            title="Expand sidebar"
-          >
-            <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-          </button>
+          <span className="hidden h-8 w-8 shrink-0 md:block" aria-hidden="true" />
         ) : null}
         {props.identity ? (
           <span className={HEADER_IDENTITY_SLOT_CLASS}>{props.identity}</span>
         ) : null}
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden">
           <div className={titleClassName} title={props.titleText}>
             {props.title}
           </div>
@@ -203,7 +184,7 @@ export function ConversationHeaderPanelToggleButton(props: {
       title={props.title}
       className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS}${props.className ? ` ${props.className}` : ""}`}
     >
-      <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+      <PanelRight size={16} />
     </button>
   );
 }

@@ -14,6 +14,8 @@ export type ConversationMetaTone =
   | "council"
   | "context";
 
+export type ConversationMetaAppearance = "badge" | "inline";
+
 export function conversationMetaToneClassName(tone: ConversationMetaTone): string {
   switch (tone) {
     case "running":
@@ -33,6 +35,24 @@ export function conversationMetaToneClassName(tone: ConversationMetaTone): strin
   }
 }
 
+export function conversationMetaInlineToneClassName(tone: ConversationMetaTone): string {
+  switch (tone) {
+    case "running":
+      return "text-emerald-600 dark:text-emerald-400";
+    case "working":
+      return "text-sky-600 dark:text-sky-400";
+    case "permission":
+      return "text-orange-700 dark:text-orange-400";
+    case "failed":
+      return "text-rose-700 dark:text-rose-400";
+    case "council":
+      return "text-orange-700 dark:text-orange-300";
+    case "stopped":
+    case "context":
+      return "text-[var(--app-hint)]";
+  }
+}
+
 export const CONVERSATION_META_BADGE_BASE_CLASS =
   "conversation-meta-badge inline-flex h-[22px] min-w-0 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border text-[11px] font-medium leading-none";
 export const CONVERSATION_META_BADGE_PADDING_CLASS = "px-1.5";
@@ -43,6 +63,12 @@ export const CONVERSATION_META_BADGE_ICON_CLASS =
   "conversation-meta-badge-icon inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center leading-none [&>svg]:block";
 export const CONVERSATION_META_BADGE_LABEL_CLASS =
   "conversation-meta-badge-label block min-w-0 truncate leading-[14px]";
+export const CONVERSATION_META_INLINE_BASE_CLASS =
+  "conversation-meta-inline inline-flex h-4 min-w-0 shrink-0 items-center justify-center gap-1 overflow-hidden text-[11px] font-medium leading-none";
+export const CONVERSATION_META_INLINE_ICON_CLASS =
+  "inline-flex h-3 w-3 shrink-0 items-center justify-center leading-none [&>svg]:block";
+export const CONVERSATION_META_INLINE_LABEL_CLASS =
+  "block min-w-0 truncate leading-[14px]";
 export const CONVERSATION_STATE_META_BADGE_CLASS = "";
 export const CONVERSATION_STATE_META_BADGE_ICON_CLASS = CONVERSATION_META_BADGE_ICON_CLASS;
 export const CONVERSATION_STATE_META_BADGE_LABEL_CLASS = CONVERSATION_META_BADGE_LABEL_CLASS;
@@ -77,10 +103,28 @@ export function orderConversationHeaderMetaItems(
 
 export function ConversationHeaderMetaList(props: {
   items: readonly ConversationHeaderMetaItem[];
+  appearance?: ConversationMetaAppearance;
 }) {
+  const orderedItems = orderConversationHeaderMetaItems(props.items);
+  if (props.appearance === "inline") {
+    return (
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden">
+        {orderedItems.map((item, index) => (
+          <Fragment key={item.slot}>
+            {index > 0 ? (
+              <span className="shrink-0 text-[var(--app-muted)] opacity-40" aria-hidden="true">
+                ·
+              </span>
+            ) : null}
+            {item.node}
+          </Fragment>
+        ))}
+      </span>
+    );
+  }
   return (
     <>
-      {orderConversationHeaderMetaItems(props.items).map((item) => (
+      {orderedItems.map((item) => (
         <Fragment key={item.slot}>{item.node}</Fragment>
       ))}
     </>
@@ -110,13 +154,27 @@ export function ConversationMetaBadge(props: {
   iconClassName?: string;
   labelClassName?: string;
   className?: string;
+  appearance?: ConversationMetaAppearance;
 }) {
-  const paddingClassName = props.paddingClassName ?? CONVERSATION_META_BADGE_PADDING_CLASS;
-  const iconClassName = props.iconClassName ?? CONVERSATION_META_BADGE_ICON_CLASS;
-  const labelClassName = props.labelClassName ?? CONVERSATION_META_BADGE_LABEL_CLASS;
+  const inline = props.appearance === "inline";
+  const paddingClassName = inline
+    ? ""
+    : props.paddingClassName ?? CONVERSATION_META_BADGE_PADDING_CLASS;
+  const iconClassName =
+    props.iconClassName ??
+    (inline ? CONVERSATION_META_INLINE_ICON_CLASS : CONVERSATION_META_BADGE_ICON_CLASS);
+  const labelClassName =
+    props.labelClassName ??
+    (inline ? CONVERSATION_META_INLINE_LABEL_CLASS : CONVERSATION_META_BADGE_LABEL_CLASS);
+  const baseClassName = inline
+    ? CONVERSATION_META_INLINE_BASE_CLASS
+    : CONVERSATION_META_BADGE_BASE_CLASS;
+  const toneClassName = inline
+    ? conversationMetaInlineToneClassName(props.tone)
+    : conversationMetaToneClassName(props.tone);
   return (
     <span
-      className={`${CONVERSATION_META_BADGE_BASE_CLASS} ${paddingClassName} ${conversationMetaToneClassName(props.tone)} ${props.className ?? ""}`}
+      className={`${baseClassName} ${paddingClassName} ${toneClassName} ${props.className ?? ""}`}
       title={props.title}
       aria-label={props.ariaLabel}
     >
@@ -135,6 +193,7 @@ export function ConversationStateMetaBadge(props: {
   state: ConversationHeaderState;
   iconClassName?: string;
   labelClassName?: string;
+  appearance?: ConversationMetaAppearance;
 }) {
   return (
     <ConversationMetaBadge
@@ -144,6 +203,7 @@ export function ConversationStateMetaBadge(props: {
       icon={<ConversationHeaderStateIconView icon={props.state.icon} />}
       label={props.state.label}
       paddingClassName={CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS}
+      {...(props.appearance ? { appearance: props.appearance } : {})}
       {...(props.iconClassName ? { iconClassName: props.iconClassName } : {})}
       {...(props.labelClassName ? { labelClassName: props.labelClassName } : {})}
     />

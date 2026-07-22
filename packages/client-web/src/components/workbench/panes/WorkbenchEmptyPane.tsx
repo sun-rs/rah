@@ -1,37 +1,32 @@
 import type { ClipboardEventHandler, RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
-import { Menu, PanelRight } from "lucide-react";
+import { Menu } from "lucide-react";
 import type { ProviderChoice } from "../../ProviderSelector";
 import type { SessionModeChoice } from "../../../session-mode-ui";
+import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
 import { NewSessionComposer } from "./NewSessionComposer";
 import { CouncilLogo } from "../../CouncilLogo";
 import {
-  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
-  HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
 } from "../header-button-styles";
 
 export function WorkbenchEmptyPane(props: {
   sidebarOpen: boolean;
-  rightSidebarOpen: boolean;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
   showLeftSidebarControls?: boolean;
-  onOpenRight: () => void;
-  onExpandInspector: () => void;
-  onToggleInspector: () => void;
-  inspectorToggleOpen: boolean;
-  showInspectorToggle?: boolean;
-  inspectorToggleClassName?: string;
   emptyStateComposerRef: RefObject<HTMLTextAreaElement | null>;
   emptyStateDraft: string;
-  emptyStateImageUrls?: readonly string[] | undefined;
-  emptyStateImageCount?: number | undefined;
+  emptyStateAttachments?: readonly ComposerAttachmentItem[] | undefined;
+  emptyStateAttachmentCount?: number | undefined;
+  emptyStateAttachmentUploadPending?: boolean | undefined;
+  emptyStateAttachmentError?: string | null | undefined;
   onEmptyStateDraftChange: (value: string) => void;
   onEmptyStatePaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
-  onClearEmptyStateImages?: (() => void) | undefined;
-  onRemoveEmptyStateImage?: ((index: number) => void) | undefined;
-  onRemoveLastEmptyStateImage?: (() => void) | undefined;
+  onUploadEmptyStateFiles?: ((files: readonly File[]) => void | Promise<void>) | undefined;
+  onRemoveEmptyStateAttachment?: ((index: number) => void) | undefined;
+  onRemoveLastEmptyStateAttachment?: (() => void) | undefined;
   onEmptyStateSend: () => void;
   workspacePickerRef: RefObject<HTMLDivElement | null>;
   onOpenFileReference: () => void;
@@ -61,12 +56,12 @@ export function WorkbenchEmptyPane(props: {
   const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="pointer-events-none absolute inset-x-2 top-3 z-20 flex items-center justify-between">
+      <div className="pointer-events-none absolute left-2 top-3 z-20 flex items-center">
         <div className="flex min-w-0 items-center">
           {showLeftSidebarControls ? (
             <button
               type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} pointer-events-auto md:hidden`}
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} pointer-events-auto inline-flex md:hidden`}
               onClick={props.onOpenLeft}
               aria-label="Open sidebar"
               title="Open sidebar"
@@ -75,43 +70,27 @@ export function WorkbenchEmptyPane(props: {
             </button>
           ) : null}
           {showLeftSidebarControls && !props.sidebarOpen ? (
-            <button
-              type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} pointer-events-auto hidden md:inline-flex`}
-              onClick={props.onExpandSidebar}
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-            >
-              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-            </button>
+            <span className="hidden h-8 w-8 shrink-0 md:block" aria-hidden="true" />
           ) : null}
         </div>
-        {props.showInspectorToggle !== false ? (
-          <button
-            type="button"
-            className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS} pointer-events-auto${props.inspectorToggleClassName ? ` ${props.inspectorToggleClassName}` : ""}`}
-            onClick={props.onToggleInspector}
-            aria-label={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
-            title={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
-          >
-            <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-          </button>
-        ) : null}
       </div>
       <NewSessionComposer
         composerRef={props.emptyStateComposerRef}
         draft={props.emptyStateDraft}
-        draftImageUrls={props.emptyStateImageUrls}
-        draftImageCount={props.emptyStateImageCount}
+        draftAttachments={props.emptyStateAttachments}
+        draftAttachmentCount={props.emptyStateAttachmentCount}
+        attachmentUploadPending={props.emptyStateAttachmentUploadPending}
+        attachmentError={props.emptyStateAttachmentError}
         onDraftChange={props.onEmptyStateDraftChange}
         onComposerPaste={props.onEmptyStatePaste}
-        onClearDraftImages={props.onClearEmptyStateImages}
-        onRemoveDraftImage={props.onRemoveEmptyStateImage}
-        onRemoveLastDraftImage={props.onRemoveLastEmptyStateImage}
+        onUploadFiles={props.onUploadEmptyStateFiles}
+        onRemoveDraftAttachment={props.onRemoveEmptyStateAttachment}
+        onRemoveLastDraftAttachment={props.onRemoveLastEmptyStateAttachment}
         onSend={props.onEmptyStateSend}
         canSend={Boolean(
-          (props.emptyStateDraft.trim() || (props.emptyStateImageCount ?? 0) > 0) &&
-            props.availableWorkspaceDir,
+          (props.emptyStateDraft.trim() || (props.emptyStateAttachmentCount ?? 0) > 0) &&
+            props.availableWorkspaceDir &&
+            !props.emptyStateAttachmentUploadPending,
         )}
         workspacePickerRef={props.workspacePickerRef}
         onOpenFileReference={props.onOpenFileReference}
@@ -123,7 +102,6 @@ export function WorkbenchEmptyPane(props: {
         onChooseNewWorkspace={props.onChooseNewWorkspace}
         provider={props.newSessionProvider}
         onChangeProvider={props.onChangeProvider}
-        providerSelectorMode="auto"
         modelCatalog={props.modelCatalog}
         modelCatalogLoading={props.modelCatalogLoading}
         selectedModelId={props.selectedModelId}
@@ -138,7 +116,7 @@ export function WorkbenchEmptyPane(props: {
         onAccessModeChange={props.onAccessModeChange}
         onPlanModeToggle={props.onPlanModeToggle}
         footer={
-          <div className="flex w-full justify-center pt-1">
+          <div className="flex w-full justify-center">
             <button
               type="button"
               onClick={props.onOpenNewCouncil}

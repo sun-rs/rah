@@ -1,120 +1,76 @@
 import type { PendingSessionTransition } from "../../../session-transition-contract";
-import { LoaderCircle, Menu, PanelRight } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import { ProviderLogo } from "../../ProviderLogo";
 import { providerLabel } from "../../../types";
-import {
-  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
-  HEADER_EDGE_TOGGLE_ICON_SIZE,
-  HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
-} from "../header-button-styles";
+import { ConversationHeader } from "../shells/ConversationHeader";
 
 export function WorkbenchOpeningPane(props: {
   openingSession: PendingSessionTransition;
   sidebarOpen: boolean;
-  rightSidebarOpen: boolean;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
   showLeftSidebarControls?: boolean;
-  onOpenRight: () => void;
-  onExpandInspector: () => void;
-  onToggleInspector: () => void;
-  inspectorToggleOpen: boolean;
-  showInspectorToggle?: boolean;
-  inspectorToggleClassName?: string;
-  reserveRightPanelToggleSpace?: boolean;
 }) {
   const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
+  const openingLabel =
+    props.openingSession.kind === "new"
+      ? "Starting session"
+      : props.openingSession.kind === "resume_history"
+        ? "Resuming session"
+        : "Opening history session";
+  const progressLabel =
+    props.openingSession.kind === "new"
+      ? "Starting"
+      : props.openingSession.kind === "resume_history"
+        ? "Resuming"
+        : "Opening";
+  const sessionTitle =
+    props.openingSession.title ??
+    (props.openingSession.kind === "new"
+      ? `${providerLabel(props.openingSession.provider)} session`
+      : "History session");
   return (
     <>
-      <header
-        className={`h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-2 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0 ${
-          props.reserveRightPanelToggleSpace
-            ? "md:pr-11"
-            : ""
-        }`}
-      >
-        <div className="flex items-center gap-1.5 min-w-0">
-          {showLeftSidebarControls ? (
-            <button
-              type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} md:hidden`}
-              onClick={props.onOpenLeft}
-              aria-label="Open sidebar"
-            >
-              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-            </button>
-          ) : null}
-          {showLeftSidebarControls && !props.sidebarOpen ? (
-            <button
-              type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden md:inline-flex`}
-              onClick={props.onExpandSidebar}
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-            >
-              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-            </button>
-          ) : null}
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-[var(--app-fg)]">
-              {props.openingSession.kind === "new"
-                ? "Starting session"
-                : props.openingSession.kind === "resume_history"
-                  ? "Resuming session"
-                  : "Opening history session"}
-            </div>
-            <div className="text-[11px] text-[var(--app-hint)]">
-              Preparing content…
-            </div>
-          </div>
-        </div>
-        {props.showInspectorToggle !== false ? (
-          <button
-            type="button"
-            className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS}${props.inspectorToggleClassName ? ` ${props.inspectorToggleClassName}` : ""}`}
-            onClick={props.onToggleInspector}
-            aria-label={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
-            title={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
-          >
-            <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-          </button>
-        ) : null}
-      </header>
+      <ConversationHeader
+        title={openingLabel}
+        titleText={openingLabel}
+        identity={
+          <ProviderLogo provider={props.openingSession.provider} className="h-5 w-5" />
+        }
+        meta="Preparing content…"
+        sidebarOpen={props.sidebarOpen}
+        showLeftSidebarControls={showLeftSidebarControls}
+        onOpenLeft={props.onOpenLeft}
+        onExpandSidebar={props.onExpandSidebar}
+      />
       <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
-        <div className="mx-auto flex min-h-full w-full max-w-4xl items-center justify-center px-6 py-8 md:px-10 md:py-12 xl:max-w-5xl xl:px-14 xl:py-16">
-          <div className="w-full rounded-3xl border border-[var(--app-border)] bg-[var(--app-bg)] px-6 py-8 text-center shadow-sm md:px-14 md:py-16 xl:px-20 xl:py-20">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--app-subtle-bg)] md:h-20 md:w-20">
-              <ProviderLogo provider={props.openingSession.provider} className="h-8 w-8 md:h-12 md:w-12" />
+        <div className="mx-auto flex min-h-full w-full max-w-2xl items-center px-5 py-8 min-[700px]:px-8">
+          <div className="w-full py-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--app-subtle-bg)]">
+                <ProviderLogo provider={props.openingSession.provider} className="h-6 w-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-base font-semibold text-[var(--app-fg)]" title={sessionTitle}>
+                  {sessionTitle}
+                </div>
+                <div className="mt-1 inline-flex items-center gap-1.5 text-sm text-[var(--app-hint)]">
+                  <LoaderCircle size={13} className="shrink-0 animate-spin" />
+                  <span>{progressLabel} {providerLabel(props.openingSession.provider)} session…</span>
+                </div>
+              </div>
             </div>
-            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-1 text-xs font-medium text-[var(--app-hint)] md:mt-6 md:px-4 md:py-1.5 md:text-sm">
-              <LoaderCircle size={14} className="animate-spin md:h-4 md:w-4" />
-              <span>
-                {props.openingSession.kind === "new"
-                  ? "Starting…"
-                  : props.openingSession.kind === "resume_history"
-                    ? "Resuming…"
-                    : "Opening…"}
-              </span>
-            </div>
-            <div className="mt-4 text-lg font-semibold text-[var(--app-fg)] md:mt-8 md:text-4xl md:tracking-tight xl:text-5xl">
-              {props.openingSession.title ??
-                (props.openingSession.kind === "new"
-                  ? `${providerLabel(props.openingSession.provider)} session`
-                  : "History session")}
-            </div>
-            <div className="mx-auto mt-2 max-w-md text-sm text-[var(--app-hint)] md:mt-4 md:max-w-2xl md:text-lg md:leading-8 xl:max-w-3xl">
+            <div className="mt-5 border-t border-[var(--app-border)] pt-4 text-sm leading-6 text-[var(--app-hint)]">
               {props.openingSession.kind === "new"
                 ? `Launching ${providerLabel(props.openingSession.provider)} and preparing the workspace.`
                 : props.openingSession.kind === "resume_history"
-                  ? `Resuming ${providerLabel(props.openingSession.provider)} session and rebuilding the timeline.`
-                  : `Restoring ${providerLabel(props.openingSession.provider)} session and rebuilding the timeline.`}
+                  ? "Reconnecting to the provider while keeping the loaded conversation in place."
+                  : "Loading the initial conversation window and session metadata."}
             </div>
             {props.openingSession.cwd ? (
-              <div className="mx-auto mt-4 max-w-xl rounded-2xl bg-[var(--app-subtle-bg)] px-4 py-3 text-left md:mt-8 md:max-w-2xl md:px-6 md:py-5 xl:max-w-3xl">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--app-hint)] md:text-xs">
-                  Workspace
-                </div>
-                <div className="mt-1 truncate text-sm text-[var(--app-fg)] md:mt-2 md:text-base" title={props.openingSession.cwd}>
+              <div className="mt-3 flex min-w-0 items-baseline gap-2 text-xs">
+                <span className="shrink-0 font-medium text-[var(--app-hint)]">Workspace</span>
+                <div className="min-w-0 truncate font-mono text-[var(--app-fg)]" title={props.openingSession.cwd}>
                   {props.openingSession.cwd}
                 </div>
               </div>

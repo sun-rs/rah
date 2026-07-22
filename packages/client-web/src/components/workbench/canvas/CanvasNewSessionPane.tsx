@@ -1,16 +1,14 @@
 import { useRef, useState, type ClipboardEventHandler } from "react";
-import type { ProviderModelCatalog } from "@rah/runtime-protocol";
+import type { ProviderModelCatalog, SessionInputAttachment } from "@rah/runtime-protocol";
 import { History } from "lucide-react";
 import type { ProviderChoice } from "../../ProviderSelector";
 import { CouncilLogo } from "../../CouncilLogo";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import { NewSessionComposer } from "../panes/NewSessionComposer";
-import {
-  appendImageDataUrlsToText,
-  imageFilesFromClipboardData,
-  readImageDataUrlsFromClipboardData,
-} from "../../../composer-image-attachments";
+import { imageFilesFromClipboardData } from "../../../composer-image-attachments";
 import { insertTextAtSelection } from "../../../composer-text-insertion";
+import { useComposerAttachments } from "../../../hooks/useComposerAttachments";
+import { FileReferencePicker } from "../../FileReferencePicker";
 
 export function CanvasNewSessionPane(props: {
   workspaceDirs: string[];
@@ -31,20 +29,29 @@ export function CanvasNewSessionPane(props: {
   onPlanModeToggle: (enabled: boolean) => void;
   onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
   onReasoningChange: (reasoningId: string) => void;
-  onStart: (initialInput: string, workspaceDir: string) => void;
+  onStart: (
+    initialInput: string,
+    workspaceDir: string,
+    attachments?: SessionInputAttachment[],
+  ) => void | Promise<void>;
   onOpenNewCouncil: () => void;
   onBack: () => void;
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState("");
-  const [imageDataUrls, setImageDataUrls] = useState<string[]>([]);
+  const attachments = useComposerAttachments();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const [selectedWorkspaceDir, setSelectedWorkspaceDir] = useState<string | null>(null);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const outgoingDraft = appendImageDataUrlsToText(draft, imageDataUrls);
   const availableWorkspaceDir = selectedWorkspaceDir ?? props.availableWorkspaceDir;
-  const canStart = Boolean(outgoingDraft && availableWorkspaceDir && !props.startPending);
+  const canStart = Boolean(
+    (draft.trim() || attachments.count > 0) &&
+      availableWorkspaceDir &&
+      !props.startPending &&
+      !attachments.uploading,
+  );
   const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = (event) => {
     if (imageFilesFromClipboardData(event.clipboardData).length === 0) {
       return;
@@ -67,41 +74,68 @@ export function CanvasNewSessionPane(props: {
         return nextValue;
       });
     }
-    void readImageDataUrlsFromClipboardData(event.clipboardData)
-      .then((urls) => {
-        if (urls.length > 0) {
-          setImageDataUrls((current) => [...current, ...urls]);
-        }
-      })
-      .catch(() => undefined);
+    void attachments.uploadFiles(imageFilesFromClipboardData(event.clipboardData));
+  };
+  const insertDraftReference = (reference: string) => {
+    setDraft((current) => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        return current ? `${current} ${reference}` : reference;
+      }
+      const { nextValue, caret } = insertTextAtSelection({
+        current,
+        selectionStart: textarea.selectionStart ?? current.length,
+        selectionEnd: textarea.selectionEnd ?? current.length,
+        insertedText: reference,
+      });
+      queueMicrotask(() => {
+        textarea.focus();
+        textarea.setSelectionRange(caret, caret);
+      });
+      return nextValue;
+    });
   };
 
   return (
+    <>
     <NewSessionComposer
       className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto rah-scroll-panel rah-scroll-panel-y px-4 py-4 md:px-6"
       surfaceClassName="w-full max-w-2xl space-y-5 md:space-y-6"
       composerRef={textareaRef}
       draft={draft}
-      draftImageUrls={imageDataUrls}
-      draftImageCount={imageDataUrls.length}
+      draftAttachments={attachments.items}
+      draftAttachmentCount={attachments.count}
+      attachmentUploadPending={attachments.uploading}
+      attachmentError={attachments.error}
       onDraftChange={setDraft}
       onComposerPaste={handlePaste}
-      onClearDraftImages={() => setImageDataUrls([])}
-      onRemoveDraftImage={(index) =>
-        setImageDataUrls((current) =>
-          current.filter((_, candidateIndex) => candidateIndex !== index),
-        )
-      }
-      onRemoveLastDraftImage={() => setImageDataUrls((current) => current.slice(0, -1))}
+      onUploadFiles={attachments.uploadFiles}
+      onRemoveDraftAttachment={attachments.remove}
+      onRemoveLastDraftAttachment={attachments.removeLast}
       onSend={() => {
-        props.onStart(outgoingDraft, availableWorkspaceDir);
+        const textDraft = draft;
+        const attachmentDraft = attachments.take();
         setDraft("");
-        setImageDataUrls([]);
-        setSelectedWorkspaceDir(null);
+        void Promise.resolve(
+          props.onStart(
+            textDraft,
+            availableWorkspaceDir,
+            attachmentDraft.map((item) => item.attachment),
+          ),
+        )
+          .then(() => {
+            attachments.release(attachmentDraft);
+            setSelectedWorkspaceDir(null);
+          })
+          .catch(() => {
+            setDraft((current) => (current.trim() ? current : textDraft));
+            attachments.restore(attachmentDraft);
+          });
       }}
       canSend={canStart}
       sendPending={props.startPending}
       workspacePickerRef={workspacePickerRef}
+      onOpenFileReference={() => setFileReferenceOpen(true)}
       workspaceDirs={props.workspaceDirs}
       availableWorkspaceDir={availableWorkspaceDir}
       workspacePickerOpen={workspaceOpen}
@@ -113,7 +147,6 @@ export function CanvasNewSessionPane(props: {
       onChooseNewWorkspace={setSelectedWorkspaceDir}
       provider={props.provider}
       onChangeProvider={props.onProviderChange}
-      providerSelectorMode="auto"
       modelCatalog={props.modelCatalog}
       modelCatalogLoading={props.modelCatalogLoading}
       selectedModelId={props.selectedModelId}
@@ -128,7 +161,7 @@ export function CanvasNewSessionPane(props: {
       onAccessModeChange={props.onAccessModeChange}
       onPlanModeToggle={props.onPlanModeToggle}
       footer={
-        <div className="flex w-full justify-center pt-1">
+        <div className="flex w-full justify-center">
           <div className="inline-flex items-center gap-2">
             <button
               type="button"
@@ -153,5 +186,12 @@ export function CanvasNewSessionPane(props: {
         </div>
       }
     />
+    <FileReferencePicker
+      open={fileReferenceOpen}
+      onOpenChange={setFileReferenceOpen}
+      rootPath={availableWorkspaceDir || "/"}
+      onPick={insertDraftReference}
+    />
+    </>
   );
 }

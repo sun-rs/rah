@@ -80,7 +80,9 @@ function applyTheme(scheme: ColorScheme): void {
 let currentScheme: ColorScheme = getColorScheme();
 const listeners = new Set<() => void>();
 
-applyTheme(currentScheme);
+if (isBrowser()) {
+  applyTheme(currentScheme);
+}
 
 function subscribe(callback: () => void): () => void {
   listeners.add(callback);

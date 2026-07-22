@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { MEDIUM_MIN_WIDTH_PX } from "../responsive-layout";
 
 function readBooleanPreference(key: string, fallback: boolean): boolean {
   try {
@@ -37,9 +38,8 @@ function readViewportWidth(): number {
 
 const SIDEBAR_MIN_WIDTH = 208;
 const SIDEBAR_MAX_WIDTH = 480;
-const SIDEBAR_DEFAULT_WIDTH = 288;
+const SIDEBAR_DEFAULT_WIDTH = 272;
 const SIDEBAR_WIDTH_CSS_VAR = "--rah-sidebar-width";
-const DESKTOP_SHEET_BREAKPOINT_PX = 768;
 
 function clampSidebarWidth(value: number): number {
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value));
@@ -199,7 +199,7 @@ export function useWorkbenchChromeState() {
   }, []);
 
   useEffect(() => {
-    if (viewportWidthPx < DESKTOP_SHEET_BREAKPOINT_PX) {
+    if (viewportWidthPx < MEDIUM_MIN_WIDTH_PX) {
       return;
     }
     setLeftOpen((current) => (current ? false : current));

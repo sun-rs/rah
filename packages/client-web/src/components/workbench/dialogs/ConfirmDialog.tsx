@@ -22,7 +22,16 @@ export function ConfirmDialog(props: {
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={props.modal ?? true}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[80]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[90] flex w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:max-w-[calc(100vw-2rem)]">
+        <Dialog.Content asChild>
+          <form
+            className="fixed left-1/2 top-1/2 z-[90] flex w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:max-w-[calc(100vw-2rem)]"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (props.open && !props.pending) {
+                props.onConfirm();
+              }
+            }}
+          >
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
               {props.title}
@@ -38,7 +47,11 @@ export function ConfirmDialog(props: {
               </button>
             </Dialog.Close>
           </div>
-          <div className="px-4 py-4 text-sm text-[var(--app-hint)]">{props.description}</div>
+          <Dialog.Description asChild>
+            <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
+              {props.description}
+            </div>
+          </Dialog.Description>
           <div className="flex items-center justify-end gap-2 border-t border-[var(--app-border)] px-4 py-3">
             <Dialog.Close asChild>
               <button
@@ -50,14 +63,15 @@ export function ConfirmDialog(props: {
               </button>
             </Dialog.Close>
             <button
-              type="button"
+              type="submit"
+              autoFocus
               disabled={!props.open || props.pending}
-              onClick={props.onConfirm}
               className={confirmClassName}
             >
               {props.confirmLabel}
             </button>
           </div>
+          </form>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

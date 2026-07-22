@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { Columns3, RefreshCcw, Rows3, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import {
   ConversationHeaderStateIconView,
   conversationMetaToneClassName,
@@ -8,14 +17,15 @@ import {
 import { resolveConversationHeaderState } from "../conversation-header-meta";
 import {
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
-  HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
-  HEADER_SEGMENTED_CONTROL_CLASS,
 } from "../header-button-styles";
 import {
+  readRememberedSessionSideSizing,
   readRememberedSessionSideSurface,
+  rememberSessionSideSizing,
   rememberSessionSideSurface,
   type SessionSideLayout,
+  type SessionSideSizing,
 } from "./session-side-state";
 
 export type { SessionSideLayout } from "./session-side-state";
@@ -25,44 +35,87 @@ export type SessionSideDockItem = {
   summary: SessionSummary;
   unread?: boolean;
   onDiscard?: () => void;
-  onRecreate?: () => void;
   content: ReactNode;
 };
 
 function SideDockSurface({ side }: { side: SessionSideDockItem }) {
-  const state = side.summary.session.relationship?.sideState;
-  const detail = side.summary.session.relationship?.sideStateDetail;
-  const needsNotice = state === "expired" || state === "cleanup_failed";
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {needsNotice ? (
-        <div
-          className={`flex shrink-0 items-center justify-between gap-3 border-b px-3 py-2 text-xs ${
-            state === "cleanup_failed"
-              ? "border-red-200 bg-red-50 text-red-700"
-              : "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-muted)]"
-          }`}
-          role="status"
-        >
-          <span className="min-w-0 truncate" title={detail}>
-            {detail ??
-              (state === "expired"
-                ? "This Side expired in the provider."
-                : "Side cleanup failed. Discard again to retry.")}
-          </span>
-          {state === "expired" && side.onRecreate ? (
-            <button
-              type="button"
-              className="icon-click-feedback inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-[11px] font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-              onClick={side.onRecreate}
-            >
-              <RefreshCcw size={12} />
-              New Side
-            </button>
-          ) : null}
-        </div>
-      ) : null}
       <div className="min-h-0 flex-1">{side.content}</div>
+    </div>
+  );
+}
+
+const DEFAULT_MAIN_SHARE = 0.6;
+const MIN_MAIN_SURFACE_PX = 320;
+const MIN_SIDE_SURFACE_PX = 240;
+
+type SideDockSizingState = SessionSideSizing & { dockId: string };
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function defaultSizing(dockId: string): SideDockSizingState {
+  return { dockId, mainShare: DEFAULT_MAIN_SHARE, sideShares: {} };
+}
+
+function readSizing(dockId: string): SideDockSizingState {
+  const remembered = readRememberedSessionSideSizing(
+    typeof window === "undefined" ? undefined : window.localStorage,
+    dockId,
+  );
+  return { dockId, ...(remembered ?? defaultSizing(dockId)) };
+}
+
+function normalizeSideShares(
+  sides: readonly SessionSideDockItem[],
+  remembered: Record<string, number>,
+): Record<string, number> {
+  const weights = sides.map((side) => {
+    const value = remembered[side.id];
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 1;
+  });
+  const total = weights.reduce((sum, value) => sum + value, 0) || 1;
+  return Object.fromEntries(sides.map((side, index) => [side.id, weights[index]! / total]));
+}
+
+function SideResizeHandle(props: {
+  orientation: "vertical" | "horizontal";
+  label: string;
+  resizing: boolean;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onKeyboardResize: (direction: -1 | 1) => void;
+}) {
+  const vertical = props.orientation === "vertical";
+  return (
+    <div
+      className={`group relative z-30 shrink-0 touch-none ${
+        vertical ? "-mx-1 w-2 cursor-col-resize" : "-my-1 h-2 cursor-row-resize"
+      }`}
+      role="separator"
+      aria-orientation={props.orientation}
+      aria-label={props.label}
+      tabIndex={0}
+      onPointerDown={props.onPointerDown}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+        const backwardKey = vertical ? "ArrowLeft" : "ArrowUp";
+        const forwardKey = vertical ? "ArrowRight" : "ArrowDown";
+        if (event.key !== backwardKey && event.key !== forwardKey) return;
+        event.preventDefault();
+        props.onKeyboardResize(event.key === backwardKey ? -1 : 1);
+      }}
+    >
+      <span
+        className={`pointer-events-none absolute bg-[var(--app-border)] transition-colors group-hover:bg-[var(--app-hint)] ${
+          props.resizing ? "!bg-[var(--app-hint)]" : ""
+        } ${
+          vertical
+            ? "inset-y-0 left-1/2 w-px -translate-x-1/2"
+            : "inset-x-0 top-1/2 h-px -translate-y-1/2"
+        }`}
+        aria-hidden="true"
+      />
     </div>
   );
 }
@@ -72,7 +125,8 @@ export function SessionSideDock(props: {
   main: ReactNode;
   sides: readonly SessionSideDockItem[];
   layout: SessionSideLayout;
-  onLayoutChange: (layout: SessionSideLayout) => void;
+  showMobileSidebarControl?: boolean;
+  onOpenMobileSidebar?: () => void;
 }) {
   const [mobileSurfaceState, setMobileSurfaceState] = useState(() => ({
     dockId: props.dockId,
@@ -88,6 +142,198 @@ export function SessionSideDock(props: {
     () => new Set(props.sides.map((side) => side.id)),
     [sideIdsKey],
   );
+  const [sizingState, setSizingState] = useState<SideDockSizingState>(() =>
+    readSizing(props.dockId),
+  );
+  const sizingRef = useRef(sizingState);
+  const desktopRootRef = useRef<HTMLDivElement | null>(null);
+  const sideRegionRef = useRef<HTMLElement | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const [activeResizeId, setActiveResizeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (sizingState.dockId === props.dockId) return;
+    const next = readSizing(props.dockId);
+    sizingRef.current = next;
+    setSizingState(next);
+  }, [props.dockId, sizingState.dockId]);
+
+  const effectiveSizing =
+    sizingState.dockId === props.dockId ? sizingState : defaultSizing(props.dockId);
+  const mainShare = clamp(effectiveSizing.mainShare, 0.2, 0.8);
+  const sideShares = useMemo(
+    () => normalizeSideShares(props.sides, effectiveSizing.sideShares),
+    [effectiveSizing.sideShares, sideIdsKey],
+  );
+
+  const updateSizing = useCallback((sizing: SessionSideSizing) => {
+    const next = { dockId: props.dockId, ...sizing };
+    sizingRef.current = next;
+    setSizingState(next);
+  }, [props.dockId]);
+
+  const stopResize = useCallback(() => {
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
+    setActiveResizeId(null);
+  }, []);
+
+  useEffect(() => stopResize, [stopResize]);
+
+  const beginResize = useCallback((args: {
+    event: ReactPointerEvent<HTMLDivElement>;
+    resizeId: string;
+    cursor: "col-resize" | "row-resize";
+    onMove: (clientX: number, clientY: number) => void;
+  }) => {
+    if (args.event.button !== 0) return;
+    args.event.preventDefault();
+    stopResize();
+    const previousUserSelect = document.body.style.userSelect;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = args.cursor;
+    setActiveResizeId(args.resizeId);
+    let frameId: number | null = null;
+    let latestPoint: { x: number; y: number } | null = null;
+
+    const flush = () => {
+      frameId = null;
+      if (latestPoint) args.onMove(latestPoint.x, latestPoint.y);
+    };
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      latestPoint = { x: moveEvent.clientX, y: moveEvent.clientY };
+      if (frameId === null) frameId = window.requestAnimationFrame(flush);
+    };
+    const cleanup = () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.cursor = previousCursor;
+    };
+    const onPointerUp = () => {
+      if (latestPoint) args.onMove(latestPoint.x, latestPoint.y);
+      cleanup();
+      resizeCleanupRef.current = null;
+      setActiveResizeId(null);
+      const current = sizingRef.current;
+      if (current.dockId === props.dockId) {
+        rememberSessionSideSizing(window.localStorage, props.dockId, current);
+      }
+    };
+    resizeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+    window.addEventListener("pointercancel", onPointerUp, { once: true });
+  }, [props.dockId, stopResize]);
+
+  const startMainResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = desktopRootRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return;
+    const startX = event.clientX;
+    const startShare = mainShare;
+    const startSideShares = sideShares;
+    const minMainShare = Math.min(0.48, MIN_MAIN_SURFACE_PX / rect.width);
+    const minSideShare = Math.min(0.48, MIN_SIDE_SURFACE_PX / rect.width);
+    beginResize({
+      event,
+      resizeId: "main",
+      cursor: "col-resize",
+      onMove: (clientX) => {
+        updateSizing({
+          mainShare: clamp(
+            startShare + (clientX - startX) / rect.width,
+            minMainShare,
+            1 - minSideShare,
+          ),
+          sideShares: startSideShares,
+        });
+      },
+    });
+  }, [beginResize, mainShare, sideShares, updateSizing]);
+
+  const resizeMainWithKeyboard = useCallback((direction: -1 | 1) => {
+    const width = desktopRootRef.current?.getBoundingClientRect().width ?? 0;
+    if (width <= 0) return;
+    const minMainShare = Math.min(0.48, MIN_MAIN_SURFACE_PX / width);
+    const minSideShare = Math.min(0.48, MIN_SIDE_SURFACE_PX / width);
+    const next = {
+      mainShare: clamp(mainShare + direction * (24 / width), minMainShare, 1 - minSideShare),
+      sideShares,
+    };
+    updateSizing(next);
+    rememberSessionSideSizing(window.localStorage, props.dockId, next);
+  }, [mainShare, props.dockId, sideShares, updateSizing]);
+
+  const startSideResize = useCallback((
+    firstId: string,
+    secondId: string,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const rect = sideRegionRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const axisSize = props.layout === "columns" ? rect.width : rect.height;
+    if (axisSize <= 0) return;
+    const startCoordinate = props.layout === "columns" ? event.clientX : event.clientY;
+    const startShares = sideShares;
+    const firstShare = startShares[firstId] ?? 0;
+    const secondShare = startShares[secondId] ?? 0;
+    const pairShare = firstShare + secondShare;
+    const minShare = Math.min(pairShare / 2, MIN_SIDE_SURFACE_PX / axisSize);
+    beginResize({
+      event,
+      resizeId: `${firstId}:${secondId}`,
+      cursor: props.layout === "columns" ? "col-resize" : "row-resize",
+      onMove: (clientX, clientY) => {
+        const coordinate = props.layout === "columns" ? clientX : clientY;
+        const nextFirst = clamp(
+          firstShare + (coordinate - startCoordinate) / axisSize,
+          minShare,
+          pairShare - minShare,
+        );
+        updateSizing({
+          mainShare,
+          sideShares: {
+            ...startShares,
+            [firstId]: nextFirst,
+            [secondId]: pairShare - nextFirst,
+          },
+        });
+      },
+    });
+  }, [beginResize, mainShare, props.layout, sideShares, updateSizing]);
+
+  const resizeSidesWithKeyboard = useCallback((
+    firstId: string,
+    secondId: string,
+    direction: -1 | 1,
+  ) => {
+    const rect = sideRegionRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const axisSize = props.layout === "columns" ? rect.width : rect.height;
+    if (axisSize <= 0) return;
+    const firstShare = sideShares[firstId] ?? 0;
+    const secondShare = sideShares[secondId] ?? 0;
+    const pairShare = firstShare + secondShare;
+    const minShare = Math.min(pairShare / 2, MIN_SIDE_SURFACE_PX / axisSize);
+    const nextFirst = clamp(
+      firstShare + direction * (24 / axisSize),
+      minShare,
+      pairShare - minShare,
+    );
+    const next = {
+      mainShare,
+      sideShares: {
+        ...sideShares,
+        [firstId]: nextFirst,
+        [secondId]: pairShare - nextFirst,
+      },
+    };
+    updateSizing(next);
+    rememberSessionSideSizing(window.localStorage, props.dockId, next);
+  }, [mainShare, props.dockId, props.layout, sideShares, updateSizing]);
 
   useEffect(() => {
     if (mobileSurfaceState.dockId !== props.dockId) {
@@ -123,81 +369,73 @@ export function SessionSideDock(props: {
     return <>{props.main}</>;
   }
 
-  const toolbar = (
-    <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2">
-      <span className="truncate text-[11px] font-medium text-[var(--app-hint)]">
-        {props.sides.length} Side {props.sides.length === 1 ? "task" : "tasks"}
-      </span>
-      <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
-        <button
-          type="button"
-          className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} ${
-            props.layout === "columns"
-              ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
-              : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
-          }`}
-          onClick={() => props.onLayoutChange("columns")}
-          aria-label="Arrange Side tasks in columns"
-          aria-pressed={props.layout === "columns"}
-          title="Columns"
-        >
-          <Columns3 size={14} />
-        </button>
-        <button
-          type="button"
-          className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} ${
-            props.layout === "stack"
-              ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
-              : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
-          }`}
-          onClick={() => props.onLayoutChange("stack")}
-          aria-label="Arrange Side tasks in a vertical stack"
-          aria-pressed={props.layout === "stack"}
-          title="Stack"
-        >
-          <Rows3 size={14} />
-        </button>
-      </div>
-    </div>
-  );
-
   return (
-    <div className="h-full min-h-0 min-w-0 bg-[var(--app-bg)]">
-      <div className="hidden h-full min-h-0 min-w-0 lg:flex">
-        <div className="min-w-0 flex-[1_1_60%]">{props.main}</div>
+    <div className="isolate h-full min-h-0 min-w-0 overflow-hidden bg-[var(--app-bg)]">
+      <div ref={desktopRootRef} className="hidden h-full min-h-0 min-w-0 lg:flex">
+        <div
+          className="min-w-0 shrink-0 overflow-hidden"
+          style={{ flexBasis: `${mainShare * 100}%` }}
+        >
+          {props.main}
+        </div>
+        <SideResizeHandle
+          orientation="vertical"
+          label="Resize main task and Side tasks"
+          resizing={activeResizeId === "main"}
+          onPointerDown={startMainResize}
+          onKeyboardResize={resizeMainWithKeyboard}
+        />
         <section
-          className="flex min-h-0 min-w-[20rem] max-w-[44rem] flex-[0_1_40%] flex-col border-l border-[var(--app-border)]"
+          ref={sideRegionRef}
+          className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
           aria-label="Side tasks"
         >
-          {toolbar}
-          {props.layout === "columns" ? (
-            <div className="flex min-h-0 flex-1 overflow-x-auto">
-              {props.sides.map((side) => (
-                <div
-                  key={side.id}
-                  className="min-w-[20rem] flex-1 border-r border-[var(--app-border)] last:border-r-0"
-                >
-                  <SideDockSurface side={side} />
+          <div
+            className={`flex h-full min-h-0 min-w-0 flex-1 overflow-hidden ${
+              props.layout === "columns" ? "flex-row" : "flex-col"
+            }`}
+          >
+            {props.sides.map((side, index) => {
+              const nextSide = props.sides[index + 1];
+              return (
+                <div key={side.id} className="contents">
+                  <div
+                    className="min-h-0 min-w-0 shrink-0 overflow-hidden"
+                    style={{ flexBasis: `${(sideShares[side.id] ?? 0) * 100}%` }}
+                  >
+                    <SideDockSurface side={side} />
+                  </div>
+                  {nextSide ? (
+                    <SideResizeHandle
+                      orientation={props.layout === "columns" ? "vertical" : "horizontal"}
+                      label={`Resize ${side.summary.session.title ?? "Side task"} and ${nextSide.summary.session.title ?? "Side task"}`}
+                      resizing={activeResizeId === `${side.id}:${nextSide.id}`}
+                      onPointerDown={(event) => startSideResize(side.id, nextSide.id, event)}
+                      onKeyboardResize={(direction) =>
+                        resizeSidesWithKeyboard(side.id, nextSide.id, direction)
+                      }
+                    />
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {props.sides.map((side) => (
-                <div
-                  key={side.id}
-                  className="min-h-[28rem] border-b border-[var(--app-border)] last:border-b-0"
-                >
-                  <SideDockSurface side={side} />
-                </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
         </section>
       </div>
 
       <div className="flex h-full min-h-0 flex-col lg:hidden">
         <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2">
+          {props.showMobileSidebarControl && props.onOpenMobileSidebar ? (
+            <button
+              type="button"
+              className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] md:!hidden"
+              onClick={props.onOpenMobileSidebar}
+              aria-label="Open sidebar"
+              title="Open sidebar"
+            >
+              <Menu size={20} />
+            </button>
+          ) : null}
           <button
             type="button"
             className={`icon-click-feedback h-7 shrink-0 rounded-md px-3 text-xs font-medium transition-colors ${
@@ -266,7 +504,7 @@ export function SessionSideDock(props: {
             );
           })}
         </div>
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {mobileSurfaceId === "main"
             ? props.main
             : (() => {

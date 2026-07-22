@@ -3,14 +3,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { CouncilSnapshot, StoredSessionRef } from "@rah/runtime-protocol";
 import {
+  archivedStoredSessionRefs,
   dedupeStoredSessionsByIdentity,
   filterSessionHistoryGroups,
   filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
-  sessionMatchesMaxLineCount,
+  sessionMatchesMaxHistoryBytes,
   sessionIdentityKey,
   visibleStoredSessionRefs,
 } from "./session-history-grouping";
+import {
+  formatHistoryBytes,
+  historySizeRiskClassName,
+  parseMaxHistoryBytes,
+} from "./session-history-size";
 import {
   councilConversationSubtitle,
   councilLineLabel,
@@ -33,6 +39,7 @@ function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSession
     ...(overrides.updatedAt ? { updatedAt: overrides.updatedAt } : {}),
     ...(overrides.lastUsedAt ? { lastUsedAt: overrides.lastUsedAt } : {}),
     ...(overrides.historyMeta ? { historyMeta: overrides.historyMeta } : {}),
+    ...(overrides.libraryState ? { libraryState: overrides.libraryState } : {}),
   };
 }
 
@@ -110,7 +117,7 @@ test("dedupes identical sessions by provider and providerSessionId", () => {
   assert.equal(deduped[0]?.rootDir, "/Users/sun/Code/solars");
 });
 
-test("Chats excludes provider-archived sessions from Recent and All", () => {
+test("Chats separates normal and archived sessions using provider or RAH state", () => {
   const active = storedSession({
     provider: "codex",
     providerSessionId: "active-session",
@@ -122,10 +129,25 @@ test("Chats excludes provider-archived sessions from Recent and All", () => {
     }),
     providerState: { archived: true },
   } satisfies StoredSessionRef;
+  const overlayArchived = storedSession({
+    provider: "claude",
+    providerSessionId: "overlay-archived-session",
+    libraryState: {
+      placement: "archive",
+      backend: "rah_overlay",
+      archivedAt: "2026-07-21T10:00:00.000Z",
+    },
+  });
 
   assert.deepEqual(
-    visibleStoredSessionRefs([active, archived]).map((session) => session.providerSessionId),
+    visibleStoredSessionRefs([active, archived, overlayArchived]).map((session) => session.providerSessionId),
     ["active-session"],
+  );
+  assert.deepEqual(
+    archivedStoredSessionRefs([active, archived, overlayArchived]).map(
+      (session) => session.providerSessionId,
+    ),
+    ["archived-session", "overlay-archived-session"],
   );
 });
 
@@ -274,29 +296,29 @@ test("recent chats are stopped and omit current running identities", () => {
   );
 });
 
-test("line-count filtering only matches sessions with known lines below the limit", () => {
+test("history-size filtering only matches sessions with known bytes below the limit", () => {
   const small = storedSession({
     provider: "codex",
     providerSessionId: "small",
-    historyMeta: { lines: 8, bytes: 1024 },
+    historyMeta: { lines: 8, bytes: 8 * 1024 ** 2 },
   });
   const large = storedSession({
     provider: "codex",
     providerSessionId: "large",
-    historyMeta: { lines: 40, bytes: 4096 },
+    historyMeta: { lines: 40, bytes: 40 * 1024 ** 2 },
   });
   const unknown = storedSession({
     provider: "codex",
     providerSessionId: "unknown",
   });
 
-  assert.equal(sessionMatchesMaxLineCount(small, 10), true);
-  assert.equal(sessionMatchesMaxLineCount(large, 10), false);
-  assert.equal(sessionMatchesMaxLineCount(unknown, 10), false);
-  assert.equal(sessionMatchesMaxLineCount(unknown, null), true);
+  assert.equal(sessionMatchesMaxHistoryBytes(small, 10 * 1024 ** 2), true);
+  assert.equal(sessionMatchesMaxHistoryBytes(large, 10 * 1024 ** 2), false);
+  assert.equal(sessionMatchesMaxHistoryBytes(unknown, 10 * 1024 ** 2), false);
+  assert.equal(sessionMatchesMaxHistoryBytes(unknown, null), true);
 });
 
-test("filtered workspace deletion candidates honor provider and line-count filters", () => {
+test("filtered workspace deletion candidates honor provider and history-size filters", () => {
   const groups = groupAllStoredSessionsByDirectory([
     storedSession({
       provider: "codex",
@@ -305,7 +327,7 @@ test("filtered workspace deletion candidates honor provider and line-count filte
       cwd: "/Users/sun/Code/solars",
       title: "small codex",
       updatedAt: "2026-04-20T10:00:00.000Z",
-      historyMeta: { lines: 5 },
+      historyMeta: { lines: 5, bytes: 5 * 1024 ** 2 },
     }),
     storedSession({
       provider: "codex",
@@ -314,7 +336,7 @@ test("filtered workspace deletion candidates honor provider and line-count filte
       cwd: "/Users/sun/Code/solars",
       title: "large codex",
       updatedAt: "2026-04-20T10:01:00.000Z",
-      historyMeta: { lines: 50 },
+      historyMeta: { lines: 50, bytes: 50 * 1024 ** 2 },
     }),
     storedSession({
       provider: "claude",
@@ -323,20 +345,20 @@ test("filtered workspace deletion candidates honor provider and line-count filte
       cwd: "/Users/sun/Code/solars",
       title: "small claude",
       updatedAt: "2026-04-20T10:02:00.000Z",
-      historyMeta: { lines: 4 },
+      historyMeta: { lines: 4, bytes: 4 * 1024 ** 2 },
     }),
     storedSession({
       provider: "codex",
-      providerSessionId: "codex-unknown-lines",
+      providerSessionId: "codex-unknown-size",
       rootDir: "/Users/sun/Code/solars",
       cwd: "/Users/sun/Code/solars",
-      title: "unknown lines",
+      title: "unknown size",
       updatedAt: "2026-04-20T10:03:00.000Z",
     }),
   ]);
 
   const filtered = filterSessionHistoryGroups(groups, {
-    maxLineCount: 10,
+    maxHistoryBytes: 10 * 1024 ** 2,
     matchesProvider: (session) => session.provider === "codex",
     matchesSessionQuery: () => true,
   });
@@ -346,6 +368,19 @@ test("filtered workspace deletion candidates honor provider and line-count filte
     filtered[0]?.items.map((session) => session.providerSessionId),
     ["codex-small"],
   );
+});
+
+test("history sizes use bounded units and progressive shallow warning tones", () => {
+  assert.equal(formatHistoryBytes(12), "12 B");
+  assert.equal(formatHistoryBytes(1536), "1.5 KB");
+  assert.equal(formatHistoryBytes(12.6 * 1024 ** 2), "12.6 MB");
+  assert.equal(formatHistoryBytes(1.25 * 1024 ** 3), "1.3 GB");
+  assert.equal(formatHistoryBytes(2 * 1024 ** 4), "2 TB");
+  assert.equal(parseMaxHistoryBytes("1.5", "GB"), 1.5 * 1024 ** 3);
+  assert.match(historySizeRiskClassName(20 * 1024 ** 2), /sky/);
+  assert.match(historySizeRiskClassName(80 * 1024 ** 2), /amber/);
+  assert.match(historySizeRiskClassName(300 * 1024 ** 2), /orange/);
+  assert.match(historySizeRiskClassName(2 * 1024 ** 3), /red/);
 });
 
 test("Chats All filters do not mutate workspace expansion state", () => {
@@ -385,6 +420,15 @@ test("splits councils for the Chats council tab", () => {
   assert.deepEqual(split.activeCouncils.map((council) => council.id), ["new-running", "old-running"]);
   assert.deepEqual(split.historyCouncils.map((council) => council.id), ["stopped-council"]);
   assert.equal(defaultRunningCouncilId(councils), "new-running");
+});
+
+test("renders Chats Council results as distinct running and stopped row groups", () => {
+  const source = readSource("./council/CouncilsBrowser.tsx");
+
+  assert.match(source, /data-council-group="running"/);
+  assert.match(source, /data-council-group="stopped"/);
+  assert.match(source, /className="space-y-1" data-council-group="running"/);
+  assert.match(source, /className="space-y-1" data-council-group="stopped"/);
 });
 
 test("defaults Council entry to the latest running chat with messages", () => {

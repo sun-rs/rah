@@ -13,6 +13,7 @@ export type ChatBrowserRowMeta = {
   compactLabel?: string | undefined;
   title?: string | undefined;
   icon?: ReactNode | undefined;
+  className?: string | undefined;
 };
 
 function badgeClassName(badge: ChatBrowserRowBadge): string {
@@ -118,7 +119,10 @@ export function ChatBrowserRow(props: {
           ) : null}
           {meta ? (
             <span
-              className="inline-flex items-center gap-1 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--app-hint)] max-[699px]:px-1.5"
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums max-[699px]:px-1.5 ${
+                meta.className ??
+                "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
+              }`}
               title={meta.title}
             >
               <span className="inline-flex h-3 w-3 items-center justify-center max-[699px]:hidden">

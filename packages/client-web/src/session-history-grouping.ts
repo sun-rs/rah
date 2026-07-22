@@ -76,7 +76,20 @@ export function dedupeStoredSessionsByIdentity(sessions: StoredSessionRef[]): St
 export function visibleStoredSessionRefs(
   sessions: readonly StoredSessionRef[],
 ): StoredSessionRef[] {
-  return sessions.filter((session) => session.providerState?.archived !== true);
+  return sessions.filter((session) => !isStoredSessionArchived(session));
+}
+
+export function archivedStoredSessionRefs(
+  sessions: readonly StoredSessionRef[],
+): StoredSessionRef[] {
+  return sessions.filter(isStoredSessionArchived);
+}
+
+export function isStoredSessionArchived(session: StoredSessionRef): boolean {
+  return (
+    session.libraryState?.placement === "archive" ||
+    session.providerState?.archived === true
+  );
 }
 
 export function filterStoppedRecentSessions(
@@ -86,40 +99,40 @@ export function filterStoppedRecentSessions(
   return sessions.filter((session) => !runningIdentityKeys.has(sessionIdentityKey(session)));
 }
 
-export function storedSessionLineCount(session: StoredSessionRef): number | null {
-  const lines = session.historyMeta?.lines;
-  return typeof lines === "number" && Number.isFinite(lines) ? lines : null;
+export function storedSessionHistoryBytes(session: StoredSessionRef): number | null {
+  const bytes = session.historyMeta?.bytes;
+  return typeof bytes === "number" && Number.isFinite(bytes) ? bytes : null;
 }
 
-export function sessionMatchesMaxLineCount(
+export function sessionMatchesMaxHistoryBytes(
   session: StoredSessionRef,
-  maxLineCount: number | null,
+  maxHistoryBytes: number | null,
 ): boolean {
-  if (maxLineCount === null) {
+  if (maxHistoryBytes === null) {
     return true;
   }
-  const lines = storedSessionLineCount(session);
-  return lines !== null && lines <= maxLineCount;
+  const bytes = storedSessionHistoryBytes(session);
+  return bytes !== null && bytes <= maxHistoryBytes;
 }
 
 export function filterSessionHistoryGroups(
   groups: readonly SessionHistoryGroup[],
   options?: {
     query?: string;
-    maxLineCount?: number | null;
+    maxHistoryBytes?: number | null;
     matchesProvider?: (session: StoredSessionRef) => boolean;
     matchesSessionQuery?: (session: StoredSessionRef, normalizedQuery: string) => boolean;
   },
 ): SessionHistoryGroup[] {
   const q = options?.query?.trim().toLowerCase() ?? "";
-  const maxLineCount = options?.maxLineCount ?? null;
+  const maxHistoryBytes = options?.maxHistoryBytes ?? null;
   const matchesProvider = options?.matchesProvider ?? (() => true);
   const matchesSessionQuery = options?.matchesSessionQuery ?? (() => false);
   return groups
     .map((group) => {
       const providerMatchedItems = group.items
         .filter(matchesProvider)
-        .filter((session) => sessionMatchesMaxLineCount(session, maxLineCount));
+        .filter((session) => sessionMatchesMaxHistoryBytes(session, maxHistoryBytes));
       if (providerMatchedItems.length === 0) {
         return null;
       }

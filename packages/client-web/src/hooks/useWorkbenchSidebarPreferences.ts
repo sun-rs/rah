@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CouncilSnapshot } from "@rah/runtime-protocol";
+import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { findOwningWorkspace, type WorkspaceSortMode, type WorkspaceSection } from "../session-browser";
+import type { SidebarPinnedItemRef } from "../sidebar-view-model";
 
 const WORKSPACE_SORT_MODE_KEY = "rah.workspace-sort-mode";
 const HISTORY_WORKSPACE_SORT_MODE_KEY = "rah.history-workspace-sort-mode";
-const PINNED_WORKSPACE_SESSION_KEY = "rah.pinned-session-by-workspace";
 
 function readWorkspaceSortMode(): WorkspaceSortMode {
   if (typeof window === "undefined") {
@@ -30,30 +30,9 @@ function readHistoryWorkspaceSortMode(): WorkspaceSortMode {
   }
 }
 
-function readPinnedWorkspaceSessions(): Record<string, string> {
-  if (typeof window === "undefined") {
-    return {};
-  }
-  try {
-    const raw = window.localStorage.getItem(PINNED_WORKSPACE_SESSION_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, string] =>
-          typeof entry[0] === "string" && typeof entry[1] === "string",
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
 function isPinnedWorkspaceItemAvailable(
   workspaceSections: WorkspaceSection[],
-  councils: readonly CouncilSnapshot[],
+  storedSessions: readonly StoredSessionRef[],
   workspaceDir: string,
   itemKey: string,
 ): boolean {
@@ -61,65 +40,91 @@ function isPinnedWorkspaceItemAvailable(
   if (!section) {
     return false;
   }
-  if (itemKey.startsWith("council:")) {
-    const councilId = itemKey.slice("council:".length);
-    const workspaceDirs = workspaceSections.map((candidate) => candidate.workspace.directory);
-    return councils.some(
-      (council) =>
-        council.id === councilId &&
-        council.status === "running" &&
-        findOwningWorkspace(workspaceDirs, council.workspace) === workspaceDir,
+  const providerIdentityMatch = /^session:(codex|claude|opencode):(.+)$/.exec(itemKey);
+  if (providerIdentityMatch) {
+    const provider = providerIdentityMatch[1] as StoredSessionRef["provider"];
+    const providerSessionId = providerIdentityMatch[2]!;
+    if (section.sessions.some(
+      (session) =>
+        session.session.provider === provider &&
+        session.session.providerSessionId === providerSessionId,
+    )) {
+      return true;
+    }
+    const workspaceDirs = workspaceSections.map(
+      (candidate) => candidate.workspace.directory,
+    );
+    return storedSessions.some(
+      (session) =>
+        session.provider === provider &&
+        session.providerSessionId === providerSessionId &&
+        findOwningWorkspace(workspaceDirs, session.rootDir || session.cwd) === workspaceDir,
     );
   }
-  const sessionId = itemKey.startsWith("session:") ? itemKey.slice("session:".length) : itemKey;
+  const sessionId = itemKey.startsWith("session:")
+    ? itemKey.slice("session:".length)
+    : itemKey;
   return section.sessions.some((session) => session.session.id === sessionId);
 }
 
-export function useWorkbenchSidebarPreferences(
+export function reconcilePinnedSidebarItems(
+  pinnedItems: readonly SidebarPinnedItemRef[],
   workspaceSections: WorkspaceSection[],
-  councils: readonly CouncilSnapshot[] = [],
-) {
-  const [pinnedSessionIdByWorkspace, setPinnedSessionIdByWorkspace] =
-    useState<Record<string, string>>(() => readPinnedWorkspaceSessions());
+  storedSessions: readonly StoredSessionRef[],
+  inventoryReady: { sessions: boolean; storedSessions: boolean },
+): SidebarPinnedItemRef[] {
+  return pinnedItems.filter(({ workspaceDir, itemKey }) => {
+    if (itemKey.startsWith("council:")) {
+      return false;
+    }
+    const inventoryLoaded = /^session:(codex|claude|opencode):/.test(itemKey)
+      ? inventoryReady.storedSessions
+      : inventoryReady.sessions;
+    return !inventoryLoaded || isPinnedWorkspaceItemAvailable(
+      workspaceSections,
+      storedSessions,
+      workspaceDir,
+      itemKey,
+    );
+  });
+}
 
-  const sanitizedPinnedSessionIdByWorkspace = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(pinnedSessionIdByWorkspace).filter(([workspaceDir, itemKey]) =>
-          isPinnedWorkspaceItemAvailable(workspaceSections, councils, workspaceDir, itemKey),
-        ),
-      ),
-    [councils, pinnedSessionIdByWorkspace, workspaceSections],
+export function useWorkbenchSidebarPreferences(
+  pinnedSidebarItems: readonly SidebarPinnedItemRef[],
+  workspaceSections: WorkspaceSection[],
+  storedSessions: readonly StoredSessionRef[] = [],
+  inventoryReady: { sessions: boolean; storedSessions: boolean } = {
+    sessions: true,
+    storedSessions: true,
+  },
+  setPinnedSidebarItem?: (workspaceDir: string, itemKey: string, pinned: boolean) => Promise<void>,
+) {
+  const sanitizedPinnedSidebarItems = useMemo(
+    () => reconcilePinnedSidebarItems(
+      pinnedSidebarItems,
+      workspaceSections,
+      storedSessions,
+      inventoryReady,
+    ),
+    [
+      inventoryReady.sessions,
+      inventoryReady.storedSessions,
+      pinnedSidebarItems,
+      storedSessions,
+      workspaceSections,
+    ],
   );
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        PINNED_WORKSPACE_SESSION_KEY,
-        JSON.stringify(sanitizedPinnedSessionIdByWorkspace),
-      );
-    } catch {
-      // ignore
-    }
-  }, [sanitizedPinnedSessionIdByWorkspace]);
-
-  const togglePinnedSession = (workspaceDir: string, sessionId: string) => {
-    setPinnedSessionIdByWorkspace((current) => {
-      if (current[workspaceDir] === sessionId) {
-        const next = { ...current };
-        delete next[workspaceDir];
-        return next;
-      }
-      return {
-        ...current,
-        [workspaceDir]: sessionId,
-      };
-    });
+  const togglePinnedSidebarItem = (workspaceDir: string, itemKey: string) => {
+    const pinned = !pinnedSidebarItems.some(
+      (item) => item.workspaceDir === workspaceDir && item.itemKey === itemKey,
+    );
+    void setPinnedSidebarItem?.(workspaceDir, itemKey, pinned);
   };
 
   return {
-    sanitizedPinnedSessionIdByWorkspace,
-    togglePinnedSession,
+    sanitizedPinnedSidebarItems,
+    togglePinnedSidebarItem,
   };
 }
 

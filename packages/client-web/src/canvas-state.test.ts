@@ -3,29 +3,43 @@ import { test } from "node:test";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   applyCanvasPaneTarget,
+  canvasPaneLabel,
+  canvasRestorableTargetKey,
   canvasOpeningTransitionForTarget,
   canvasStoredRefKey,
   clearCanvasCouncilTargets,
   clearCanvasSessionTargets,
   clearCanvasTargetsForStoredSession,
-  createCanvasLayoutRatios,
+  createCanvasSessionTarget,
   createDefaultCanvasRightPanelsOpen,
   createEmptyCanvasTargets,
+  enrichCanvasSessionTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
+  LEGACY_CANVAS_STATE_STORAGE_KEY,
   MOBILE_CANVAS_LAYOUT,
-  MOBILE_CANVAS_LAYOUTS,
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
+  resolveCanvasPaneRemovalSelection,
+  resolveCanvasLayoutSelection,
   resolveCanvasResumedSessionId,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
   resolveCanvasVisibleSessionId,
-  shouldInitializeCanvasPaneFromSelection,
   shouldUseMobileCanvasLayout,
   type CanvasPaneTarget,
 } from "./canvas-state";
+import {
+  canvasLayoutPaneIds,
+  createCanvasGridLayout,
+  createCanvasPresetLayout,
+  deriveCanvasSplitJunctions,
+  getCanvasGridDimensions,
+  removeCanvasLayoutPane,
+  splitCanvasLayoutPane,
+  updateCanvasSplitRatio,
+} from "./canvas-layout";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
 
 function summary(args: {
@@ -33,6 +47,7 @@ function summary(args: {
   provider?: "codex" | "opencode";
   providerSessionId?: string;
   readOnlyReplay?: boolean;
+  status?: "running" | "stopped";
 }): SessionSummary {
   const providerSessionId = args.providerSessionId ?? `${args.id}-provider`;
   const readOnlyReplay = args.readOnlyReplay === true;
@@ -45,6 +60,7 @@ function summary(args: {
       cwd: "/tmp/rah",
       rootDir: "/tmp/rah",
       runtimeState: "idle",
+      status: args.status ?? "running",
       capabilities: {
         liveAttach: true,
         structuredTimeline: true,
@@ -106,43 +122,198 @@ function memoryStorage(): Storage {
   };
 }
 
-test("canvas layout ratios match visible pane count", () => {
-  assert.deepEqual(createCanvasLayoutRatios("two-horizontal"), [1, 1]);
-  assert.deepEqual(createCanvasLayoutRatios("two-vertical"), [1, 1]);
-  assert.deepEqual(createCanvasLayoutRatios("three-horizontal"), [1, 1, 1]);
-  assert.deepEqual(createCanvasLayoutRatios("four-grid"), [1, 1, 1, 1]);
+test("canvas grid layouts reveal fixed ordered pane slots", () => {
+  assert.deepEqual(canvasLayoutPaneIds(createCanvasGridLayout(2, 1)), [
+    "canvas-1",
+    "canvas-2",
+  ]);
+  assert.deepEqual(canvasLayoutPaneIds(createCanvasGridLayout(2, 3)), [
+    "canvas-1",
+    "canvas-2",
+    "canvas-3",
+    "canvas-4",
+    "canvas-5",
+    "canvas-6",
+  ]);
+  assert.deepEqual(canvasLayoutPaneIds(createCanvasGridLayout(4, 2)), [
+    "canvas-1",
+    "canvas-2",
+    "canvas-3",
+    "canvas-4",
+    "canvas-5",
+    "canvas-6",
+    "canvas-7",
+    "canvas-8",
+  ]);
+});
+
+test("canvas divider markers describe bars, T junctions, and grid crosses", () => {
+  assert.equal(deriveCanvasSplitJunctions(createCanvasGridLayout(2, 1)).size, 0);
+  assert.equal(deriveCanvasSplitJunctions(createCanvasGridLayout(1, 2)).size, 0);
+
+  const topTwoBottomOne = splitCanvasLayoutPane(
+    createCanvasGridLayout(1, 2),
+    "canvas-1",
+    "horizontal",
+  );
+  assert.ok(topTwoBottomOne);
+  const tJunctions = [...deriveCanvasSplitJunctions(topTwoBottomOne.layout).values()].flat();
+  assert.deepEqual(tJunctions, [{
+    position: 0.5,
+    directions: { left: true, right: true, up: true, down: false },
+  }]);
+
+  const fourGridJunctions = [...deriveCanvasSplitJunctions(createCanvasGridLayout(2, 2)).values()].flat();
+  assert.deepEqual(fourGridJunctions, [{
+    position: 0.5,
+    directions: { left: true, right: true, up: true, down: true },
+  }]);
+
+  const eightGridJunctions = [...deriveCanvasSplitJunctions(createCanvasGridLayout(4, 2)).values()].flat();
+  assert.equal(eightGridJunctions.length, 3);
+  assert.deepEqual(
+    eightGridJunctions.map((junction) => junction.directions),
+    Array.from({ length: 3 }, () => ({ left: true, right: true, up: true, down: true })),
+  );
 });
 
 test("canvas layouts reveal fixed ordered pane slots without clearing hidden targets", () => {
-  assert.deepEqual(getCanvasVisiblePaneIds("two-horizontal"), ["canvas-1", "canvas-2"]);
-  assert.deepEqual(getCanvasVisiblePaneIds("two-vertical"), ["canvas-1", "canvas-2"]);
-  assert.deepEqual(getCanvasVisiblePaneIds("three-horizontal"), [
+  assert.deepEqual(getCanvasVisiblePaneIds(createCanvasPresetLayout("two-horizontal")), [
+    "canvas-1",
+    "canvas-2",
+  ]);
+  assert.deepEqual(getCanvasVisiblePaneIds(createCanvasPresetLayout("two-vertical")), [
+    "canvas-1",
+    "canvas-2",
+  ]);
+  assert.deepEqual(getCanvasVisiblePaneIds(createCanvasPresetLayout("three-horizontal")), [
     "canvas-1",
     "canvas-2",
     "canvas-3",
   ]);
-  assert.deepEqual(getCanvasVisiblePaneIds("four-grid"), [
+  assert.deepEqual(getCanvasVisiblePaneIds(createCanvasPresetLayout("four-grid")), [
     "canvas-1",
     "canvas-2",
     "canvas-3",
     "canvas-4",
   ]);
-  assert.deepEqual(getCanvasVisiblePaneIds("two-horizontal", "canvas-4"), ["canvas-4"]);
+  assert.deepEqual(
+    getCanvasVisiblePaneIds(createCanvasPresetLayout("two-horizontal"), "canvas-4"),
+    ["canvas-4"],
+  );
+  assert.equal(canvasPaneLabel("canvas-1"), "Pane 1");
+  assert.equal(canvasPaneLabel("canvas-8"), "Pane 8");
 });
 
 test("mobile canvas policy uses only stacked two-pane layout", () => {
-  assert.equal(MOBILE_CANVAS_LAYOUT, "two-vertical");
-  assert.deepEqual(MOBILE_CANVAS_LAYOUTS, ["two-vertical"]);
   assert.equal(shouldUseMobileCanvasLayout(699), true);
   assert.equal(shouldUseMobileCanvasLayout(700), false);
   assert.deepEqual(getCanvasVisiblePaneIds(MOBILE_CANVAS_LAYOUT), ["canvas-1", "canvas-2"]);
+  assert.deepEqual(getCanvasGridDimensions(MOBILE_CANVAS_LAYOUT), { columns: 1, rows: 2 });
+});
+
+test("canvas pane expansion supports equal columns and local asymmetric splits", () => {
+  const equalColumns = splitCanvasLayoutPane(
+    createCanvasGridLayout(2, 1),
+    "canvas-2",
+    "horizontal",
+  );
+  assert.ok(equalColumns);
+  assert.deepEqual(getCanvasGridDimensions(equalColumns.layout), { columns: 3, rows: 1 });
+  assert.equal(equalColumns.newPaneId, "canvas-3");
+
+  const asymmetric = splitCanvasLayoutPane(
+    createCanvasGridLayout(2, 1),
+    "canvas-1",
+    "vertical",
+  );
+  assert.ok(asymmetric);
+  assert.deepEqual(canvasLayoutPaneIds(asymmetric.layout), ["canvas-1", "canvas-3", "canvas-2"]);
+  assert.equal(getCanvasGridDimensions(asymmetric.layout), null);
+});
+
+test("canvas pane removal collapses any selected leaf and keeps a one-pane minimum", () => {
+  const threeColumns = createCanvasGridLayout(3, 1);
+  const removed = removeCanvasLayoutPane(threeColumns, "canvas-3");
+  assert.ok(removed);
+  assert.deepEqual(canvasLayoutPaneIds(removed), ["canvas-1", "canvas-2"]);
+
+  const removedMiddle = removeCanvasLayoutPane(threeColumns, "canvas-2");
+  assert.ok(removedMiddle);
+  assert.deepEqual(canvasLayoutPaneIds(removedMiddle), ["canvas-1", "canvas-3"]);
+
+  const asymmetric = splitCanvasLayoutPane(
+    createCanvasGridLayout(2, 1),
+    "canvas-1",
+    "vertical",
+  );
+  assert.ok(asymmetric);
+  const collapsed = removeCanvasLayoutPane(asymmetric.layout, "canvas-3");
+  assert.ok(collapsed);
+  assert.deepEqual(canvasLayoutPaneIds(collapsed), ["canvas-1", "canvas-2"]);
+
+  const singlePane = removeCanvasLayoutPane(createCanvasGridLayout(2, 1), "canvas-1");
+  assert.deepEqual(singlePane, { kind: "pane", paneId: "canvas-2" });
+  assert.equal(removeCanvasLayoutPane(singlePane!, "canvas-2"), null);
+  assert.equal(removeCanvasLayoutPane(threeColumns, "canvas-8"), null);
+});
+
+test("canvas pane removal keeps a deterministic active pane and maximizes the last pane", () => {
+  assert.deepEqual(
+    resolveCanvasPaneRemovalSelection(["canvas-2"], 0, "canvas-1"),
+    {
+      activePaneId: "canvas-2",
+      maximizedPaneId: "canvas-2",
+    },
+  );
+  assert.deepEqual(
+    resolveCanvasPaneRemovalSelection(["canvas-1", "canvas-3"], 1, "canvas-1"),
+    {
+      activePaneId: "canvas-1",
+      maximizedPaneId: null,
+    },
+  );
+  assert.deepEqual(
+    resolveCanvasPaneRemovalSelection(["canvas-1", "canvas-3"], 1, "canvas-2"),
+    {
+      activePaneId: "canvas-3",
+      maximizedPaneId: null,
+    },
+  );
+});
+
+test("explicit canvas layouts override the previous maximize state", () => {
+  assert.deepEqual(
+    resolveCanvasLayoutSelection({ kind: "pane", paneId: "canvas-2" }, "canvas-1"),
+    {
+      activePaneId: "canvas-2",
+      maximizedPaneId: "canvas-2",
+    },
+  );
+  assert.deepEqual(
+    resolveCanvasLayoutSelection(createCanvasGridLayout(2, 1), "canvas-1"),
+    {
+      activePaneId: "canvas-1",
+      maximizedPaneId: null,
+    },
+  );
+});
+
+test("canvas split ratios update only the selected split", () => {
+  const layout = createCanvasGridLayout(2, 1);
+  assert.equal(layout.kind, "split");
+  if (layout.kind !== "split") return;
+  const updated = updateCanvasSplitRatio(layout, layout.id, 0.7);
+  assert.equal(updated.kind, "split");
+  if (updated.kind !== "split") return;
+  assert.equal(updated.ratio, 0.7);
 });
 
 test("canvas clear all availability is based on all fixed pane slots", () => {
   const targets = createEmptyCanvasTargets();
   assert.equal(hasAnyCanvasPaneTarget(targets), false);
 
-  targets["canvas-3"] = { kind: "stored", ref: ref("codex", "hidden-history") };
+  targets["canvas-8"] = { kind: "stored", ref: ref("codex", "hidden-history") };
   assert.equal(hasAnyCanvasPaneTarget(targets), true);
 });
 
@@ -176,23 +347,6 @@ test("canvas local resume state survives unrelated global resume transitions", (
   assert.equal(transition?.providerSessionId, "pane-provider-session");
 });
 
-test("canvas entry only initializes empty panes from the global selection", () => {
-  assert.equal(shouldInitializeCanvasPaneFromSelection({ kind: "empty" }), true);
-  assert.equal(
-    shouldInitializeCanvasPaneFromSelection({ kind: "session", sessionId: "live-1" }),
-    false,
-  );
-  assert.equal(
-    shouldInitializeCanvasPaneFromSelection({ kind: "stored", ref: ref("codex", "history-1") }),
-    false,
-  );
-  assert.equal(
-    shouldInitializeCanvasPaneFromSelection({ kind: "council", councilId: "council-1" }),
-    false,
-  );
-  assert.equal(shouldInitializeCanvasPaneFromSelection({ kind: "new" }), false);
-});
-
 test("canvas state persistence stores only pane targets and layout chrome", () => {
   const storage = memoryStorage();
   const state = normalizeRememberedCanvasState({
@@ -218,6 +372,80 @@ test("canvas state persistence stores only pane targets and layout chrome", () =
   assert.deepEqual(readRememberedCanvasState(storage), state);
 });
 
+test("canvas session targets retain a stable provider identity across daemon restarts", () => {
+  const original = summary({ id: "runtime-before-restart", providerSessionId: "thread-stable" });
+  const target = createCanvasSessionTarget(
+    "runtime-before-restart",
+    projections(original),
+  );
+  assert.equal(target.kind, "session");
+  if (target.kind !== "session") return;
+  assert.equal(target.ref?.providerSessionId, "thread-stable");
+
+  const replacement = summary({ id: "runtime-after-restart", providerSessionId: "thread-stable" });
+  assert.equal(
+    resolveCanvasTargetProjection(target, projections(replacement))?.summary.session.id,
+    "runtime-after-restart",
+  );
+});
+
+test("canvas enriches runtime-only bindings as soon as their projection arrives", () => {
+  const targets = createEmptyCanvasTargets();
+  targets["canvas-1"] = { kind: "session", sessionId: "runtime-1" };
+  const next = enrichCanvasSessionTargets(
+    targets,
+    projections(summary({ id: "runtime-1", providerSessionId: "thread-1" })),
+  );
+
+  assert.equal(next["canvas-1"].kind, "session");
+  assert.equal(
+    next["canvas-1"].kind === "session"
+      ? next["canvas-1"].ref?.providerSessionId
+      : undefined,
+    "thread-1",
+  );
+});
+
+test("canvas state preserves a single remaining pane and activates that pane", () => {
+  const state = normalizeRememberedCanvasState({
+    layout: { kind: "pane", paneId: "canvas-4" },
+    activePaneId: "canvas-1",
+    targets: {
+      "canvas-4": { kind: "stored", ref: ref("codex", "history-4") },
+    },
+  });
+
+  assert.deepEqual(state.layout, { kind: "pane", paneId: "canvas-4" });
+  assert.equal(state.activePaneId, "canvas-4");
+  assert.deepEqual(state.targets["canvas-4"], {
+    kind: "stored",
+    ref: ref("codex", "history-4"),
+  });
+});
+
+test("canvas state reads and migrates the legacy v1 storage key", () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    LEGACY_CANVAS_STATE_STORAGE_KEY,
+    JSON.stringify({
+      layout: "four-grid",
+      ratios: [2, 1, 3, 1],
+      activePaneId: "canvas-4",
+      targets: { "canvas-4": { kind: "new" } },
+    }),
+  );
+
+  const state = readRememberedCanvasState(storage);
+  assert.ok(state);
+  assert.deepEqual(canvasLayoutPaneIds(state.layout), [
+    "canvas-1",
+    "canvas-2",
+    "canvas-3",
+    "canvas-4",
+  ]);
+  assert.deepEqual(state.targets["canvas-4"], { kind: "new" });
+});
+
 test("canvas state persistence sanitizes invalid saved values", () => {
   assert.deepEqual(
     normalizeRememberedCanvasState({
@@ -231,9 +459,8 @@ test("canvas state persistence sanitizes invalid saved values", () => {
       rightPanelsOpen: { "canvas-1": false, "canvas-3": true },
     }),
     {
-      layout: "two-horizontal",
+      layout: createCanvasGridLayout(2, 1),
       activePaneId: "canvas-1",
-      ratios: [1, 1],
       targets: {
         ...createEmptyCanvasTargets(),
         "canvas-2": { kind: "session", sessionId: "live-2" },
@@ -442,6 +669,23 @@ test("stopping a canvas session clears its pane target", () => {
 
   assert.deepEqual(next["canvas-1"], { kind: "empty" });
   assert.deepEqual(next["canvas-2"], { kind: "session", sessionId: "live-2" });
+});
+
+test("canvas restore failures share one identity across stored and enriched session targets", () => {
+  const storedRef = ref("codex", "provider-1");
+
+  assert.equal(
+    canvasRestorableTargetKey({ kind: "stored", ref: storedRef }),
+    "codex:provider-1",
+  );
+  assert.equal(
+    canvasRestorableTargetKey({ kind: "session", sessionId: "live-1", ref: storedRef }),
+    "codex:provider-1",
+  );
+  assert.equal(
+    canvasRestorableTargetKey({ kind: "session", sessionId: "live-1" }),
+    null,
+  );
 });
 
 test("stopping a canvas council clears its pane target", () => {
