@@ -62,6 +62,18 @@ CLI 使用仅存于本机的 management token 请求一个 8 位单次配对码�
 
 设备撤销使用专用 WebSocket close code `4001`。前端收到后停止自动重连，卸载当前工作台并回到配对页。
 
+前端只有在 `/api/auth/status` 成功返回 `authenticated: false` 时才进入配对页。成功认证后，
+当前 origin 额外保存一个非凭据的本地 trust hint；它只表示“这个站点曾经完成认证”，用于
+iOS PWA 进程被系统回收后的显示恢复。真正的 HTTP/WS 权限仍只由服务端 cookie 和设备 registry
+决定，localStorage hint 不能授权任何 API。
+
+Tailscale 切换、iOS PWA 恢复或短时断网导致的请求失败属于连接状态。曾经认证过的 origin 必须
+继续挂载已有工作台，让用户阅读已经显示或本地缓存的对话，并使用非阻塞连接提示、退避重试和
+foreground catch-up；不能再用全屏认证 gate 覆盖页面。只有从未建立过信任、没有本地 hint 且
+尚未取得服务端状态的冷启动，才允许显示全屏连接等待。网络恢复、页面重新可见或窗口重新聚焦时
+立即复查；服务端明确返回 `authenticated: false` 时清除 hint 并进入配对页。不同 hostname/origin
+仍有独立 cookie 和 hint。
+
 ## 5. 配对安全
 
 - 配对码单次使用，成功后立即失效。
@@ -94,4 +106,4 @@ npm run typecheck
 npm run build:web
 ```
 
-浏览器回归应覆盖：loopback HTTP/Events/PTY 免认证、伪造 loopback Host 不可绕过远端认证、代理转发请求不可使用本地身份、首次配对、刷新后保持登录、生成第二个配对码、撤销其他设备、撤销当前设备、远端 HTTP 401、Events/PTY WebSocket 拒绝与即时断连。
+浏览器回归应覆盖：loopback HTTP/Events/PTY 免认证、伪造 loopback Host 不可绕过远端认证、代理转发请求不可使用本地身份、首次配对、刷新后保持登录、生成第二个配对码、撤销其他设备、撤销当前设备、远端 HTTP 401、Events/PTY WebSocket 拒绝与即时断连，以及认证状态请求短时失败后自动恢复且不显示配对页。

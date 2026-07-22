@@ -128,6 +128,7 @@ Core live provider 都按同一组用例跑，只有 provider 原生能力不同
 9. 权限弹窗：TUI 正在权限确认、菜单选择或本地草稿非空时，Chat composer 不应盲目注入文本；不确定时应提示切 TUI。
 10. 历史回看：关闭浏览器再打开，TUI replay 和 Chat mirror 应能恢复最近内容，不应重复输出。
 11. Mirror 诊断：如果 Chat mirror 源缺失或更新失败，Settings Native TUI diagnostics / session notice 应显示 `mirror_source_missing` 或 `mirror_failed`，但 TUI live session 不应被关闭。
+12. Binding 隔离：同时启动两个会报告同一 provider session ID 的 fake/real adapter 时，第二个 session 应进入 `stopped/failed` 并记录 `binding_failed`；第一个 owner、其它 session 和 daemon 必须继续运行。Provider output parser 抛错也服从同一 session-scoped failure 边界。
 
 ## Provider 专项
 

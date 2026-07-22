@@ -75,7 +75,7 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `turn/completed` | `turn.completed`, `turn.failed`, or `turn.canceled` |
 | `hook/started` | `operation.started` |
 | `hook/completed` | `operation.resolved` |
-| `turn/diff/updated` | `observation.updated: patch.apply` |
+| `turn/diff/updated` | `turn.file_changes.updated`（同一 turn 的完整 diff 快照，replace 而非 append；event 只发布摘要，完整 diff 写入 turn artifact） |
 | `turn/plan/updated` | `timeline.item.added: plan` |
 | `item/started` | item-specific `message.part.*`, `tool.call.*`, `observation.*`, or `operation.*` |
 | `item/completed` | item-specific terminal `message.part.*`, `tool.call.*`, `observation.*`, or `operation.*` |
@@ -88,6 +88,23 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `item/reasoning/summaryPartAdded` | `message.part.added: reasoning` |
 | `item/reasoning/textDelta` | `message.part.delta: reasoning` + `timeline.item.added: reasoning` |
 | `process/outputDelta` | ignored by design |
+
+## Turn file-change artifact boundary
+
+`turn/diff/updated` 是 Codex 对当前 turn 的最新聚合 diff。RAH 不拼接
+`fileChange` item，也不使用 workspace `git diff` 猜测某个 turn 修改了什么。
+
+- daemon 将完整聚合 diff 按 `{sessionId, turnId}` 原子替换到
+  `~/.rah/runtime-daemon/turn-artifacts/`。
+- 只有 artifact 原子提交成功后才发布摘要；写入失败只记录 daemon 诊断，
+  不产生无法打开的摘要卡，也不打断后续 provider 事件。
+- `turn.file_changes.updated` 只发布文件路径、增删行数和总计；provider raw
+  notification 不得附加到该 event，避免把完整 diff 写入 event history。
+- Web 的 turn 卡片只消费摘要。用户点击某个文件时，Inspector 再按
+  `{sessionId, turnId, path}` 懒加载冻结 diff。
+- artifact 默认限制为单文件 512 KiB、单 turn 4 MiB；截断必须显式返回。
+- 旧 turn 没有 artifact 时显示不可用。RAH 不从当前工作区或后续历史重建，
+  因为那不再是该 turn 当时的事实。
 | `process/exited` | ignored by design |
 | `item/commandExecution/outputDelta` | `observation.updated` + `tool.call.delta` + `terminal.output` |
 | `command/exec/outputDelta` | ignored by design |

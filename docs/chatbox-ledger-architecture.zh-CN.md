@@ -71,7 +71,6 @@ Anchored notice 是属于某个 turn 或某个气泡的提示，不是自由流�
 Runtime chrome 不进入 transcript：
 
 - reconnect / retry count
-- queued input
 - control required
 - prompt dirty
 - runtime status: thinking/idle/failed
@@ -79,6 +78,34 @@ Runtime chrome 不进入 transcript：
 - transport disconnected
 
 这些信息只能显示在标题栏、composer notice、toast、status bar 或 inspector 中。
+
+排队输入需要区分两层：通用的队列数量、provider prompt busy 等运行状态仍属于 chrome；但用户已经提交且可编辑/撤回的输入是 conversation 事实，必须以带稳定 `clientMessageId/clientTurnId` 的 user row 出现在 transcript。`session.input_queue.changed` 更新这条 row 的排队位置，不得额外生成一条状态消息。
+
+### Turn Artifact
+
+本轮文件改动属于 turn artifact，不属于普通 transcript row，也不属于当前
+workspace Git 状态：
+
+- Codex `turn/diff/updated` 提供同一 turn 的完整聚合快照；daemon 对
+  `{provider, providerSessionId, turnId}` 执行 replace。只有 provider 没有稳定
+  session id 时才回退到 Runtime ID。
+- artifact 原子提交是摘要发布的前置条件。写入失败时不产生
+  `turn.file_changes.updated`，避免 transcript 出现无法读取详情的半状态。
+- provider notification 通过有序异步 writer 写 artifact；同一 live bridge 和
+  同一 turn 的更新不得乱序。正常 shutdown 必须 flush 在途写入。启动及周期维护
+  默认保留 30 天、每 provider thread 200 个、全局 2,000 个且总量不超过 512 MiB。
+- event ledger 只保存轻量 `turn.file_changes.updated` 摘要，不保存完整 diff
+  或 provider raw notification。
+- 完整 diff 独立持久化，单文件和单 turn 都有字节上限。Chat 在 turn 结束后
+  显示有界文件列表，点击文件才由 Inspector 懒加载对应冻结 diff。
+- Inspector `This turn` 是只读历史事实；Inspector `Workspace` 是当前累计
+  Git 事实。两者不能共享读取路径或互相 fallback。
+- 当旧 turn 没有权威 artifact 时显示 unavailable。禁止用当前工作区的
+  `git diff`、文件正文或后续 turn 内容补造旧轮次。
+- Resume 会生成新的 RAH Runtime ID，但仍指向同一个 provider thread，因此已经捕获
+  的本轮 Changed Files 必须继续可读。Fork 获得新的 provider thread，不能继承父线程
+  的 artifact。Outputs 来自 provider 持久 conversation items，可随历史重放；Changed
+  Files 只来自当时捕获的冻结 diff，旧版本未捕获的轮次不能事后伪造。
 
 ## 当前已落地的 P0 子集
 
@@ -103,6 +130,10 @@ Web 发送时生成这两个 id：
 前端 optimistic row 使用 `optimistic:user:${clientMessageId}` 作为 key。后续 live/history echo 如果带回同一个 `clientMessageId`，必须替换 optimistic row，而不是新增 row。
 
 Native TUI 路径会记录已注入的 Web 输入；provider mirror 看到同文本 user echo 时，会把 `clientMessageId/clientTurnId` 补进 `timeline.item.added` 的 `user_message` item。这是兼容 native TUI/history mirror 的过渡机制。
+
+Codex/OpenCode 的结构化运行路径在当前 turn 尚未结束时把后续输入写入 daemon-owned FIFO。队列快照通过 `session.input_queue.changed` 发布；编辑和撤回以 `clientMessageId` 为唯一定位键。目标已不在队列时服务端返回 `409`，前端只能显示错误并等待/消费最新流式投影，不能把请求前保存的完整 projection 写回 store。
+
+FIFO 的提交边界不是一次普通的 `shift()`。等待项进入 provider 请求后仍保留 submitting identity；RPC 成功或 identity 匹配的 provider `turn/started` 才是权威接受。若 `turn/started` 已经到达而 RPC 回执随后失败，该项不得恢复成 queued；若 provider 明确拒绝或传输结果不确定，则恢复原位置并暂停 drain。结果不确定时，只有后来绑定到同一 `clientMessageId` 的 turn 能解除暂停，不能因为任意新 turn 出现就猜测该输入已经执行。该规则同时防止重复提交和误吞用户输入，不使用文本、时间窗口或事后 UI 去重。
 
 ## 下一阶段：ChatLedger
 
@@ -163,6 +194,8 @@ type SessionTimelineCursor = {
 - reconnect/queued/control/runtime status 不出现在 transcript feed。
 - history latest merge 不把旧 assistant 文本合并进无共享身份的 live assistant。
 - reconnect/catch-up/event replay 任意重复应用后 feed 收敛。
+- provider `turn/started` 先于 RPC 失败回执、甚至 `turn/completed` 也先到时，已接受输入不会重新排队，后续 FIFO 仍继续执行。
+- 明确拒绝的排队输入在无关 turn 启动时保持可见且暂停，不能被错误消费。
 
 ## 非目标
 

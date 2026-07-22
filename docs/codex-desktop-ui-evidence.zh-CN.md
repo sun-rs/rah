@@ -47,7 +47,10 @@ Desktop 不是把每个原始事件都渲染成独立气泡，而是先分类，
 - subagent activity
 - context compaction
 
-多个连续命令可压缩为 `Ran multiple commands`，中文为 `运行了多个命令`。该命令组可以再次展开，形成两级折叠：
+多个连续命令可压缩为 `Ran multiple commands`，中文为 `运行了多个命令`。连续的读取、命令、编辑、
+搜索等工具活动也不需要按工具种类拆成多行；只要中间没有 reasoning/commentary 文字，就可以合并为
+`Used N tools`。reasoning/commentary 是顺序边界，展开工具组后仍按 provider 原始事件顺序展示。该活动组
+可以再次展开，形成两级折叠：
 
 1. turn 处理过程整体折叠。
 2. 过程内部的同类 activity 批次折叠。
@@ -159,10 +162,14 @@ Desktop 将 `Sources` 与 `Outputs` 分开：source 表示任务输入和执行�
 表示任务产生或交付的结果。Sources 聚合自：
 
 - 用户消息和 composer attachments 中的文件、文件夹和本地图片。
-- agent 读取的本地文件。
 - 外部资源和连接的 app。
 - MCP tool/server。
 - web search query 和打开过的网页。
+
+26.715.61943 的打包实现中，`fileSources` 只扫描 user/steering message 与 turn params 里的
+attachments 和 `localImage`；agent 通过 CLI 读取的普通项目源码不进入该集合。外部资源、MCP
+工具与 web search/open page 则分别聚合。因此 Process 中的 `sed`/`rg`/file read 和 Inspector
+`Files` 可以展示项目源码，但不能反向把所有读过的文件灌入 Sources。
 
 每个 source 还可以带有语义活动：
 
@@ -200,9 +207,10 @@ RAH 应在 Conversation 中增加 provider-neutral 的资源层，而不是把�
   新页到达时保留阅读位置，不先渲染一个错误窗口再由 DOM 事后纠偏。
 - 本地刚发送的 user message 以 `clientMessageId` 进入同一 canonical feed；服务端回传同一 id 后
   替换 optimistic item，不等待 assistant 完成，也不产生双份用户气泡。
-- 最新 `plan` 不再作为普通 process item 随聊天向上滚走，而是在聊天区域底部显示为可展开的
-  Task Summary；原始 step/status/explanation、turn 状态和 activity 摘要仍来自 provider-neutral
-  projection。
+- 当前最新 turn 的活动 `plan` 不再作为普通 process item 随聊天向上滚走，而是在聊天区域底部显示为
+  可展开的 Task Summary。只有该 turn 仍为 `in_progress` 且尚无 canonical final answer 时显示；final
+  answer 到达，或 turn 进入 completed/interrupted/failed 后立即撤下。原始 step/status/explanation、
+  turn 状态和 activity 摘要仍保留在 provider-neutral projection，后续 turn 不得复活旧 plan。
 - `ConversationTurnProjection.activities` 是 process 摘要的唯一语义来源。普通非零命令退出属于
   `issueCount`（Review result），只有 provider/tool transport failure 才属于 `failureCount`；React
   不再用字符串或卡片颜色推断整个 turn 是否失败。
@@ -214,10 +222,43 @@ RAH 应在 Conversation 中增加 provider-neutral 的资源层，而不是把�
 - Inspector 已提供 Changes / Outputs / Sources / Files 四个视图；最终回答下方的资源卡与 turn
   navigation preview 复用同一 turn outputs。图片卡按可见性请求 bounded thumbnail，本地文件继续
   进入统一 Inspector preview，URL 使用受控外链。
-- Outputs 接纳成功的 file write/edit/patch/notebook/media 证据；失败操作、普通 inline code、裸
-  文件名、final-answer Markdown 链接和只读 source 不会被猜成 output。历史 summary 若没有
-  provider 资源证据则保持空；展开 turn detail 后再由结构化 tool/observation 补齐。
-- Sources 独立聚合用户 provided attachment、agent read/search 的文件和 web search/fetch URL，
-  并保留 provided/read/searched/fetched 活动；与 Outputs 不混用。
+- Outputs 与 Changed files 是两个独立维度，允许同一文件同时出现。Changed files 表达 provider
+  权威本轮 diff；Outputs 表达 agent 明确交付给用户的资源。Desktop 的通用 `file` output 并不限于
+  图片，截图实证显示最终回答明确交付的 `.md` 文档会同时出现在 Outputs 和“已编辑 N 个文件”中。
+  provider 原生 output resource 始终优先且不受扩展名限制；当 provider 没有暴露完整 output union
+  时，RAH 只对“成功写入或编辑 + final answer 明确呈现同一条 path、URL 或文件名”的文档、媒体、
+  数据或归档类交付物做保守等价映射。普通 `.rs`、`.ts`、`.py` 等源码链接仍只属于 Changed files，
+  除非 provider 原生将它暴露为 output。该规则允许真正的 output 与 Changed files 重叠。Changed files
+  是否已经到达、资源是否位于本轮 diff 中，都不能改变 Output 判定。失败操作、普通 inline code、
+  只读 source，以及没有成功产出证据的 final-answer Markdown 链接都不会被猜成 Output。final
+  answer 明确嵌入的本地 Markdown 图片仍是窄补充路径，用于 shell 生成图片但 provider 未发
+  artifact 的情况；远程图片和 data URL 不适用。resource projector 优先读取 provider-neutral
+  activity descriptor 的 kind/action/file targets/URLs，旧 `tool.family` 只作为兼容后备；历史
+  summary 若缺少这些资源证据，首次打开 Inspector 的 Outputs/Sources 时会对当前已载入 summaries
+  以最多 3 路并发按需补齐 turn detail，再由结构化 tool/observation 生成完整资源索引。
+- 最终回答附近的 Outputs 直接展示交付物行，不再增加冗余的 `Outputs (N)` 标题；首屏最多展示
+  3 项，超出后使用 `Show more / Show less` 有界展开。Changed files 使用独立的统计摘要行，
+  显示本轮文件数和总增删行数，首屏同样展示 3 项并有界追加。普通源码改动继续只显示在独立的
+  Changed files 卡和 Inspector `This turn` 中；明确交付的任意资源可以同时存在于两张卡中，
+  因为两处分别回答“交付了什么”和“这一轮改了什么”。
+- Outputs 与 Changed files 共享颜色、边框、圆角、文件路径字号和 hover 反馈，但不强行复用同一
+  标题布局：Output 行需要文件类型、缩略图和打开动作，Changed files 摘要需要本轮增删统计。
+  这种差异属于信息结构，不应通过额外的空标题行抹平。
+- RAH 当前将 Sources 收口为用户 provided attachment、web search/open page，以及 provider 明确
+  暴露为 URL 的外部或 Git 引用；普通本地项目文件读取、list/search 目录、查询词、shell argv 和
+  没有可打开资源的裸 MCP 调用都不进入 Sources。资源保留 provided/read/searched/fetched 活动，
+  与 Outputs 不混用。
 - 最终回答 Markdown 采用 Desktop 证据对应的系统字体、14px 字号、1.5 行高、20px 块间距和
   24px 列表缩进；过程消息继续使用较弱的视觉层级，不与 final answer 混淆。
+- Chat fenced code、Inspector 文件预览、Notebook code cell 与 Diff code token 使用同一套
+  provider-neutral Shiki 主题入口。本机 Desktop 26.715.61943 的打包资源表明其默认代码主题是
+  独立的 `Codex Light` / `Codex Dark`，不是 VS Code `light-plus` / `dark-plus`。RAH 不导入私有
+  bundle，而是按其公开呈现出的语义调色板建立自己的 scope 映射：light 模式使用黑色正文、灰色
+  注释/标点、绿色字符串、蓝色数字、红色关键字、橙色变量/属性和紫色函数/类型；dark 模式采用
+  对应的高亮度色阶。Diff 的增删底色继续由独立语义 token 控制，不与代码语法色耦合。
+- 未归档的 stored session 与 Desktop 一样，打开后立即显示可输入且可配置 model/mode/permission
+  的 composer，不暴露独立 Resume 按钮。只读打开不会启动 provider；首次提交才执行原子
+  `resume/attach -> send`。该操作必须复用已经显示的 resident history projection，并以
+  `historyReplay: "skip"` 避免大历史再次读取或出现空白。主 Session 与 Canvas 对同一个 provider
+  thread 的并发首次提交共享同一在途 resume；失败时保留历史并恢复 draft/attachments。Archived
+  session 继续保持只读。

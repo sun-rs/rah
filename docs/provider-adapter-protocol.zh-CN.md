@@ -169,6 +169,7 @@ ACP 可以作为某个 provider 的传输/控制实现，例如 OpenCode ACP。�
 
 - launch/resume spec 是否能进入 daemon-owned PTY。
 - provider session id 是否能稳定绑定。
+- provider session id 绑定是否先原子确认唯一所有权；重复 identity 或 parser 异常是否只让冲突 session 进入 `stopped/failed` 并产生 `binding_failed` diagnostic，而不是覆盖 owner 或终止 daemon。
 - stored history 是否能 tail-first paging。
 - mirror parser 是否只读 provider 原厂文件/DB。
 - mirror failure 是否只进 diagnostics，不影响 PTY session。
