@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   DEVICE_AUTH_TRUST_HINT_KEY,
   deviceAuthRetryDelay,
+  deviceAuthStatusIsFresh,
   deviceAuthStateForFailure,
   deviceAuthStateForStatus,
   readDeviceAuthTrustHint,
@@ -23,6 +24,13 @@ test("device auth retries quickly and caps its backoff", () => {
   assert.equal(deviceAuthRetryDelay(2), 3_000);
   assert.equal(deviceAuthRetryDelay(3), 5_000);
   assert.equal(deviceAuthRetryDelay(20), 5_000);
+});
+
+test("device auth foreground checks reuse a recent authoritative status", () => {
+  assert.equal(deviceAuthStatusIsFresh(undefined, 10_000, 15_000), false);
+  assert.equal(deviceAuthStatusIsFresh(10_000, 24_999, 15_000), true);
+  assert.equal(deviceAuthStatusIsFresh(10_000, 25_000, 15_000), false);
+  assert.equal(deviceAuthStatusIsFresh(10_000, 9_999, 15_000), false);
 });
 
 test("the origin trust hint survives a cold client restart without becoming a credential", () => {

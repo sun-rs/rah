@@ -210,6 +210,48 @@ describe("workbench selectors", () => {
     );
   });
 
+  test("keeps Council agent projections out of ordinary workspace collections", () => {
+    const clientId = "web-current";
+    const ordinary = controlledSummary({
+      id: "ordinary-session",
+      clientId,
+      rootDir: "/workspace/one",
+    });
+    const councilAgent = controlledSummary({
+      id: "council-agent-session",
+      clientId,
+      rootDir: "/workspace/one",
+    });
+    councilAgent.session.origin = {
+      kind: "council",
+      councilId: "council-1",
+      agentId: "agent-1",
+    };
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [ordinary.session.id, projection(ordinary)],
+        [councilAgent.session.id, projection(councilAgent)],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/one"],
+      storedSessions: [],
+      workspaceDir: "/workspace/one",
+      workspaceSortMode: "created",
+    });
+
+    assert.deepEqual(
+      collections.sessionEntries.map((entry) => entry.summary.session.id),
+      ["ordinary-session"],
+    );
+    assert.deepEqual(
+      collections.workspaceSections.flatMap((section) =>
+        section.sessions.map((session) => session.session.id),
+      ),
+      ["ordinary-session"],
+    );
+  });
+
   test("uses visible session activity for updated workspace ordering", () => {
     const clientId = "web-current";
     const backgroundRefresh = controlledSummary({

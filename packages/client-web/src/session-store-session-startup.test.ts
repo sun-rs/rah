@@ -535,22 +535,23 @@ describe("session startup model and mode requests", () => {
       markConversationStarted = resolve;
     });
 
+    const deps = startupDeps(
+      {},
+      {
+        initializeLiveConversationProjection: async () => {
+          calls.push("conversation");
+          markConversationStarted();
+          await conversationGate;
+        },
+        sendInput: async () => {
+          calls.push("send");
+          throw new Error("send failed");
+        },
+      },
+    );
     const command = assert.rejects(
       startSessionCommand(
-        startupDeps(
-          {},
-          {
-            initializeLiveConversationProjection: async () => {
-              calls.push("conversation");
-              markConversationStarted();
-              await conversationGate;
-            },
-            sendInput: async () => {
-              calls.push("send");
-              throw new Error("send failed");
-            },
-          },
-        ),
+        deps,
         {
           provider: "codex",
           cwd: "/tmp/rah",
@@ -569,6 +570,8 @@ describe("session startup model and mode requests", () => {
     releaseConversation();
     await command;
     assert.deepEqual(calls, ["created:started", "conversation", "send"]);
+    assert.equal(deps.get().projections.get("started")?.feed.length, 0);
+    assert.equal(deps.get().projections.get("started")?.currentRuntimeStatus, undefined);
   });
 
   test("new session sidebar placement uses daemon returned workspace metadata", async () => {
@@ -1147,6 +1150,67 @@ describe("session startup model and mode requests", () => {
         skipOptimisticQueue: true,
       },
     ]);
+  });
+
+  test("history send failure removes the immediate message and Starting runtime status", async () => {
+    const history = summary({
+      id: "history-send-failure",
+      provider: "codex",
+      providerSessionId: "thread-send-failure",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const deps = startupDeps(
+      {
+        projections: new Map([
+          ["history-send-failure", createEmptySessionProjection(history)],
+        ]),
+        selectedSessionId: "history-send-failure",
+        storedSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-send-failure",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+            createdAt: "2026-04-29T00:00:00.000Z",
+          },
+        ],
+        recentSessions: [],
+      },
+      {
+        sendInput: async () => {
+          throw new Error("send failed");
+        },
+      },
+    );
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed-send-failure",
+            provider: "codex",
+            providerSessionId: "thread-send-failure",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await assert.rejects(
+      resumeHistorySessionCommand(deps, "history-send-failure", {
+        initialInput: "do not leave this behind",
+      }),
+      /send failed/,
+    );
+
+    const projection = deps.get().projections.get("claimed-send-failure");
+    assert.ok(projection);
+    assert.equal(projection.feed.length, 0);
+    assert.equal(projection.currentRuntimeStatus, undefined);
   });
 
   test("concurrent history activation shares one resume operation across surfaces", async () => {

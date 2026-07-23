@@ -10,13 +10,10 @@ export function InspectorHeader(props: {
   changeCount: number;
   outputCount: number;
   sourceCount: number;
-  resourceIndexing: boolean;
   onTabChange: (tab: InspectorTab) => void;
   onOpenTerminal?: () => void;
   onClosePanel?: () => void;
 }) {
-  const resourceCount = (count: number) =>
-    props.resourceIndexing ? (count > 0 ? `${count}+` : "…") : String(count);
   return (
     <>
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--app-border)] px-4">
@@ -78,7 +75,7 @@ export function InspectorHeader(props: {
               title="Files and media explicitly generated or delivered by this conversation"
             >
               <SegmentedButtonLabel size="compact" className="block truncate">
-                Outputs ({resourceCount(props.outputCount)})
+                Outputs ({props.outputCount})
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton
@@ -92,7 +89,7 @@ export function InspectorHeader(props: {
               title="Attachments, web pages, and external references recorded in provider history; the session does not need to run in RAH"
             >
               <SegmentedButtonLabel size="compact" className="block truncate">
-                Sources ({resourceCount(props.sourceCount)})
+                Sources ({props.sourceCount})
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton

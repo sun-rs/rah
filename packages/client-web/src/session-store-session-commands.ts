@@ -293,6 +293,13 @@ export async function sendInputCommand(args: {
   const previousRuntimeStatus = previousProjection?.currentRuntimeStatus;
   const clientTurnId = args.clientTurnId ?? createClientSideId("client-turn");
   const clientMessageId = args.clientMessageId ?? createClientSideId("client-message");
+  const inputWasAlreadyOptimistic = previousProjection?.feed.some(
+    (entry) =>
+      entry.kind === "timeline" &&
+      entry.key.startsWith("optimistic:user:") &&
+      entry.item.kind === "user_message" &&
+      entry.item.clientMessageId === clientMessageId,
+  ) ?? false;
   try {
     args.set((state) => {
       const projection = state.projections.get(args.sessionId);
@@ -387,20 +394,24 @@ export async function sendInputCommand(args: {
         return { error: message };
       }
       const next = new Map(state.projections);
+      const projectionAdvanced =
+        previousProjection !== undefined && projection.lastSeq !== previousProjection.lastSeq;
       const baseRestored =
-        previousProjection && projection.lastSeq === previousProjection.lastSeq
-          ? previousProjection
+        previousProjection && !projectionAdvanced
+          ? removeOptimisticUserMessage(previousProjection, args.text, clientMessageId)
           : removeOptimisticUserMessage(projection, args.text, clientMessageId);
       const restoredInputQueue = baseRestored.summary.session.inputQueue
         ?.filter((item) => item.clientMessageId !== clientMessageId)
         .map((item, index) => ({ ...item, position: index + 1 }));
-      const restoredSession = {
-        ...baseRestored.summary.session,
-        ...conversationStateFromRuntimeState(
-          previousRuntimeState ?? baseRestored.summary.session.runtimeState,
-        ),
-        runtimeState: previousRuntimeState ?? baseRestored.summary.session.runtimeState,
-      };
+      const restoredSession = projectionAdvanced
+        ? { ...baseRestored.summary.session }
+        : {
+            ...baseRestored.summary.session,
+            ...conversationStateFromRuntimeState(
+              previousRuntimeState ?? baseRestored.summary.session.runtimeState,
+            ),
+            runtimeState: previousRuntimeState ?? baseRestored.summary.session.runtimeState,
+          };
       if (restoredInputQueue?.length) {
         restoredSession.inputQueue = restoredInputQueue;
       } else {
@@ -413,10 +424,12 @@ export async function sendInputCommand(args: {
           session: restoredSession,
         },
       };
-      if (previousRuntimeStatus === undefined) {
-        delete restored.currentRuntimeStatus;
-      } else {
-        restored.currentRuntimeStatus = previousRuntimeStatus;
+      if (!projectionAdvanced) {
+        if (previousRuntimeStatus === undefined || (args.skipOptimisticQueue && inputWasAlreadyOptimistic)) {
+          delete restored.currentRuntimeStatus;
+        } else {
+          restored.currentRuntimeStatus = previousRuntimeStatus;
+        }
       }
       next.set(args.sessionId, restored);
       return { projections: next, error: message };

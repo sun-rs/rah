@@ -183,6 +183,12 @@ export interface ProviderWorkspaceInspectionAdapter {
 }
 
 export interface ProviderStoredHistoryAdapter {
+  /**
+   * Declares whether archive can be requested while a provider session is
+   * still live. Provider-native archive is transactional with runtime close;
+   * snapshot backends must first stop the history writer.
+   */
+  readonly storedSessionArchiveBackend?: StoredSessionArchiveBackend;
   resumeStoredSession?(
     request: ResumeSessionRequest,
   ): ResumeSessionResponse | Promise<ResumeSessionResponse>;

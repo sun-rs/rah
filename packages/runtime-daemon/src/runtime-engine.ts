@@ -10,6 +10,7 @@ import type {
   ClaimControlRequest,
   CloseSessionRequest,
   ConversationItemDetailResponse,
+  ConversationResourceIndexResponse,
   ConversationTurnDetailResponse,
   ConversationTurnsPageResponse,
   CouncilAgentTuiResponse,
@@ -86,6 +87,7 @@ import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import { nativeTuiInputText } from "./session-input-attachments";
 import { projectConversation } from "./conversation-projector";
 import { ConversationProjectionStore } from "./conversation-projection-store";
+import { ConversationResourceIndexStore } from "./conversation-resource-index";
 import { summarizeConversationTurnsForTransport } from "./conversation-transport-summary";
 import { buildConversationTurnDirectory } from "./conversation-turn-directory";
 import { conversationEventBelongsToLiveProjection } from "./conversation-live-policy";
@@ -316,6 +318,7 @@ export class RuntimeEngine {
   readonly sessionLibrary: StoredSessionLibraryStore;
   readonly historySnapshots: HistorySnapshotStore;
   readonly turnArtifacts: TurnArtifactStore;
+  private readonly conversationResourceIndexes = new ConversationResourceIndexStore();
   private rememberedSessions: StoredSessionRef[];
   private rememberedRecentSessions: StoredSessionRef[];
   private rememberedWorkspaceDirs: string[];
@@ -424,6 +427,9 @@ export class RuntimeEngine {
     });
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
+        for (const state of states) {
+          this.council.rememberManagedSessionProviderIdentity(state.session);
+        }
         this.workbenchState.persistLiveSessions(states);
         this.refreshRememberedState();
       },
@@ -982,6 +988,7 @@ export class RuntimeEngine {
     },
   ): Promise<ListSessionsResponse> {
     let stoppedRuntimeRef: StoredSessionRef | null = null;
+    let managedRuntime: StoredSessionState | undefined;
     if (options?.runtimeSessionId) {
       if (!options.clientId) {
         throw new Error("clientId is required when archiving a running session.");
@@ -998,12 +1005,9 @@ export class RuntimeEngine {
           `Managed session ${options.runtimeSessionId} does not match ${provider}:${providerSessionId}.`,
         );
       }
+      managedRuntime = managed;
       stoppedRuntimeRef = stoppedSessionRef(managed) ?? null;
-      await this.sessionLifecycle.closeSession(options.runtimeSessionId, {
-        clientId: options.clientId,
-      });
     }
-    this.requireStoredSessionClosed(provider, providerSessionId, "archive");
     const adapter = this.storedHistoryAdaptersByProvider.get(provider);
     const session = this.lastDiscoveredStoredSessions.find(
       (entry) =>
@@ -1013,15 +1017,42 @@ export class RuntimeEngine {
       providerSessionId,
       source: "provider_history" as const,
     };
-    let archiveBackend: StoredSessionArchiveBackend = adapter?.archiveStoredSession
-      ? "provider_native"
-      : "rah_overlay";
+    let archiveBackend: StoredSessionArchiveBackend =
+      adapter?.storedSessionArchiveBackend ??
+      (adapter?.archiveStoredSession ? "provider_native" : "rah_overlay");
+    let providerArchived = false;
+    let libraryArchived = false;
     let archivedAt: string;
     try {
-      const reportedArchiveBackend = await adapter?.archiveStoredSession?.(session);
-      if (reportedArchiveBackend) {
-        archiveBackend = reportedArchiveBackend;
+      // Native providers can archive first. If that request fails, the live
+      // session remains untouched; this is the fast, failure-atomic path used
+      // by Codex and OpenCode.
+      if (managedRuntime && archiveBackend === "provider_native") {
+        const reportedArchiveBackend = await adapter?.archiveStoredSession?.(session);
+        providerArchived = Boolean(adapter?.archiveStoredSession);
+        if (reportedArchiveBackend) {
+          archiveBackend = reportedArchiveBackend;
+        }
+        if (archiveBackend !== "provider_native") {
+          throw new Error(
+            `${provider} reported ${archiveBackend} after declaring provider-native archive.`,
+          );
+        }
+      } else if (managedRuntime && options?.runtimeSessionId && options.clientId) {
+        await this.sessionLifecycle.closeSession(options.runtimeSessionId, {
+          clientId: options.clientId,
+        });
       }
+
+      if (!managedRuntime || archiveBackend !== "provider_native") {
+        this.requireStoredSessionClosed(provider, providerSessionId, "archive");
+        const reportedArchiveBackend = await adapter?.archiveStoredSession?.(session);
+        providerArchived = Boolean(adapter?.archiveStoredSession);
+        if (reportedArchiveBackend) {
+          archiveBackend = reportedArchiveBackend;
+        }
+      }
+
       archivedAt = new Date().toISOString();
       await this.sessionLibrary.archive(session, {
         backend: archiveBackend,
@@ -1030,9 +1061,87 @@ export class RuntimeEngine {
           ? { workspaceDir: session.rootDir ?? session.cwd }
           : {}),
       });
+      libraryArchived = true;
+
+      if (
+        managedRuntime &&
+        archiveBackend === "provider_native" &&
+        options?.runtimeSessionId &&
+        options.clientId
+      ) {
+        await this.sessionLifecycle.closeSession(options.runtimeSessionId, {
+          clientId: options.clientId,
+        });
+      }
     } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      if (libraryArchived) {
+        try {
+          await this.sessionLibrary.restore({ provider, providerSessionId });
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (providerArchived && adapter?.restoreStoredSession) {
+        try {
+          await adapter.restoreStoredSession(session);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (
+        managedRuntime &&
+        !this.sessionStore.getSession(managedRuntime.session.id)
+      ) {
+        const attachedClient = managedRuntime.clients.find(
+          (client) => client.id === options?.clientId,
+        );
+        try {
+          await this.resumeSession({
+            provider,
+            providerSessionId,
+            cwd: managedRuntime.session.cwd,
+            ...(managedRuntime.session.liveBackend
+              ? { liveBackend: managedRuntime.session.liveBackend }
+              : {}),
+            ...(managedRuntime.session.origin
+              ? { origin: managedRuntime.session.origin }
+              : {}),
+            ...(managedRuntime.session.model?.currentModelId
+              ? { model: managedRuntime.session.model.currentModelId }
+              : {}),
+            ...(managedRuntime.session.config?.values
+              ? { optionValues: managedRuntime.session.config.values }
+              : {}),
+            ...(managedRuntime.session.mode?.currentModeId
+              ? { modeId: managedRuntime.session.mode.currentModeId }
+              : {}),
+            ...(attachedClient
+              ? {
+                  attach: {
+                    client: {
+                      id: attachedClient.id,
+                      kind: attachedClient.kind,
+                      connectionId: attachedClient.connectionId,
+                    },
+                    mode: attachedClient.attachMode,
+                    claimControl: true,
+                  },
+                }
+              : {}),
+          });
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      const providerSessionStillRunning = this.sessionStore.listSessions().some(
+        (state) =>
+          state.session.provider === provider &&
+          state.session.providerSessionId === providerSessionId,
+      );
       if (
         stoppedRuntimeRef &&
+        !providerSessionStillRunning &&
         !this.lastDiscoveredStoredSessions.some(
           (entry) =>
             entry.provider === provider && entry.providerSessionId === providerSessionId,
@@ -1043,8 +1152,14 @@ export class RuntimeEngine {
           { publish: false },
         );
       }
-      if (stoppedRuntimeRef) {
+      if (stoppedRuntimeRef && !providerSessionStillRunning) {
         this.publishStoredSessionDiscoveryUpsert({ provider, providerSessionId });
+      }
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackErrors],
+          `Archive failed and ${rollbackErrors.length} rollback step(s) also failed.`,
+        );
       }
       throw error;
     }
@@ -1823,6 +1938,7 @@ export class RuntimeEngine {
     const closingProvider = closingState?.session.provider;
     const stoppedRef = stoppedSessionRef(closingState);
     await this.sessionLifecycle.closeSession(sessionId, request);
+    this.conversationResourceIndexes.invalidate(sessionId);
     if (stoppedRef) {
       this.updateStoredSessionsCache(
         [
@@ -2352,6 +2468,44 @@ export class RuntimeEngine {
     };
     response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
     return response;
+  }
+
+  async getSessionConversationResourceIndex(
+    sessionId: string,
+    options?: { refresh?: boolean },
+  ): Promise<ConversationResourceIndexResponse> {
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    const historyRevision =
+      adapter?.createFrozenHistoryPageLoader?.(sessionId)?.boundary?.sourceRevision;
+    const state = this.sessionStore.getSession(sessionId);
+    const liveRevision = this.conversationStore.snapshot(sessionId).liveRevision;
+    const sourceRevision = JSON.stringify({
+      history: historyRevision ?? null,
+      providerSessionId: state?.session.providerSessionId ?? null,
+      liveRevision,
+      status: state?.session.status ?? null,
+      fallbackActivity:
+        historyRevision === undefined
+          ? state?.conversationActivityAt ?? state?.session.updatedAt ?? sessionId
+          : null,
+    });
+    return this.conversationResourceIndexes.load({
+      sessionId,
+      sourceRevision,
+      ...(options?.refresh ? { refresh: true } : {}),
+      readTurns: (cursor) =>
+        this.getSessionConversationTurns(sessionId, {
+          ...(cursor ? { cursor } : {}),
+          limit: 100,
+        }),
+      readTurnDetail: (turn) =>
+        turn.providerTurnId
+          ? this.getSessionConversationTurnDetail(sessionId, {
+              turnId: turn.id,
+              providerTurnId: turn.providerTurnId,
+            })
+          : Promise.resolve(undefined),
+    });
   }
 
   async getSessionConversationItemDetail(
@@ -3087,6 +3241,22 @@ export class RuntimeEngine {
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): ListSessionsResponse {
     const eventSeq = this.eventBus.newestSeq();
+    const councilProviderSessionKeys = new Set(
+      this.council.listCouncils().councils.flatMap((council) =>
+        council.agents.flatMap((agent) =>
+          (agent.providerSessionIds ?? []).map(
+            (providerSessionId) => `${agent.provider}:${providerSessionId}`,
+          ),
+        ),
+      ),
+    );
+    for (const state of liveStates) {
+      if (state.session.origin?.kind === "council" && state.session.providerSessionId) {
+        councilProviderSessionKeys.add(
+          `${state.session.provider}:${state.session.providerSessionId}`,
+        );
+      }
+    }
     return {
       ...buildRuntimeSessionsResponse({
         liveStates,
@@ -3104,6 +3274,7 @@ export class RuntimeEngine {
           rememberedPinnedSidebarItems: this.rememberedPinnedSidebarItems,
         },
         isClosingSession: (sessionId) => this.orphanSessionCleanupInFlight.has(sessionId),
+        excludedProviderSessionKeys: councilProviderSessionKeys,
         ...(options?.storedSessionsMode ? { storedSessionsMode: options.storedSessionsMode } : {}),
       }),
       ...(eventSeq !== null ? { eventSeq } : {}),

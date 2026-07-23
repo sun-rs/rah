@@ -40,6 +40,12 @@ export interface CouncilAgent extends CouncilAgentConfig {
   status: CouncilAgentStatus;
   terminalId?: string;
   nativeSessionId?: string;
+  /**
+   * Provider-owned sessions created for this Council agent. These identities
+   * remain after the runtime binding is cleared so ordinary session history
+   * views can keep Council work isolated from user sessions.
+   */
+  providerSessionIds?: string[];
   lastStatusDetail?: string;
   updatedAt: string;
 }

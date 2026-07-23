@@ -1,13 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   constants,
   createReadStream,
   existsSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   renameSync,
   statSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -69,13 +73,46 @@ function safeSessionSegment(providerSessionId: string): string {
   return normalized;
 }
 
-function sameFile(left: string, right: string): boolean {
+function sha256FileSync(filePath: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Hashing already failed or completed; recovery will conservatively
+        // leave the manifest entry pending if the descriptor cannot close.
+      }
+    }
+  }
+}
+
+function matchingFileContent(left: string, right: string): string | undefined {
   try {
     const leftStat = statSync(left);
     const rightStat = statSync(right);
-    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+    if (!leftStat.isFile() || !rightStat.isFile() || leftStat.size !== rightStat.size) {
+      return undefined;
+    }
+    const leftHash = sha256FileSync(left);
+    const rightHash = sha256FileSync(right);
+    return leftHash && leftHash === rightHash ? leftHash : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -375,32 +412,65 @@ export class ClaudeSessionArchiveStore {
   private recoverPendingEntries(): boolean {
     let changed = false;
     for (const [providerSessionId, entry] of [...this.entries]) {
-      const originalExists = existsSync(entry.originalPath);
-      const archivedExists = existsSync(entry.archivedPath);
-      if (entry.state === "pending_archive") {
-        if (archivedExists && !originalExists) {
-          this.entries.set(providerSessionId, { ...entry, state: "archived" });
-          changed = true;
-        } else if (originalExists && !archivedExists) {
-          this.entries.delete(providerSessionId);
-          changed = true;
-        } else if (originalExists && archivedExists && sameFile(entry.originalPath, entry.archivedPath)) {
-          unlinkSync(entry.originalPath);
-          this.entries.set(providerSessionId, { ...entry, state: "archived" });
-          changed = true;
+      try {
+        const originalExists = existsSync(entry.originalPath);
+        const archivedExists = existsSync(entry.archivedPath);
+        if (entry.state === "pending_archive") {
+          if (archivedExists && !originalExists) {
+            const archivedStat = statSync(entry.archivedPath);
+            const sha256 = entry.sha256 ?? sha256FileSync(entry.archivedPath);
+            this.entries.set(providerSessionId, {
+              ...entry,
+              sizeBytes: archivedStat.size,
+              ...(sha256 ? { sha256 } : {}),
+              state: "archived",
+            });
+            changed = true;
+          } else if (originalExists && !archivedExists) {
+            this.entries.delete(providerSessionId);
+            changed = true;
+          } else if (originalExists && archivedExists) {
+            const sha256 = matchingFileContent(entry.originalPath, entry.archivedPath);
+            if (sha256) {
+              const archivedStat = statSync(entry.archivedPath);
+              unlinkSync(entry.originalPath);
+              this.entries.set(providerSessionId, {
+                ...entry,
+                sizeBytes: archivedStat.size,
+                sha256,
+                state: "archived",
+              });
+              changed = true;
+            }
+          }
+        } else if (entry.state === "pending_restore") {
+          if (originalExists && !archivedExists) {
+            const restoredTime = new Date(entry.mtimeMs);
+            utimesSync(entry.originalPath, restoredTime, restoredTime);
+            this.entries.delete(providerSessionId);
+            changed = true;
+          } else if (!originalExists && archivedExists) {
+            this.entries.set(providerSessionId, { ...entry, state: "archived" });
+            changed = true;
+          } else if (originalExists && archivedExists) {
+            const sha256 = matchingFileContent(entry.originalPath, entry.archivedPath);
+            if (sha256) {
+              unlinkSync(entry.archivedPath);
+              const restoredTime = new Date(entry.mtimeMs);
+              utimesSync(entry.originalPath, restoredTime, restoredTime);
+              this.entries.delete(providerSessionId);
+              changed = true;
+            }
+          }
         }
-      } else if (entry.state === "pending_restore") {
-        if (originalExists && !archivedExists) {
-          this.entries.delete(providerSessionId);
-          changed = true;
-        } else if (!originalExists && archivedExists) {
-          this.entries.set(providerSessionId, { ...entry, state: "archived" });
-          changed = true;
-        } else if (originalExists && archivedExists && sameFile(entry.originalPath, entry.archivedPath)) {
-          unlinkSync(entry.archivedPath);
-          this.entries.delete(providerSessionId);
-          changed = true;
-        }
+      } catch (error) {
+        // A transient filesystem race must not quarantine the whole manifest.
+        // Keep this entry pending so the next startup can retry recovery.
+        console.warn("[rah:claude-archive] pending entry recovery deferred", {
+          providerSessionId,
+          state: entry.state,
+          error,
+        });
       }
     }
     return changed;

@@ -181,6 +181,7 @@ function storedSessionActivityTimestamp(session: StoredSessionRef): string {
 function isRememberableLiveSession(state: StoredSessionState): boolean {
   return (
     state.session.provider !== "custom" &&
+    state.session.origin?.kind !== "council" &&
     state.session.relationship?.persistence !== "ephemeral" &&
     !isReadOnlyReplaySession(state)
   );

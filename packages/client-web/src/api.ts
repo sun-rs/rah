@@ -18,6 +18,7 @@ import type {
   CouncilRemoveAgentResponse,
   CouncilStopAgentResponse,
   ConversationItemDetailResponse,
+  ConversationResourceIndexResponse,
   ConversationTurnDetailResponse,
   ConversationTurnsPageResponse,
   CreateCouncilRequest,
@@ -1174,6 +1175,21 @@ export async function readSessionConversationTurnDetail(
   return requestJson<ConversationTurnDetailResponse>(
     `/api/sessions/${sessionId}/conversation/turns/${encodeURIComponent(options.turnId)}/detail?${query.toString()}`,
     options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
+export async function readSessionConversationResourceIndex(
+  sessionId: string,
+  options?: { refresh?: boolean; signal?: AbortSignal },
+): Promise<ConversationResourceIndexResponse> {
+  const query = new URLSearchParams();
+  if (options?.refresh) {
+    query.set("refresh", "true");
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return requestJson<ConversationResourceIndexResponse>(
+    `/api/sessions/${sessionId}/conversation/resources${suffix}`,
+    options?.signal ? { signal: options.signal } : undefined,
   );
 }
 

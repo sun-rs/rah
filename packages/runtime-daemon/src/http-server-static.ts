@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { applyCorsHeaders } from "./http-server-cors";
 import { writeText } from "./http-server-response";
 
+type StaticContentEncoding = "br" | "gzip";
+
 const CLIENT_DIST_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -42,6 +44,71 @@ async function tryReadFile(path: string): Promise<Buffer | null> {
   }
 }
 
+function parseEncodingPreference(
+  header: string,
+): Map<string, number> {
+  const preferences = new Map<string, number>();
+  for (const rawEntry of header.split(",")) {
+    const [rawCoding, ...rawParameters] = rawEntry.trim().toLowerCase().split(";");
+    const coding = rawCoding?.trim();
+    if (!coding) {
+      continue;
+    }
+    let quality = 1;
+    for (const rawParameter of rawParameters) {
+      const match = /^q\s*=\s*(0(?:\.\d+)?|1(?:\.0+)?)$/.exec(rawParameter.trim());
+      if (match?.[1]) {
+        quality = Number.parseFloat(match[1]);
+      }
+    }
+    preferences.set(coding, Math.max(preferences.get(coding) ?? 0, quality));
+  }
+  return preferences;
+}
+
+function acceptedStaticContentEncodings(
+  acceptEncoding: string | string[] | undefined,
+): StaticContentEncoding[] {
+  if (typeof acceptEncoding !== "string") {
+    return [];
+  }
+  const preferences = parseEncodingPreference(acceptEncoding);
+  const wildcardQuality = preferences.get("*") ?? 0;
+  const brotliQuality = preferences.get("br") ?? wildcardQuality;
+  const gzipQuality = preferences.get("gzip") ?? wildcardQuality;
+  return [
+    { encoding: "br" as const, quality: brotliQuality },
+    { encoding: "gzip" as const, quality: gzipQuality },
+  ]
+    .filter((entry) => entry.quality > 0)
+    .sort(
+      (left, right) =>
+        right.quality - left.quality ||
+        (left.encoding === "br" ? -1 : 1),
+    )
+    .map((entry) => entry.encoding);
+}
+
+export function preferredStaticContentEncoding(
+  acceptEncoding: string | string[] | undefined,
+): StaticContentEncoding | null {
+  return acceptedStaticContentEncodings(acceptEncoding)[0] ?? null;
+}
+
+async function readStaticRepresentation(
+  path: string,
+  acceptEncoding: string | string[] | undefined,
+): Promise<{ body: Buffer; encoding?: StaticContentEncoding } | null> {
+  for (const encoding of acceptedStaticContentEncodings(acceptEncoding)) {
+    const body = await tryReadFile(`${path}.${encoding === "gzip" ? "gz" : "br"}`);
+    if (body) {
+      return { body, encoding };
+    }
+  }
+  const body = await tryReadFile(path);
+  return body ? { body } : null;
+}
+
 function resolveClientAssetPath(pathname: string): string | null {
   const cleaned = pathname == "/" ? "/index.html" : pathname;
   const candidate = resolve(CLIENT_DIST_ROOT, cleaned.replace(/^\/+/, ""));
@@ -58,17 +125,23 @@ async function serveStaticFile(
   path: string,
   options?: { cacheControl?: string },
 ): Promise<boolean> {
-  const body = await tryReadFile(path);
-  if (!body) {
+  const representation = await readStaticRepresentation(path, req.headers["accept-encoding"]);
+  if (!representation) {
     return false;
   }
   applyCorsHeaders(req, res);
   res.writeHead(200, {
     "content-type": contentTypeForPath(path),
-    "content-length": body.byteLength,
+    "content-length": representation.body.byteLength,
     "cache-control": options?.cacheControl ?? "no-cache",
+    ...(representation.encoding
+      ? {
+          "content-encoding": representation.encoding,
+          vary: "accept-encoding",
+        }
+      : {}),
   });
-  res.end(body);
+  res.end(representation.body);
   return true;
 }
 

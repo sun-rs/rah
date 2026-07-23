@@ -162,8 +162,11 @@ export function InspectorResourcesPane(props: {
   resources: readonly InspectorResource[];
   description?: string;
   loading?: boolean;
+  error?: string | null;
+  warning?: string | null;
   emptyLabel: string;
   testId: string;
+  onRetry?: () => void;
   onOpenFile: (path: string) => void;
   onOpenUrl: (url: string) => void;
 }) {
@@ -189,7 +192,30 @@ export function InspectorResourcesPane(props: {
           {props.description}
         </div>
       ) : null}
-      {props.resources.length === 0 && !props.loading ? (
+      {props.error ? (
+        <div className="flex min-h-8 items-center gap-2 rounded-md border border-red-200/70 bg-red-50/70 px-2.5 py-1.5 text-[11px] leading-4 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          <span className="min-w-0 flex-1 truncate" title={props.error}>
+            Historical resources could not be indexed: {props.error}
+          </span>
+          {props.onRetry ? (
+            <button
+              type="button"
+              className="shrink-0 font-medium underline underline-offset-2"
+              onClick={props.onRetry}
+            >
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : props.warning ? (
+        <div
+          className="truncate px-1 text-[11px] leading-4 text-amber-700 dark:text-amber-300"
+          title={props.warning}
+        >
+          {props.warning}
+        </div>
+      ) : null}
+      {props.resources.length === 0 && !props.loading && !props.error ? (
         <div className="py-1 text-sm text-[var(--app-hint)]">{props.emptyLabel}</div>
       ) : props.resources.length > 0 ? (
         <div>

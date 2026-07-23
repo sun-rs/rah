@@ -1,15 +1,18 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -23,6 +26,7 @@ import {
 
 const CONFIRM_TOKEN = "DELETE_NON_KEPT_SESSION_HISTORY";
 const CODEX_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const CLEANUP_LOCK_NAME = "session-cleanup.lock";
 
 type CodexThreadRow = {
   id: string;
@@ -252,6 +256,100 @@ function codexFileRecords(codexHome: string): FileRecord[] {
 
 function makeRunId(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readPidRecord(filePath: string): number | null {
+  try {
+    const raw = readFileSync(filePath, "utf8").trim();
+    if (!raw) return null;
+    const value = raw.startsWith("{")
+      ? (JSON.parse(raw) as { pid?: unknown }).pid
+      : raw;
+    const pid = Number.parseInt(String(value ?? ""), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function assertRahDaemonStopped(runtimeRoot: string): void {
+  if (!existsSync(runtimeRoot)) return;
+  const live = readdirSync(runtimeRoot)
+    .filter((name) => /^daemon-\d+\.pid$/.test(name))
+    .flatMap((name) => {
+      const pid = readPidRecord(path.join(runtimeRoot, name));
+      return pid !== null && processAlive(pid) ? [{ name, pid }] : [];
+    });
+  if (live.length === 0) return;
+  throw new Error(
+    `Refusing session-history cleanup while a managed RAH daemon is running (${live
+      .map((entry) => `${entry.name}: pid ${entry.pid}`)
+      .join(", ")}). Stop RAH first so it cannot rewrite catalog or workbench state during cleanup.`,
+  );
+}
+
+async function withCleanupLock<T>(
+  runtimeRoot: string,
+  task: () => Promise<T> | T,
+): Promise<T> {
+  mkdirSync(runtimeRoot, { recursive: true });
+  const lockPath = path.join(runtimeRoot, CLEANUP_LOCK_NAME);
+  let lockFd: number;
+  try {
+    lockFd = openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") {
+      throw error;
+    }
+    const ownerPid = readPidRecord(lockPath);
+    if (ownerPid !== null && processAlive(ownerPid)) {
+      throw new Error(`Another session-history cleanup is already running (pid ${ownerPid}).`);
+    }
+    if (ownerPid === null) {
+      const lockAgeMs = Date.now() - statSync(lockPath).mtimeMs;
+      if (lockAgeMs < 30_000) {
+        throw new Error(
+          `A newly created session-history cleanup lock is not readable yet: ${lockPath}`,
+        );
+      }
+    }
+    try {
+      unlinkSync(lockPath);
+      lockFd = openSync(lockPath, "wx", 0o600);
+    } catch {
+      throw new Error(
+        `A session-history cleanup lock already exists and could not be safely reclaimed: ${lockPath}`,
+      );
+    }
+  }
+  writeFileSync(
+    lockFd,
+    `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+  );
+  try {
+    return await task();
+  } finally {
+    try {
+      closeSync(lockFd);
+    } catch {
+      // Continue to the ownership check so a stale path is not left behind.
+    }
+    try {
+      if (readPidRecord(lockPath) === process.pid) unlinkSync(lockPath);
+    } catch {
+      // A terminated process leaves a stale lock that the next run can reclaim.
+    }
+  }
 }
 
 function buildManifest(keepIds: string[]): CleanupManifest {
@@ -890,11 +988,12 @@ function finalizeCleanup(auditDir: string): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const runtimeRoot = path.join(os.homedir(), ".rah", "runtime-daemon");
   if (args.finalizeDir) {
     if (args.apply || args.keepIds.length > 0 || args.resumeDir) {
       throw new Error("--finalize cannot be combined with --apply, --keep, or --resume.");
     }
-    finalizeCleanup(args.finalizeDir);
+    await withCleanupLock(runtimeRoot, () => finalizeCleanup(args.finalizeDir));
     return;
   }
   if (args.resumeDir) {
@@ -902,7 +1001,10 @@ async function main(): Promise<void> {
       throw new Error("--resume cannot be combined with --apply or --keep.");
     }
     if (args.confirm !== CONFIRM_TOKEN) throw new Error(`--resume requires --confirm ${CONFIRM_TOKEN}.`);
-    await resumeCleanup(args.resumeDir);
+    await withCleanupLock(runtimeRoot, async () => {
+      assertRahDaemonStopped(runtimeRoot);
+      await resumeCleanup(args.resumeDir);
+    });
     return;
   }
   const manifest = buildManifest(args.keepIds);
@@ -912,7 +1014,10 @@ async function main(): Promise<void> {
     return;
   }
   if (args.confirm !== CONFIRM_TOKEN) throw new Error(`--apply requires --confirm ${CONFIRM_TOKEN}.`);
-  await applyCleanup(manifest);
+  await withCleanupLock(manifest.rah.runtimeRoot, async () => {
+    assertRahDaemonStopped(manifest.rah.runtimeRoot);
+    await applyCleanup(manifest);
+  });
 }
 
 await main();

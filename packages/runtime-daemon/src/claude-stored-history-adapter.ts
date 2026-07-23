@@ -33,6 +33,7 @@ export class ClaudeStoredHistoryAdapter
 {
   readonly id = "claude-stored-history";
   readonly providers: Array<"claude"> = ["claude"];
+  readonly storedSessionArchiveBackend = "rah_snapshot" as const;
 
   private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();

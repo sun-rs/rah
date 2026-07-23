@@ -1975,7 +1975,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("keeps a closed session in the workspace when atomic archive fails", async () => {
+  test("keeps a running session attached when provider-native archive fails", async () => {
     const adapter = new FailingArchiveAfterCloseAdapter();
     const engine = new RuntimeEngine([adapter]);
     adapter.engine = engine;
@@ -2005,20 +2005,17 @@ describe("RuntimeEngine", () => {
         /provider archive failed/,
       );
 
-      assert.equal(engine.sessionStore.getSession(started.session.session.id), undefined);
-      const stopped = engine
-        .listSessions({ storedSessionsMode: "all" })
-        .storedSessions.find(
-          (entry) => entry.providerSessionId === "closed-provider-session",
-        );
-      assert.ok(stopped);
-      assert.equal(stopped.libraryState, undefined);
+      assert.ok(engine.sessionStore.getSession(started.session.session.id));
+      assert.equal(
+        engine.sessionStore.hasAttachedClient(started.session.session.id, "web-user"),
+        true,
+      );
       const delta = engine.getStoredSessionsDelta(beforeRevision);
       assert.equal(
         delta.upsert.some(
           (entry) => entry.providerSessionId === "closed-provider-session",
         ),
-        true,
+        false,
       );
     } finally {
       await engine.shutdown();

@@ -6,8 +6,7 @@ import type {
 } from "@rah/runtime-protocol";
 import {
   listDirectory,
-  readSessionConversationTurnDetail,
-  readSessionConversationTurns,
+  readSessionConversationResourceIndex,
   readGitStatus,
   readTurnFileChanges,
   readWorkspaceGitStatus,
@@ -29,7 +28,9 @@ import {
   mergeConversationSources,
 } from "./conversation-resources";
 import {
-  loadConversationResourceIndex,
+  invalidateCachedConversationResourceIndex,
+  loadCachedConversationResourceIndex,
+  readCachedConversationResourceIndex,
   type ConversationResourceIndex,
 } from "./inspector/conversation-resource-index";
 import type {
@@ -88,17 +89,45 @@ export function InspectorPane(props: {
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
   const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
-  const [indexedResources, setIndexedResources] = useState<ConversationResourceIndex>({
-    outputs: [],
-    sources: [],
-  });
-  const [resourceIndexing, setResourceIndexing] = useState(false);
   const gitStatusRequestRef = useRef(0);
   const turnChangesRequestRef = useRef(0);
   const liveResources = useMemo(
     () => collectConversationResources(props.conversationTurns),
     [props.conversationTurns],
   );
+  const initialResourceCache = props.sessionId
+    ? readCachedConversationResourceIndex(props.sessionId)
+    : undefined;
+  const [resourceIndexState, setResourceIndexState] = useState<{
+    sessionId: string | null;
+    index: ConversationResourceIndex;
+    indexing: boolean;
+    error: string | null;
+    warning: string | null;
+  }>(() => ({
+    sessionId: props.sessionId,
+    index: initialResourceCache?.index ?? liveResources,
+    indexing: Boolean(props.sessionId && !initialResourceCache?.complete),
+    error: null,
+    warning: initialResourceCache?.warning ?? null,
+  }));
+  const [resourceIndexRetryToken, setResourceIndexRetryToken] = useState(0);
+  const indexedResources =
+    resourceIndexState.sessionId === props.sessionId
+      ? resourceIndexState.index
+      : liveResources;
+  const resourceIndexing =
+    resourceIndexState.sessionId === props.sessionId
+      ? resourceIndexState.indexing
+      : Boolean(props.sessionId);
+  const resourceIndexError =
+    resourceIndexState.sessionId === props.sessionId
+      ? resourceIndexState.error
+      : null;
+  const resourceIndexWarning =
+    resourceIndexState.sessionId === props.sessionId
+      ? resourceIndexState.warning
+      : null;
   const canonicalResources = useMemo(
     () => ({
       outputs: mergeConversationOutputs(liveResources.outputs, indexedResources.outputs),
@@ -112,44 +141,92 @@ export function InspectorPane(props: {
   );
   useEffect(() => {
     const seedResources = collectConversationResources(props.conversationTurns);
-    setIndexedResources(seedResources);
     if (!props.sessionId) {
-      setResourceIndexing(false);
+      setResourceIndexState({
+        sessionId: null,
+        index: seedResources,
+        indexing: false,
+        error: null,
+        warning: null,
+      });
       return;
     }
     const sessionId = props.sessionId;
-    const controller = new AbortController();
+    const cached = readCachedConversationResourceIndex(sessionId);
+    const initialIndex = cached
+      ? {
+          outputs: mergeConversationOutputs(seedResources.outputs, cached.index.outputs),
+          sources: mergeConversationSources(seedResources.sources, cached.index.sources),
+        }
+      : seedResources;
+    setResourceIndexState({
+      sessionId,
+      index: initialIndex,
+      indexing: !cached?.complete,
+      error: null,
+      warning: cached?.warning ?? null,
+    });
     let active = true;
-    setResourceIndexing(true);
-    void loadConversationResourceIndex({
+    void loadCachedConversationResourceIndex({
       sessionId,
       seedTurns: props.conversationTurns,
-      signal: controller.signal,
       dependencies: {
-        readTurns: readSessionConversationTurns,
-        readTurnDetail: readSessionConversationTurnDetail,
+        readIndex: readSessionConversationResourceIndex,
       },
       onProgress: (resources) => {
         if (active) {
-          setIndexedResources(resources);
+          setResourceIndexState((current) =>
+            current.sessionId === sessionId
+              ? { ...current, index: resources }
+              : current,
+          );
+        }
+      },
+      onWarning: (warning) => {
+        if (active) {
+          setResourceIndexState((current) =>
+            current.sessionId === sessionId
+              ? { ...current, warning }
+              : current,
+          );
         }
       },
     })
-      .catch(() => undefined)
+      .catch((error) => {
+        if (active) {
+          setResourceIndexState((current) =>
+            current.sessionId === sessionId
+              ? {
+                  ...current,
+                  error: error instanceof Error ? error.message : String(error),
+                }
+              : current,
+          );
+        }
+      })
       .finally(() => {
         if (active) {
-          setResourceIndexing(false);
+          setResourceIndexState((current) =>
+            current.sessionId === sessionId
+              ? { ...current, indexing: false }
+              : current,
+          );
         }
       });
     return () => {
       active = false;
-      controller.abort();
     };
     // The detached index follows the session identity. Live turn resources are
     // merged separately so ordinary conversation updates never restart a full
     // historical scan.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.sessionId]);
+  }, [props.sessionId, resourceIndexRetryToken]);
+
+  const retryResourceIndex = () => {
+    if (!props.sessionId) return;
+    invalidateCachedConversationResourceIndex(props.sessionId);
+    setResourceIndexRetryToken((token) => token + 1);
+  };
 
   const loadDirectory = async (directoryPath: string) => {
     setDirectoryLoadingPaths((current) => new Set(current).add(directoryPath));
@@ -421,7 +498,6 @@ export function InspectorPane(props: {
         changeCount={changeCount}
         outputCount={outputResources.length}
         sourceCount={canonicalResources.sources.length}
-        resourceIndexing={resourceIndexing}
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
         {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
@@ -501,8 +577,11 @@ export function InspectorPane(props: {
             resources={outputResources}
             description="Files and media explicitly generated or delivered by this conversation."
             loading={resourceIndexing}
+            error={resourceIndexError}
+            warning={resourceIndexWarning}
             emptyLabel="No outputs yet."
             testId="inspector-outputs-list"
+            onRetry={retryResourceIndex}
             onOpenFile={(path) =>
               openFile(
                 path,
@@ -519,8 +598,11 @@ export function InspectorPane(props: {
             resources={canonicalResources.sources}
             description="Attachments, web pages, and external references recorded in provider history. The session does not need to run in RAH."
             loading={resourceIndexing}
+            error={resourceIndexError}
+            warning={resourceIndexWarning}
             emptyLabel="No attachments, web pages, or external references were recorded for this session."
             testId="inspector-sources-list"
+            onRetry={retryResourceIndex}
             onOpenFile={(path) =>
               openFile(
                 path,

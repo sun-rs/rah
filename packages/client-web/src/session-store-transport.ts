@@ -103,6 +103,14 @@ export function sessionStoreSocketCloseDecision(
   return closeCode === 4001 ? "stop" : "reconnect";
 }
 
+export function sessionStoreTransportIsHealthy(): boolean {
+  return (
+    eventsSocket !== null &&
+    eventsSocket.readyState === WebSocket.OPEN &&
+    initialReplayReadySocket === eventsSocket
+  );
+}
+
 function nextReconnectDelayMs(): number {
   const delay = Math.min(30_000, 750 * 2 ** reconnectAttempt);
   reconnectAttempt += 1;

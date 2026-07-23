@@ -205,3 +205,18 @@ export interface ConversationTurnDetailResponse {
   turn: ConversationTurnProjection;
   approximateBytes?: number;
 }
+
+/**
+ * Provider-neutral, detached resource index for Inspector. The daemon owns
+ * history hydration so clients do not need one detail request per turn.
+ */
+export interface ConversationResourceIndexResponse {
+  sessionId: string;
+  sourceRevision: string;
+  outputs: ConversationOutputProjection[];
+  sources: ConversationSourceProjection[];
+  complete: boolean;
+  generatedAt: string;
+  warning?: string;
+  approximateBytes?: number;
+}

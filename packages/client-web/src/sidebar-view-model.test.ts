@@ -424,7 +424,7 @@ describe("sidebar view model", () => {
     );
   });
 
-  test("projects council session origin for sidebar styling", () => {
+  test("defensively excludes Council agent sessions from workspace rows", () => {
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([
         session({
@@ -445,7 +445,7 @@ describe("sidebar view model", () => {
       pinnedItems: [],
     });
 
-    assert.equal(items[0]?.sessions[0]?.originKind, "council");
+    assert.deepEqual(items[0]?.sessions, []);
   });
 
   test("keeps running Councils out of workspace models and projects them independently", () => {
@@ -678,7 +678,7 @@ describe("sidebar view model", () => {
     );
   });
 
-  test("does not mark Council-owned sessions working for MCP listener activity", () => {
+  test("does not project Council-owned MCP listener sessions into workspaces", () => {
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([
         session({
@@ -701,7 +701,7 @@ describe("sidebar view model", () => {
       pinnedItems: [],
     });
 
-    assert.equal(items[0]?.sessions[0]?.status, "running");
+    assert.deepEqual(items[0]?.sessions, []);
   });
 
   test("projects unread and failed running Councils through the shared status protocol", () => {

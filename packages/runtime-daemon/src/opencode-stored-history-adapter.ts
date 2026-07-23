@@ -43,6 +43,7 @@ export class OpenCodeStoredHistoryAdapter
 {
   readonly id = "opencode-stored-history";
   readonly providers: Array<"opencode"> = ["opencode"];
+  readonly storedSessionArchiveBackend = "provider_native" as const;
 
   private storedSessionIndex = new Map<string, OpenCodeStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();

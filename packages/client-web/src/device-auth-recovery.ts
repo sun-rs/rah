@@ -23,6 +23,18 @@ export function deviceAuthRetryDelay(attempt: number): number {
   return AUTH_RETRY_DELAYS_MS[index]!;
 }
 
+export function deviceAuthStatusIsFresh(
+  lastSuccessfulCheckAt: number | undefined,
+  now: number,
+  freshnessMs: number,
+): boolean {
+  return (
+    lastSuccessfulCheckAt !== undefined &&
+    now >= lastSuccessfulCheckAt &&
+    now - lastSuccessfulCheckAt < freshnessMs
+  );
+}
+
 export function readDeviceAuthTrustHint(
   storage: DeviceAuthTrustStorage | null | undefined,
 ): boolean {

@@ -514,6 +514,61 @@ rl.on('line', (line) => {
     }
   });
 
+  test("single-flights an unsupported native item paging capability probe", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-item-probe-cwd-"));
+    const sessionId = "019d9999-probe-7bbb-8ccc-ddddeeeeffff";
+    writeRollout(sessionId, cwd);
+    let itemListRequests = 0;
+    const client: CodexAppServerRpcClient = {
+      setNotificationHandler() {},
+      setRequestHandler() {},
+      setCloseHandler() {},
+      async request(method) {
+        if (method === "thread/items/list") {
+          itemListRequests += 1;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          throw new Error("Method not found: thread/items/list");
+        }
+        return {};
+      },
+      notify() {},
+      async dispose() {},
+    };
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const storedHistory = new CodexStoredHistoryAdapter(
+      services,
+      async () => client,
+    );
+    storedHistory.listStoredSessions();
+    const managed = services.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      launchSource: "web",
+      cwd,
+      rootDir: cwd,
+    });
+
+    await Promise.all([
+      storedHistory.getSessionConversationTurnDetail(managed.session.id, {
+        providerTurnId: "turn-probe-1",
+      }),
+      storedHistory.getSessionConversationTurnDetail(managed.session.id, {
+        providerTurnId: "turn-probe-2",
+      }),
+      storedHistory.getSessionConversationTurnDetail(managed.session.id, {
+        providerTurnId: "turn-probe-3",
+      }),
+    ]);
+
+    assert.equal(itemListRequests, 1);
+    await storedHistory.shutdown();
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("archives Codex history through the official thread/archive method", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-archive-cwd-"));
     const sessionId = "019d9999-archive-7bbb-8ccc-ddddeeeeffff";

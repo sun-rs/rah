@@ -1,8 +1,15 @@
 import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { Columns3, MessageCircleMore, Settings, SquarePen } from "lucide-react";
-import { SessionHistoryDialog } from "../../SessionHistoryDialog";
+import { Suspense, lazy, useState } from "react";
 import { CouncilLogo } from "../../CouncilLogo";
 import type { WorkspaceSortMode } from "../../../session-browser";
+import { importWithStaleReload } from "../../../lazy-module-reload";
+
+const loadSessionHistoryDialog = () =>
+  importWithStaleReload(() => import("../../SessionHistoryDialog"));
+const SessionHistoryDialog = lazy(async () => ({
+  default: (await loadSessionHistoryDialog()).SessionHistoryDialog,
+}));
 
 const NAV_ITEM_CLASS =
   "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[14px] font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60";
@@ -39,6 +46,19 @@ export function WorkbenchSidebarNavigation(props: {
   onHome: () => void;
 }) {
   const canvasEnabled = props.canvasEnabled ?? true;
+  const [chatsOpen, setChatsOpen] = useState(false);
+  const chatsButton = (
+    <button
+      type="button"
+      className={NAV_ITEM_CLASS}
+      aria-label="Chats"
+      aria-expanded={chatsOpen}
+      onClick={() => setChatsOpen(true)}
+    >
+      <span className={NAV_ICON_CLASS}><MessageCircleMore size={16} /></span>
+      <span>Chats</span>
+    </button>
+  );
   return (
     <nav className="shrink-0 space-y-0.5 px-2 pb-2" aria-label="Primary navigation">
       <button
@@ -74,32 +94,35 @@ export function WorkbenchSidebarNavigation(props: {
         <span className={NAV_ICON_CLASS}><Columns3 size={16} /></span>
         <span>Canvas</span>
       </button>
-      <SessionHistoryDialog
-        storedSessions={props.storedSessions}
-        recentSessions={props.recentSessions}
-        runningSessions={props.runningSessions}
-        runningSessionActivityAtById={props.runningSessionActivityAtById}
-        councils={props.councils}
-        selectedCouncilId={props.selectedCouncilId}
-        workspaceSortMode={props.workspaceSortMode}
-        onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
-        onActivate={props.onActivateHistory}
-        onActivateRunning={props.onActivateRunning}
-        onActivateCouncil={props.onActivateCouncil}
-        onLoadStoredSessions={props.onLoadStoredSessions}
-        onRefreshCouncils={props.onRefreshCouncils}
-        onRenameCouncil={props.onRenameCouncil}
-        onRemoveCouncil={props.onRemoveCouncil}
-        onRemoveSession={props.onRemoveHistorySession}
-        onArchiveSession={props.onArchiveHistorySession}
-        onRestoreSession={props.onRestoreHistorySession}
-        onRemoveWorkspace={props.onRemoveHistoryWorkspace}
-      >
-        <button type="button" className={NAV_ITEM_CLASS} aria-label="Chats">
-          <span className={NAV_ICON_CLASS}><MessageCircleMore size={16} /></span>
-          <span>Chats</span>
-        </button>
-      </SessionHistoryDialog>
+      {chatsOpen ? (
+        <Suspense fallback={chatsButton}>
+          <SessionHistoryDialog
+            open
+            onOpenChange={setChatsOpen}
+            storedSessions={props.storedSessions}
+            recentSessions={props.recentSessions}
+            runningSessions={props.runningSessions}
+            runningSessionActivityAtById={props.runningSessionActivityAtById}
+            councils={props.councils}
+            selectedCouncilId={props.selectedCouncilId}
+            workspaceSortMode={props.workspaceSortMode}
+            onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
+            onActivate={props.onActivateHistory}
+            onActivateRunning={props.onActivateRunning}
+            onActivateCouncil={props.onActivateCouncil}
+            onLoadStoredSessions={props.onLoadStoredSessions}
+            onRefreshCouncils={props.onRefreshCouncils}
+            onRenameCouncil={props.onRenameCouncil}
+            onRemoveCouncil={props.onRemoveCouncil}
+            onRemoveSession={props.onRemoveHistorySession}
+            onArchiveSession={props.onArchiveHistorySession}
+            onRestoreSession={props.onRestoreHistorySession}
+            onRemoveWorkspace={props.onRemoveHistoryWorkspace}
+          >
+            {chatsButton}
+          </SessionHistoryDialog>
+        </Suspense>
+      ) : chatsButton}
     </nav>
   );
 }

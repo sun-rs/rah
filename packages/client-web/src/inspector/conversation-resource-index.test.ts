@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   ConversationOutputProjection,
+  ConversationResourceIndexResponse,
   ConversationSourceProjection,
   ConversationTurnProjection,
-  ConversationTurnsPageResponse,
 } from "@rah/runtime-protocol";
-import { loadConversationResourceIndex } from "./conversation-resource-index";
+import {
+  invalidateCachedConversationResourceIndex,
+  loadCachedConversationResourceIndex,
+  loadConversationResourceIndex,
+  readCachedConversationResourceIndex,
+  resetConversationResourceIndexCacheForTests,
+} from "./conversation-resource-index";
 
 function output(id: string): ConversationOutputProjection {
   return {
@@ -35,7 +41,6 @@ function source(id: string): ConversationSourceProjection {
 function turn(
   id: string,
   options: {
-    view?: "summary" | "full";
     outputs?: ConversationOutputProjection[];
     sources?: ConversationSourceProjection[];
   } = {},
@@ -50,56 +55,45 @@ function turn(
     activities: [],
     failedItemCount: 0,
     revision: 1,
-    itemsView: options.view ?? "summary",
+    itemsView: "full",
     ...(options.outputs ? { outputs: options.outputs } : {}),
     ...(options.sources ? { sources: options.sources } : {}),
   };
 }
 
-function page(
-  turns: ConversationTurnProjection[],
-  nextCursor?: string,
-): ConversationTurnsPageResponse {
+function response(
+  revision: string,
+  options: {
+    complete?: boolean;
+    outputs?: ConversationOutputProjection[];
+    sources?: ConversationSourceProjection[];
+    warning?: string;
+  } = {},
+): ConversationResourceIndexResponse {
   return {
     sessionId: "session-1",
-    turns,
-    revision: 1,
-    generatedAt: "2026-07-22T00:00:00.000Z",
-    sourceEventCount: 0,
-    ...(nextCursor ? { nextCursor } : {}),
+    sourceRevision: revision,
+    outputs: options.outputs ?? [],
+    sources: options.sources ?? [],
+    complete: options.complete ?? true,
+    generatedAt: "2026-07-23T00:00:00.000Z",
+    ...(options.warning ? { warning: options.warning } : {}),
   };
 }
 
-test("indexes every history page without replacing the visible conversation", async () => {
-  const seed = turn("seed", { view: "full", outputs: [output("seed-output")] });
-  const firstSummary = turn("first", { sources: [source("stale-summary")] });
-  const olderSummary = turn("older", { sources: [source("summary-fallback")] });
-  const pageRequests: Array<string | undefined> = [];
-  const detailRequests: string[] = [];
+test("loads one detached daemon index and merges visible live resources", async () => {
+  const requests: Array<{ sessionId: string; refresh?: boolean }> = [];
   const progress: Array<{ outputs: number; sources: number }> = [];
-
   const result = await loadConversationResourceIndex({
     sessionId: "session-1",
-    seedTurns: [seed],
+    seedTurns: [turn("live", { outputs: [output("live-output")] })],
+    refresh: true,
     dependencies: {
-      readTurns: async (_sessionId, options) => {
-        pageRequests.push(options.cursor);
-        return options.cursor ? page([olderSummary]) : page([firstSummary], "older");
-      },
-      readTurnDetail: async (_sessionId, options) => {
-        detailRequests.push(options.providerTurnId);
-        if (options.providerTurnId === "provider-older") {
-          throw new Error("detail unavailable");
-        }
-        return {
-          sessionId: "session-1",
-          turnId: options.turnId,
-          turn: turn("first", {
-            view: "full",
-            outputs: [output("detail-output")],
-            sources: [source("detail-source")],
-          }),
-        };
+      readIndex: async (sessionId, options) => {
+        requests.push({ sessionId, ...(options?.refresh ? { refresh: true } : {}) });
+        return response("revision-1", {
+          sources: [source("history-source")],
+        });
       },
     },
     onProgress: (index) => {
@@ -107,35 +101,96 @@ test("indexes every history page without replacing the visible conversation", as
     },
   });
 
-  assert.deepEqual(pageRequests, [undefined, "older"]);
-  assert.deepEqual(detailRequests.sort(), ["provider-first", "provider-older"]);
-  assert.deepEqual(result.outputs.map((entry) => entry.id).sort(), [
-    "detail-output",
-    "seed-output",
+  assert.deepEqual(requests, [{ sessionId: "session-1", refresh: true }]);
+  assert.deepEqual(result.outputs.map((entry) => entry.id), ["live-output"]);
+  assert.deepEqual(result.sources.map((entry) => entry.id), ["history-source"]);
+  assert.deepEqual(progress, [
+    { outputs: 1, sources: 0 },
+    { outputs: 1, sources: 1 },
   ]);
-  assert.deepEqual(result.sources.map((entry) => entry.id), [
-    "detail-source",
-    "summary-fallback",
-  ]);
-  assert.ok(!result.sources.some((entry) => entry.id === "stale-summary"));
-  assert.ok(progress.length >= 3);
 });
 
-test("reuses full seed turns instead of requesting their detail again", async () => {
-  const full = turn("full", { view: "full", sources: [source("seed-source")] });
-  let detailRequestCount = 0;
-  const result = await loadConversationResourceIndex({
-    sessionId: "session-1",
-    seedTurns: [full],
-    dependencies: {
-      readTurns: async () => page([{ ...full, itemsView: "summary" }]),
-      readTurnDetail: async () => {
-        detailRequestCount += 1;
-        throw new Error("must not run");
-      },
+test("shares one request and reuses a freshly validated client cache", async () => {
+  resetConversationResourceIndexCacheForTests();
+  let requestCount = 0;
+  const dependencies = {
+    readIndex: async () => {
+      requestCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return response("revision-1", {
+        outputs: [output("cached-output")],
+      });
     },
+  };
+
+  const [first, concurrent] = await Promise.all([
+    loadCachedConversationResourceIndex({
+      sessionId: "cached-session",
+      dependencies,
+    }),
+    loadCachedConversationResourceIndex({
+      sessionId: "cached-session",
+      dependencies,
+    }),
+  ]);
+  const reused = await loadCachedConversationResourceIndex({
+    sessionId: "cached-session",
+    dependencies,
   });
 
-  assert.equal(detailRequestCount, 0);
-  assert.deepEqual(result.sources.map((entry) => entry.id), ["seed-source"]);
+  assert.equal(requestCount, 1);
+  assert.deepEqual(first.outputs.map((entry) => entry.id), ["cached-output"]);
+  assert.deepEqual(concurrent, first);
+  assert.deepEqual(reused, first);
+  assert.equal(readCachedConversationResourceIndex("cached-session")?.complete, true);
+  resetConversationResourceIndexCacheForTests();
+});
+
+test("manual invalidation forces a new daemon request", async () => {
+  resetConversationResourceIndexCacheForTests();
+  const requests: Array<{ refresh?: boolean }> = [];
+  const dependencies = {
+    readIndex: async (_sessionId: string, options?: { refresh?: boolean }) => {
+      requests.push(options?.refresh ? { refresh: true } : {});
+      return response(`revision-${requests.length}`, {
+        outputs: [output(`output-${requests.length}`)],
+      });
+    },
+  };
+  await loadCachedConversationResourceIndex({
+    sessionId: "retry-session",
+    dependencies,
+  });
+  invalidateCachedConversationResourceIndex("retry-session");
+  const refreshed = await loadCachedConversationResourceIndex({
+    sessionId: "retry-session",
+    dependencies,
+  });
+
+  assert.deepEqual(requests, [{}, { refresh: true }]);
+  assert.deepEqual(refreshed.outputs.map((entry) => entry.id), ["output-2"]);
+  resetConversationResourceIndexCacheForTests();
+});
+
+test("surfaces daemon completeness warnings", async () => {
+  resetConversationResourceIndexCacheForTests();
+  const warnings: string[] = [];
+  const result = await loadCachedConversationResourceIndex({
+    sessionId: "warning-session",
+    dependencies: {
+      readIndex: async () =>
+        response("revision-1", {
+          complete: false,
+          sources: [source("summary-source")],
+          warning: "1 historical turn detail was unavailable; summary resources were retained.",
+        }),
+    },
+    onWarning: (warning) => warnings.push(warning),
+  });
+
+  assert.deepEqual(result.sources.map((entry) => entry.id), ["summary-source"]);
+  assert.deepEqual(warnings, [
+    "1 historical turn detail was unavailable; summary resources were retained.",
+  ]);
+  resetConversationResourceIndexCacheForTests();
 });

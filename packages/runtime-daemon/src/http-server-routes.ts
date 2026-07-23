@@ -1250,6 +1250,20 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    const conversationResourcesMatch =
+      /^\/api\/sessions\/([^/]+)\/conversation\/resources$/.exec(pathname);
+    if (req.method === "GET" && conversationResourcesMatch) {
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getSessionConversationResourceIndex(conversationResourcesMatch[1]!, {
+          ...(url.searchParams.get("refresh") === "true" ? { refresh: true } : {}),
+        }),
+      );
+      return;
+    }
+
     const conversationTurnDetailMatch =
       /^\/api\/sessions\/([^/]+)\/conversation\/turns\/([^/]+)\/detail$/.exec(pathname);
     if (req.method === "GET" && conversationTurnDetailMatch) {

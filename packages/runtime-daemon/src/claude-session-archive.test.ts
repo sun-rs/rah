@@ -83,3 +83,108 @@ test("Claude restore refuses to overwrite a recreated provider history file", as
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Claude archive recovers a verified cross-filesystem copy left before source unlink", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-claude-archive-recover-copy-"));
+  const claudeConfigDir = path.join(root, "claude");
+  const originalPath = path.join(
+    claudeConfigDir,
+    "projects",
+    "-tmp-project",
+    "session-copy.jsonl",
+  );
+  const archiveRoot = path.join(root, "rah-archive");
+  const archivedPath = path.join(
+    archiveRoot,
+    "files",
+    "session-copy",
+    "session-copy.jsonl",
+  );
+  const content = '{"type":"user","message":{"content":"copy"}}\n';
+  mkdirSync(path.dirname(originalPath), { recursive: true });
+  mkdirSync(path.dirname(archivedPath), { recursive: true });
+  writeFileSync(originalPath, content);
+  writeFileSync(archivedPath, content);
+  writeFileSync(path.join(archiveRoot, "manifest.json"), JSON.stringify({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    entries: [{
+      provider: "claude",
+      providerSessionId: "session-copy",
+      originalPath,
+      archivedPath,
+      archivedAt: new Date().toISOString(),
+      sizeBytes: Buffer.byteLength(content),
+      mtimeMs: Date.now(),
+      state: "pending_archive",
+      snapshot: {
+        provider: "claude",
+        providerSessionId: "session-copy",
+        source: "provider_history",
+      },
+    }],
+  }));
+
+  try {
+    const store = new ClaudeSessionArchiveStore({ rootDir: archiveRoot, claudeConfigDir });
+    const recovered = store.find("session-copy");
+    assert.equal(existsSync(originalPath), false);
+    assert.equal(existsSync(archivedPath), true);
+    assert.equal(recovered?.state, "archived");
+    assert.match(recovered?.sha256 ?? "", /^[a-f0-9]{64}$/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Claude restore recovers a verified cross-filesystem copy left before archive unlink", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-claude-restore-recover-copy-"));
+  const claudeConfigDir = path.join(root, "claude");
+  const originalPath = path.join(
+    claudeConfigDir,
+    "projects",
+    "-tmp-project",
+    "session-restore.jsonl",
+  );
+  const archiveRoot = path.join(root, "rah-archive");
+  const archivedPath = path.join(
+    archiveRoot,
+    "files",
+    "session-restore",
+    "session-restore.jsonl",
+  );
+  const content = '{"type":"user","message":{"content":"restore"}}\n';
+  mkdirSync(path.dirname(originalPath), { recursive: true });
+  mkdirSync(path.dirname(archivedPath), { recursive: true });
+  writeFileSync(originalPath, content);
+  writeFileSync(archivedPath, content);
+  writeFileSync(path.join(archiveRoot, "manifest.json"), JSON.stringify({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    entries: [{
+      provider: "claude",
+      providerSessionId: "session-restore",
+      originalPath,
+      archivedPath,
+      archivedAt: new Date().toISOString(),
+      sizeBytes: Buffer.byteLength(content),
+      mtimeMs: Date.now(),
+      state: "pending_restore",
+      snapshot: {
+        provider: "claude",
+        providerSessionId: "session-restore",
+        source: "provider_history",
+      },
+    }],
+  }));
+
+  try {
+    const store = new ClaudeSessionArchiveStore({ rootDir: archiveRoot, claudeConfigDir });
+    assert.equal(existsSync(originalPath), true);
+    assert.equal(existsSync(archivedPath), false);
+    assert.equal(store.find("session-restore"), undefined);
+    assert.equal(readFileSync(originalPath, "utf8"), content);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

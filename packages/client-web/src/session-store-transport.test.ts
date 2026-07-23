@@ -4,6 +4,7 @@ import {
   connectSessionStoreTransport,
   restartSessionStoreTransport,
   sessionStoreSocketCloseDecision,
+  sessionStoreTransportIsHealthy,
 } from "./session-store-transport";
 
 class FakeWebSocket {
@@ -88,6 +89,7 @@ test("transport recovery waits for the restarted socket initial replay boundary"
       onStoredSessionsRefresh: () => undefined,
     });
     assert.equal(FakeWebSocket.instances.length, 1);
+    assert.equal(sessionStoreTransportIsHealthy(), false);
 
     let recovered = false;
     const recovery = restartSessionStoreTransport().then(() => {
@@ -99,6 +101,7 @@ test("transport recovery waits for the restarted socket initial replay boundary"
     restarted.open();
     await Promise.resolve();
     assert.equal(recovered, false);
+    assert.equal(sessionStoreTransportIsHealthy(), false);
 
     restarted.message({ events: [] });
     await Promise.resolve();
@@ -107,8 +110,10 @@ test("transport recovery waits for the restarted socket initial replay boundary"
     restarted.message({ events: [], initial: true });
     await recovery;
     assert.equal(recovered, true);
+    assert.equal(sessionStoreTransportIsHealthy(), true);
 
     restarted.close(4001);
+    assert.equal(sessionStoreTransportIsHealthy(), false);
   } finally {
     Object.defineProperty(globalThis, "WebSocket", {
       configurable: true,

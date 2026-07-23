@@ -373,6 +373,19 @@ describe("startRahDaemon", () => {
     assert.equal(liveOnlyBody.sessionId, state.session.id);
     assert.ok(Array.isArray(liveOnlyBody.turns));
     assert.equal((liveOnlyBody.turns as unknown[]).length, 1);
+
+    const resourceIndexResponse = await requestJson({
+      port,
+      path: `/api/sessions/${state.session.id}/conversation/resources`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(resourceIndexResponse.status, 200);
+    const resourceIndexBody = resourceIndexResponse.json as Record<string, unknown>;
+    assert.equal(resourceIndexBody.sessionId, state.session.id);
+    assert.equal(typeof resourceIndexBody.sourceRevision, "string");
+    assert.equal(typeof resourceIndexBody.complete, "boolean");
+    assert.ok(Array.isArray(resourceIndexBody.outputs));
+    assert.ok(Array.isArray(resourceIndexBody.sources));
   });
 
   test("streams canonical conversation deltas with live events", async () => {

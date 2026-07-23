@@ -268,11 +268,13 @@ export function deriveSidebarWorkspaceViewModels(args: {
       args.pinnedItems,
       section.workspace.directory,
     );
-    const sortedSessions = [...section.sessions].sort((left, right) =>
-      sessionSidebarSortActivityAt(right, args.runningSessionActivityAtById).localeCompare(
-        sessionSidebarSortActivityAt(left, args.runningSessionActivityAtById),
-      ),
-    );
+    const sortedSessions = section.sessions
+      .filter((session) => session.session.origin?.kind !== "council")
+      .sort((left, right) =>
+        sessionSidebarSortActivityAt(right, args.runningSessionActivityAtById).localeCompare(
+          sessionSidebarSortActivityAt(left, args.runningSessionActivityAtById),
+        ),
+      );
 
     const runningIdentityKeys = new Set(
       sortedSessions.flatMap((session) =>

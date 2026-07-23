@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -69,6 +69,35 @@ describe("workspace branch comparison", () => {
     assert.ok(!status.branchOptions.includes("origin"));
     assert.match(untrackedDiff, /new file mode/);
     assert.match(untrackedDiff, /\+new local file/);
+  });
+
+  test("enumerates every untracked file inside a new directory", async () => {
+    const nestedDir = path.join(repoRoot, "new directory", "nested");
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(path.join(nestedDir, "first file.txt"), "first\n", "utf8");
+    writeFileSync(path.join(nestedDir, "second.txt"), "second\n", "utf8");
+
+    const status = await getWorkspaceGitStatusDataAsync(repoRoot);
+
+    assert.deepEqual(
+      status.unstagedFiles
+        .map((file) => file.path)
+        .filter((file) => file.startsWith("new directory/"))
+        .sort(),
+      [
+        "new directory/nested/first file.txt",
+        "new directory/nested/second.txt",
+      ],
+    );
+  });
+
+  test("surfaces Git status failures instead of reporting a clean workspace", async () => {
+    writeFileSync(path.join(repoRoot, ".git", "index"), "not a git index", "utf8");
+
+    await assert.rejects(
+      getWorkspaceGitStatusDataAsync(repoRoot),
+      /index|fatal|corrupt|unknown/i,
+    );
   });
 
   test("recomputes the current worktree diff from a selected ancestor", async () => {

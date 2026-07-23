@@ -47,6 +47,7 @@ import {
   appendOptimisticUserMessage,
   initialConversationSyncState,
   providerLabel,
+  removeOptimisticUserMessage,
   type SessionProjection,
 } from "./types";
 
@@ -314,6 +315,31 @@ function createPendingLiveSessionProjection(args: {
   );
 }
 
+function rollbackImmediateUserInput(
+  projection: SessionProjection,
+  args: {
+    text: string;
+    clientMessageId: string;
+    baselineSeq: number | undefined;
+  },
+): SessionProjection {
+  const restored = removeOptimisticUserMessage(
+    projection,
+    args.text,
+    args.clientMessageId,
+  );
+  if (
+    args.baselineSeq !== undefined &&
+    projection.lastSeq === args.baselineSeq &&
+    restored.currentRuntimeStatus === "thinking"
+  ) {
+    const next = { ...restored };
+    delete next.currentRuntimeStatus;
+    return next;
+  }
+  return restored;
+}
+
 function pruneReadOnlyReplaysForResumedProviderSession(
   projections: Map<string, SessionProjection>,
   resumedSession: SessionSummary,
@@ -339,6 +365,12 @@ export async function startSessionCommand(
   options?: StartSessionOptions,
 ): Promise<string | null> {
   let provisionalSessionId: string | null = null;
+  let initialInputRollback: {
+    sessionId: string;
+    text: string;
+    clientMessageId: string;
+    baselineSeq: number | undefined;
+  } | null = null;
   try {
     const state = deps.get();
     const cwd = options?.cwd?.trim() || state.workspaceDir.trim();
@@ -480,6 +512,12 @@ export async function startSessionCommand(
     options?.onSessionCreated?.(session.session.id);
     if (initialInput || initialAttachments.length > 0) {
       void deps.initializeLiveConversationProjection(session.session.id).catch(() => undefined);
+      initialInputRollback = {
+        sessionId: session.session.id,
+        text: initialInput ?? "",
+        clientMessageId,
+        baselineSeq: deps.get().projections.get(session.session.id)?.lastSeq,
+      };
       await deps.sendInput(
         session.session.id,
         initialInput ?? "",
@@ -493,17 +531,28 @@ export async function startSessionCommand(
   } catch (error) {
     consumeCanceledSessionStartup(provisionalSessionId);
     deps.set((state) => {
-      if (!provisionalSessionId || !state.projections.has(provisionalSessionId)) {
-        return { pendingSessionTransition: null, error: readErrorMessage(error) };
-      }
       const projections = new Map(state.projections);
-      projections.delete(provisionalSessionId);
+      if (initialInputRollback) {
+        const projection = projections.get(initialInputRollback.sessionId);
+        if (projection) {
+          projections.set(
+            initialInputRollback.sessionId,
+            rollbackImmediateUserInput(projection, initialInputRollback),
+          );
+        }
+      }
+      const removedProvisional = Boolean(
+        provisionalSessionId && projections.delete(provisionalSessionId),
+      );
       return {
         projections,
         selectedSessionId:
-          state.selectedSessionId === provisionalSessionId ? null : state.selectedSessionId,
+          removedProvisional && state.selectedSessionId === provisionalSessionId
+            ? null
+            : state.selectedSessionId,
         pendingSessionTransition: null,
-        sessionTopologyVersion: state.sessionTopologyVersion + 1,
+        sessionTopologyVersion:
+          state.sessionTopologyVersion + (removedProvisional ? 1 : 0),
         error: readErrorMessage(error),
       };
     });
@@ -925,6 +974,7 @@ export function resumeHistorySessionCommand(
   }
 
   let resumedSessionId: string | null = null;
+  let resumedInputBaselineSeq: number | undefined;
   const operation = resumeHistorySessionCommandInternal(deps, sessionId, options)
     .then(async (nextSessionId) => {
       resumedSessionId = nextSessionId;
@@ -951,6 +1001,7 @@ export function resumeHistorySessionCommand(
         return null;
       }
       if (nextSessionId && hasInitialInput) {
+        resumedInputBaselineSeq = deps.get().projections.get(nextSessionId)?.lastSeq;
         await deps.sendInput(
           nextSessionId,
           initialInput,
@@ -967,6 +1018,21 @@ export function resumeHistorySessionCommand(
           if (!state.projections.has(sessionId)) return state;
           const projections = new Map(state.projections);
           projections.set(sessionId, previousProjection);
+          return { projections };
+        });
+      } else if (resumedSessionId !== null && hasInitialInput) {
+        deps.set((state) => {
+          const projection = state.projections.get(resumedSessionId!);
+          if (!projection) return state;
+          const projections = new Map(state.projections);
+          projections.set(
+            resumedSessionId!,
+            rollbackImmediateUserInput(projection, {
+              text: initialInput,
+              clientMessageId,
+              baselineSeq: resumedInputBaselineSeq,
+            }),
+          );
           return { projections };
         });
       }

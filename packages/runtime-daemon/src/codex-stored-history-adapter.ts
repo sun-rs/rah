@@ -66,6 +66,7 @@ export class CodexStoredHistoryAdapter
 {
   readonly id = "codex-stored-history";
   readonly providers: Array<"codex"> = ["codex"];
+  readonly storedSessionArchiveBackend = "provider_native" as const;
 
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
@@ -73,6 +74,9 @@ export class CodexStoredHistoryAdapter
   private readonly turnPages = new CodexTurnPageCache();
   private turnsListSupport: "unknown" | "available" | "unavailable" = "unknown";
   private itemsListSupport: "unknown" | "available" | "unavailable" = "unknown";
+  private itemsListProbePromise:
+    | Promise<"available" | "unavailable" | "failed">
+    | undefined;
   private pagingClient: CodexAppServerRpcClient | undefined;
   private pagingClientPromise: Promise<CodexAppServerRpcClient> | undefined;
 
@@ -487,7 +491,10 @@ export class CodexStoredHistoryAdapter
     providerTurnId: string,
     stopAtItemId?: string,
   ): Promise<unknown[] | undefined> {
-    if (this.itemsListSupport === "unavailable") {
+    if (
+      (await this.ensureNativeItemsListSupport(record, providerTurnId)) !==
+      "available"
+    ) {
       return undefined;
     }
     try {
@@ -548,6 +555,54 @@ export class CodexStoredHistoryAdapter
         await this.resetPagingClient();
       }
       return undefined;
+    }
+  }
+
+  private async ensureNativeItemsListSupport(
+    record: CodexStoredSessionRecord,
+    providerTurnId: string,
+  ): Promise<"available" | "unavailable" | "failed"> {
+    if (this.itemsListSupport !== "unknown") {
+      return this.itemsListSupport;
+    }
+    this.itemsListProbePromise ??= (async () => {
+      try {
+        const client = await this.getPagingClient();
+        const raw = (await client.request(
+          "thread/items/list",
+          {
+            threadId: record.ref.providerSessionId,
+            turnId: providerTurnId,
+            limit: 1,
+            sortDirection: "asc",
+          },
+          8_000,
+        )) as CodexAppServerItemsPage;
+        if (!Array.isArray(raw?.data)) {
+          throw new Error("Codex thread/items/list returned an invalid capability probe.");
+        }
+        this.itemsListSupport = "available";
+        return "available" as const;
+      } catch (error) {
+        if (isUnsupportedExperimentalListError(error)) {
+          this.itemsListSupport = "unavailable";
+          return "unavailable" as const;
+        }
+        console.warn("[rah] Codex native item paging capability probe failed", {
+          providerSessionId: record.ref.providerSessionId,
+          providerTurnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (isBrokenPagingTransport(error)) {
+          await this.resetPagingClient();
+        }
+        return "failed" as const;
+      }
+    })();
+    try {
+      return await this.itemsListProbePromise;
+    } finally {
+      this.itemsListProbePromise = undefined;
     }
   }
 

@@ -112,7 +112,9 @@ export function deriveWorkbenchSessionCollections(args: {
     (entry) => entry.summary.session.relationship?.kind === "side",
   );
   const sessionEntries = allSessionEntries.filter(
-    (entry) => entry.summary.session.relationship?.kind !== "side",
+    (entry) =>
+      entry.summary.session.relationship?.kind !== "side" &&
+      entry.summary.session.origin?.kind !== "council",
   );
   const storedSessionByKey = new Map(
     args.storedSessions.map((ref) => [storedSessionKey(ref), ref] as const),

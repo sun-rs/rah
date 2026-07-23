@@ -18,6 +18,7 @@ import type {
   ListCouncilsResponse,
   SessionInputRequest,
   InterruptSessionRequest,
+  SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
 } from "@rah/runtime-protocol";
@@ -110,6 +111,45 @@ export class CouncilRuntime {
           this.projectRuntimeCouncilState(council),
         )),
     };
+  }
+
+  /**
+   * Provider session identities are not guaranteed to exist in the initial
+   * start response (Claude can publish one after its first lifecycle event).
+   * Persist them whenever SessionStore observes the authoritative identity so
+   * Council-owned provider history remains isolated after the live binding is
+   * cleared or the daemon restarts.
+   */
+  rememberManagedSessionProviderIdentity(
+    session: Pick<SessionSummary["session"], "provider" | "providerSessionId" | "origin">,
+  ): void {
+    const origin = session.origin;
+    const providerSessionId = session.providerSessionId;
+    if (origin?.kind !== "council" || !providerSessionId) {
+      return;
+    }
+    let council: CouncilSnapshot;
+    try {
+      council = this.councilStateSnapshot(origin.councilId);
+    } catch {
+      // The Council may have been deleted while a late provider event was in
+      // flight. It no longer owns a visible Council record in that case.
+      return;
+    }
+    const agent = council.agents.find((candidate) => candidate.id === origin.agentId);
+    if (
+      !agent ||
+      agent.provider !== session.provider ||
+      agent.providerSessionIds?.includes(providerSessionId)
+    ) {
+      return;
+    }
+    this.store.updateAgent(council.id, agent.id, {
+      providerSessionIds: [...new Set([
+        ...(agent.providerSessionIds ?? []),
+        providerSessionId,
+      ])],
+    });
   }
 
   readCouncilMessages(
@@ -1101,9 +1141,18 @@ export class CouncilRuntime {
       },
     });
     const sessionId = session.session.session.id;
+    const providerSessionId = session.session.session.providerSessionId;
     this.store.updateAgent(council.id, agent.id, {
       status: "starting",
       nativeSessionId: sessionId,
+      ...(providerSessionId
+        ? {
+            providerSessionIds: [...new Set([
+              ...(agent.providerSessionIds ?? []),
+              providerSessionId,
+            ])],
+          }
+        : {}),
       lastStatusDetail: "managed session started",
     });
     if (!this.shouldContinueLaunchingCouncil(council.id)) {

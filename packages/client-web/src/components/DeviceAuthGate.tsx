@@ -14,6 +14,7 @@ import {
 } from "../api";
 import {
   deviceAuthRetryDelay,
+  deviceAuthStatusIsFresh,
   deviceAuthStateForFailure,
   deviceAuthStateForStatus,
   readDeviceAuthTrustHint,
@@ -23,6 +24,7 @@ import {
 } from "../device-auth-recovery";
 
 const AUTH_STATUS_TIMEOUT_MS = 8_000;
+const AUTH_STATUS_FOREGROUND_FRESH_MS = 15_000;
 
 function suggestedDeviceName(): string {
   if (typeof navigator === "undefined") {
@@ -75,6 +77,7 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
     let retryAttempt = 0;
     let retryTimer: number | undefined;
     let pendingUnauthenticatedMessage: string | undefined;
+    let lastSuccessfulCheckAt: number | undefined;
 
     const clearRetry = () => {
       if (retryTimer !== undefined) {
@@ -89,16 +92,31 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
       retryAttempt += 1;
       retryTimer = window.setTimeout(() => {
         retryTimer = undefined;
-        void check();
+        void check(undefined, { force: true });
       }, delay);
     };
 
-    const check = async (unauthenticatedMessage?: string) => {
+    const check = async (
+      unauthenticatedMessage?: string,
+      options: { force?: boolean } = {},
+    ) => {
       if (unauthenticatedMessage) {
         pendingUnauthenticatedMessage = unauthenticatedMessage;
       }
       if (inFlight) {
-        rerunAfterFlight = true;
+        if (options.force || unauthenticatedMessage) {
+          rerunAfterFlight = true;
+        }
+        return;
+      }
+      if (
+        !options.force &&
+        deviceAuthStatusIsFresh(
+          lastSuccessfulCheckAt,
+          Date.now(),
+          AUTH_STATUS_FOREGROUND_FRESH_MS,
+        )
+      ) {
         return;
       }
 
@@ -111,6 +129,7 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
       try {
         const status = await getDeviceAuthStatus({ signal: controller.signal });
         if (cancelled) return;
+        lastSuccessfulCheckAt = Date.now();
         retryAttempt = 0;
         setHasTrustedDevices(status.hasTrustedDevices);
         hasReachedTrustedRef.current = status.authenticated;
@@ -127,16 +146,19 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
         inFlight = false;
         if (!cancelled && rerunAfterFlight) {
           rerunAfterFlight = false;
-          void check();
+          void check(undefined, { force: true });
         }
       }
     };
 
     const requireAuth = () => {
-      void check("This device is no longer trusted.");
+      void check("This device is no longer trusted.", { force: true });
     };
     const recheck = () => {
       void check();
+    };
+    const forceRecheck = () => {
+      void check(undefined, { force: true });
     };
     const recheckWhenVisible = () => {
       if (document.visibilityState === "visible") {
@@ -145,17 +167,17 @@ export function DeviceAuthGate({ children }: { children: ReactNode }) {
     };
 
     window.addEventListener(RAH_AUTH_REQUIRED_EVENT, requireAuth);
-    window.addEventListener("online", recheck);
+    window.addEventListener("online", forceRecheck);
     window.addEventListener("focus", recheck);
     window.addEventListener("pageshow", recheck);
     document.addEventListener("visibilitychange", recheckWhenVisible);
-    void check();
+    void check(undefined, { force: true });
 
     return () => {
       cancelled = true;
       clearRetry();
       window.removeEventListener(RAH_AUTH_REQUIRED_EVENT, requireAuth);
-      window.removeEventListener("online", recheck);
+      window.removeEventListener("online", forceRecheck);
       window.removeEventListener("focus", recheck);
       window.removeEventListener("pageshow", recheck);
       document.removeEventListener("visibilitychange", recheckWhenVisible);

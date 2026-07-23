@@ -9,7 +9,7 @@ import {
   serializeSessionTransportCommand,
   updateQueuedInputCommand,
 } from "./session-store-session-commands";
-import type { SessionProjection } from "./types";
+import { appendOptimisticUserMessage, type SessionProjection } from "./types";
 
 const originalFetch = globalThis.fetch;
 
@@ -240,6 +240,48 @@ test("the first input after startup stays in the transcript instead of the follo
       }),
     );
     await sending;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a failed preinserted first input removes its optimistic message and activity status", async () => {
+  const base = sessionProjection(10);
+  base.summary.session.phase = "ready";
+  base.summary.session.runtimeState = "idle";
+  const projection: SessionProjection = {
+    ...appendOptimisticUserMessage(base, "first input", {
+      clientMessageId: "startup-message",
+      clientTurnId: "startup-turn",
+    }),
+    currentRuntimeStatus: "thinking",
+  };
+  let state = commandState(projection);
+  globalThis.fetch = (async () => {
+    throw new Error("network failed");
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      sendInputCommand({
+        get: () => state,
+        set: (partial) => {
+          const patch = typeof partial === "function" ? partial(state) : partial;
+          state = { ...state, ...patch };
+        },
+        sessionId: "session-queue",
+        text: "first input",
+        clientMessageId: "startup-message",
+        clientTurnId: "startup-turn",
+        skipOptimisticQueue: true,
+      }),
+      /network failed/,
+    );
+
+    const restored = state.projections.get("session-queue");
+    assert.equal(restored?.feed.length, 0);
+    assert.equal(restored?.currentRuntimeStatus, undefined);
+    assert.equal(restored?.summary.session.phase, "ready");
   } finally {
     globalThis.fetch = originalFetch;
   }

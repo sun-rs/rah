@@ -19,23 +19,16 @@ import { SessionSidebar } from "./SessionSidebar";
 import type { SessionProjection } from "./types";
 import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
 import { readErrorMessage } from "./session-store-bootstrap";
-import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
-import { SessionHistoryDialog } from "./components/SessionHistoryDialog";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { StopSessionDialog } from "./components/workbench/dialogs/StopSessionDialog";
 import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessionDialog";
 import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
-import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
-import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
-import { CanvasWorkbench } from "./components/workbench/canvas/CanvasWorkbench";
 import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
 import { useCouncilController } from "./council/useCouncilController";
-import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
-import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
 import {
   SessionSideDock,
 } from "./components/workbench/session/SessionSideDock";
@@ -94,6 +87,7 @@ import {
   foregroundClockWasSuspended,
   runForegroundRecoveryLoop,
 } from "./foreground-recovery";
+import { sessionStoreTransportIsHealthy } from "./session-store-transport";
 import { latestCompletedProviderTurnId } from "./session-branch-boundary";
 import {
   resolveResponsiveTier,
@@ -181,6 +175,41 @@ const InspectorPane = lazy(async () => ({
 const loadCouncilPage = () => importWithStaleReload(() => import("./council/CouncilPage"));
 const CouncilPage = lazy(async () => ({
   default: (await loadCouncilPage()).CouncilPage,
+}));
+const loadFileReferencePicker = () =>
+  importWithStaleReload(() => import("./components/FileReferencePicker"));
+const FileReferencePicker = lazy(async () => ({
+  default: (await loadFileReferencePicker()).FileReferencePicker,
+}));
+const loadSessionHistoryDialog = () =>
+  importWithStaleReload(() => import("./components/SessionHistoryDialog"));
+const SessionHistoryDialog = lazy(async () => ({
+  default: (await loadSessionHistoryDialog()).SessionHistoryDialog,
+}));
+const loadWorkbenchSelectedPane = () =>
+  importWithStaleReload(() => import("./components/workbench/panes/WorkbenchSelectedPane"));
+const WorkbenchSelectedPane = lazy(async () => ({
+  default: (await loadWorkbenchSelectedPane()).WorkbenchSelectedPane,
+}));
+const loadCanvasSessionPane = () =>
+  importWithStaleReload(() => import("./components/workbench/canvas/CanvasSessionPane"));
+const CanvasSessionPane = lazy(async () => ({
+  default: (await loadCanvasSessionPane()).CanvasSessionPane,
+}));
+const loadCanvasNewSessionPane = () =>
+  importWithStaleReload(() => import("./components/workbench/canvas/CanvasNewSessionPane"));
+const CanvasNewSessionPane = lazy(async () => ({
+  default: (await loadCanvasNewSessionPane()).CanvasNewSessionPane,
+}));
+const loadCanvasWorkbench = () =>
+  importWithStaleReload(() => import("./components/workbench/canvas/CanvasWorkbench"));
+const CanvasWorkbench = lazy(async () => ({
+  default: (await loadCanvasWorkbench()).CanvasWorkbench,
+}));
+const loadNewCouncilDialog = () =>
+  importWithStaleReload(() => import("./council/NewCouncilDialog"));
+const NewCouncilDialog = lazy(async () => ({
+  default: (await loadNewCouncilDialog()).NewCouncilDialog,
 }));
 type ModelDraft = {
   modelId?: string | null;
@@ -735,20 +764,56 @@ export function App() {
     void refreshCouncils();
   }, [pageController.openCouncil, refreshCouncils, upsertCouncil]);
 
+  const councilProviderSessionKeys = useMemo(
+    () => new Set(
+      councils.flatMap((council) =>
+        council.agents.flatMap((agent) =>
+          (agent.providerSessionIds ?? []).map(
+            (providerSessionId) => `${agent.provider}:${providerSessionId}`,
+          ),
+        ),
+      ),
+    ),
+    [councils],
+  );
+  const visibleStoredSessions = useMemo(
+    () => storedSessions.filter(
+      (session) => {
+        const key = `${session.provider}:${session.providerSessionId}`;
+        return (
+          !councilProviderSessionKeys.has(key) &&
+          !optimisticallyArchivedSessionKeys.has(key)
+        );
+      },
+    ),
+    [councilProviderSessionKeys, optimisticallyArchivedSessionKeys, storedSessions],
+  );
+  const visibleRecentSessions = useMemo(
+    () => recentSessions.filter((session) => {
+      const key = `${session.provider}:${session.providerSessionId}`;
+      return (
+        !councilProviderSessionKeys.has(key) &&
+        !optimisticallyArchivedSessionKeys.has(key)
+      );
+    }),
+    [councilProviderSessionKeys, optimisticallyArchivedSessionKeys, recentSessions],
+  );
   const sessionCollections = useMemo(() => {
     const visibleProjections = new Map(
       [...projections].filter(([, projection]) => {
+        if (projection.summary.session.origin?.kind === "council") {
+          return false;
+        }
         const providerSessionId = projection.summary.session.providerSessionId;
-        return !providerSessionId || !optimisticallyArchivedSessionKeys.has(
-          `${projection.summary.session.provider}:${providerSessionId}`,
+        if (!providerSessionId) {
+          return true;
+        }
+        const key = `${projection.summary.session.provider}:${providerSessionId}`;
+        return (
+          !councilProviderSessionKeys.has(key) &&
+          !optimisticallyArchivedSessionKeys.has(key)
         );
       }),
-    );
-    const visibleStoredSessions = storedSessions.filter(
-      (session) =>
-        !optimisticallyArchivedSessionKeys.has(
-          `${session.provider}:${session.providerSessionId}`,
-        ),
     );
     return deriveWorkbenchSessionCollections({
         projections: visibleProjections,
@@ -760,9 +825,10 @@ export function App() {
       });
   }, [
     clientId,
+    councilProviderSessionKeys,
     optimisticallyArchivedSessionKeys,
     projections,
-    storedSessions,
+    visibleStoredSessions,
     workspaceDir,
     workspaceDirs,
     workspaceSortMode,
@@ -779,7 +845,7 @@ export function App() {
   } = useWorkbenchSidebarPreferences(
     pinnedSidebarItems,
     workspaceSections,
-    storedSessions,
+    visibleStoredSessions,
     {
       sessions: isInitialLoaded,
       storedSessions: storedSessionsCatalogLoaded && !storedSessionsCatalogDirty,
@@ -1076,6 +1142,9 @@ export function App() {
 
   const scheduleForegroundRecovery = useCallback(() => {
     if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      return;
+    }
+    if (foregroundRecoveryControllerRef.current) {
       return;
     }
     if (foregroundRecoveryTimerRef.current !== null) {
@@ -1862,30 +1931,13 @@ export function App() {
       foregroundRecoveryControllerRef.current?.abort();
       foregroundRecoveryControllerRef.current = null;
     };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        foregroundWakeTickAtRef.current = Date.now();
-        scheduleForegroundRecovery();
-        return;
-      }
-      cancelForegroundRecovery();
-    };
-    const handleForegroundResume = () => {
-      foregroundWakeTickAtRef.current = Date.now();
-      scheduleForegroundRecovery();
-    };
-    const handlePageShow = () => handleForegroundResume();
-    const handleOnline = () => handleForegroundResume();
     const detectForegroundWake = () => {
+      const now = Date.now();
+      const previousTickAt = foregroundWakeTickAtRef.current;
+      foregroundWakeTickAtRef.current = now;
       if (document.visibilityState !== "visible") {
         return;
       }
-      const now = Date.now();
-      const previousTickAt = foregroundWakeTickAtRef.current;
-      if (now - previousTickAt < FOREGROUND_WAKE_HEARTBEAT_MS) {
-        return;
-      }
-      foregroundWakeTickAtRef.current = now;
       if (
         foregroundClockWasSuspended(
           previousTickAt,
@@ -1895,6 +1947,33 @@ export function App() {
       ) {
         scheduleForegroundRecovery();
       }
+    };
+    const recoverIfTransportNeedsIt = () => {
+      reconcileVisibleUnreadState();
+      detectForegroundWake();
+      if (!sessionStoreTransportIsHealthy()) {
+        scheduleForegroundRecovery();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        recoverIfTransportNeedsIt();
+        return;
+      }
+      foregroundWakeTickAtRef.current = Date.now();
+      cancelForegroundRecovery();
+    };
+    const handleForegroundResume = () => recoverIfTransportNeedsIt();
+    const handlePageShow = (event: PageTransitionEvent) => {
+      reconcileVisibleUnreadState();
+      detectForegroundWake();
+      if (event.persisted || !sessionStoreTransportIsHealthy()) {
+        scheduleForegroundRecovery();
+      }
+    };
+    const handleOnline = () => {
+      reconcileVisibleUnreadState();
+      scheduleForegroundRecovery();
     };
     const wakeTimer = window.setInterval(
       detectForegroundWake,
@@ -1915,7 +1994,7 @@ export function App() {
       window.clearInterval(wakeTimer);
       cancelForegroundRecovery();
     };
-  }, [scheduleForegroundRecovery]);
+  }, [reconcileVisibleUnreadState, scheduleForegroundRecovery]);
 
   useEffect(() => {
     if (primaryPaneState.kind !== "active" || !selectedSummary) {
@@ -1957,7 +2036,7 @@ export function App() {
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
-      storedSessions={storedSessions}
+      storedSessions={visibleStoredSessions}
       workspaceSortMode={workspaceSortMode}
       onWorkspaceSortModeChange={setWorkspaceSortMode}
       runningSessionActivityAtById={runningSessionActivityAtById}
@@ -2115,7 +2194,14 @@ export function App() {
     const modelCatalogState =
       modelCatalogs[providerModelCatalogKey(provider, summary.session.cwd)];
     return (
-      <CanvasSessionPane
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+            Loading conversation…
+          </div>
+        }
+      >
+        <CanvasSessionPane
         variant="compact"
         summary={summary}
         projection={projection}
@@ -2225,8 +2311,9 @@ export function App() {
         onSideLayoutChange={() => undefined}
         onForkSession={handleForkSession}
         onRecreateSide={handleRecreateSide}
-        branchOperationKind={pendingBranchOperations.get(summary.session.id) ?? null}
-      />
+          branchOperationKind={pendingBranchOperations.get(summary.session.id) ?? null}
+        />
+      </Suspense>
     );
   };
 
@@ -2245,8 +2332,8 @@ export function App() {
           startSidebarResize(e);
         }}
         sidebarContent={sidebarContent}
-        storedSessions={storedSessions}
-        recentSessions={recentSessions}
+        storedSessions={visibleStoredSessions}
+        recentSessions={visibleRecentSessions}
         runningSessions={runningSessionEntries.map((entry) => entry.summary)}
         runningSessionActivityAtById={runningSessionActivityAtById}
         councils={councils}
@@ -2510,29 +2597,37 @@ export function App() {
         onConfirm={() => resolveMissingWorkspacePrompt(true)}
       />
 
-      {workbenchMode === "single" && (selectedSummary || emptyStateAvailableWorkspaceDir) ? (
-        <FileReferencePicker
-          open={fileReferenceOpen}
-          onOpenChange={setFileReferenceOpen}
-          rootPath={
-            selectedSummary?.session.rootDir ||
-            selectedSummary?.session.cwd ||
-            emptyStateAvailableWorkspaceDir ||
-            "/"
-          }
-          onPick={selectedSummary ? insertDraftReference : insertEmptyStateReference}
-        />
+      {workbenchMode === "single" &&
+      fileReferenceOpen &&
+      (selectedSummary || emptyStateAvailableWorkspaceDir) ? (
+        <Suspense fallback={null}>
+          <FileReferencePicker
+            open
+            onOpenChange={setFileReferenceOpen}
+            rootPath={
+              selectedSummary?.session.rootDir ||
+              selectedSummary?.session.cwd ||
+              emptyStateAvailableWorkspaceDir ||
+              "/"
+            }
+            onPick={selectedSummary ? insertDraftReference : insertEmptyStateReference}
+          />
+        </Suspense>
       ) : null}
 
-      <NewCouncilDialog
-        open={homeNewCouncilDialogOpen}
-        onOpenChange={setHomeNewCouncilDialogOpen}
-        workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
-        workspaceDirs={workspaceDirs}
-        councils={councils}
-        onAddWorkspace={(dir) => void addWorkspace(dir)}
-        onCreated={openCreatedCouncil}
-      />
+      {homeNewCouncilDialogOpen ? (
+        <Suspense fallback={null}>
+          <NewCouncilDialog
+            open
+            onOpenChange={setHomeNewCouncilDialogOpen}
+            workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
+            workspaceDirs={workspaceDirs}
+            councils={councils}
+            onAddWorkspace={(dir) => void addWorkspace(dir)}
+            onCreated={openCreatedCouncil}
+          />
+        </Suspense>
+      ) : null}
 
       <WorkbenchErrorBoundary resetKey={`${workbenchMode}:${selectedSessionId ?? primaryPaneState.kind}`}>
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -2564,7 +2659,14 @@ export function App() {
               />
             </Suspense>
           ) : workbenchMode === "canvas" ? (
-            <CanvasWorkbench
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+                  Loading canvas…
+                </div>
+              }
+            >
+              <CanvasWorkbench
               panes={visibleCanvasPaneIds.map((paneId) => {
                 const target = canvasPaneTargets[paneId];
                 return {
@@ -2924,8 +3026,8 @@ export function App() {
                       </div>
                       <div className="grid w-full max-w-[17rem] grid-cols-2 gap-2">
                         <SessionHistoryDialog
-                          storedSessions={storedSessions}
-                          recentSessions={recentSessions}
+                          storedSessions={visibleStoredSessions}
+                          recentSessions={visibleRecentSessions}
                           runningSessions={runningSessionEntries.map((entry) => entry.summary)}
                           runningSessionActivityAtById={runningSessionActivityAtById}
                           councils={councils}
@@ -3220,14 +3322,22 @@ export function App() {
                   />
                 );
               }}
-            />
+              />
+            </Suspense>
           ) : primaryPaneState.kind === "active" && selectedSummary ? (
             <SessionSideDock
               dockId={selectedSummary.session.id}
               main={(
                 <div className="conversation-panel-surface relative flex h-full min-h-0 min-w-0">
                   <div className="min-w-0 flex-1">
-                    <WorkbenchSelectedPane
+                    <Suspense
+                      fallback={
+                        <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+                          Loading conversation…
+                        </div>
+                      }
+                    >
+                      <WorkbenchSelectedPane
               selectedSummary={selectedSummary}
               clientId={clientId}
               selectedProjection={selectedProjection}
@@ -3545,8 +3655,9 @@ export function App() {
                   [selectedSummary.session.id]: layout,
                 }));
               }}
-              showInspectorToggle={sessionInspectorAvailable && !inspectorToggleOpen}
-                    />
+                        showInspectorToggle={sessionInspectorAvailable && !inspectorToggleOpen}
+                      />
+                    </Suspense>
                   </div>
                   {inspectorContent ? (
                     <WorkbenchInspectorShell

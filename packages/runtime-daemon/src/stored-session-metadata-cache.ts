@@ -24,8 +24,8 @@ function resolveRahHome(): string {
   return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
 }
 
-function cacheFilePath(provider: ProviderKind): string {
-  return path.join(resolveRahHome(), "stored-session-cache", `${provider}.json`);
+function cacheFilePath(provider: ProviderKind, rootDir = resolveRahHome()): string {
+  return path.join(rootDir, "stored-session-cache", `${provider}.json`);
 }
 
 function catalogSnapshotPath(): string {
@@ -78,10 +78,11 @@ export function writeStoredSessionCatalogSnapshot(
 
 export function loadStoredSessionMetadataCache(
   provider: ProviderKind,
+  rootDir?: string,
 ): Map<string, StoredSessionMetadataCacheEntry> {
   try {
     const parsed = JSON.parse(
-      readFileSync(cacheFilePath(provider), "utf8"),
+      readFileSync(cacheFilePath(provider, rootDir), "utf8"),
     ) as StoredSessionMetadataCacheFile;
     return new Map(Object.entries(parsed.entries ?? {}));
   } catch {
@@ -106,8 +107,9 @@ export function loadStoredSessionCatalogCache(
 export function writeStoredSessionMetadataCache(
   provider: ProviderKind,
   entries: Map<string, StoredSessionMetadataCacheEntry>,
+  rootDir?: string,
 ): void {
-  const targetPath = cacheFilePath(provider);
+  const targetPath = cacheFilePath(provider, rootDir);
   mkdirSync(path.dirname(targetPath), { recursive: true });
   writeFileSync(
     targetPath,

@@ -538,9 +538,12 @@ export function SessionHistoryDialog(props: {
   onRestoreSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string, sessions: readonly StoredSessionRef[]) => void;
   defaultTab?: ChatTab;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = props.open ?? internalOpen;
   const [tab, setTab] = useState<ChatTab>(props.defaultTab ?? "active");
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -563,10 +566,13 @@ export function SessionHistoryDialog(props: {
     if (nextOpen) {
       setTab(props.defaultTab ?? "active");
     }
-    setOpen(nextOpen);
+    if (props.open === undefined) {
+      setInternalOpen(nextOpen);
+    }
+    props.onOpenChange?.(nextOpen);
   };
   const closeAfterActivation = () => {
-    setOpen(false);
+    handleOpenChange(false);
   };
 
   const runningIdentityKeys = useMemo(
@@ -1176,7 +1182,7 @@ export function SessionHistoryDialog(props: {
                     providerSessionId: pendingRemoveSession.providerSessionId,
                   });
                   setPendingRemoveSession(null);
-                  window.setTimeout(() => setOpen(true), 0);
+                  window.setTimeout(() => handleOpenChange(true), 0);
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
               >
@@ -1263,7 +1269,7 @@ export function SessionHistoryDialog(props: {
                     pendingRemoveWorkspace.sessions,
                   );
                   setPendingRemoveWorkspace(null);
-                  window.setTimeout(() => setOpen(true), 0);
+                  window.setTimeout(() => handleOpenChange(true), 0);
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
               >
@@ -1331,7 +1337,7 @@ export function SessionHistoryDialog(props: {
                   }
                   void props.onRemoveCouncil?.(pendingRemoveCouncil.id);
                   setPendingRemoveCouncil(null);
-                  window.setTimeout(() => setOpen(true), 0);
+                  window.setTimeout(() => handleOpenChange(true), 0);
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
               >

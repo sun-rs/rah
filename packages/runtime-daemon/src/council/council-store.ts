@@ -810,7 +810,10 @@ export class CouncilStore {
   updateAgent(
     councilId: string,
     agentId: string,
-    patch: Partial<Pick<CouncilAgent, "status" | "terminalId" | "nativeSessionId" | "lastStatusDetail">>,
+    patch: Partial<Pick<
+      CouncilAgent,
+      "status" | "terminalId" | "nativeSessionId" | "providerSessionIds" | "lastStatusDetail"
+    >>,
   ): CouncilSnapshot {
     const agent = this.requireAgent(councilId, agentId);
     Object.assign(agent, patch, { updatedAt: nowIso() });

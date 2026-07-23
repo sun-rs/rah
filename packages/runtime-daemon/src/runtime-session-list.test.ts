@@ -78,6 +78,43 @@ function storedRef(providerSessionId: string): StoredSessionRef {
 }
 
 describe("buildSessionsResponse", () => {
+  test("keeps Council-owned live and stored sessions out of the ordinary session catalog", () => {
+    const councilLive = storedSessionState("council-provider-session");
+    councilLive.session.origin = {
+      kind: "council",
+      councilId: "council-1",
+      agentId: "agent-1",
+    };
+    const response = buildSessionsResponse({
+      liveStates: [councilLive],
+      discoveredStoredSessions: [
+        storedRef("council-provider-session"),
+        storedRef("ordinary-provider-session"),
+      ],
+      remembered: {
+        rememberedSessions: [storedRef("council-provider-session")],
+        rememberedRecentSessions: [storedRef("council-provider-session")],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      excludedProviderSessionKeys: new Set(["codex:council-provider-session"]),
+      isClosingSession: () => false,
+      storedSessionsMode: "all",
+    });
+
+    assert.deepEqual(response.sessions, []);
+    assert.deepEqual(
+      response.storedSessions.map((session) => session.providerSessionId),
+      ["ordinary-provider-session"],
+    );
+    assert.deepEqual(
+      response.recentSessions.map((session) => session.providerSessionId),
+      ["ordinary-provider-session"],
+    );
+  });
+
   test("treats provider archive state as a stored-session revision", () => {
     const active = storedRef("archive-state");
     const archived: StoredSessionRef = {

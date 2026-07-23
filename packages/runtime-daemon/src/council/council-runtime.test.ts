@@ -218,6 +218,14 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     await waitForCondition(() => managed.started.length === 3, "expected all council agents to launch as managed sessions");
     const launchedCouncil = runtime.listCouncils().councils.find((council) => council.id === response.council.id)!;
     assert.equal(launchedCouncil.status, "running");
+    assert.deepEqual(
+      launchedCouncil.agents.map((agent) => agent.providerSessionIds),
+      [
+        ["managed:codex:1"],
+        ["managed:claude:2"],
+        ["managed:opencode:3"],
+      ],
+    );
     assert.equal(managed.started[0]!.provider, "codex");
     assert.equal(managed.started[0]!.liveBackend, "native_local_server");
     assert.deepEqual(managed.started[0]!.origin, {
@@ -333,6 +341,38 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
     if (previousRahHome === undefined) delete process.env.RAH_HOME;
     else process.env.RAH_HOME = previousRahHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime persists provider identities that arrive after managed-session startup", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-late-provider-id-"));
+  try {
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const council = store.createCouncil({
+      workspace: root,
+      agents: [{ id: "claude-reviewer", provider: "claude", label: "Claude Reviewer" }],
+    });
+    const runtime = createCouncilRuntime({ store, dryRun: true });
+    const agent = council.agents[0]!;
+    const session = {
+      provider: "claude" as const,
+      providerSessionId: "late-claude-session",
+      origin: {
+        kind: "council" as const,
+        councilId: council.id,
+        agentId: agent.id,
+      },
+    };
+
+    runtime.rememberManagedSessionProviderIdentity(session);
+    runtime.rememberManagedSessionProviderIdentity(session);
+
+    assert.deepEqual(
+      runtime.listCouncils().councils[0]?.agents[0]?.providerSessionIds,
+      ["late-claude-session"],
+    );
+  } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
@@ -1169,6 +1209,7 @@ test("CouncilRuntime stop closes an agent session that finishes launching after 
     assert.equal(stopped.phase, "ended");
     assert.equal(stopped.agents[0]!.status, "stopped");
     assert.equal(stopped.agents[0]!.nativeSessionId, undefined);
+    assert.deepEqual(stopped.agents[0]!.providerSessionIds, ["managed:codex:1"]);
     const initialGenericInputs = managed.inputs.slice();
     assert.deepEqual(initialGenericInputs, []);
   } finally {

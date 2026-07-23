@@ -36,6 +36,12 @@ import { normalizeDirectory } from "./workbench-directory-utils";
 import { withHistoryMeta } from "./stored-session-history-meta";
 import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 import { providerBinaryArgv } from "./provider-binary-utils";
+import {
+  getCachedStoredSessionRef,
+  loadStoredSessionMetadataCache,
+  setCachedStoredSessionRef,
+  writeStoredSessionMetadataCache,
+} from "./stored-session-metadata-cache";
 
 export interface OpenCodeStoredSessionRecord {
   ref: StoredSessionRef;
@@ -89,6 +95,8 @@ const HISTORY_SOURCE = {
   authority: "authoritative" as const,
 };
 
+const OPENCODE_HISTORY_META_CACHE_VERSION = 1;
+
 type OpenCodeSessionRow = {
   id: string;
   directory: string | null;
@@ -98,6 +106,12 @@ type OpenCodeSessionRow = {
   time_archived: number | null;
   project_worktree: string | null;
   preview: string | null;
+  message_count: number | null;
+  history_bytes: number | null;
+};
+
+type OpenCodeHistoryStatsRow = {
+  id: string;
   message_count: number | null;
   history_bytes: number | null;
 };
@@ -235,22 +249,8 @@ export function discoverOpenCodeStoredSessions(options: {
             limit 1
           )
         ) as preview,
-        (
-          select count(*)
-          from message mm
-          where mm.session_id = s.id
-        ) as message_count,
-        (
-          coalesce((
-            select sum(length(cast(mm.data as blob)))
-            from message mm
-            where mm.session_id = s.id
-          ), 0) + coalesce((
-            select sum(length(cast(pp.data as blob)))
-            from part pp
-            where pp.session_id = s.id
-          ), 0)
-        ) as history_bytes
+        null as message_count,
+        null as history_bytes
       from session s
       left join project p on p.id = s.project_id
       where s.parent_id is null
@@ -259,7 +259,13 @@ export function discoverOpenCodeStoredSessions(options: {
     `,
     { throwOnReadError: options.throwOnReadError === true },
   );
-  return rows.flatMap((row) => buildStoredSessionRecord(row, databasePath));
+  return hydrateOpenCodeSessionHistoryMeta(rows, databasePath, {
+    ...(options.dataDir
+      ? { cacheRootDir: path.join(options.dataDir, ".rah-cache") }
+      : {}),
+    pruneCache: options.limit === undefined,
+    throwOnReadError: options.throwOnReadError === true,
+  });
 }
 
 export function findOpenCodeStoredSessionRecord(
@@ -304,29 +310,21 @@ export function findOpenCodeStoredSessionRecord(
             limit 1
           )
         ) as preview,
-        (
-          select count(*)
-          from message mm
-          where mm.session_id = s.id
-        ) as message_count,
-        (
-          coalesce((
-            select sum(length(cast(mm.data as blob)))
-            from message mm
-            where mm.session_id = s.id
-          ), 0) + coalesce((
-            select sum(length(cast(pp.data as blob)))
-            from part pp
-            where pp.session_id = s.id
-          ), 0)
-        ) as history_bytes
+        null as message_count,
+        null as history_bytes
       from session s
       left join project p on p.id = s.project_id
       where s.id = ${quoteSql(providerSessionId)}
       limit 1
     `,
   );
-  return buildStoredSessionRecord(rows[0], databasePath)[0] ?? null;
+  return (
+    hydrateOpenCodeSessionHistoryMeta(rows, databasePath, {
+      ...(options.dataDir
+        ? { cacheRootDir: path.join(options.dataDir, ".rah-cache") }
+        : {}),
+    })[0] ?? null
+  );
 }
 
 export function restoreOpenCodeStoredSession(record: OpenCodeStoredSessionRecord): void {
@@ -1053,6 +1051,118 @@ function attachRequestedClient(
       },
     });
   }
+}
+
+function openCodeHistoryMetaCacheKey(databasePath: string, sessionId: string): string {
+  return `${databasePath}#${sessionId}`;
+}
+
+function openCodeHistoryMetaRevision(row: OpenCodeSessionRow): number {
+  return row.time_updated ?? row.time_created ?? 0;
+}
+
+function hydrateOpenCodeSessionHistoryMeta(
+  rows: OpenCodeSessionRow[],
+  databasePath: string,
+  options: {
+    cacheRootDir?: string;
+    pruneCache?: boolean;
+    throwOnReadError?: boolean;
+  } = {},
+): OpenCodeStoredSessionRecord[] {
+  if (rows.length === 0) {
+    return [];
+  }
+  const cache = loadStoredSessionMetadataCache("opencode", options.cacheRootDir);
+  const missingRows: OpenCodeSessionRow[] = [];
+  for (const row of rows) {
+    const cached = getCachedStoredSessionRef({
+      cache,
+      filePath: openCodeHistoryMetaCacheKey(databasePath, row.id),
+      size: openCodeHistoryMetaRevision(row),
+      mtimeMs: 0,
+      version: OPENCODE_HISTORY_META_CACHE_VERSION,
+    });
+    const bytes = cached?.historyMeta?.bytes;
+    const messages = cached?.historyMeta?.messages;
+    if (typeof bytes === "number" && typeof messages === "number") {
+      row.history_bytes = bytes;
+      row.message_count = messages;
+    } else {
+      missingRows.push(row);
+    }
+  }
+
+  if (missingRows.length > 0) {
+    const requestedValues = missingRows
+      .map((row) => `(${quoteSql(row.id)})`)
+      .join(",");
+    const stats = sqliteJson<OpenCodeHistoryStatsRow>(
+      databasePath,
+      `
+        with requested(id) as (values ${requestedValues}),
+        message_stats as (
+          select
+            mm.session_id as id,
+            count(*) as message_count,
+            coalesce(sum(length(cast(mm.data as blob))), 0) as message_bytes
+          from message mm
+          join requested r on r.id = mm.session_id
+          group by mm.session_id
+        ),
+        part_stats as (
+          select
+            pp.session_id as id,
+            coalesce(sum(length(cast(pp.data as blob))), 0) as part_bytes
+          from part pp
+          join requested r on r.id = pp.session_id
+          group by pp.session_id
+        )
+        select
+          r.id,
+          coalesce(m.message_count, 0) as message_count,
+          coalesce(m.message_bytes, 0) + coalesce(p.part_bytes, 0) as history_bytes
+        from requested r
+        left join message_stats m on m.id = r.id
+        left join part_stats p on p.id = r.id
+      `,
+      { throwOnReadError: options.throwOnReadError === true },
+    );
+    const statsById = new Map(stats.map((entry) => [entry.id, entry]));
+    for (const row of missingRows) {
+      const entry = statsById.get(row.id);
+      row.message_count = entry?.message_count ?? 0;
+      row.history_bytes = entry?.history_bytes ?? 0;
+    }
+  }
+
+  const records = rows.flatMap((row) => buildStoredSessionRecord(row, databasePath));
+  if (
+    missingRows.length > 0 ||
+    (options.pruneCache === true && cache.size !== records.length)
+  ) {
+    const nextCache = options.pruneCache === true ? new Map() : cache;
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    for (const record of records) {
+      const row = rowsById.get(record.ref.providerSessionId);
+      if (!row) {
+        continue;
+      }
+      setCachedStoredSessionRef({
+        cache: nextCache,
+        filePath: openCodeHistoryMetaCacheKey(
+          databasePath,
+          record.ref.providerSessionId,
+        ),
+        size: openCodeHistoryMetaRevision(row),
+        mtimeMs: 0,
+        version: OPENCODE_HISTORY_META_CACHE_VERSION,
+        ref: record.ref,
+      });
+    }
+    writeStoredSessionMetadataCache("opencode", nextCache, options.cacheRootDir);
+  }
+  return records;
 }
 
 function buildStoredSessionRecord(

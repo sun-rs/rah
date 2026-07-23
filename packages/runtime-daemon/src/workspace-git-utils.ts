@@ -72,45 +72,41 @@ export async function getWorkspaceGitDiffAsync(
   targetPath: string,
   options?: WorkspaceGitDiffOptions,
 ): Promise<GitDiffResponse["diff"]> {
-  try {
-    const gitBase = options?.scopeRoot ?? cwd;
-    const gitCwd = await tryResolveGitRootAsync(gitBase);
-    if (!gitCwd) {
-      return "";
-    }
-    const relativeGitPath = await toGitPathAsync(gitBase, targetPath);
-    if (await isUntrackedGitPathAsync(gitCwd, relativeGitPath)) {
-      return await runGitCommand(
-        gitCwd,
-        [
-          "diff",
-          "--no-index",
-          ...(options?.ignoreWhitespace ? ["-w"] : []),
-          "--",
-          "/dev/null",
-          relativeGitPath,
-        ],
-        { acceptedExitCodes: [1] },
-      );
-    }
-    const args = ["-C", gitCwd, "diff"];
-    if (options?.baseBranch) {
-      const comparison = await readBranchComparisonAsync(gitCwd, options.baseBranch);
-      if (!comparison.comparisonBase) {
-        return "";
-      }
-      args.push(comparison.comparisonBase);
-    } else if (options?.staged) {
-      args.push("--cached");
-    }
-    if (options?.ignoreWhitespace) {
-      args.push("-w");
-    }
-    args.push("--", relativeGitPath);
-    return await runGitCommand(gitCwd, args.slice(2));
-  } catch {
+  const gitBase = options?.scopeRoot ?? cwd;
+  const gitCwd = await tryResolveGitRootAsync(gitBase);
+  if (!gitCwd) {
     return "";
   }
+  const relativeGitPath = await toGitPathAsync(gitBase, targetPath);
+  if (await isUntrackedGitPathAsync(gitCwd, relativeGitPath)) {
+    return await runGitCommand(
+      gitCwd,
+      [
+        "diff",
+        "--no-index",
+        ...(options?.ignoreWhitespace ? ["-w"] : []),
+        "--",
+        "/dev/null",
+        relativeGitPath,
+      ],
+      { acceptedExitCodes: [1] },
+    );
+  }
+  const args = ["-C", gitCwd, "diff"];
+  if (options?.baseBranch) {
+    const comparison = await readBranchComparisonAsync(gitCwd, options.baseBranch);
+    if (!comparison.comparisonBase) {
+      return "";
+    }
+    args.push(comparison.comparisonBase);
+  } else if (options?.staged) {
+    args.push("--cached");
+  }
+  if (options?.ignoreWhitespace) {
+    args.push("-w");
+  }
+  args.push("--", relativeGitPath);
+  return await runGitCommand(gitCwd, args.slice(2));
 }
 
 export async function applyWorkspaceGitFileActionAsync(
@@ -190,125 +186,9 @@ async function tryReadGitStatusAsync(
   cwd: string,
   options?: WorkspaceGitStatusOptions,
 ): Promise<WorkspaceGitStatusData> {
-  try {
-    const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
-    const gitCwd = await tryResolveGitRootAsync(options?.scopeRoot ?? cwd);
-    if (!gitCwd) {
-      return {
-        branchOptions: [],
-        branchFiles: [],
-        changedFiles: [],
-        stagedFiles: [],
-        unstagedFiles: [],
-        totalBranch: 0,
-        totalStaged: 0,
-        totalUnstaged: 0,
-      };
-    }
-    const [output, comparison] = await Promise.all([
-      runGitCommand(gitCwd, ["status", "--porcelain"]),
-      readBranchComparisonAsync(gitCwd, options?.baseBranch),
-    ]);
-    const lines = output.split(/\r?\n/).filter(Boolean);
-    const [unstagedStatsOutput, stagedStatsOutput, branchFiles] = await Promise.all([
-      runGitNumstatAsync(gitCwd, false),
-      runGitNumstatAsync(gitCwd, true),
-      comparison.comparisonBase
-        ? readBranchChangedFilesAsync(gitCwd, scopeRoot, comparison.comparisonBase)
-        : Promise.resolve([]),
-    ]);
-    const unstagedStats = createDiffStatsMap(parseNumStat(unstagedStatsOutput));
-    const stagedStats = createDiffStatsMap(parseNumStat(stagedStatsOutput));
-    const stagedFiles: GitChangedFile[] = [];
-    const unstagedFiles: GitChangedFile[] = [];
-    const changedFiles = new Set<string>();
-    const branchFilePaths = new Set(branchFiles.map((file) => file.path));
-
-    for (const line of lines) {
-      if (line.startsWith("?? ")) {
-        const rawPath = line.slice(3).trim();
-        if (!rawPath || rawPath.endsWith("/")) {
-          continue;
-        }
-        if (!isPathWithinBase(scopeRoot, path.resolve(gitCwd, rawPath))) {
-          continue;
-        }
-        changedFiles.add(rawPath);
-        unstagedFiles.push({
-          path: rawPath,
-          status: "untracked",
-          staged: false,
-          added: 0,
-          removed: 0,
-        });
-        if (!branchFilePaths.has(rawPath)) {
-          branchFiles.push({
-            path: rawPath,
-            status: "untracked",
-            added: 0,
-            removed: 0,
-          });
-          branchFilePaths.add(rawPath);
-        }
-        continue;
-      }
-
-      const indexStatus = line[0] ?? " ";
-      const worktreeStatus = line[1] ?? " ";
-      const rawPath = line.slice(3).trim();
-      if (!rawPath) {
-        continue;
-      }
-      const renameMatch = /^(.*?) -> (.*)$/.exec(rawPath);
-      const resolvedPath = renameMatch ? renameMatch[2]!.trim() : rawPath;
-      const oldPath = renameMatch ? renameMatch[1]!.trim() : undefined;
-      if (!isPathWithinBase(scopeRoot, path.resolve(gitCwd, resolvedPath))) {
-        continue;
-      }
-      changedFiles.add(resolvedPath);
-
-      if (indexStatus !== " " && indexStatus !== "?") {
-        const stats = stagedStats[resolvedPath] ?? { added: 0, removed: 0, binary: false };
-        stagedFiles.push({
-          path: resolvedPath,
-          ...(oldPath ? { oldPath } : {}),
-          status: getGitFileStatus(indexStatus),
-          staged: true,
-          added: stats.added,
-          removed: stats.removed,
-          ...(stats.binary ? { binary: true } : {}),
-        });
-      }
-
-      if (worktreeStatus !== " " && worktreeStatus !== "?") {
-        const stats = unstagedStats[resolvedPath] ?? { added: 0, removed: 0, binary: false };
-        unstagedFiles.push({
-          path: resolvedPath,
-          ...(oldPath ? { oldPath } : {}),
-          status: getGitFileStatus(worktreeStatus),
-          staged: false,
-          added: stats.added,
-          removed: stats.removed,
-          ...(stats.binary ? { binary: true } : {}),
-        });
-      }
-    }
-
-    return {
-      ...(comparison.currentBranch ? { branch: comparison.currentBranch } : {}),
-      ...(comparison.baseBranch ? { baseBranch: comparison.baseBranch } : {}),
-      ...(comparison.comparisonMode ? { comparisonMode: comparison.comparisonMode } : {}),
-      ...(comparison.comparisonBase ? { comparisonBase: comparison.comparisonBase } : {}),
-      branchOptions: comparison.branchOptions,
-      branchFiles,
-      changedFiles: [...changedFiles],
-      stagedFiles,
-      unstagedFiles,
-      totalBranch: branchFiles.length,
-      totalStaged: stagedFiles.length,
-      totalUnstaged: unstagedFiles.length,
-    };
-  } catch {
+  const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
+  const gitCwd = await tryResolveGitRootAsync(options?.scopeRoot ?? cwd);
+  if (!gitCwd) {
     return {
       branchOptions: [],
       branchFiles: [],
@@ -320,6 +200,189 @@ async function tryReadGitStatusAsync(
       totalUnstaged: 0,
     };
   }
+  const [output, comparison] = await Promise.all([
+    runGitCommand(gitCwd, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ]),
+    readBranchComparisonAsync(gitCwd, options?.baseBranch),
+  ]);
+  const statusEntries = parsePorcelainStatus(output);
+  const shouldReadComparedBranchFiles =
+    comparison.comparisonMode !== "uncommitted" &&
+    Boolean(comparison.comparisonBase);
+  const [unstagedStatsOutput, stagedStatsOutput, comparedBranchFiles] = await Promise.all([
+    runGitNumstatAsync(gitCwd, false),
+    runGitNumstatAsync(gitCwd, true),
+    shouldReadComparedBranchFiles && comparison.comparisonBase
+      ? readBranchChangedFilesAsync(gitCwd, scopeRoot, comparison.comparisonBase)
+      : Promise.resolve([]),
+  ]);
+  const unstagedStats = createDiffStatsMap(parseNumStat(unstagedStatsOutput));
+  const stagedStats = createDiffStatsMap(parseNumStat(stagedStatsOutput));
+  const stagedFiles: GitChangedFile[] = [];
+  const unstagedFiles: GitChangedFile[] = [];
+  const changedFiles = new Set<string>();
+  const branchFiles = [...comparedBranchFiles];
+  const branchFilePaths = new Set(branchFiles.map((file) => file.path));
+
+  for (const entry of statusEntries) {
+    if (entry.indexStatus === "?" && entry.worktreeStatus === "?") {
+      const rawPath = entry.path;
+      if (!rawPath) {
+        continue;
+      }
+      if (!isPathWithinBase(scopeRoot, path.resolve(gitCwd, rawPath))) {
+        continue;
+      }
+      changedFiles.add(rawPath);
+      unstagedFiles.push({
+        path: rawPath,
+        status: "untracked",
+        staged: false,
+        added: 0,
+        removed: 0,
+      });
+      if (!branchFilePaths.has(rawPath)) {
+        branchFiles.push({
+          path: rawPath,
+          status: "untracked",
+          added: 0,
+          removed: 0,
+        });
+        branchFilePaths.add(rawPath);
+      }
+      continue;
+    }
+
+    const { indexStatus, worktreeStatus } = entry;
+    const resolvedPath = entry.path;
+    const oldPath = entry.oldPath;
+    if (!isPathWithinBase(scopeRoot, path.resolve(gitCwd, resolvedPath))) {
+      continue;
+    }
+    changedFiles.add(resolvedPath);
+
+    if (indexStatus !== " " && indexStatus !== "?") {
+      const stats = stagedStats[resolvedPath] ?? { added: 0, removed: 0, binary: false };
+      stagedFiles.push({
+        path: resolvedPath,
+        ...(oldPath ? { oldPath } : {}),
+        status: getGitFileStatus(indexStatus),
+        staged: true,
+        added: stats.added,
+        removed: stats.removed,
+        ...(stats.binary ? { binary: true } : {}),
+      });
+    }
+
+    if (worktreeStatus !== " " && worktreeStatus !== "?") {
+      const stats = unstagedStats[resolvedPath] ?? { added: 0, removed: 0, binary: false };
+      unstagedFiles.push({
+        path: resolvedPath,
+        ...(oldPath ? { oldPath } : {}),
+        status: getGitFileStatus(worktreeStatus),
+        staged: false,
+        added: stats.added,
+        removed: stats.removed,
+        ...(stats.binary ? { binary: true } : {}),
+      });
+    }
+  }
+
+  if (comparison.comparisonMode === "uncommitted") {
+    const uncommittedByPath = new Map(
+      branchFiles.map((file) => [file.path, file] as const),
+    );
+    for (const file of [...stagedFiles, ...unstagedFiles]) {
+      const existing = uncommittedByPath.get(file.path);
+      if (!existing) {
+        uncommittedByPath.set(file.path, {
+          path: file.path,
+          ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+          status: file.status,
+          added: file.added,
+          removed: file.removed,
+          ...(file.binary ? { binary: true } : {}),
+        });
+        continue;
+      }
+      if (existing.status === "untracked") {
+        continue;
+      }
+      uncommittedByPath.set(file.path, {
+        ...existing,
+        ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+        status: file.status,
+        added: existing.added + file.added,
+        removed: existing.removed + file.removed,
+        ...(existing.binary || file.binary ? { binary: true } : {}),
+      });
+    }
+    branchFiles.splice(0, branchFiles.length, ...uncommittedByPath.values());
+  }
+
+  return {
+    ...(comparison.currentBranch ? { branch: comparison.currentBranch } : {}),
+    ...(comparison.baseBranch ? { baseBranch: comparison.baseBranch } : {}),
+    ...(comparison.comparisonMode ? { comparisonMode: comparison.comparisonMode } : {}),
+    ...(comparison.comparisonBase ? { comparisonBase: comparison.comparisonBase } : {}),
+    branchOptions: comparison.branchOptions,
+    branchFiles,
+    changedFiles: [...changedFiles],
+    stagedFiles,
+    unstagedFiles,
+    totalBranch: branchFiles.length,
+    totalStaged: stagedFiles.length,
+    totalUnstaged: unstagedFiles.length,
+  };
+}
+
+type PorcelainStatusEntry = {
+  indexStatus: string;
+  worktreeStatus: string;
+  path: string;
+  oldPath?: string;
+};
+
+/**
+ * `-z` keeps paths byte-for-byte (including spaces, quotes, and newlines).
+ * For rename/copy records Git emits the destination first and the source in
+ * the following NUL-delimited field.
+ */
+function parsePorcelainStatus(output: string): PorcelainStatusEntry[] {
+  const fields = output.split("\0");
+  const entries: PorcelainStatusEntry[] = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    if (!field || field.length < 3) {
+      continue;
+    }
+    const indexStatus = field[0] ?? " ";
+    const worktreeStatus = field[1] ?? " ";
+    const filePath = field.slice(3);
+    const isRenameOrCopy =
+      indexStatus === "R" ||
+      indexStatus === "C" ||
+      worktreeStatus === "R" ||
+      worktreeStatus === "C";
+    const oldPath = isRenameOrCopy ? fields[index + 1] : undefined;
+    if (isRenameOrCopy) {
+      index += 1;
+    }
+    if (!filePath) {
+      continue;
+    }
+    entries.push({
+      indexStatus,
+      worktreeStatus,
+      path: filePath,
+      ...(oldPath ? { oldPath } : {}),
+    });
+  }
+  return entries;
 }
 
 type BranchComparison = {
@@ -467,7 +530,7 @@ async function tryRunGitCommand(cwd: string, args: string[]): Promise<string> {
 }
 
 async function isUntrackedGitPathAsync(cwd: string, targetPath: string): Promise<boolean> {
-  const output = await tryRunGitCommand(cwd, [
+  const output = await runGitCommand(cwd, [
     "ls-files",
     "--others",
     "--exclude-standard",
@@ -492,11 +555,7 @@ async function toGitPathAsync(cwd: string, targetPath: string): Promise<string> 
 }
 
 async function runGitNumstatAsync(cwd: string, staged: boolean): Promise<string> {
-  try {
-    return await runGitCommand(cwd, ["diff", ...(staged ? ["--cached"] : []), "--numstat"]);
-  } catch {
-    return "";
-  }
+  return await runGitCommand(cwd, ["diff", ...(staged ? ["--cached"] : []), "--numstat"]);
 }
 
 function parseNumStat(numStatOutput: string): Array<{

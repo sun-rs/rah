@@ -242,21 +242,35 @@ export function buildSessionsResponse(args: {
   remembered: RememberedWorkbenchSessionState;
   isClosingSession: (sessionId: string) => boolean;
   storedSessionsMode?: StoredSessionsResponseMode;
+  excludedProviderSessionKeys?: ReadonlySet<string>;
 }): ListSessionsResponse {
   const userFacingLiveStates = args.liveStates.filter(
-    (state) => !isInternalNativeTuiProbeSession(state.session),
+    (state) =>
+      !isInternalNativeTuiProbeSession(state.session) &&
+      state.session.origin?.kind !== "council" &&
+      (!state.session.providerSessionId ||
+        !args.excludedProviderSessionKeys?.has(sessionProviderKey({
+          provider: state.session.provider,
+          providerSessionId: state.session.providerSessionId,
+        }))),
   );
   const visibleRunningStates = userFacingLiveStates.filter(
     (state) => !args.isClosingSession(state.session.id),
   );
   const rememberedSessions = args.remembered.rememberedSessions.filter(
-    (session) => !isInternalNativeTuiProbeSession(session),
+    (session) =>
+      !isInternalNativeTuiProbeSession(session) &&
+      !args.excludedProviderSessionKeys?.has(sessionProviderKey(session)),
   );
   const rememberedRecentSessions = args.remembered.rememberedRecentSessions.filter(
-    (session) => !isInternalNativeTuiProbeSession(session),
+    (session) =>
+      !isInternalNativeTuiProbeSession(session) &&
+      !args.excludedProviderSessionKeys?.has(sessionProviderKey(session)),
   );
   const discoveredStoredSessions = args.discoveredStoredSessions.filter(
-    (session) => !isInternalNativeTuiProbeSession(session),
+    (session) =>
+      !isInternalNativeTuiProbeSession(session) &&
+      !args.excludedProviderSessionKeys?.has(sessionProviderKey(session)),
   );
   const titleContext = {
     titleOverrides: args.remembered.rememberedSessionTitleOverrides,

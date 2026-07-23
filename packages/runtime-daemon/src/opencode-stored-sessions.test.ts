@@ -79,6 +79,43 @@ test("uses stable OpenCode stored session preview instead of the latest text par
   }
 });
 
+test("reuses OpenCode history-size metadata until the provider session revision changes", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const databasePath = path.join(dataDir, "opencode.db");
+    const initialBytes =
+      discoverOpenCodeStoredSessions({ dataDir }).find(
+        (record) => record.ref.providerSessionId === "ses_active",
+      )?.ref.historyMeta?.bytes ?? 0;
+
+    execFileSync("sqlite3", [
+      databasePath,
+      `
+        update part
+        set data = json_set(data, '$.text', printf('%.*c', 4096, 'x'))
+        where id = 'prt_c_assistant';
+      `,
+    ]);
+    const cachedBytes =
+      discoverOpenCodeStoredSessions({ dataDir }).find(
+        (record) => record.ref.providerSessionId === "ses_active",
+      )?.ref.historyMeta?.bytes ?? 0;
+    assert.equal(cachedBytes, initialBytes);
+
+    execFileSync("sqlite3", [
+      databasePath,
+      `update session set time_updated = time_updated + 1 where id = 'ses_active';`,
+    ]);
+    const refreshedBytes =
+      discoverOpenCodeStoredSessions({ dataDir }).find(
+        (record) => record.ref.providerSessionId === "ses_active",
+      )?.ref.historyMeta?.bytes ?? 0;
+    assert.ok(refreshedBytes > initialBytes);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("discovers the complete OpenCode catalog when no explicit limit is requested", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {

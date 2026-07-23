@@ -368,14 +368,17 @@ describe("sidebar layout contract", () => {
     const headerSource = readSource("./inspector/InspectorHeader.tsx");
     const resourcesSource = readSource("./inspector/InspectorResourcesPane.tsx");
 
-    assert.match(inspectorSource, /loadConversationResourceIndex/);
-    assert.match(inspectorSource, /\}, \[props\.sessionId\]\);/);
+    assert.match(inspectorSource, /loadCachedConversationResourceIndex/);
+    assert.match(inspectorSource, /\[props\.sessionId, resourceIndexRetryToken\]/);
     assert.doesNotMatch(inspectorSource, /activeTab !== "outputs" && activeTab !== "sources"/);
     assert.doesNotMatch(inspectorSource, /onLoadConversationTurnDetail/);
-    assert.match(indexSource, /Math\.min\(3, candidates\.length\)/);
-    assert.match(indexSource, /Builds an Inspector-only resource index/);
-    assert.match(headerSource, /Outputs \(\{resourceCount\(props\.outputCount\)\}\)/);
-    assert.match(headerSource, /Sources \(\{resourceCount\(props\.sourceCount\)\}\)/);
+    assert.match(indexSource, /dependencies\.readIndex\(args\.sessionId/);
+    assert.doesNotMatch(indexSource, /readConversationTurnsPage/);
+    assert.doesNotMatch(indexSource, /readConversationTurnDetail/);
+    assert.match(indexSource, /daemon-owned provider-neutral resource-index request/);
+    assert.match(headerSource, /Outputs \(\{props\.outputCount\}\)/);
+    assert.match(headerSource, /Sources \(\{props\.sourceCount\}\)/);
+    assert.doesNotMatch(headerSource, /resourceIndexing/);
     assert.doesNotMatch(resourcesSource, /Indexing complete turn resources/);
     assert.doesNotMatch(resourcesSource, /role="status"/);
   });
