@@ -161,6 +161,32 @@ function TimelineCard(props: {
   );
 }
 
+function ContextCompactionDivider(props: {
+  item: Extract<TimelineItem, { kind: "compaction" }>;
+}) {
+  const countSuffix =
+    props.item.count && props.item.count > 1 ? ` · ${props.item.count} passes` : "";
+  const triggerSuffix = props.item.trigger ? ` · ${props.item.trigger}` : "";
+  const label = `${
+    props.item.status === "started" ? "Compacting context" : "Context compacted"
+  }${countSuffix}${triggerSuffix}`;
+  return (
+    <div
+      className="flex min-w-0 items-center gap-2 py-1 text-[11px] text-[var(--app-hint)]"
+      data-testid="context-compaction-divider"
+      role="separator"
+      aria-label={label}
+    >
+      <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-[var(--app-border)]" />
+      <span className="inline-flex shrink-0 items-center gap-1.5">
+        <ArrowUpToLine size={12} aria-hidden="true" />
+        <span>{label}</span>
+      </span>
+      <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-[var(--app-border)]" />
+    </div>
+  );
+}
+
 function renderTimelineItem(item: TimelineItem, options: {
   entryKey?: string;
   canCopyAssistant?: boolean;
@@ -312,17 +338,8 @@ function renderTimelineItem(item: TimelineItem, options: {
           </div>
         </TimelineCard>
       );
-    case "compaction": {
-      const countSuffix = item.count && item.count > 1 ? ` · ${item.count} passes` : "";
-      const triggerSuffix = item.trigger ? ` · ${item.trigger}` : "";
-      return (
-        <SystemNotice
-          content={`${
-            item.status === "started" ? "Compacting context" : "Context compacted"
-          }${countSuffix}${triggerSuffix}`}
-        />
-      );
-    }
+    case "compaction":
+      return <ContextCompactionDivider item={item} />;
   }
 }
 
@@ -789,6 +806,25 @@ export const ChatThread = memo(function ChatThread(props: {
     }
   }, []);
 
+  const captureProcessDisclosureAnchor = useCallback(
+    (anchorElement: HTMLElement) => {
+      const node = containerRef.current;
+      const row = anchorElement.closest<HTMLElement>("[data-feed-entry-key]");
+      if (!node || !row) {
+        return;
+      }
+      detachBottomFollowing();
+      const containerTop = node.getBoundingClientRect().top;
+      prependAnchorRef.current = {
+        scrollHeight: node.scrollHeight,
+        scrollTop: node.scrollTop,
+        entryKey: row.dataset.feedEntryKey ?? null,
+        offsetTop: row.getBoundingClientRect().top - containerTop,
+      };
+    },
+    [detachBottomFollowing],
+  );
+
   const restoreBottomAfterForeground = useCallback(() => {
     if (
       !returnToBottomOnVisibleRef.current &&
@@ -868,6 +904,12 @@ export const ChatThread = memo(function ChatThread(props: {
       restoreVisiblePrependAnchor();
     });
   }, [restoreVisiblePrependAnchor]);
+
+  useLayoutEffect(() => {
+    if (prependAnchorRef.current) {
+      restoreVisiblePrependAnchor();
+    }
+  }, [processGroupExpansionOverrides, restoreVisiblePrependAnchor]);
 
   const releaseSettledPrependAnchor = useCallback(() => {
     if (props.historyLoading || loadingOlderRef.current) {
@@ -1721,7 +1763,8 @@ export const ChatThread = memo(function ChatThread(props: {
                         ? processGroupExpansionOverrides.get(row.key) ?? false
                         : true
                     }
-                    onExpandedChange={(expanded) => {
+                    onExpandedChange={(expanded, anchor) => {
+                      captureProcessDisclosureAnchor(anchor);
                       setProcessGroupExpansionOverrides((current) => {
                         const next = new Map(current);
                         next.set(row.key, expanded);

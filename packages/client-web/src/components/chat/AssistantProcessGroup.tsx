@@ -4,7 +4,7 @@ import type {
   ConversationActivityKind,
   ConversationItemDetailKind,
 } from "@rah/runtime-protocol";
-import { AlertTriangle, ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
 import type { FeedEntry } from "../../types";
 import { ConversationActivityIcon } from "./conversation-activity-display";
 import {
@@ -122,7 +122,7 @@ function activityBatchLabel(
 export function AssistantProcessGroup(props: {
   group: AssistantProcessGroupModel;
   expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
+  onExpandedChange: (expanded: boolean, anchor: HTMLElement) => void;
   detailLoading?: boolean;
   onLoadConversationItemDetail?: (
     kind: ConversationItemDetailKind,
@@ -131,17 +131,10 @@ export function AssistantProcessGroup(props: {
   onOpenLocalFile?: (path: string) => void;
   renderEntry: (entry: FeedEntry) => ReactNode;
 }) {
-  const detailRows = buildProcessDetailRows(props.group.entries);
+  const detailRows = buildProcessDetailRows(props.group.entries, {
+    includeTransientStatus: !props.group.completed,
+  });
   const duration = formatAssistantProcessDuration(props.group.durationMs);
-  const activityFailureCount = props.group.activities.reduce(
-    (total, activity) => total + activity.failureCount,
-    0,
-  );
-  const activityIssueCount = props.group.activities.reduce(
-    (total, activity) => total + activity.issueCount,
-    0,
-  );
-  const reviewResults = activityFailureCount > 0 || activityIssueCount > 0;
   const label =
     props.group.turnStatus === "failed"
       ? duration
@@ -172,9 +165,10 @@ export function AssistantProcessGroup(props: {
         }`}
         aria-expanded={props.expanded}
         disabled={!canCollapse}
-        onClick={() => {
+        data-testid="assistant-process-group-toggle"
+        onClick={(event) => {
           if (canCollapse) {
-            props.onExpandedChange(!props.expanded);
+            props.onExpandedChange(!props.expanded, event.currentTarget);
           }
         }}
       >
@@ -182,25 +176,14 @@ export function AssistantProcessGroup(props: {
           <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
             <LoaderCircle size={13} className="animate-spin" />
           </span>
-        ) : props.group.turnStatus === "failed" ? (
-          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
-            <AlertTriangle size={13} className="text-[var(--app-danger)]" />
-          </span>
-        ) : reviewResults ? (
-          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
-            <AlertTriangle size={13} className="text-[var(--app-warning)]" />
-          </span>
         ) : null}
-        <span className="min-w-0 flex-1 truncate group-focus-visible:underline group-focus-visible:underline-offset-4">{label}</span>
-        {reviewResults && props.group.turnStatus !== "failed" ? (
-          <span className="shrink-0 text-[var(--app-warning)]">Review results</span>
-        ) : null}
+        <span className="min-w-0 truncate group-focus-visible:underline group-focus-visible:underline-offset-4">{label}</span>
         {canCollapse ? (
           props.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
         ) : null}
       </button>
       {props.expanded ? (
-        <div className="mt-3 space-y-2.5">
+        <div className="mt-3 space-y-2.5 border-b border-[var(--app-border)] pb-3">
           {props.detailLoading ? (
             <div className="flex min-h-8 items-center gap-2 text-xs text-[var(--app-hint)]">
               <LoaderCircle size={13} className="animate-spin" />

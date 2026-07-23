@@ -137,6 +137,18 @@ function isReasoningEntry(
   return entry.kind === "timeline" && entry.item.kind === "reasoning";
 }
 
+function isDuplicateReasoningPart(
+  entry: FeedEntry,
+  canonicalReasoningTexts: ReadonlySet<string>,
+): boolean {
+  return (
+    entry.kind === "message_part" &&
+    entry.part.kind === "reasoning" &&
+    typeof entry.part.text === "string" &&
+    canonicalReasoningTexts.has(entry.part.text.trim())
+  );
+}
+
 function entryStatus(entry: FeedEntry): "running" | "completed" | "interrupted" | "failed" {
   if (entry.kind === "tool_call" || entry.kind === "observation") return entry.status;
   if (entry.kind === "message_part") {
@@ -171,10 +183,18 @@ function activityBatchCounts(entries: readonly FeedEntry[]) {
   return { runningCount, interruptedCount, issueCount, failureCount };
 }
 
-export function buildProcessDetailRows(entries: readonly FeedEntry[]): ProcessDetailRow[] {
+export function buildProcessDetailRows(
+  entries: readonly FeedEntry[],
+  options: { includeTransientStatus?: boolean } = {},
+): ProcessDetailRow[] {
   const rows: ProcessDetailRow[] = [];
   let pendingActivityEntries: FeedEntry[] = [];
   let pendingReasoning: ReasoningFeedEntry[] = [];
+  const canonicalReasoningTexts = new Set(
+    entries.flatMap((entry) =>
+      isReasoningEntry(entry) ? [entry.item.text.trim()] : [],
+    ),
+  );
 
   const flushActivity = () => {
     if (pendingActivityEntries.length === 0) {
@@ -217,6 +237,16 @@ export function buildProcessDetailRows(entries: readonly FeedEntry[]): ProcessDe
   };
 
   for (const entry of entries) {
+    if (isDuplicateReasoningPart(entry, canonicalReasoningTexts)) {
+      continue;
+    }
+    if (
+      isReasoningEntry(entry) &&
+      entry.item.presentation === "transient_status" &&
+      options.includeTransientStatus === false
+    ) {
+      continue;
+    }
     const activityKind = entryActivityKind(entry);
     if (activityKind) {
       flushReasoning();

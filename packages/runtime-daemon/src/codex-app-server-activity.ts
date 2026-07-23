@@ -1792,7 +1792,7 @@ function mapThreadItem(
           {
             type: "timeline_item_updated",
             turnId,
-            item: { kind: "reasoning", text },
+            item: { kind: "reasoning", text, presentation: "transient_status" },
             ...timelineIdentityProps(identity),
           },
         ];
@@ -1802,7 +1802,7 @@ function mapThreadItem(
         {
           type: "timeline_item",
           turnId,
-          item: { kind: "reasoning", text },
+          item: { kind: "reasoning", text, presentation: "transient_status" },
           ...timelineIdentityProps(identity),
         },
       ];
@@ -2649,7 +2649,11 @@ export function translateCodexAppServerNotification(
         }),
         translated(notification, {
           type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
-          item: { kind: "reasoning", text: fullText },
+          item: {
+            kind: "reasoning",
+            text: fullText,
+            presentation: "transient_status",
+          },
           ...timelineIdentityProps(identity),
         }),
       ];
@@ -2709,7 +2713,11 @@ export function translateCodexAppServerNotification(
         }),
         translated(notification, {
           type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
-          item: { kind: "reasoning", text: fullText },
+          item: {
+            kind: "reasoning",
+            text: fullText,
+            presentation: "transient_status",
+          },
           ...timelineIdentityProps(identity),
         }),
       ];

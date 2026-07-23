@@ -132,7 +132,18 @@ export type TimelineItem =
       phase?: AssistantMessagePhase;
       runtimeModel?: TimelineRuntimeModel;
     }
-  | { kind: "reasoning"; text: string; section?: string; runtimeModel?: TimelineRuntimeModel }
+  | {
+      kind: "reasoning";
+      text: string;
+      section?: string;
+      /**
+       * Narrative reasoning remains part of a settled turn. A transient status
+       * is useful while the provider is working, but is omitted once the turn
+       * settles so cumulative progress headlines do not become transcript.
+       */
+      presentation?: "narrative" | "transient_status";
+      runtimeModel?: TimelineRuntimeModel;
+    }
   | { kind: "plan"; text: string; explanation?: string; steps?: TimelinePlanStep[] }
   | { kind: "step"; title: string; status: "started" | "completed" | "interrupted"; text?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "todo"; items: Array<{ text: string; completed: boolean }> }

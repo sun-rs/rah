@@ -13,6 +13,8 @@ import type {
 import { classifyCodexCommand } from "./codex-command-classifier";
 import { classifyCodexCommandResult } from "./codex-command-result";
 import {
+  CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+  createCodexAggregateTimelineIdentity,
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
@@ -69,6 +71,7 @@ export interface CodexRolloutTranslationState {
   currentTurnId?: string | undefined;
   currentRuntimeModel?: TimelineRuntimeModel | undefined;
   nextTimelineItemIndex: number;
+  compactionCountByTurnId: Map<string, number>;
 }
 
 export function createCodexRolloutTranslationState(
@@ -82,6 +85,7 @@ export function createCodexRolloutTranslationState(
     lastTimelineIdentity: null,
     lastGoalEventSignatureByThread: new Map(),
     nextTimelineItemIndex: 0,
+    compactionCountByTurnId: new Map(),
   };
   if (options.providerSessionId !== undefined) {
     state.providerSessionId = options.providerSessionId;
@@ -119,7 +123,6 @@ let invalidRolloutSequence = 0;
 const IGNORED_PERSISTED_EVENT_MSG_TYPES = new Set([
   "task_started",
   "task_complete",
-  "context_compacted",
   "token_count",
   "user_message",
   "exec_command_begin",
@@ -593,6 +596,23 @@ function createHistoryTimelineIdentity(
     confidence: "derived",
     ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
     ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
+  });
+}
+
+function createHistoryCompactionIdentity(
+  state: CodexRolloutTranslationState,
+  turnId: string,
+): TimelineIdentity | undefined {
+  if (!state.providerSessionId) {
+    return undefined;
+  }
+  return createCodexAggregateTimelineIdentity({
+    providerSessionId: state.providerSessionId,
+    turnId,
+    itemKind: "compaction",
+    itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+    origin: "history",
+    confidence: "derived",
   });
 }
 
@@ -1651,6 +1671,30 @@ function translateCodexRolloutLineUnscoped(
         ),
       ];
     }
+    if (payload.type === "context_compacted") {
+      const turnId = state.currentTurnId ?? turnIdBeforeSync;
+      if (!turnId) {
+        return [];
+      }
+      const previousCount = state.compactionCountByTurnId.get(turnId) ?? 0;
+      const count = previousCount + 1;
+      state.compactionCountByTurnId.set(turnId, count);
+      return [
+        persistedActivity(
+          record,
+          {
+            type: previousCount > 0 ? "timeline_item_updated" : "timeline_item",
+            item: {
+              kind: "compaction",
+              status: "completed",
+              count,
+            },
+            ...timelineIdentityProps(createHistoryCompactionIdentity(state, turnId)),
+          },
+          "authoritative",
+        ),
+      ];
+    }
     if (payload.type === "agent_reasoning" && typeof payload.text === "string") {
       const text = sanitizeCodexReasoningText(payload.text);
       if (!text || shouldSkipDuplicateTimelineText(state, record, "reasoning", text)) {
@@ -1665,7 +1709,7 @@ function translateCodexRolloutLineUnscoped(
           record,
           {
             type: "timeline_item",
-            item: { kind: "reasoning", text },
+            item: { kind: "reasoning", text, presentation: "transient_status" },
             ...timelineIdentityProps(identity),
           },
           "authoritative",
@@ -1792,7 +1836,7 @@ function translateCodexRolloutLineUnscoped(
         record,
         {
           type: "timeline_item",
-          item: { kind: "reasoning", text },
+          item: { kind: "reasoning", text, presentation: "transient_status" },
           ...timelineIdentityProps(identity),
         },
         "authoritative",

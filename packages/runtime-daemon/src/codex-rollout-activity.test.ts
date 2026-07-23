@@ -5,7 +5,11 @@ import {
   finalizeCodexRolloutTranslationState,
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
-import { createCodexTimelineIdentity } from "./codex-timeline-identity";
+import {
+  CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+  createCodexAggregateTimelineIdentity,
+  createCodexTimelineIdentity,
+} from "./codex-timeline-identity";
 
 describe("translateCodexRolloutLine", () => {
   test("maps user messages and agent reasoning into persisted timeline activities", () => {
@@ -72,7 +76,11 @@ describe("translateCodexRolloutLine", () => {
         },
         activity: {
           type: "timeline_item",
-          item: { kind: "reasoning", text: "Inspecting files" },
+          item: {
+            kind: "reasoning",
+            text: "Inspecting files",
+            presentation: "transient_status",
+          },
         },
       },
     ]);
@@ -1222,7 +1230,86 @@ describe("translateCodexRolloutLine", () => {
     });
     assert.deepEqual(reasoning[0]?.activity, {
       type: "timeline_item",
-      item: { kind: "reasoning", text: "Reviewing the patch output" },
+      item: {
+        kind: "reasoning",
+        text: "Reviewing the patch output",
+        presentation: "transient_status",
+      },
+    });
+  });
+
+  test("restores persisted context compactions as one aggregate Worked event per turn", () => {
+    const state = createCodexRolloutTranslationState({
+      providerSessionId: "session-compaction",
+    });
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_started",
+          turn_id: "turn-compaction",
+        },
+      },
+      state,
+    );
+
+    const first = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "context_compacted",
+        },
+      },
+      state,
+    );
+    const second = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "context_compacted",
+        },
+      },
+      state,
+    );
+
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
+    assert.deepEqual(first[0]?.activity, {
+      type: "timeline_item",
+      turnId: "turn-compaction",
+      item: {
+        kind: "compaction",
+        status: "completed",
+        count: 1,
+      },
+      identity: createCodexAggregateTimelineIdentity({
+        providerSessionId: "session-compaction",
+        turnId: "turn-compaction",
+        itemKind: "compaction",
+        itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+        origin: "history",
+        confidence: "derived",
+      }),
+    });
+    assert.deepEqual(second[0]?.activity, {
+      type: "timeline_item_updated",
+      turnId: "turn-compaction",
+      item: {
+        kind: "compaction",
+        status: "completed",
+        count: 2,
+      },
+      identity: createCodexAggregateTimelineIdentity({
+        providerSessionId: "session-compaction",
+        turnId: "turn-compaction",
+        itemKind: "compaction",
+        itemKey: CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
+        origin: "history",
+        confidence: "derived",
+      }),
     });
   });
 
@@ -1744,16 +1831,6 @@ describe("translateCodexRolloutLine", () => {
       },
       state,
     );
-    const contextCompacted = translateCodexRolloutLine(
-      {
-        timestamp: "2026-04-14T18:00:10.900Z",
-        type: "event_msg",
-        payload: {
-          type: "context_compacted",
-        },
-      },
-      state,
-    );
     const developerMessage = translateCodexRolloutLine(
       {
         timestamp: "2026-04-14T18:00:11.000Z",
@@ -1811,7 +1888,6 @@ describe("translateCodexRolloutLine", () => {
     assert.deepEqual(execCommandEnd, []);
     assert.deepEqual(patchApplyEnd, []);
     assert.deepEqual(mcpToolCallEnd, []);
-    assert.deepEqual(contextCompacted, []);
     assert.deepEqual(developerMessage, []);
     assert.deepEqual(encryptedReasoning, []);
     assert.deepEqual(emptyAgentMessage, []);

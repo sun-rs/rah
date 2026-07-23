@@ -51,11 +51,15 @@ function command(key: string, status: "running" | "completed" | "failed" = "comp
   return tool(key, "shell", status);
 }
 
-function reasoning(key: string, text = key): FeedEntry {
+function reasoning(
+  key: string,
+  text = key,
+  presentation?: "narrative" | "transient_status",
+): FeedEntry {
   return {
     key,
     kind: "timeline",
-    item: { kind: "reasoning", text },
+    item: { kind: "reasoning", text, ...(presentation ? { presentation } : {}) },
     ts: "2026-07-10T00:00:02.000Z",
     turnId: "turn-1",
   };
@@ -148,8 +152,27 @@ describe("assistant process groups", () => {
     assert.doesNotMatch(html, /pl-5/);
   });
 
-  test("keeps review results at the far edge of the disclosure row", () => {
-    const html = renderToStaticMarkup(
+  test("keeps the Worked header stable when lazy detail reveals reviewable results", () => {
+    const summaryHtml = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-review",
+          entries: [],
+          completed: true,
+          active: false,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          completedAt: "2026-07-10T00:00:01.000Z",
+          durationMs: 1_000,
+          activities: [],
+          turnStatus: "completed",
+        },
+        expanded: false,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) => createElement("span", null, `raw:${entry.key}`),
+      }),
+    );
+    const hydratedExpandedHtml = renderToStaticMarkup(
       createElement(AssistantProcessGroup, {
         group: {
           kind: "assistant_process_group",
@@ -177,14 +200,47 @@ describe("assistant process groups", () => {
         renderEntry: (entry) => createElement("span", null, `raw:${entry.key}`),
       }),
     );
-
-    assert.match(html, /<span class="min-w-0 flex-1 truncate[^"]*">Worked 1s<\/span>/);
-    assert.match(
-      html,
-      /<span class="shrink-0 text-\[var\(--app-warning\)\]">Review results<\/span>/,
+    const hydratedCollapsedHtml = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-review",
+          entries: [command("command-1", "failed")],
+          completed: true,
+          active: false,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          completedAt: "2026-07-10T00:00:01.000Z",
+          durationMs: 1_000,
+          activities: [
+            {
+              kind: "command",
+              totalCount: 1,
+              runningCount: 0,
+              interruptedCount: 0,
+              failureCount: 0,
+              issueCount: 1,
+            },
+          ],
+          turnStatus: "completed",
+        },
+        expanded: false,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) => createElement("span", null, `raw:${entry.key}`),
+      }),
     );
-    assert.equal(html.match(/Review results/g)?.length, 1);
-    assert.doesNotMatch(html, />Review result<\/span>/);
+
+    for (const html of [summaryHtml, hydratedExpandedHtml, hydratedCollapsedHtml]) {
+      assert.match(
+        html,
+        /<span class="min-w-0 truncate[^"]*">Worked 1s<\/span><svg[^>]*lucide-chevron-/,
+      );
+      assert.doesNotMatch(html, /Review results|lucide-triangle-alert/);
+    }
+    assert.match(summaryHtml, /lucide-chevron-right/);
+    assert.match(hydratedExpandedHtml, /lucide-chevron-down/);
+    assert.match(hydratedExpandedHtml, /Ran 1 command/);
+    assert.match(hydratedExpandedHtml, /text-\[var\(--app-warning\)\]/);
+    assert.match(hydratedCollapsedHtml, /lucide-chevron-right/);
   });
 
   test("groups consecutive reasoning summaries into one visible text row", () => {
@@ -237,6 +293,89 @@ describe("assistant process groups", () => {
     assert.match(reasoningHtml, /Inspecting/);
     assert.match(reasoningHtml, /Reviewing files/);
     assert.doesNotMatch(reasoningHtml, /aria-expanded|>Reasoning</);
+  });
+
+  test("keeps transient reasoning while active and removes it from settled Worked details", () => {
+    const entries = [
+      reasoning("transient", "Estimating lazy loading scope", "transient_status"),
+      reasoning("narrative", "The stable boundary is the complete conversation pane."),
+      assistant("commentary", "2026-07-10T00:00:03.000Z", "commentary"),
+    ];
+    const activeHtml = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-active-reasoning",
+          entries,
+          completed: false,
+          active: true,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          activities: [],
+          turnStatus: "in_progress",
+        },
+        expanded: true,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) =>
+          createElement(
+            "span",
+            null,
+            entry.kind === "timeline" && "text" in entry.item ? entry.item.text : entry.key,
+          ),
+      }),
+    );
+    const settledHtml = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-settled-reasoning",
+          entries,
+          completed: true,
+          active: false,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          completedAt: "2026-07-10T00:00:04.000Z",
+          activities: [],
+          turnStatus: "completed",
+        },
+        expanded: true,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) =>
+          createElement(
+            "span",
+            null,
+            entry.kind === "timeline" && "text" in entry.item ? entry.item.text : entry.key,
+          ),
+      }),
+    );
+
+    assert.match(activeHtml, /Estimating lazy loading scope/);
+    assert.doesNotMatch(settledHtml, /Estimating lazy loading scope/);
+    assert.match(settledHtml, /The stable boundary is the complete conversation pane/);
+    assert.match(
+      settledHtml,
+      /border-b border-\[var\(--app-border\)\] pb-3/,
+    );
+  });
+
+  test("removes duplicate provider reasoning parts when a canonical reasoning row exists", () => {
+    const reasoningPart: FeedEntry = {
+      key: "reasoning-part",
+      kind: "message_part",
+      status: "updated",
+      ts: "2026-07-10T00:00:02.000Z",
+      turnId: "turn-1",
+      part: {
+        messageId: "reasoning-message",
+        partId: "reasoning-part",
+        kind: "reasoning",
+        text: "Inspecting",
+      },
+    };
+    const rows = buildProcessDetailRows([
+      reasoningPart,
+      reasoning("canonical-reasoning", "Inspecting"),
+    ]);
+
+    assert.deepEqual(rows.map((row) => row.kind), ["reasoning_batch"]);
   });
 
   test("does not classify provider reasoning parts as executable activity", () => {

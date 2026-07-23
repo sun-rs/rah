@@ -2532,6 +2532,19 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
       }
+      if (
+        item.presentation !== undefined &&
+        item.presentation !== "narrative" &&
+        item.presentation !== "transient_status"
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "timeline.reasoning.presentation.invalid",
+          "reasoning presentation must be narrative or transient_status",
+          `${path}.presentation`,
+        );
+      }
       break;
     case "plan":
     case "system":
