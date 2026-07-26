@@ -1,7 +1,21 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  createWriteStream,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  mkdir as mkdirAsync,
+  rename as renameAsync,
+  rm as rmAsync,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { ProviderKind, StoredSessionRef } from "@rah/runtime-protocol";
+import { streamJsonChunks } from "./json-response-stream";
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 
 type StoredSessionMetadataCacheEntry = {
@@ -17,7 +31,7 @@ type StoredSessionMetadataCacheFile = {
 
 type StoredSessionCatalogSnapshotFile = {
   version: 1;
-  records: StoredSessionCatalogRecord[];
+  records: readonly StoredSessionCatalogRecord[];
 };
 
 function resolveRahHome(): string {
@@ -63,17 +77,30 @@ export function loadStoredSessionCatalogSnapshot(): StoredSessionCatalogRecord[]
   }
 }
 
-export function writeStoredSessionCatalogSnapshot(
+export async function writeStoredSessionCatalogSnapshot(
   records: readonly StoredSessionCatalogRecord[],
-): void {
+): Promise<void> {
   const targetPath = catalogSnapshotPath();
   const temporaryPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
-  mkdirSync(path.dirname(targetPath), { recursive: true });
-  writeFileSync(
-    temporaryPath,
-    JSON.stringify({ version: 1, records: [...records] } satisfies StoredSessionCatalogSnapshotFile),
-  );
-  renameSync(temporaryPath, targetPath);
+  await mkdirAsync(path.dirname(targetPath), { recursive: true });
+  try {
+    await pipeline(
+      Readable.from(
+        streamJsonChunks({
+          version: 1,
+          records,
+        } satisfies StoredSessionCatalogSnapshotFile),
+      ),
+      createWriteStream(temporaryPath, {
+        flags: "wx",
+        mode: 0o600,
+      }),
+    );
+    await renameAsync(temporaryPath, targetPath);
+  } catch (error) {
+    await rmAsync(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export function loadStoredSessionMetadataCache(

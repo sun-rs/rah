@@ -675,6 +675,7 @@ test("CouncilRuntime projects persisted active councils from live managed sessio
       nativeSessionId: councilTerminalId(created.id, agentId),
     });
 
+    await store.flush();
     const reloadedStore = new CouncilStore(filePath);
     assert.equal(reloadedStore.snapshot(created.id).status, "running");
 
@@ -1221,11 +1222,12 @@ test("CouncilRuntime stop closes an agent session that finishes launching after 
 
 test("CouncilRuntime shutdown closes live managed agent sessions", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-shutdown-"));
+  const filePath = path.join(root, "councils.json");
   const previousClaude = process.env.RAH_CLAUDE_BINARY;
   process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
   try {
     const managed = new FakeManagedSessionRunner();
-    const store = new CouncilStore(path.join(root, "councils.json"));
+    const store = new CouncilStore(filePath);
     const runtime = createCouncilRuntime({
       store,
     }, managed);
@@ -1246,6 +1248,11 @@ test("CouncilRuntime shutdown closes live managed agent sessions", async () => {
     assert.equal(persisted.agents[0]?.status, "stopped");
     assert.equal(persisted.agents[0]?.nativeSessionId, undefined);
     assert.equal(persisted.agents[0]?.terminalId, undefined);
+    const reloaded = new CouncilStore(filePath).snapshot(response.council.id);
+    assert.equal(reloaded.status, "stopped");
+    assert.equal(reloaded.agents[0]?.status, "stopped");
+    assert.equal(reloaded.agents[0]?.nativeSessionId, undefined);
+    assert.equal(reloaded.agents[0]?.terminalId, undefined);
   } finally {
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;

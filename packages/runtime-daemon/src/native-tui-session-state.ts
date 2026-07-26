@@ -50,10 +50,14 @@ export type NativeTuiSessionState = {
   bindingTimer?: ReturnType<typeof setInterval>;
   bindingWarningEmitted?: boolean;
   fatalObservationError?: string;
-  mirrorTimer?: ReturnType<typeof setInterval>;
+  mirrorTimer?: ReturnType<typeof setTimeout>;
   mirrorWakeTimer?: ReturnType<typeof setTimeout>;
+  mirrorPollingEnabled?: boolean;
+  mirrorPollIntervalMs?: number;
   mirrorWarningEmitted?: boolean;
   mirrorFailureWarningEmitted?: boolean;
+  mirrorInFlight?: boolean;
+  mirrorRerunRequested?: boolean;
   providerMirror?: NativeTuiProviderMirror;
 };
 
@@ -79,13 +83,16 @@ export function clearNativeTuiSessionTimers(native: NativeTuiSessionState | unde
     delete native.bindingTimer;
   }
   if (native.mirrorTimer) {
-    clearInterval(native.mirrorTimer);
+    clearTimeout(native.mirrorTimer);
     delete native.mirrorTimer;
   }
   if (native.mirrorWakeTimer) {
     clearTimeout(native.mirrorWakeTimer);
     delete native.mirrorWakeTimer;
   }
+  native.mirrorPollingEnabled = false;
+  delete native.mirrorPollIntervalMs;
+  delete native.mirrorRerunRequested;
   if (native.stopTimer) {
     clearTimeout(native.stopTimer);
     delete native.stopTimer;

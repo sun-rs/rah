@@ -9,9 +9,10 @@ export type ProviderKind =
 export type SessionInputAttachmentKind = "image" | "file";
 
 /**
- * Opaque reference to a file uploaded into RAH's managed attachment store.
- * Clients never submit a host path; the daemon resolves `id` to the trusted
- * path it created when accepting the upload.
+ * Opaque reference to an attachment the RAH daemon can preview. Uploaded
+ * files live in RAH's managed store; provider-history attachments use a
+ * daemon-owned ephemeral reference. Clients never receive or submit host
+ * paths.
  */
 export interface SessionInputAttachment {
   id: string;

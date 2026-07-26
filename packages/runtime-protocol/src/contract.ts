@@ -15,6 +15,8 @@ import type {
   PermissionAction,
   PermissionRequest,
   PermissionResolution,
+  ProcessOutputAppend,
+  ProcessOutputSnapshot,
   RahEvent,
   RahEventType,
   RuntimeOperation,
@@ -55,6 +57,7 @@ export type RahEventFamily =
   | "timeline"
   | "message_part"
   | "tool_call"
+  | "process_output"
   | "observation"
   | "permission"
   | "operation"
@@ -105,6 +108,8 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "tool.call.delta": "tool_call",
   "tool.call.completed": "tool_call",
   "tool.call.failed": "tool_call",
+  "process.output.appended": "process_output",
+  "process.output.snapshot": "process_output",
   "observation.started": "observation",
   "observation.updated": "observation",
   "observation.completed": "observation",
@@ -2547,10 +2552,27 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       }
       break;
     case "plan":
-    case "system":
     case "error":
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
+      }
+      break;
+    case "system":
+      if (typeof item.text !== "string") {
+        addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
+      }
+      if (
+        item.placement !== undefined &&
+        item.placement !== "conversation" &&
+        item.placement !== "process"
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "timeline.system.placement.invalid",
+          "system placement must be conversation or process",
+          `${path}.placement`,
+        );
       }
       break;
     case "step":
@@ -2876,6 +2898,83 @@ function validateRuntimeOperation(operation: RuntimeOperation, sink: IssueSink, 
   }
 }
 
+const PROCESS_OUTPUT_STREAMS = new Set(["stdout", "stderr", "combined"]);
+
+function validateProcessOutputAppend(
+  output: ProcessOutputAppend,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(output)) {
+    addIssue(sink, "error", "process_output.append.invalid", "process output append must be an object", path);
+    return;
+  }
+  if (!isNonEmptyString(output.itemId)) {
+    addIssue(sink, "error", "process_output.item_id.invalid", "process output itemId must be non-empty", `${path}.itemId`);
+  }
+  if (!PROCESS_OUTPUT_STREAMS.has(output.stream)) {
+    addIssue(sink, "error", "process_output.stream.invalid", "process output stream is not canonical", `${path}.stream`);
+  }
+  if (!Number.isInteger(output.sequence) || output.sequence < 1) {
+    addIssue(sink, "error", "process_output.sequence.invalid", "process output sequence must be a positive integer", `${path}.sequence`);
+  }
+  if (!Number.isInteger(output.offsetBytes) || output.offsetBytes < 0) {
+    addIssue(sink, "error", "process_output.offset.invalid", "process output offsetBytes must be a non-negative integer", `${path}.offsetBytes`);
+  }
+  if (typeof output.data !== "string") {
+    addIssue(sink, "error", "process_output.data.invalid", "process output data must be a string", `${path}.data`);
+  }
+  if (
+    !Number.isInteger(output.totalBytes) ||
+    output.totalBytes < output.offsetBytes
+  ) {
+    addIssue(sink, "error", "process_output.total.invalid", "process output totalBytes must be an integer at or beyond offsetBytes", `${path}.totalBytes`);
+  }
+}
+
+function validateProcessOutputSnapshot(
+  output: ProcessOutputSnapshot,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(output)) {
+    addIssue(sink, "error", "process_output.snapshot.invalid", "process output snapshot must be an object", path);
+    return;
+  }
+  if (!isNonEmptyString(output.itemId)) {
+    addIssue(sink, "error", "process_output.item_id.invalid", "process output itemId must be non-empty", `${path}.itemId`);
+  }
+  if (!PROCESS_OUTPUT_STREAMS.has(output.stream)) {
+    addIssue(sink, "error", "process_output.stream.invalid", "process output stream is not canonical", `${path}.stream`);
+  }
+  if (!Number.isInteger(output.totalBytes) || output.totalBytes < 0) {
+    addIssue(sink, "error", "process_output.total.invalid", "process output totalBytes must be a non-negative integer", `${path}.totalBytes`);
+  }
+  if (!Number.isInteger(output.retainedBytes) || output.retainedBytes < 0) {
+    addIssue(sink, "error", "process_output.retained.invalid", "process output retainedBytes must be a non-negative integer", `${path}.retainedBytes`);
+  }
+  if (
+    !Number.isInteger(output.truncatedBeforeBytes) ||
+    output.truncatedBeforeBytes < 0
+  ) {
+    addIssue(sink, "error", "process_output.truncated.invalid", "process output truncatedBeforeBytes must be a non-negative integer", `${path}.truncatedBeforeBytes`);
+  }
+  if (typeof output.tail !== "string") {
+    addIssue(sink, "error", "process_output.tail.invalid", "process output tail must be a string", `${path}.tail`);
+  }
+  if (
+    Number.isInteger(output.totalBytes) &&
+    Number.isInteger(output.retainedBytes) &&
+    Number.isInteger(output.truncatedBeforeBytes) &&
+    output.retainedBytes + output.truncatedBeforeBytes !== output.totalBytes
+  ) {
+    addIssue(sink, "error", "process_output.snapshot_size.invalid", "retainedBytes plus truncatedBeforeBytes must equal totalBytes", path);
+  }
+  if (output.detailAvailable !== undefined && typeof output.detailAvailable !== "boolean") {
+    addIssue(sink, "error", "process_output.detail_available.invalid", "detailAvailable must be a boolean", `${path}.detailAvailable`);
+  }
+}
+
 function validatePayload(event: RahEvent, sink: IssueSink) {
   const payload = event.payload as Record<string, unknown>;
   if (!isRecord(payload)) {
@@ -2966,6 +3065,20 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
         addIssue(sink, "error", "tool.failed.error.invalid", "tool failure error must be non-empty", "payload.error");
       }
       validateToolDetail(payload.detail as ToolCallDetail | undefined, sink, "payload.detail");
+      break;
+    case "process.output.appended":
+      validateProcessOutputAppend(
+        payload.output as ProcessOutputAppend,
+        sink,
+        "payload.output",
+      );
+      break;
+    case "process.output.snapshot":
+      validateProcessOutputSnapshot(
+        payload.output as ProcessOutputSnapshot,
+        sink,
+        "payload.output",
+      );
       break;
     case "observation.started":
       validateObservation(payload.observation as WorkbenchObservation, "running", sink, "payload.observation");
@@ -3323,6 +3436,8 @@ export function validateRahEvent(
       "tool.call.delta",
       "tool.call.completed",
       "tool.call.failed",
+      "process.output.appended",
+      "process.output.snapshot",
       "observation.started",
       "observation.updated",
       "observation.completed",
@@ -3378,6 +3493,8 @@ export function validateRahEventSequence(
         "tool.call.delta",
         "tool.call.completed",
         "tool.call.failed",
+        "process.output.appended",
+        "process.output.snapshot",
         "observation.started",
         "observation.updated",
         "observation.completed",

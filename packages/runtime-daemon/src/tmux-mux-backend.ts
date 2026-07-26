@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { execFile } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type {
@@ -20,9 +19,13 @@ import {
   RAH_TMUX_OWNER_SCOPE_OPTION,
   resolveRahTmuxOwnerScope,
 } from "./tmux-session-ownership";
+import { resolveBackgroundProcessNice } from "./background-process-priority";
+import { runBackgroundCommand } from "./background-command";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 const SUBSCRIBE_POLL_INTERVAL_MS = 100;
+const MAX_SUBSCRIBE_POLL_INTERVAL_MS = 1_000;
+const MAX_CAPTURE_SCROLLBACK_LINES = 5_000;
 
 type ExecResult = {
   stdout: string;
@@ -62,8 +65,10 @@ export type TmuxMuxBackendOptions = {
   env?: NodeJS.ProcessEnv;
   commandTimeoutMs?: number;
   subscribePollIntervalMs?: number;
+  maxSubscribePollIntervalMs?: number;
   ownerScope?: string;
   ownerPid?: number;
+  backgroundNice?: number;
 };
 
 export function createShortTmuxSessionName(prefix = "rah"): string {
@@ -90,21 +95,52 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function shellCommandForRequest(request: CreateMuxPaneRequest): string {
+export function createTmuxPaneShellCommand(
+  request: CreateMuxPaneRequest,
+  backgroundNice = resolveBackgroundProcessNice(),
+  platform: NodeJS.Platform = process.platform,
+): string {
   const envPrefix = Object.entries(request.env ?? {})
     .filter(([name]) => name.trim().length > 0 && !name.includes("="))
     .map(([name, value]) => `${name}=${shellQuote(value)}`);
+  const nice = Math.max(0, Math.min(19, Math.floor(backgroundNice)));
   return [
     ...envPrefix,
+    "exec",
+    ...(nice > 0 && platform === "darwin"
+      ? ["/usr/sbin/taskpolicy", "-b", "nice", "-n", String(nice)]
+      : nice > 0
+        ? ["nice", "-n", String(nice)]
+        : []),
     shellQuote(request.command),
     ...(request.args ?? []).map((arg) => shellQuote(arg)),
   ].join(" ");
 }
 
-function shellCommandWithRemainOnExit(request: CreateMuxPaneRequest): string {
+export function nextTmuxSubscriptionPollInterval(args: {
+  currentMs: number;
+  changed: boolean;
+  minMs: number;
+  maxMs: number;
+}): number {
+  const minMs = Math.max(1, Math.floor(args.minMs));
+  const maxMs = Math.max(minMs, Math.floor(args.maxMs));
+  if (args.changed) {
+    return minMs;
+  }
+  return Math.min(
+    maxMs,
+    Math.max(minMs, Math.floor(args.currentMs) * 2),
+  );
+}
+
+function shellCommandWithRemainOnExit(
+  request: CreateMuxPaneRequest,
+  backgroundNice: number,
+): string {
   return [
     "tmux set-option -w remain-on-exit on >/dev/null 2>&1 || true",
-    shellCommandForRequest(request),
+    createTmuxPaneShellCommand(request, backgroundNice),
   ].join("; ");
 }
 
@@ -178,6 +214,9 @@ export class TmuxMuxBackend implements MuxRuntime {
   private readonly baseEnv: NodeJS.ProcessEnv;
   private readonly commandTimeoutMs: number;
   private readonly subscribePollIntervalMs: number;
+  private readonly maxSubscribePollIntervalMs: number;
+  private readonly backgroundNice: number;
+  private readonly paneSubscriptionWakeups = new Map<string, Set<() => void>>();
   readonly ownerScope: string;
   readonly ownerPid: number;
 
@@ -186,6 +225,13 @@ export class TmuxMuxBackend implements MuxRuntime {
     this.baseEnv = options.env ?? process.env;
     this.commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.subscribePollIntervalMs = options.subscribePollIntervalMs ?? SUBSCRIBE_POLL_INTERVAL_MS;
+    this.maxSubscribePollIntervalMs = Math.max(
+      this.subscribePollIntervalMs,
+      options.maxSubscribePollIntervalMs ?? MAX_SUBSCRIBE_POLL_INTERVAL_MS,
+    );
+    this.backgroundNice =
+      options.backgroundNice ??
+      resolveBackgroundProcessNice(this.baseEnv.RAH_BACKGROUND_PROCESS_NICE);
     this.ownerScope = options.ownerScope ?? resolveRahTmuxOwnerScope(this.baseEnv.RAH_HOME);
     this.ownerPid = options.ownerPid ?? process.pid;
   }
@@ -300,7 +346,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       args.push("-e");
     }
     if (options.full === true) {
-      args.push("-S", "-");
+      args.push("-S", `-${MAX_CAPTURE_SCROLLBACK_LINES}`);
     }
     return (await this.exec(args)).stdout;
   }
@@ -313,13 +359,46 @@ export class TmuxMuxBackend implements MuxRuntime {
   ): MuxPaneSubscription {
     let closed = false;
     let inFlight = false;
+    let wakePending = false;
     let last = "";
     let initial = true;
+    let pollIntervalMs = this.subscribePollIntervalMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unregisterWake = this.registerPaneSubscriptionWakeup(paneId, () => {
+      if (closed) {
+        return;
+      }
+      if (inFlight) {
+        wakePending = true;
+        return;
+      }
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      pollIntervalMs = this.subscribePollIntervalMs;
+      timer = setTimeout(() => {
+        timer = undefined;
+        void poll();
+      }, 0);
+      timer.unref?.();
+    });
+    const scheduleNextPoll = (delayMs: number) => {
+      if (closed) {
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = undefined;
+        void poll();
+      }, delayMs);
+      timer.unref?.();
+    };
     const poll = async () => {
       if (closed || inFlight) {
         return;
       }
       inFlight = true;
+      let changed = false;
       try {
         const dumpOptions: DumpMuxScreenOptions = {
           full: options.scrollback === "all",
@@ -327,6 +406,7 @@ export class TmuxMuxBackend implements MuxRuntime {
         };
         const dumped = await this.dumpScreen(sessionName, paneId, dumpOptions);
         if (dumped !== last || initial) {
+          changed = true;
           last = dumped;
           onUpdate({
             paneId,
@@ -340,20 +420,35 @@ export class TmuxMuxBackend implements MuxRuntime {
           options.onExit?.({ error: error instanceof Error ? error : new Error(String(error)) });
         }
         closed = true;
-        clearInterval(timer);
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        unregisterWake();
       } finally {
         inFlight = false;
+        if (!closed) {
+          pollIntervalMs = nextTmuxSubscriptionPollInterval({
+            currentMs: pollIntervalMs,
+            changed: changed || wakePending,
+            minMs: this.subscribePollIntervalMs,
+            maxMs: this.maxSubscribePollIntervalMs,
+          });
+          const runImmediately = wakePending;
+          wakePending = false;
+          scheduleNextPoll(runImmediately ? 0 : pollIntervalMs);
+        }
       }
     };
-    const timer = setInterval(() => {
-      void poll();
-    }, this.subscribePollIntervalMs);
-    timer.unref?.();
     void poll();
     return {
       close: () => {
         closed = true;
-        clearInterval(timer);
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        unregisterWake();
       },
     };
   }
@@ -363,6 +458,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       return;
     }
     await this.exec(["send-keys", "-t", paneId, "-l", text]);
+    this.wakePaneSubscriptions(paneId);
   }
 
   async pasteText(_sessionName: string, paneId: MuxPaneId, text: string): Promise<void> {
@@ -375,6 +471,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       // `-p` adds bracketed-paste markers when the target application has
       // enabled them, so a terminal composer consumes the prompt atomically.
       await this.exec(["paste-buffer", "-p", "-d", "-b", bufferName, "-t", paneId]);
+      this.wakePaneSubscriptions(paneId);
     } catch (error) {
       await this.exec(["delete-buffer", "-b", bufferName]).catch(() => undefined);
       throw error;
@@ -419,6 +516,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       return;
     }
     await this.exec(["send-keys", "-t", paneId, ...keys.map(tmuxKeyFor)]);
+    this.wakePaneSubscriptions(paneId);
   }
 
   async resizePane(
@@ -439,6 +537,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       "-y",
       String(Math.max(8, Math.floor(rows))),
     ]);
+    this.wakePaneSubscriptions(paneId);
   }
 
   async closePane(_sessionName: string, paneId: MuxPaneId): Promise<void> {
@@ -462,6 +561,27 @@ export class TmuxMuxBackend implements MuxRuntime {
     return (await this.listSessions()).some((session) => session.sessionName === sessionName);
   }
 
+  private registerPaneSubscriptionWakeup(
+    paneId: string,
+    wake: () => void,
+  ): () => void {
+    const wakeups = this.paneSubscriptionWakeups.get(paneId) ?? new Set();
+    wakeups.add(wake);
+    this.paneSubscriptionWakeups.set(paneId, wakeups);
+    return () => {
+      wakeups.delete(wake);
+      if (wakeups.size === 0) {
+        this.paneSubscriptionWakeups.delete(paneId);
+      }
+    };
+  }
+
+  private wakePaneSubscriptions(paneId: string): void {
+    for (const wake of this.paneSubscriptionWakeups.get(paneId) ?? []) {
+      wake();
+    }
+  }
+
   private async createDetachedSession(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult> {
     await this.exec([
       "new-session",
@@ -472,7 +592,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.cwd,
       "-n",
       request.title ?? "rah",
-      shellCommandWithRemainOnExit(request),
+      shellCommandWithRemainOnExit(request, this.backgroundNice),
     ]);
     try {
       await this.markSessionOwnership(request.sessionName);
@@ -513,7 +633,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.title ?? "rah",
       "-c",
       request.cwd,
-      shellCommandWithRemainOnExit(request),
+      shellCommandWithRemainOnExit(request, this.backgroundNice),
     ]);
     const paneId = result.stdout.trim();
     if (!paneId) {
@@ -532,7 +652,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.sessionName,
       "-c",
       request.cwd,
-      shellCommandWithRemainOnExit(request),
+      shellCommandWithRemainOnExit(request, this.backgroundNice),
     ]);
     const paneId = result.stdout.trim();
     if (!paneId) {
@@ -559,34 +679,36 @@ export class TmuxMuxBackend implements MuxRuntime {
   }
 
   private async exec(args: string[]): Promise<ExecResult> {
-    return await new Promise<ExecResult>((resolve, reject) => {
-      execFile(
-        this.binary,
+    try {
+      const result = await runBackgroundCommand({
+        command: this.binary,
         args,
-        {
-          env: this.baseEnv,
-          timeout: this.commandTimeoutMs,
-          maxBuffer: 10 * 1024 * 1024,
-          encoding: "utf8",
-        },
-        (error, stdout, stderr) => {
-          if (error) {
-            const failed = error as NodeJS.ErrnoException & { code?: number | string | null };
-            reject(
-              new TmuxCommandError({
-                command: this.binary,
-                args,
-                stdout,
-                stderr,
-                exitCode: typeof failed.code === "number" ? failed.code : null,
-                cause: error,
-              }),
-            );
-            return;
-          }
-          resolve({ stdout, stderr });
-        },
-      );
-    });
+        env: this.baseEnv,
+        label: `tmux ${args[0] ?? "command"}`,
+        timeoutMs: this.commandTimeoutMs,
+        maxStdoutBytes: 10 * 1024 * 1024,
+        maxStderrBytes: 2 * 1024 * 1024,
+        allowNonZeroExit: true,
+      });
+      if (result.code !== 0) {
+        throw new TmuxCommandError({
+          command: this.binary,
+          args,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.code >= 0 ? result.code : null,
+        });
+      }
+      return { stdout: result.stdout, stderr: result.stderr };
+    } catch (error) {
+      if (error instanceof TmuxCommandError) {
+        throw error;
+      }
+      throw new TmuxCommandError({
+        command: this.binary,
+        args,
+        cause: error,
+      });
+    }
   }
 }

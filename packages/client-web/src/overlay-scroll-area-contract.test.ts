@@ -145,6 +145,8 @@ describe("overlay scroll area contract", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
 
     assert.match(source, /VIRTUAL_FEED_ROW_GAP_PX/);
+    assert.match(source, /const PROCESS_TO_FINAL_ROW_GAP_PX = 10/);
+    assert.match(source, /return PROCESS_TO_FINAL_ROW_GAP_PX/);
     assert.match(source, /rowGapPx/);
     assert.match(source, /paddingBottom: `\$\{props\.rowGapPx\}px`/);
     assert.doesNotMatch(source, /space-y-5/);

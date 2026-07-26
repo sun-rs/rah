@@ -1,4 +1,4 @@
-import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
+import { promises as fs, watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 
 type StoredSessionMonitorOptions = {
@@ -10,24 +10,35 @@ type StoredSessionMonitorOptions = {
   watchFileChanges?: boolean;
 };
 
-function resolveWatchTarget(root: string): { path: string; recursive: boolean } | null {
+async function resolveWatchTarget(
+  root: string,
+): Promise<{ path: string; recursive: boolean } | null> {
   let candidate = path.resolve(root);
   const filesystemRoot = path.parse(candidate).root;
   while (candidate !== filesystemRoot) {
-    if (existsSync(candidate)) {
-      try {
-        const stats = statSync(candidate);
-        return {
-          path: candidate,
-          recursive: stats.isDirectory(),
-        };
-      } catch {
+    try {
+      const stats = await fs.stat(candidate);
+      return {
+        path: candidate,
+        recursive: stats.isDirectory(),
+      };
+    } catch (error) {
+      if (!isMissingPathError(error)) {
         return null;
       }
     }
     candidate = path.dirname(candidate);
   }
   return null;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    ((error as NodeJS.ErrnoException).code === "ENOENT" ||
+      (error as NodeJS.ErrnoException).code === "ENOTDIR")
+  );
 }
 
 /**
@@ -51,6 +62,8 @@ export class StoredSessionMonitor {
   private reconcileTimer: NodeJS.Timeout | null = null;
   private refreshInFlight = false;
   private refreshQueued = false;
+  private watcherInstallInFlight = false;
+  private watcherInstallQueued = false;
 
   constructor(options: StoredSessionMonitorOptions) {
     this.roots = [...new Set(options.roots.map((root) => path.resolve(root)))];
@@ -67,11 +80,11 @@ export class StoredSessionMonitor {
     }
     this.started = true;
     if (this.watchFs) {
-      this.installWatchers();
+      this.scheduleWatcherInstall();
     }
     this.reconcileTimer = setInterval(() => {
       if (this.watchFs) {
-        this.installWatchers();
+        this.scheduleWatcherInstall();
       }
       this.scheduleRefresh();
     }, this.reconcileMs);
@@ -92,6 +105,7 @@ export class StoredSessionMonitor {
       this.watchers.pop()?.close();
     }
     this.installedWatcherTargets.clear();
+    this.watcherInstallQueued = false;
   }
 
   scheduleRefresh(): void {
@@ -109,9 +123,32 @@ export class StoredSessionMonitor {
     this.refreshTimer.unref?.();
   }
 
-  private installWatchers(): void {
-    for (const root of this.roots) {
-      const target = resolveWatchTarget(root);
+  private scheduleWatcherInstall(): void {
+    if (!this.started) {
+      return;
+    }
+    if (this.watcherInstallInFlight) {
+      this.watcherInstallQueued = true;
+      return;
+    }
+    this.watcherInstallInFlight = true;
+    void this.installWatchers()
+      .catch(() => undefined)
+      .finally(() => {
+        this.watcherInstallInFlight = false;
+        if (this.watcherInstallQueued && this.started) {
+          this.watcherInstallQueued = false;
+          this.scheduleWatcherInstall();
+        }
+      });
+  }
+
+  private async installWatchers(): Promise<void> {
+    const targets = await Promise.all(this.roots.map((root) => resolveWatchTarget(root)));
+    if (!this.started) {
+      return;
+    }
+    for (const target of targets) {
       if (!target || this.installedWatcherTargets.has(target.path)) {
         continue;
       }

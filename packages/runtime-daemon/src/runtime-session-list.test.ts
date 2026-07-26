@@ -9,6 +9,7 @@ import {
   sameStoredSessionRefs,
 } from "./runtime-session-list";
 import type { StoredSessionState } from "./session-store";
+import { primeCanonicalDirectoryKeys } from "./workbench-directory-utils";
 
 function storedSessionState(providerSessionId: string): StoredSessionState {
   return {
@@ -436,7 +437,7 @@ describe("buildSessionsResponse", () => {
     assert.deepEqual(response.sessions, []);
   });
 
-  test("dedupes workspace dirs by resolved symlink path even when the child directory is gone", () => {
+  test("dedupes primed workspace dirs by resolved symlink path even when the child directory is gone", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "rah-workspace-symlink-"));
     try {
       const target = path.join(root, "target");
@@ -445,6 +446,7 @@ describe("buildSessionsResponse", () => {
       symlinkSync(target, alias, "dir");
       const aliasWorkspace = path.join(alias, "crates", "AI", "synapse");
       const targetWorkspace = path.join(target, "crates", "AI", "synapse");
+      await primeCanonicalDirectoryKeys([aliasWorkspace, targetWorkspace]);
 
       const response = buildSessionsResponse({
         liveStates: [],

@@ -32,8 +32,8 @@ describe("WorkbenchStateStore", () => {
 
   test("does not surface stale previous running sessions without provider backing", async () => {
     const first = new RuntimeEngine();
-    first.addWorkspace("/workspace/demo");
-    first.addWorkspace("/workspace/extra");
+    await first.addWorkspace("/workspace/demo");
+    await first.addWorkspace("/workspace/extra");
     const state = first.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: "thread-remember-1",
@@ -73,10 +73,10 @@ describe("WorkbenchStateStore", () => {
 
   test("listSessions exposes hidden workspaces from persisted workbench state", async () => {
     const engine = new RuntimeEngine();
-    engine.addWorkspace("/workspace/demo");
-    engine.addWorkspace("/workspace/extra");
+    await engine.addWorkspace("/workspace/demo");
+    await engine.addWorkspace("/workspace/extra");
 
-    const afterRemoval = engine.removeWorkspace("/workspace/demo");
+    const afterRemoval = await engine.removeWorkspace("/workspace/demo");
 
     assert.deepEqual(afterRemoval.workspaceDirs, ["/workspace/extra"]);
     assert.deepEqual(afterRemoval.hiddenWorkspaces, ["/workspace/demo"]);
@@ -86,7 +86,7 @@ describe("WorkbenchStateStore", () => {
 
   test("cannot remove a workspace with active running sessions", async () => {
     const engine = new RuntimeEngine();
-    engine.addWorkspace("/workspace/demo");
+    await engine.addWorkspace("/workspace/demo");
     engine.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: "thread-live-1",
@@ -96,8 +96,8 @@ describe("WorkbenchStateStore", () => {
       title: "live",
     });
 
-    assert.throws(
-      () => engine.removeWorkspace("/workspace/demo"),
+    await assert.rejects(
+      engine.removeWorkspace("/workspace/demo"),
       /Cannot remove a workspace with active running sessions/,
     );
 
@@ -106,8 +106,8 @@ describe("WorkbenchStateStore", () => {
 
   test("can remove a parent workspace while a child workspace owns the active running session", async () => {
     const engine = new RuntimeEngine();
-    engine.addWorkspace("/workspace");
-    engine.addWorkspace("/workspace/demo");
+    await engine.addWorkspace("/workspace");
+    await engine.addWorkspace("/workspace/demo");
     const state = engine.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: "thread-live-child",
@@ -125,11 +125,11 @@ describe("WorkbenchStateStore", () => {
       mode: "observe",
     });
 
-    const afterParentRemoval = engine.removeWorkspace("/workspace");
+    const afterParentRemoval = await engine.removeWorkspace("/workspace");
     assert.deepEqual(afterParentRemoval.workspaceDirs, ["/workspace/demo"]);
 
-    assert.throws(
-      () => engine.removeWorkspace("/workspace/demo"),
+    await assert.rejects(
+      engine.removeWorkspace("/workspace/demo"),
       /Cannot remove a workspace with active running sessions/,
     );
 
@@ -244,9 +244,9 @@ describe("WorkbenchStateStore", () => {
 
   test("preserves workspace add order across restart", async () => {
     const first = new RuntimeEngine();
-    first.addWorkspace("/workspace/zeta");
-    first.addWorkspace("/workspace/alpha");
-    first.addWorkspace("/workspace/mid");
+    await first.addWorkspace("/workspace/zeta");
+    await first.addWorkspace("/workspace/alpha");
+    await first.addWorkspace("/workspace/mid");
     await first.shutdown();
 
     const second = new RuntimeEngine();
@@ -263,8 +263,8 @@ describe("WorkbenchStateStore", () => {
 
   test("can remove a parent workspace when a descendant workspace owns the running session", async () => {
     const engine = new RuntimeEngine();
-    engine.addWorkspace("/workspace/demo");
-    engine.addWorkspace("/workspace/demo/app");
+    await engine.addWorkspace("/workspace/demo");
+    await engine.addWorkspace("/workspace/demo/app");
     engine.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: "thread-live-nested-1",
@@ -274,7 +274,7 @@ describe("WorkbenchStateStore", () => {
       title: "nested live",
     });
 
-    const afterRemoval = engine.removeWorkspace("/workspace/demo");
+    const afterRemoval = await engine.removeWorkspace("/workspace/demo");
     assert.deepEqual(afterRemoval.workspaceDirs, ["/workspace/demo/app"]);
 
     await engine.shutdown();
@@ -473,7 +473,7 @@ describe("WorkbenchStateStore", () => {
   test("closing a managed session removes it from running sessions and unblocks workspace removal", async () => {
     const rootDir = mkdtempSync(path.join(tmpRoot, "workspace-close-"));
     const engine = new RuntimeEngine();
-    engine.addWorkspace(rootDir);
+    await engine.addWorkspace(rootDir);
     const started = await engine.startSession({
       provider: "claude",
       cwd: rootDir,
@@ -501,7 +501,7 @@ describe("WorkbenchStateStore", () => {
         .some((event) => event.type === "session.closed"),
     );
 
-    const afterRemoval = engine.removeWorkspace(rootDir);
+    const afterRemoval = await engine.removeWorkspace(rootDir);
     assert.deepEqual(afterRemoval.workspaceDirs, []);
 
     await engine.shutdown();
@@ -618,7 +618,7 @@ describe("WorkbenchStateStore", () => {
 
     const engine = new RuntimeEngine();
     try {
-      engine.addWorkspace(workDir);
+      await engine.addWorkspace(workDir);
 
       const resumed = await engine.resumeSession({
         provider: "claude",
@@ -645,7 +645,7 @@ describe("WorkbenchStateStore", () => {
         ),
       );
 
-      const afterRemoval = engine.removeWorkspace(workDir);
+      const afterRemoval = await engine.removeWorkspace(workDir);
       assert.deepEqual(afterRemoval.workspaceDirs, []);
 
       await engine.shutdown();
@@ -662,9 +662,9 @@ describe("WorkbenchStateStore", () => {
 
   test("workspace removal treats /private/var and /var as the same directory", async () => {
     const engine = new RuntimeEngine();
-    engine.addWorkspace("/private/var/folders/demo/workspace");
+    await engine.addWorkspace("/private/var/folders/demo/workspace");
 
-    const afterRemoval = engine.removeWorkspace("/var/folders/demo/workspace");
+    const afterRemoval = await engine.removeWorkspace("/var/folders/demo/workspace");
     assert.deepEqual(afterRemoval.workspaceDirs, []);
 
     await engine.shutdown();
@@ -685,8 +685,8 @@ describe("WorkbenchStateStore", () => {
     const targetWorkspace = path.join(target, "crates", "AI", "synapse");
 
     const engine = new RuntimeEngine();
-    engine.addWorkspace(aliasWorkspace);
-    const listed = engine.addWorkspace(targetWorkspace);
+    await engine.addWorkspace(aliasWorkspace);
+    const listed = await engine.addWorkspace(targetWorkspace);
 
     assert.deepEqual(listed.workspaceDirs, [aliasWorkspace]);
 
@@ -752,7 +752,7 @@ describe("WorkbenchStateStore", () => {
 
   test("removed workspace stays removed across restart even if stale previous running history still points to it", async () => {
     const first = new RuntimeEngine();
-    first.addWorkspace("/workspace/demo");
+    await first.addWorkspace("/workspace/demo");
     const state = first.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: "thread-removed-1",
@@ -765,7 +765,7 @@ describe("WorkbenchStateStore", () => {
     await first.shutdown();
 
     const second = new RuntimeEngine();
-    const removed = second.removeWorkspace("/workspace/demo");
+    const removed = await second.removeWorkspace("/workspace/demo");
     assert.deepEqual(removed.workspaceDirs, []);
     await second.shutdown();
 

@@ -71,7 +71,7 @@ test("Codex newest turn page cache invalidates on rollout growth and explicit cl
   assert.deepEqual(await cache.getOrLoad(request), page("turn-1"));
   writeFileSync(rolloutPath, "second\n", { encoding: "utf8", flag: "a" });
   assert.deepEqual(await cache.getOrLoad(request), page("turn-2"));
-  cache.clear("provider-session");
+  await cache.clear("provider-session");
   assert.deepEqual(await cache.getOrLoad(request), page("turn-3"));
   assert.equal(loads, 3);
   rmSync(root, { recursive: true, force: true });
@@ -132,7 +132,7 @@ test("Codex historical turn page cache rejects in-place rewrites and clear", asy
     "utf8",
   );
   assert.deepEqual(await cache.getOrLoad(request), page("turn-2"));
-  cache.clear("provider-session");
+  await cache.clear("provider-session");
   assert.deepEqual(await cache.getOrLoad(request), page("turn-3"));
   assert.equal(loads, 3);
   rmSync(root, { recursive: true, force: true });

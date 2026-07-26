@@ -28,7 +28,7 @@ import {
   type LiveOpenCodeSession,
 } from "./opencode-live-client";
 import {
-  findOpenCodeStoredSessionRecord,
+  findOpenCodeStoredSessionRecordAsync,
   resumeOpenCodeStoredSession,
 } from "../opencode-stored-sessions";
 import { opencodeLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostics";
@@ -123,7 +123,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
       historySourceSessionId: request.historySourceSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
-    const record = findOpenCodeStoredSessionRecord(request.providerSessionId);
+    const record = await findOpenCodeStoredSessionRecordAsync(
+      request.providerSessionId,
+    );
     if (request.preferStoredReplay) {
       if (!record) {
         throw new Error(`Unknown OpenCode session ${request.providerSessionId}.`);

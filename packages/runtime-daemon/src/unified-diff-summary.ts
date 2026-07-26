@@ -219,7 +219,9 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
     }
   }
 
-  const parsedFiles = [...files.values()];
+  const parsedFiles = [...files.values()].sort((left, right) =>
+    left.path === right.path ? 0 : left.path < right.path ? -1 : 1,
+  );
   const projectedFiles = parsedFiles.map(({ path, additions, deletions }) => ({
     path,
     additions,

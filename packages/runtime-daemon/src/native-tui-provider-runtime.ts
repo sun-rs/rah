@@ -9,6 +9,7 @@ import {
   type NativeTuiLaunchSpec,
 } from "./native-tui-launch-spec";
 import { createDefaultNativeTuiBindingHandlers } from "./native-tui-provider-handlers";
+import type { NativeTuiHistoryCatalog } from "./native-tui-history-catalog";
 import type {
   NativeTuiBindingHandler,
   NativeTuiBindingCandidate,
@@ -90,6 +91,10 @@ export class DefaultNativeTuiProviderRuntime implements NativeTuiProviderRuntime
   }
 }
 
-export function createDefaultNativeTuiProviderRuntime(): NativeTuiProviderRuntime {
-  return new DefaultNativeTuiProviderRuntime();
+export function createDefaultNativeTuiProviderRuntime(
+  historyCatalog?: NativeTuiHistoryCatalog,
+): NativeTuiProviderRuntime {
+  return new DefaultNativeTuiProviderRuntime(
+    createDefaultNativeTuiBindingHandlers(historyCatalog),
+  );
 }

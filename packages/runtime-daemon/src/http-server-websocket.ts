@@ -1,18 +1,33 @@
 import type { Server } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
+  ConversationProjectionDelta,
   EventSubscriptionRequest,
   PtyClientMessage,
   PtyServerMessage,
   RahEvent,
   ReplayGapNotice,
 } from "@rah/runtime-protocol";
+import { composeConversationProjectionDeltas } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { isAllowedOrigin } from "./http-server-cors";
 import type { DeviceAuthManager } from "./device-auth";
+import { boundedJsonByteLength } from "./bounded-json-size";
+import { LiveEventTransportBatch } from "./live-event-transport-batch";
+import { PtyOutputTransportBatch } from "./pty-output-transport-batch";
 
 const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024;
+const EVENT_BATCH_SEMANTIC_FLUSH_DELAY_MS = 8;
+const EVENT_BATCH_DATA_FLUSH_DELAY_MS = 50;
+const EVENT_BATCH_MAX_EVENTS = 256;
+const EVENT_BATCH_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
+const EVENT_BATCH_MAX_COALESCED_OUTPUT_CHARS = 128 * 1024;
+const EVENT_REPLAY_MAX_EVENTS = 96;
+const EVENT_REPLAY_MAX_BYTES = 512 * 1024;
+const EVENT_REPLAY_MAX_PENDING_LIVE_EVENTS = 1_024;
+const EVENT_REPLAY_MAX_PENDING_LIVE_BYTES = 4 * 1024 * 1024;
 const PTY_OUTPUT_FLUSH_DELAY_MS = 8;
 const PTY_OUTPUT_MAX_BATCH_CHARS = 128 * 1024;
 
@@ -28,7 +43,12 @@ type BackpressureSocket = {
 export function sendJsonWithBackpressure(
   socket: BackpressureSocket,
   message: unknown,
-  options: { maxBufferedBytes?: number; closeReason?: string } = {},
+  options: {
+    maxBufferedBytes?: number;
+    maxMessageBytes?: number;
+    closeReason?: string;
+    oversizedCloseReason?: string;
+  } = {},
 ): boolean {
   if (socket.readyState !== WebSocket.OPEN) {
     return false;
@@ -41,7 +61,20 @@ export function sendJsonWithBackpressure(
     socket.close(1013, options.closeReason ?? "client is too slow");
     return false;
   }
-  socket.send(JSON.stringify(message));
+  const maxMessageBytes = Math.max(
+    1,
+    options.maxMessageBytes ?? DEFAULT_MAX_WEBSOCKET_MESSAGE_BYTES,
+  );
+  if (boundedJsonByteLength(message, maxMessageBytes) > maxMessageBytes) {
+    socket.close(1009, options.oversizedCloseReason ?? "message is too large");
+    return false;
+  }
+  const serialized = JSON.stringify(message);
+  if (Buffer.byteLength(serialized, "utf8") > maxMessageBytes) {
+    socket.close(1009, options.oversizedCloseReason ?? "message is too large");
+    return false;
+  }
+  socket.send(serialized);
   return true;
 }
 
@@ -144,10 +177,62 @@ function decodePathSegment(value: string): string {
   }
 }
 
-function conversationDeltasForEvents(engine: RuntimeEngine, events: readonly RahEvent[]) {
-  return events
-    .map((event) => engine.conversationStore.deltaForSourceSeq(event.seq))
-    .filter((delta) => delta !== undefined);
+export interface EventReplayChunk {
+  events: RahEvent[];
+  conversationDeltas: ConversationProjectionDelta[];
+}
+
+export function chunkEventReplay(
+  events: readonly RahEvent[],
+  deltaForSourceSeq: (sourceSeq: number) => ConversationProjectionDelta | undefined,
+  options: {
+    maxEvents?: number;
+    maxBytes?: number;
+  } = {},
+): EventReplayChunk[] {
+  const maxEvents = Math.max(1, options.maxEvents ?? EVENT_REPLAY_MAX_EVENTS);
+  const maxBytes = Math.max(1, options.maxBytes ?? EVENT_REPLAY_MAX_BYTES);
+  const chunks: EventReplayChunk[] = [];
+  let chunkEvents: RahEvent[] = [];
+  let chunkDeltas: ConversationProjectionDelta[] = [];
+  let chunkBytes = 0;
+
+  const flush = () => {
+    if (chunkEvents.length === 0) {
+      return;
+    }
+    chunks.push({
+      events: chunkEvents,
+      conversationDeltas: composeConversationProjectionDeltas(chunkDeltas),
+    });
+    chunkEvents = [];
+    chunkDeltas = [];
+    chunkBytes = 0;
+  };
+
+  for (const event of events) {
+    const delta = deltaForSourceSeq(event.seq);
+    const entryBytes =
+      boundedJsonByteLength(event, maxBytes) +
+      (delta ? boundedJsonByteLength(delta, maxBytes) : 0);
+    if (
+      chunkEvents.length > 0 &&
+      (chunkEvents.length >= maxEvents || chunkBytes + entryBytes > maxBytes)
+    ) {
+      flush();
+    }
+    chunkEvents.push(event);
+    if (delta) {
+      chunkDeltas.push(delta);
+    }
+    chunkBytes = Math.min(maxBytes + 1, chunkBytes + entryBytes);
+  }
+  flush();
+  return chunks;
+}
+
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 export function attachWebSocketHandlers(
@@ -176,6 +261,90 @@ export function attachWebSocketHandlers(
       closeReason: "Event client is too slow",
     });
     let filter: EventSubscriptionRequest = {};
+    const pendingBatch = new LiveEventTransportBatch({
+      maxCoalescedOutputChars: EVENT_BATCH_MAX_COALESCED_OUTPUT_CHARS,
+      sizeBudgetBytes: EVENT_BATCH_MAX_QUEUED_BYTES,
+    });
+    let eventFlushTimer: ReturnType<typeof setTimeout> | undefined;
+    let eventFlushUrgent = false;
+    let unsubscribe: () => void = () => undefined;
+    let replayActive = false;
+    let replayGeneration = 0;
+    let closed = false;
+
+    const clearPendingEventBatch = () => {
+      if (eventFlushTimer !== undefined) {
+        clearTimeout(eventFlushTimer);
+        eventFlushTimer = undefined;
+      }
+      pendingBatch.clear();
+      eventFlushUrgent = false;
+    };
+    const flushPendingEventBatch = (): boolean => {
+      if (eventFlushTimer !== undefined) {
+        clearTimeout(eventFlushTimer);
+        eventFlushTimer = undefined;
+      }
+      if (pendingBatch.eventCount === 0) {
+        return true;
+      }
+      const { events, conversationDeltas } = pendingBatch.take();
+      eventFlushUrgent = false;
+      return sendEventFrame({
+        events,
+        ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
+      });
+    };
+    const schedulePendingEventFlush = () => {
+      if (replayActive || pendingBatch.eventCount === 0) {
+        return;
+      }
+      const urgent = pendingBatch.hasUrgentEvents;
+      if (eventFlushTimer !== undefined) {
+        if (!urgent || eventFlushUrgent) {
+          return;
+        }
+        clearTimeout(eventFlushTimer);
+        eventFlushTimer = undefined;
+      }
+      eventFlushUrgent = urgent;
+      eventFlushTimer = setTimeout(() => {
+        eventFlushTimer = undefined;
+        eventFlushUrgent = false;
+        if (!flushPendingEventBatch()) {
+          unsubscribe();
+        }
+      }, urgent
+        ? EVENT_BATCH_SEMANTIC_FLUSH_DELAY_MS
+        : EVENT_BATCH_DATA_FLUSH_DELAY_MS);
+      eventFlushTimer.unref?.();
+    };
+    const enqueueEventFrame = (
+      event: RahEvent,
+      conversationDelta: ReturnType<typeof engine.conversationStore.deltaForSourceSeq>,
+    ): boolean => {
+      pendingBatch.append(event, conversationDelta);
+      if (replayActive) {
+        if (
+          pendingBatch.eventCount >= EVENT_REPLAY_MAX_PENDING_LIVE_EVENTS ||
+          pendingBatch.byteLength >= EVENT_REPLAY_MAX_PENDING_LIVE_BYTES
+        ) {
+          socket.close(1013, "Live event backlog exceeded replay budget");
+          unsubscribe();
+          return false;
+        }
+        return true;
+      }
+      if (
+        pendingBatch.eventCount >= EVENT_BATCH_MAX_EVENTS ||
+        pendingBatch.byteLength >= EVENT_BATCH_MAX_QUEUED_BYTES
+      ) {
+        return flushPendingEventBatch();
+      }
+      schedulePendingEventFlush();
+      return true;
+    };
+
     const sessionIds = url.searchParams.getAll("sessionId");
     const eventTypes = url.searchParams.getAll("eventType") as NonNullable<EventSubscriptionRequest["eventTypes"]>;
     if (sessionIds.length > 0) {
@@ -188,27 +357,88 @@ export function attachWebSocketHandlers(
       filter.replayFromSeq = Number.parseInt(replayFromSeq, 10);
     }
 
-    if (initialReplayEnabled) {
-      const initial = engine.listEvents(filter);
-      const initialReplayGap = replayGapForSubscription(engine, filter);
-      const conversationDeltas = conversationDeltasForEvents(engine, initial);
-      sendEventFrame({
-        events: initial,
-        ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
-        initial: true,
-        ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
-      });
-    }
+    const beginSubscription = (
+      nextFilter: EventSubscriptionRequest,
+      options: { replay: boolean; initial: boolean },
+    ) => {
+      clearPendingEventBatch();
+      unsubscribe();
+      filter = nextFilter;
+      const generation = ++replayGeneration;
+      const replayGap = options.replay
+        ? replayGapForSubscription(engine, filter)
+        : undefined;
+      const replayEvents =
+        options.replay && !replayGap ? engine.listEvents(filter) : [];
+      replayActive =
+        options.replay &&
+        (options.initial || replayGap !== undefined || replayEvents.length > 0);
 
-    let unsubscribe: () => void = () => undefined;
-    unsubscribe = engine.eventBus.subscribe(filter, (event) => {
-      const conversationDelta = engine.conversationStore.deltaForSourceSeq(event.seq);
-      if (!sendEventFrame({
-        events: [event],
-        ...(conversationDelta ? { conversationDeltas: [conversationDelta] } : {}),
-      })) {
-        unsubscribe();
+      // Subscribe before yielding to the replay pump. New events are queued
+      // behind the snapshot and cannot overtake retained history.
+      unsubscribe = engine.eventBus.subscribe(filter, (event) => {
+        const conversationDelta = engine.conversationStore.deltaForSourceSeq(event.seq);
+        if (!enqueueEventFrame(event, conversationDelta)) {
+          unsubscribe();
+        }
+      });
+
+      if (!replayActive) {
+        return;
       }
+      const chunks = chunkEventReplay(
+        replayEvents,
+        (sourceSeq) => engine.conversationStore.deltaForSourceSeq(sourceSeq),
+      );
+      void (async () => {
+        const frameCount = Math.max(1, chunks.length);
+        for (let index = 0; index < frameCount; index += 1) {
+          if (closed || generation !== replayGeneration) {
+            return;
+          }
+          const chunk = chunks[index] ?? {
+            events: [],
+            conversationDeltas: [],
+          };
+          const complete = index === frameCount - 1;
+          const sent = sendEventFrame({
+            events: chunk.events,
+            ...(chunk.conversationDeltas.length > 0
+              ? { conversationDeltas: chunk.conversationDeltas }
+              : {}),
+            replay: true,
+            ...(options.initial ? { initial: true } : {}),
+            replayComplete: complete,
+            ...(complete && replayGap ? { replayGap } : {}),
+          });
+          if (!sent) {
+            unsubscribe();
+            return;
+          }
+          if (!complete) {
+            await yieldEventLoop();
+          }
+        }
+        if (closed || generation !== replayGeneration) {
+          return;
+        }
+        replayActive = false;
+        if (
+          pendingBatch.eventCount >= EVENT_BATCH_MAX_EVENTS ||
+          pendingBatch.byteLength >= EVENT_BATCH_MAX_QUEUED_BYTES
+        ) {
+          if (!flushPendingEventBatch()) {
+            unsubscribe();
+          }
+          return;
+        }
+        schedulePendingEventFlush();
+      })();
+    };
+
+    beginSubscription(filter, {
+      replay: initialReplayEnabled,
+      initial: initialReplayEnabled,
     });
 
     socket.on("message", (raw) => {
@@ -217,33 +447,17 @@ export function attachWebSocketHandlers(
         if (sameEventSubscription(filter, parsed)) {
           return;
         }
-        unsubscribe();
-        filter = parsed;
-        const replay = engine.listEvents(filter);
-        const replayGap = replayGapForSubscription(engine, filter);
-        if (replay.length > 0 || replayGap) {
-          const conversationDeltas = conversationDeltasForEvents(engine, replay);
-          sendEventFrame({
-            events: replay,
-            ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
-            ...(replayGap ? { replayGap } : {}),
-          });
-        }
-        unsubscribe = engine.eventBus.subscribe(filter, (event) => {
-          const conversationDelta = engine.conversationStore.deltaForSourceSeq(event.seq);
-          if (!sendEventFrame({
-            events: [event],
-            ...(conversationDelta ? { conversationDeltas: [conversationDelta] } : {}),
-          })) {
-            unsubscribe();
-          }
-        });
+        beginSubscription(parsed, { replay: true, initial: false });
       } catch {
         sendEventFrame({ error: "Invalid subscription payload" });
       }
     });
 
     socket.on("close", () => {
+      closed = true;
+      replayGeneration += 1;
+      replayActive = false;
+      clearPendingEventBatch();
       unsubscribe();
       unsubscribeRevocation?.();
     });
@@ -270,7 +484,7 @@ export function attachWebSocketHandlers(
     const tailBytes = parsePtyReplaySeq(url.searchParams.get("tailBytes"));
     let unsubscribe: () => void = () => undefined;
     let closeAfterSubscribe = false;
-    let pendingOutput: Extract<PtyServerMessage, { type: "pty.output" }> | null = null;
+    const pendingOutput = new PtyOutputTransportBatch();
     let pendingOutputTimer: ReturnType<typeof setTimeout> | null = null;
 
     const sendFrame = (frame: PtyServerMessage): boolean =>
@@ -283,11 +497,13 @@ export function attachWebSocketHandlers(
         clearTimeout(pendingOutputTimer);
         pendingOutputTimer = null;
       }
-      if (!pendingOutput) {
+      if (pendingOutput.empty) {
         return;
       }
-      const output = pendingOutput;
-      pendingOutput = null;
+      const output = pendingOutput.take();
+      if (!output) {
+        return;
+      }
       const sent = sendFrame(output);
       if (!sent) {
         closeAfterSubscribe = true;
@@ -297,16 +513,8 @@ export function attachWebSocketHandlers(
 
     const sendPtyFrame = (frame: PtyServerMessage) => {
       if (frame.type === "pty.output" && frame.replace !== true) {
-        if (pendingOutput) {
-          pendingOutput = {
-            ...pendingOutput,
-            data: `${pendingOutput.data}${frame.data}`,
-            ...(frame.seq !== undefined ? { seq: frame.seq } : {}),
-          };
-        } else {
-          pendingOutput = frame;
-        }
-        if (pendingOutput.data.length >= PTY_OUTPUT_MAX_BATCH_CHARS) {
+        pendingOutput.append(frame);
+        if (pendingOutput.charLength >= PTY_OUTPUT_MAX_BATCH_CHARS) {
           flushPendingOutput();
           return;
         }
@@ -315,7 +523,7 @@ export function attachWebSocketHandlers(
         }
         return;
       }
-      if (pendingOutput) {
+      if (!pendingOutput.empty) {
         flushPendingOutput();
       }
       const sent = sendFrame(frame);
@@ -392,7 +600,7 @@ export function attachWebSocketHandlers(
         clearTimeout(pendingOutputTimer);
         pendingOutputTimer = null;
       }
-      pendingOutput = null;
+      pendingOutput.clear();
       unsubscribe();
       if (surfaceClientId) {
         void engine

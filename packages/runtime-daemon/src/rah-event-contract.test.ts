@@ -13,7 +13,11 @@ import {
   type CodexLiveTranslatedActivity,
 } from "./codex-app-server-activity";
 import { createTimelineIdentity } from "./timeline-identity";
-import { EventBus } from "./event-bus";
+import {
+  boundedJsonByteLength,
+  compactEventRaw,
+  EventBus,
+} from "./event-bus";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
@@ -319,6 +323,10 @@ describe("RAH event contract", () => {
   test("Codex live translator emits contract-conformant reference events", () => {
     const services = createServices();
     const sessionId = createSession(services);
+    const deliveredEvents: RahEvent[] = [];
+    services.eventBus.subscribe({ sessionIds: [sessionId] }, (event) => {
+      deliveredEvents.push(event);
+    });
     const state = createCodexAppServerTranslationState();
     let currentTurnId: string | null = null;
 
@@ -370,6 +378,8 @@ describe("RAH event contract", () => {
         "tool_call_delta",
         "tool_call_completed",
         "tool_call_failed",
+        "process_output_appended",
+        "process_output_snapshot",
         "observation_started",
         "observation_updated",
         "observation_completed",
@@ -436,8 +446,10 @@ describe("RAH event contract", () => {
 
     const events = services.eventBus.list({ sessionIds: [sessionId] });
     assert.ok(events.some((event) => event.type === "message.part.delta"));
-    assert.ok(events.some((event) => event.type === "tool.call.delta"));
-    assert.ok(events.some((event) => event.type === "observation.updated"));
+    assert.ok(
+      deliveredEvents.some((event) => event.type === "process.output.appended"),
+    );
+    assert.ok(events.some((event) => event.type === "process.output.snapshot"));
     assert.ok(
       events.some(
         (event) =>
@@ -703,6 +715,153 @@ describe("RAH event contract", () => {
 
     assert.equal(bus.oldestSeq(), 2);
     assert.equal(bus.newestSeq(), 4);
+  });
+
+  test("event bus delivers process output appends without retaining or persisting them", () => {
+    const persisted: RahEvent[] = [];
+    const delivered: RahEvent[] = [];
+    const bus = new EventBus({
+      onPersistEvent: (event) => persisted.push(event),
+    });
+    bus.subscribe({}, (event) => delivered.push(event));
+    const source = {
+      provider: "codex" as const,
+      channel: "structured_live" as const,
+      authority: "authoritative" as const,
+    };
+
+    bus.publish({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      type: "process.output.appended",
+      source,
+      payload: {
+        output: {
+          itemId: "command-1",
+          stream: "combined",
+          sequence: 1,
+          offsetBytes: 0,
+          data: "streaming output",
+          totalBytes: 16,
+        },
+      },
+    });
+    bus.publish({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      type: "process.output.snapshot",
+      source,
+      payload: {
+        output: {
+          itemId: "command-1",
+          stream: "combined",
+          totalBytes: 16,
+          retainedBytes: 16,
+          truncatedBeforeBytes: 0,
+          tail: "streaming output",
+          detailAvailable: true,
+        },
+      },
+    });
+
+    assert.deepEqual(
+      delivered.map((event) => event.type),
+      ["process.output.appended", "process.output.snapshot"],
+    );
+    assert.deepEqual(
+      bus.list().map((event) => event.type),
+      ["process.output.snapshot"],
+    );
+    assert.deepEqual(
+      persisted.map((event) => event.type),
+      ["process.output.snapshot"],
+    );
+    assert.equal(bus.oldestSeq(), 2);
+    assert.equal(bus.newestSeq(), 2);
+  });
+
+  test("event bus trims replay by encoded bytes before the event count limit", () => {
+    const bus = new EventBus({
+      maxEvents: 100,
+      maxRetainedBytes: 1_100,
+    });
+    const source = {
+      provider: "system" as const,
+      channel: "system" as const,
+      authority: "authoritative" as const,
+    };
+
+    for (let index = 0; index < 10; index += 1) {
+      bus.publish({
+        sessionId: "session-1",
+        type: "notification.emitted",
+        source,
+        payload: {
+          level: "info",
+          title: `notification-${index}`,
+          body: "x".repeat(320),
+        },
+      });
+    }
+
+    assert.ok(bus.list().length < 10);
+    assert.ok(bus.list().length < 100);
+    assert.ok(bus.retainedBytes() <= 1_100);
+    assert.equal(bus.newestSeq(), 10);
+    assert.ok((bus.oldestSeq() ?? 0) > 1);
+  });
+
+  test("event bus compacts oversized provider evidence before retention and delivery", () => {
+    const bus = new EventBus({ maxRawBytes: 256 });
+    const delivered: RahEvent[] = [];
+    bus.subscribe({}, (event) => delivered.push(event));
+
+    const event = bus.publish({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      type: "observation.completed",
+      source: {
+        provider: "codex",
+        channel: "structured_live",
+        authority: "heuristic",
+      },
+      payload: {
+        observation: {
+          id: "unknown-1",
+          kind: "runtime.invalid_stream",
+          status: "completed",
+          title: "Unknown provider event",
+        },
+      },
+      raw: {
+        method: "future/provider/event",
+        payload: "x".repeat(1_000_000),
+      },
+    });
+
+    assert.deepEqual(event.raw, {
+      __rahRaw: "compacted",
+      kind: "object",
+      exceededBytes: 256,
+      keys: ["method", "payload"],
+      method: "future/provider/event",
+    });
+    assert.deepEqual(delivered[0]?.raw, event.raw);
+    assert.ok(boundedJsonByteLength(event.raw, 256) <= 256);
+  });
+
+  test("bounded event sizing terminates on cyclic provider data", () => {
+    const raw: { method: string; self?: unknown } = { method: "cyclic" };
+    raw.self = raw;
+
+    assert.equal(boundedJsonByteLength(raw, 128), 129);
+    assert.deepEqual(compactEventRaw(raw, 128), {
+      __rahRaw: "compacted",
+      kind: "object",
+      exceededBytes: 128,
+      keys: ["method", "self"],
+      method: "cyclic",
+    });
   });
 
   test("event bus isolates subscriber failures", () => {

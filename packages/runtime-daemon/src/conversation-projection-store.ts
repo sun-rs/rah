@@ -9,26 +9,31 @@ import type {
   RahEvent,
 } from "@rah/runtime-protocol";
 import { summarizeConversationActivities } from "@rah/runtime-protocol";
-import { projectConversation } from "./conversation-projector";
 import { projectConversationTurnResources } from "./conversation-resource-projector";
 import type { EventBus } from "./event-bus";
 import { summarizeHistoryEvent } from "./history-event-projection";
+import {
+  IncrementalConversationProjector,
+  isConversationProjectionEvent,
+  type IncrementalConversationProjectorChange,
+} from "./incremental-conversation-projector";
 
 type MergePosition = "older" | "newer";
 
 interface StoredConversationProjection {
   projection: ConversationProjection;
   liveRevision: number;
-  eventWindow: RahEvent[];
 }
 
 export interface ConversationProjectionSnapshot extends ConversationProjection {
   liveRevision: number;
 }
 
-const DEFAULT_EVENT_WINDOW = 256;
 const DEFAULT_DELTA_HISTORY = 2_000;
 const DEFAULT_RESIDENT_TURNS = 64;
+
+type TouchedItemIdsByTurn =
+  IncrementalConversationProjectorChange["turns"];
 
 function emptyProjection(sessionId: string): ConversationProjection {
   return {
@@ -387,6 +392,10 @@ function boundResidentTurns(
 
 export class ConversationProjectionStore {
   private readonly sessions = new Map<string, StoredConversationProjection>();
+  private readonly liveProjectors = new Map<
+    string,
+    IncrementalConversationProjector
+  >();
   private readonly deltasBySourceSeq = new Map<number, ConversationProjectionDelta>();
   private readonly deltaSourceSeqs: number[] = [];
   private readonly unsubscribe: () => void;
@@ -394,6 +403,7 @@ export class ConversationProjectionStore {
   constructor(
     eventBus: EventBus,
     private readonly options: {
+      /** @deprecated Live projection no longer replays a sliding event window. */
       eventWindow?: number;
       maxDeltaHistory?: number;
       maxResidentTurns?: number;
@@ -476,16 +486,27 @@ export class ConversationProjectionStore {
 
   mergeProjection(
     incoming: ConversationProjection,
-    options: { position?: MergePosition; live?: boolean; sourceSeq?: number } = {},
+    options: {
+      position?: MergePosition;
+      live?: boolean;
+      sourceSeq?: number;
+      removeTurnIds?: readonly string[];
+      replaceTurns?: boolean;
+      touchedItemIdsByTurn?: TouchedItemIdsByTurn;
+    } = {},
   ): ConversationProjectionDelta | undefined {
     const stored = this.sessions.get(incoming.sessionId) ?? {
       projection: emptyProjection(incoming.sessionId),
       liveRevision: 0,
-      eventWindow: [],
     };
     const beforeTurns = stored.projection.turns;
-    const nextTurns = [...beforeTurns];
-    const removedTurnIds: string[] = [];
+    const requestedRemoveTurnIds = new Set(options.removeTurnIds ?? []);
+    const nextTurns = beforeTurns.filter(
+      (turn) => !requestedRemoveTurnIds.has(turn.id),
+    );
+    const removedTurnIds = beforeTurns
+      .filter((turn) => requestedRemoveTurnIds.has(turn.id))
+      .map((turn) => turn.id);
     const changedTurns: ConversationTurnDelta[] = [];
     const incomingNewTurns: ConversationTurnProjection[] = [];
 
@@ -500,12 +521,21 @@ export class ConversationProjectionStore {
         continue;
       }
       const previous = nextTurns[index]!;
-      const merged = mergeConversationTurn(previous, incomingTurn);
+      const merged = options.replaceTurns
+        ? incomingTurn
+        : mergeConversationTurn(previous, incomingTurn);
       if (previous.id !== merged.id) {
         removedTurnIds.push(previous.id);
       }
       nextTurns[index] = merged;
-      const delta = turnDelta(previous, merged, incomingTurn.items);
+      const touchedItemIds = options.touchedItemIdsByTurn?.get(
+        incomingTurn.id,
+      );
+      const touchedItems =
+        touchedItemIds === undefined || touchedItemIds === null
+          ? incomingTurn.items
+          : incomingTurn.items.filter((item) => touchedItemIds.has(item.id));
+      const delta = turnDelta(previous, merged, touchedItems);
       if (delta) {
         changedTurns.push(delta);
       }
@@ -566,27 +596,42 @@ export class ConversationProjectionStore {
   private applyLiveEvent(event: RahEvent): void {
     if (event.type === "session.closed") {
       this.sessions.delete(event.sessionId);
+      this.liveProjectors.delete(event.sessionId);
       return;
     }
-    const stored = this.sessions.get(event.sessionId) ?? {
-      projection: emptyProjection(event.sessionId),
-      liveRevision: 0,
-      eventWindow: [],
-    };
-    const projectionEvent = summarizeHistoryEvent(event);
-    stored.eventWindow.push(projectionEvent);
-    const maxWindow = this.options.eventWindow ?? DEFAULT_EVENT_WINDOW;
-    if (stored.eventWindow.length > maxWindow) {
-      stored.eventWindow.splice(0, stored.eventWindow.length - maxWindow);
+    // Canonical events share one bus, but process output, message deltas, and
+    // tool deltas are high-volume data-plane traffic. They have bounded stores
+    // of their own and must never enter semantic conversation projection.
+    if (!isConversationProjectionEvent(event)) {
+      return;
     }
-    this.sessions.set(event.sessionId, stored);
-    const projection = projectConversation(event.sessionId, stored.eventWindow, {
-      partial: true,
-    });
+    let projector = this.liveProjectors.get(event.sessionId);
+    if (!projector) {
+      projector = new IncrementalConversationProjector(event.sessionId);
+      this.liveProjectors.set(event.sessionId, projector);
+    }
+    const change = projector.apply(summarizeHistoryEvent(event));
+    const prunedTurnIds = projector.pruneCompletedTurns(
+      Math.max(1, this.options.maxResidentTurns ?? DEFAULT_RESIDENT_TURNS),
+    );
+    const removeTurnIds = [...new Set([
+      ...change.removedTurnIds,
+      ...prunedTurnIds,
+    ])];
+    if (change.turns.size === 0 && removeTurnIds.length === 0) {
+      return;
+    }
+    const projection = projector.projection(
+      { partial: true },
+      new Set(change.turns.keys()),
+    );
     this.mergeProjection(projection, {
       position: "newer",
       live: true,
       sourceSeq: event.seq,
+      removeTurnIds,
+      replaceTurns: true,
+      touchedItemIdsByTurn: change.turns,
     });
   }
 

@@ -25,6 +25,18 @@ test("stored history capability preserves Conversation paging methods", async ()
     async getSessionConversationTurnDetail(sessionId) {
       return { sessionId, events: [], nextCursor: "turn-detail" };
     },
+    async getSessionConversationTurnFileDiff(sessionId, options) {
+      return {
+        sessionId,
+        turnId: options.providerTurnId,
+        path: options.path,
+        diff: "provider-native-diff",
+        truncated: false,
+      };
+    },
+    getSessionConversationSourceRevision() {
+      return "1234:5678";
+    },
   };
 
   assert.equal(hasStoredHistoryCapability(adapter), true);
@@ -46,6 +58,34 @@ test("stored history capability preserves Conversation paging methods", async ()
     }))?.nextCursor,
     "turn-detail",
   );
+  assert.equal(
+    (await capability.getSessionConversationTurnFileDiff?.("session-1", {
+      providerTurnId: "turn-1",
+      path: "src/main.ts",
+    }))?.diff,
+    "provider-native-diff",
+  );
+  assert.equal(
+    await capability.getSessionConversationSourceRevision?.("session-1"),
+    "1234:5678",
+  );
+});
+
+test("turn file diff alone declares stored history capability", () => {
+  const adapter: ProviderAdapter & ProviderStoredHistoryAdapter = {
+    id: "history-turn-diff-only",
+    providers: ["codex"],
+    getSessionConversationTurnFileDiff(sessionId, options) {
+      return {
+        sessionId,
+        turnId: options.providerTurnId,
+        path: options.path,
+        diff: "",
+        truncated: false,
+      };
+    },
+  };
+  assert.equal(hasStoredHistoryCapability(adapter), true);
 });
 
 test("structured lifecycle capability preserves provider-native forkSession", async () => {

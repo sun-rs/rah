@@ -385,12 +385,27 @@ export function applyEventsToProjectionMap(
   if (events.length === 0) {
     return current;
   }
-  const next = new Map(current);
+  let next = current;
+  const writable = () => {
+    if (next === current) {
+      next = new Map(current);
+    }
+    return next;
+  };
   const touchedSessionIds = new Set<string>();
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     handling.updateLastSeq(event.seq);
+    // Incremental process output is a lossy data-plane stream. The canonical
+    // conversation and final process snapshot own rendered state, so copying
+    // it into the global projection map would only invalidate the entire app
+    // for every stdout batch.
+    if (event.type === "process.output.appended") {
+      continue;
+    }
     if (event.type === "session.closed") {
-      next.delete(event.sessionId);
+      if (next.has(event.sessionId)) {
+        writable().delete(event.sessionId);
+      }
       handling.clearPendingSession(event.sessionId);
       continue;
     }
@@ -400,13 +415,13 @@ export function applyEventsToProjectionMap(
       (event.type === "session.created" || event.type === "session.started")
     ) {
       projection = createProjectionFromSessionEvent(event);
-      next.set(event.sessionId, projection);
+      writable().set(event.sessionId, projection);
     }
     if (!projection) {
       handling.queuePendingEvent(event);
       continue;
     }
-    next.set(event.sessionId, applyEventToProjection(projection, event));
+    writable().set(event.sessionId, applyEventToProjection(projection, event));
     touchedSessionIds.add(event.sessionId);
   }
   for (const sessionId of touchedSessionIds) {
@@ -414,7 +429,10 @@ export function applyEventsToProjectionMap(
     if (!projection) {
       continue;
     }
-    next.set(sessionId, compactRecoverableLiveProjectionFeed(projection));
+    const compacted = compactRecoverableLiveProjectionFeed(projection);
+    if (compacted !== projection) {
+      writable().set(sessionId, compacted);
+    }
   }
   return next;
 }

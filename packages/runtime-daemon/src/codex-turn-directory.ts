@@ -1,16 +1,37 @@
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
-import type { ConversationTurnDirectoryResponse } from "@rah/runtime-protocol";
+import type {
+  ConversationTurnDirectoryResponse,
+  ConversationTurnFileChangesProjection,
+} from "@rah/runtime-protocol";
 import type { CodexAppServerTurnsPage } from "./codex-app-server-turns-page";
-import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
-import type { CodexTurnDirectorySnapshot } from "./codex-turn-directory-worker";
+import {
+  codexStoredSessionWorkspaceRoot,
+  type CodexStoredSessionRecord,
+} from "./codex-stored-session-types";
+import type {
+  CodexIndexedTurn,
+  CodexTurnDirectorySnapshot,
+  CodexTurnDirectoryWorkerResponse,
+  CodexTurnSummaryPageWorkerResult,
+} from "./codex-turn-directory-worker";
+import { BoundedTaskScheduler } from "./bounded-task-scheduler";
+import {
+  runBackgroundIpcTask,
+  terminateBackgroundIpcProcess,
+  type BackgroundIpcChild,
+} from "./background-ipc-task";
+import {
+  HISTORY_WORKLOAD_PRIORITY,
+  sharedHistoryWorkloadScheduler,
+} from "./history-workload-governor";
 
-type WorkerResponse =
-  | { ok: true; snapshot: CodexTurnDirectorySnapshot }
-  | { ok: false; error: string };
+const SUMMARY_PAGE_TEXT_BUDGET_BYTES = 4 * 1024 * 1024;
+const TURN_DIRECTORY_RESPONSE_BYTES = 8 * 1024 * 1024;
+const TURN_SUMMARY_RESPONSE_BYTES = 8 * 1024 * 1024;
+const TURN_LOOKUP_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 function resolveRahRuntimeHome(): string {
   return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
@@ -18,6 +39,15 @@ function resolveRahRuntimeHome(): string {
 
 function cacheKey(providerSessionId: string): string {
   return createHash("sha256").update(providerSessionId).digest("hex").slice(0, 32);
+}
+
+function directoryCachePath(providerSessionId: string): string {
+  return path.join(
+    resolveRahRuntimeHome(),
+    "turn-directory",
+    "codex",
+    `${cacheKey(providerSessionId)}.json`,
+  );
 }
 
 function sourceRevision(snapshot: CodexTurnDirectorySnapshot): string {
@@ -35,8 +65,8 @@ function sourceRevision(snapshot: CodexTurnDirectorySnapshot): string {
     .slice(0, 22);
 }
 
-function statKey(filePath: string): string {
-  const stats = statSync(filePath);
+async function statKey(filePath: string): Promise<string> {
+  const stats = await stat(filePath);
   return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
 }
 
@@ -55,22 +85,29 @@ export class CodexTurnDirectoryStore {
     { statKey: string; snapshot: CodexTurnDirectorySnapshot }
   >();
   private readonly inFlightByPath = new Map<string, Promise<CodexTurnDirectorySnapshot>>();
-  private readonly workers = new Set<Worker>();
+  private readonly workers = new Set<BackgroundIpcChild>();
+  private readonly scanAbortControllers = new Set<AbortController>();
+  private closed = false;
+
+  constructor(
+    private readonly scheduler: BoundedTaskScheduler = sharedHistoryWorkloadScheduler,
+  ) {}
 
   async getDirectory(
     sessionId: string,
     record: CodexStoredSessionRecord,
   ): Promise<ConversationTurnDirectoryResponse> {
     const snapshot = await this.getSnapshot(record);
-    const sourceIsCurrent = snapshotStatKey(snapshot) === statKey(record.rolloutPath);
+    const sourceIsCurrent =
+      snapshotStatKey(snapshot) === await statKey(record.rolloutPath);
     return {
       sessionId,
       revision: sourceRevision(snapshot),
       items: snapshot.items
         .filter((item) => item.userPreview)
-        .map((item, ordinal) => ({
+        .map((item) => ({
           id: item.id,
-          ordinal,
+          ordinal: item.ordinal,
           userPreview: item.userPreview,
           ...(item.assistantPreview !== undefined
             ? { assistantPreview: item.assistantPreview }
@@ -80,7 +117,10 @@ export class CodexTurnDirectoryStore {
           ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
           status: item.status,
         })),
-      complete: sourceIsCurrent && snapshot.scannedBytes >= snapshot.source.size,
+      complete:
+        sourceIsCurrent &&
+        snapshot.scannedBytes >= snapshot.source.size &&
+        (snapshot.retainedFromOrdinal ?? 0) === 0,
       sourceBytes: snapshot.source.size,
       generatedAt: snapshot.generatedAt,
     };
@@ -91,28 +131,42 @@ export class CodexTurnDirectoryStore {
     turnId: string,
   ): Promise<{ startOffset: number; endOffset: number } | null> {
     const snapshot = await this.getSnapshot(record);
-    const item = snapshot.items.find((candidate) => candidate.id === turnId);
+    const item =
+      snapshot.items.find((candidate) => candidate.id === turnId) ??
+      (await this.lookupTurns(record, [turnId], false))[0];
     return item ? { startOffset: item.startOffset, endOffset: item.endOffset } : null;
+  }
+
+  async getFileChangesByTurnIds(
+    record: CodexStoredSessionRecord,
+    turnIds: readonly string[],
+  ): Promise<Map<string, ConversationTurnFileChangesProjection>> {
+    if (turnIds.length === 0) {
+      return new Map();
+    }
+    await this.getSnapshot(record);
+    const lookups = await this.lookupTurns(record, turnIds, true);
+    return new Map(
+      lookups.flatMap((item) =>
+        item.fileChanges
+          ? [[item.id, item.fileChanges] as const]
+          : [],
+      ),
+    );
   }
 
   async getSummaryPage(
     record: CodexStoredSessionRecord,
     options: { cursor?: string; limit: number; sourceSettled: boolean },
   ): Promise<CodexAppServerTurnsPage> {
-    const snapshot = await this.getSnapshot(record);
-    const indexedTurns = snapshot.items.filter((item) => item.userText || item.userPreview);
+    await this.getSnapshot(record);
     const anchor = options.cursor ? parseTurnCursor(options.cursor) : undefined;
-    let startIndex = indexedTurns.length - 1;
-    if (anchor) {
-      const anchorIndex = indexedTurns.findIndex((item) => item.id === anchor.turnId);
-      if (anchorIndex < 0) {
-        throw new Error("Codex history cursor no longer exists in the indexed rollout.");
-      }
-      startIndex = anchor.includeAnchor ? anchorIndex : anchorIndex - 1;
-    }
-    const selected = indexedTurns
-      .slice(Math.max(0, startIndex - options.limit + 1), startIndex + 1)
-      .reverse();
+    const summaryPage = await this.hydrateSummaryPage(
+      record,
+      anchor,
+      options.limit,
+    );
+    const selected = summaryPage.items;
     const data = selected.map((item, index) => {
       const isTrailing = !options.cursor && index === 0;
       const status =
@@ -122,19 +176,31 @@ export class CodexTurnDirectoryStore {
             ? "inProgress"
             : item.status;
       const userText = item.userText ?? item.userPreview;
+      const userContent: unknown[] = [
+        { type: "text", text: userText, text_elements: [] },
+        ...Array.from(
+          { length: item.userImageCount ?? 0 },
+          () => ({ type: "image", summaryOnly: true }),
+        ),
+      ];
       const items: unknown[] = [
         {
           type: "userMessage",
           id: item.userItemId ?? `history-user:${item.id}`,
-          content: [{ type: "text", text: userText, text_elements: [] }],
+          content: userContent,
         },
       ];
-      if (item.assistantText || item.assistantPreview) {
+      const assistantText = item.assistantText ?? item.assistantPreview;
+      if (assistantText) {
         items.push({
           type: "agentMessage",
-          id: item.assistantItemId ?? `history-assistant:${item.id}`,
-          text: item.assistantText ?? item.assistantPreview,
-          phase: item.assistantPhase ?? (item.hasFinalAnswer ? "final_answer" : "commentary"),
+          id:
+            item.assistantItemId ??
+            `history-assistant:${item.id}`,
+          text: assistantText,
+          phase:
+            item.assistantPhase ??
+            (item.hasFinalAnswer ? "final_answer" : "commentary"),
           memoryCitation: null,
         });
       }
@@ -142,6 +208,7 @@ export class CodexTurnDirectoryStore {
         id: item.id,
         items,
         itemsView: "summary",
+        processDetailsAvailable: item.processDetailsAvailable,
         status,
         error: item.status === "failed" ? { message: "Codex turn failed" } : null,
         startedAt: isoToEpochSeconds(item.startedAt),
@@ -150,12 +217,9 @@ export class CodexTurnDirectoryStore {
       };
     });
     const oldest = selected.at(-1);
-    const oldestIndex = oldest
-      ? indexedTurns.findIndex((item) => item.id === oldest.id)
-      : -1;
     return {
       data,
-      ...(oldest && oldestIndex > 0
+      ...(oldest && summaryPage.hasOlder
         ? { nextCursor: createTurnCursor(oldest.id, false) }
         : { nextCursor: null }),
       ...(selected[0]
@@ -173,15 +237,27 @@ export class CodexTurnDirectoryStore {
   }
 
   async shutdown(): Promise<void> {
+    this.closed = true;
+    for (const controller of this.scanAbortControllers) {
+      controller.abort(new DOMException("Turn directory store closed", "AbortError"));
+    }
+    this.scanAbortControllers.clear();
     const workers = [...this.workers];
     this.workers.clear();
-    await Promise.all(workers.map((worker) => worker.terminate().then(() => undefined)));
+    await Promise.all(workers.map(terminateBackgroundIpcProcess));
   }
 
   private async getSnapshot(record: CodexStoredSessionRecord): Promise<CodexTurnDirectorySnapshot> {
-    const currentStatKey = statKey(record.rolloutPath);
+    if (this.closed) {
+      throw new Error("Codex turn directory store is closed.");
+    }
+    const currentStatKey = await statKey(record.rolloutPath);
+    const workspaceRoot = codexStoredSessionWorkspaceRoot(record) ?? "";
     const cached = this.snapshotsByPath.get(record.rolloutPath);
-    if (cached?.statKey === currentStatKey) {
+    if (
+      cached?.statKey === currentStatKey &&
+      cached.snapshot.workspaceRoot === workspaceRoot
+    ) {
       return cached.snapshot;
     }
     const inFlight = this.inFlightByPath.get(record.rolloutPath);
@@ -206,52 +282,204 @@ export class CodexTurnDirectoryStore {
   }
 
   private scan(record: CodexStoredSessionRecord): Promise<CodexTurnDirectorySnapshot> {
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(new URL("./codex-turn-directory-worker.ts", import.meta.url), {
-        workerData: {
+    const controller = new AbortController();
+    this.scanAbortControllers.add(controller);
+    return this.scheduler.schedule(
+      (signal) => this.runScanWorker(record, signal),
+      {
+        signal: controller.signal,
+        priority: HISTORY_WORKLOAD_PRIORITY.interactive,
+      },
+    ).finally(() => {
+      this.scanAbortControllers.delete(controller);
+    });
+  }
+
+  private hydrateSummaryPage(
+    record: CodexStoredSessionRecord,
+    cursor: { turnId: string; includeAnchor: boolean } | undefined,
+    limit: number,
+  ): Promise<CodexTurnSummaryPageWorkerResult> {
+    const controller = new AbortController();
+    this.scanAbortControllers.add(controller);
+    return this.scheduler
+      .schedule(
+        (signal) => this.runSummaryWorker(record, cursor, limit, signal),
+        {
+          signal: controller.signal,
+          priority: HISTORY_WORKLOAD_PRIORITY.interactive,
+        },
+      )
+      .finally(() => {
+        this.scanAbortControllers.delete(controller);
+      });
+  }
+
+  private runScanWorker(
+    record: CodexStoredSessionRecord,
+    signal: AbortSignal,
+  ): Promise<CodexTurnDirectorySnapshot> {
+    return runBackgroundIpcTask<
+      {
+        kind: "codex-turn-directory";
+        providerSessionId: string;
+        rolloutPath: string;
+        workspaceRoot: string;
+        cachePath: string;
+      },
+      CodexTurnDirectoryWorkerResponse
+    >({
+      script: new URL("./codex-turn-directory-worker.ts", import.meta.url),
+      request: {
           kind: "codex-turn-directory",
           providerSessionId: record.ref.providerSessionId,
           rolloutPath: record.rolloutPath,
-          cachePath: path.join(
-            resolveRahRuntimeHome(),
-            "turn-directory",
-            "codex",
-            `${cacheKey(record.ref.providerSessionId)}.json`,
-          ),
+          workspaceRoot: codexStoredSessionWorkspaceRoot(record) ?? "",
+          cachePath: directoryCachePath(record.ref.providerSessionId),
         },
-      });
-      this.workers.add(worker);
-      let settled = false;
-      const finish = () => {
+      label: "Codex turn directory worker",
+      signal,
+      timeoutMs: 120_000,
+      maxResponseBytes: TURN_DIRECTORY_RESPONSE_BYTES,
+      onSpawn: (worker) => {
+        this.workers.add(worker);
+      },
+      onClose: (worker) => {
         this.workers.delete(worker);
-      };
-      worker.once("message", (response: WorkerResponse) => {
-        settled = true;
-        finish();
-        if (response.ok) {
-          resolve(response.snapshot);
-        } else {
-          reject(new Error(response.error));
-        }
-      });
-      worker.once("error", (error) => {
-        settled = true;
-        finish();
-        reject(error);
-      });
-      worker.once("exit", (code) => {
-        finish();
-        if (!settled) {
-          reject(
-            new Error(
-              code === 0
-                ? "Codex turn directory worker exited without a result."
-                : `Codex turn directory worker exited with code ${code}.`,
-            ),
-          );
-        }
-      });
+      },
+    }).then((response) => {
+      if (response.ok && "snapshot" in response) {
+        return response.snapshot;
+      }
+      if (response.ok) {
+        throw new Error(
+          "Codex turn directory worker returned an unexpected summary result.",
+        );
+      }
+      throw new Error(response.error);
     });
+  }
+
+  private runSummaryWorker(
+    record: CodexStoredSessionRecord,
+    cursor: { turnId: string; includeAnchor: boolean } | undefined,
+    limit: number,
+    signal: AbortSignal,
+  ): Promise<CodexTurnSummaryPageWorkerResult> {
+    return runBackgroundIpcTask<
+      {
+        kind: "codex-turn-summary-page";
+        rolloutPath: string;
+        cachePath: string;
+        workspaceRoot: string;
+        cursor?: { turnId: string; includeAnchor: boolean };
+        limit: number;
+        textBudgetBytes: number;
+      },
+      CodexTurnDirectoryWorkerResponse
+    >({
+      script: new URL("./codex-turn-directory-worker.ts", import.meta.url),
+      request: {
+          kind: "codex-turn-summary-page",
+          rolloutPath: record.rolloutPath,
+          cachePath: directoryCachePath(record.ref.providerSessionId),
+          workspaceRoot: codexStoredSessionWorkspaceRoot(record) ?? "",
+          ...(cursor ? { cursor } : {}),
+          limit,
+          textBudgetBytes: SUMMARY_PAGE_TEXT_BUDGET_BYTES,
+        },
+      label: "Codex turn summary worker",
+      signal,
+      timeoutMs: 30_000,
+      maxResponseBytes: TURN_SUMMARY_RESPONSE_BYTES,
+      onSpawn: (worker) => {
+        this.workers.add(worker);
+      },
+      onClose: (worker) => {
+        this.workers.delete(worker);
+      },
+    }).then((response) => {
+      if (response.ok && "summaryPage" in response) {
+        return response.summaryPage;
+      }
+      if (response.ok) {
+        throw new Error(
+          "Codex turn summary worker returned an unexpected directory result.",
+        );
+      }
+      throw new Error(response.error);
+    });
+  }
+
+  private runLookupWorker(
+    record: CodexStoredSessionRecord,
+    turnIds: readonly string[],
+    includeFileChanges: boolean,
+    signal: AbortSignal,
+  ): Promise<CodexIndexedTurn[]> {
+    return runBackgroundIpcTask<
+      {
+        kind: "codex-turn-lookup";
+        cachePath: string;
+        turnIds: string[];
+        includeFileChanges: boolean;
+      },
+      CodexTurnDirectoryWorkerResponse
+    >({
+      script: new URL("./codex-turn-directory-worker.ts", import.meta.url),
+      request: {
+        kind: "codex-turn-lookup",
+        cachePath: directoryCachePath(record.ref.providerSessionId),
+        turnIds: [...turnIds],
+        includeFileChanges,
+      },
+      label: "Codex turn lookup worker",
+      signal,
+      timeoutMs: 30_000,
+      maxResponseBytes: TURN_LOOKUP_RESPONSE_BYTES,
+      onSpawn: (worker) => {
+        this.workers.add(worker);
+      },
+      onClose: (worker) => {
+        this.workers.delete(worker);
+      },
+    }).then((response) => {
+      if (response.ok && "lookups" in response) {
+        return response.lookups;
+      }
+      if (response.ok) {
+        throw new Error(
+          "Codex turn lookup worker returned an unexpected result.",
+        );
+      }
+      throw new Error(response.error);
+    });
+  }
+
+  private lookupTurns(
+    record: CodexStoredSessionRecord,
+    turnIds: readonly string[],
+    includeFileChanges: boolean,
+  ): Promise<CodexIndexedTurn[]> {
+    const controller = new AbortController();
+    this.scanAbortControllers.add(controller);
+    return this.scheduler
+      .schedule(
+        (signal) =>
+          this.runLookupWorker(
+            record,
+            turnIds,
+            includeFileChanges,
+            signal,
+          ),
+        {
+          signal: controller.signal,
+          priority: HISTORY_WORKLOAD_PRIORITY.interactive,
+        },
+      )
+      .finally(() => {
+        this.scanAbortControllers.delete(controller);
+      });
   }
 }
 

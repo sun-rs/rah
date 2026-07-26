@@ -180,7 +180,7 @@ describe("native TUI session state", () => {
 
   test("clears binding, mirror, and stop timers", () => {
     const bindingTimer = setInterval(() => undefined, 60_000);
-    const mirrorTimer = setInterval(() => undefined, 60_000);
+    const mirrorTimer = setTimeout(() => undefined, 60_000);
     const stopTimer = setTimeout(() => undefined, 60_000);
     bindingTimer.unref();
     mirrorTimer.unref();
@@ -188,6 +188,8 @@ describe("native TUI session state", () => {
     const native = nativeSession({
       bindingTimer,
       mirrorTimer,
+      mirrorPollingEnabled: true,
+      mirrorPollIntervalMs: 400,
       stopTimer,
       stopPending: true,
     });
@@ -196,6 +198,8 @@ describe("native TUI session state", () => {
 
     assert.equal(native.bindingTimer, undefined);
     assert.equal(native.mirrorTimer, undefined);
+    assert.equal(native.mirrorPollingEnabled, false);
+    assert.equal(native.mirrorPollIntervalMs, undefined);
     assert.equal(native.stopTimer, undefined);
     assert.equal(native.stopPending, undefined);
   });

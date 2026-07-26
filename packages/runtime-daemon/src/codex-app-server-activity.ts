@@ -5,6 +5,9 @@ import type {
   ContextUsage,
   PermissionRequest,
   PermissionResolution,
+  ProcessOutputAppend,
+  ProcessOutputSnapshot,
+  ProcessOutputStream,
   RuntimeOperation,
   SessionInputAttachment,
   TimelineIdentity,
@@ -17,6 +20,8 @@ import type {
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
 import { classifyCodexCommandResult } from "./codex-command-result";
+import { BoundedProcessOutputAccumulator } from "./bounded-process-output";
+import { isCodexOutputDetailIncomplete } from "./codex-notification-ingress";
 import { normalizeContextUsage } from "./context-usage";
 import {
   CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
@@ -26,7 +31,12 @@ import {
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
 import { runtimeStateFromCodexThreadStatus } from "./codex-thread-status";
+import {
+  cacheProviderHistoryImageParts,
+  isProviderHistoryPathAttachmentId,
+} from "./provider-history-attachments";
 import type { ProviderActivity } from "./provider-activity";
+import { parsePersistedUserMessageContent } from "./session-input-attachments";
 import { timelineRuntimeModel } from "./timeline-runtime-model";
 
 export interface CodexLiveTranslatedActivity {
@@ -77,8 +87,8 @@ export interface CodexAppServerTranslationState {
   lastReasoningDeltaByItemId: Map<string, string>;
   lastCommandOutputDeltaByCallId: Map<string, string>;
   lastPatchOutputDeltaByCallId: Map<string, string>;
-  commandOutputByCallId: Map<string, string[]>;
-  patchOutputByCallId: Map<string, string[]>;
+  commandOutputByCallId: Map<string, BoundedProcessOutputAccumulator>;
+  patchOutputByCallId: Map<string, BoundedProcessOutputAccumulator>;
   commandObservationByCallId: Map<string, WorkbenchObservation>;
   patchObservationByCallId: Map<string, WorkbenchObservation>;
 }
@@ -874,6 +884,7 @@ function parseExecCommandEnd(notification: JsonRpcNotification): {
   exitCode?: number;
   output?: string;
   stderr?: string;
+  detailIncomplete?: boolean;
 } | null {
   if (!notification.params || typeof notification.params !== "object" || Array.isArray(notification.params)) {
     return null;
@@ -898,6 +909,9 @@ function parseExecCommandEnd(notification: JsonRpcNotification): {
           ? { output: msg.stdout }
           : {}),
     ...(typeof msg.stderr === "string" ? { stderr: msg.stderr } : {}),
+    ...(isCodexOutputDetailIncomplete(msg)
+      ? { detailIncomplete: true }
+      : {}),
   };
 }
 
@@ -928,6 +942,52 @@ function consumeDelta(store: Map<string, string[]>, key: string): string | undef
   }
   store.delete(key);
   return existing.join("");
+}
+
+function appendProcessOutputIfNew(
+  store: Map<string, BoundedProcessOutputAccumulator>,
+  lastDeltaByKey: Map<string, string>,
+  key: string,
+  chunk: string,
+  stream: ProcessOutputStream = "combined",
+): ProcessOutputAppend | undefined {
+  if (!chunk || lastDeltaByKey.get(key) === chunk) {
+    return undefined;
+  }
+  lastDeltaByKey.set(key, chunk);
+  let output = store.get(key);
+  if (!output) {
+    output = new BoundedProcessOutputAccumulator({ itemId: key, stream });
+    store.set(key, output);
+  }
+  return output.append(chunk);
+}
+
+function consumeProcessOutput(
+  store: Map<string, BoundedProcessOutputAccumulator>,
+  key: string,
+  fallback?: string,
+  forceDetailIncomplete = false,
+): ProcessOutputSnapshot | undefined {
+  let output = store.get(key);
+  let detailAvailable =
+    !forceDetailIncomplete && Boolean(output?.hasOutput());
+  const fallbackBytes = fallback ? Buffer.byteLength(fallback, "utf8") : 0;
+  if (
+    fallback &&
+    (!output || fallbackBytes > output.stats().totalBytes)
+  ) {
+    output = new BoundedProcessOutputAccumulator({ itemId: key });
+    output.append(fallback);
+    // Aggregate-only provider payloads are bounded for the conversation feed,
+    // but were never streamed into RAH's durable output store.
+    detailAvailable = false;
+  }
+  if (forceDetailIncomplete) {
+    detailAvailable = false;
+  }
+  store.delete(key);
+  return output?.snapshot(detailAvailable);
 }
 
 function parseDeltaChunk(notification: JsonRpcNotification): { callId: string; chunk: string } | null {
@@ -971,6 +1031,7 @@ function parsePatchEnd(notification: JsonRpcNotification): {
   success?: boolean;
   stdout?: string;
   stderr?: string;
+  detailIncomplete?: boolean;
 } | null {
   if (!notification.params || typeof notification.params !== "object" || Array.isArray(notification.params)) {
     return null;
@@ -988,6 +1049,9 @@ function parsePatchEnd(notification: JsonRpcNotification): {
     ...(typeof msg.success === "boolean" ? { success: msg.success } : {}),
     ...(typeof msg.stdout === "string" ? { stdout: msg.stdout } : {}),
     ...(typeof msg.stderr === "string" ? { stderr: msg.stderr } : {}),
+    ...(isCodexOutputDetailIncomplete(msg)
+      ? { detailIncomplete: true }
+      : {}),
   };
 }
 
@@ -1610,14 +1674,15 @@ function mapThreadItem(
         (part): part is Record<string, unknown> =>
           Boolean(part) && typeof part === "object" && !Array.isArray(part),
       );
-      const imageCount = contentParts.filter(isImageInputPart).length;
-      const text = stripCodexContextualFragments(
+      const nativeImageCount = contentParts.filter(isImageInputPart).length;
+      const persistedContent = parsePersistedUserMessageContent(
         contentParts
           .filter((part) => !isImageInputPart(part))
           .map((part) => stringField(part, "text") ?? "")
           .filter(Boolean)
           .join("\n"),
       );
+      const text = stripCodexContextualFragments(persistedContent.text);
       if (text && isCodexInternalEnvironmentMessage(text)) {
         state.emittedUserMessageItemIds.add(id);
         return [];
@@ -1628,6 +1693,31 @@ function mapThreadItem(
         state.submittedUserMessageByTurnId.delete(turnId);
         return [];
       }
+      const nativeAttachments = submitted?.attachments?.length
+        ? []
+        : cacheProviderHistoryImageParts(
+            content,
+            persistedContent.mentionedFiles.map((file) => file.name),
+          );
+      const attachments = submitted?.attachments?.length
+        ? submitted.attachments
+        : [
+            ...new Map(
+              [
+                ...persistedContent.attachments.filter(
+                  (attachment) =>
+                    nativeAttachments.length === 0 ||
+                    !isProviderHistoryPathAttachmentId(attachment.id),
+                ),
+                ...nativeAttachments,
+              ].map((attachment) => [attachment.id, attachment]),
+            ).values(),
+          ];
+      const imageCount = Math.max(
+        nativeImageCount,
+        persistedContent.imageCount,
+        attachments.filter((attachment) => attachment.kind === "image").length,
+      );
       const identity = createLiveTimelineIdentity(state, {
         providerSessionId,
         turnId,
@@ -1653,20 +1743,17 @@ function mapThreadItem(
                 ...(submitted?.clientTurnId !== undefined
                   ? { clientTurnId: submitted.clientTurnId }
                   : {}),
-                ...(submitted?.attachments?.length
-                  ? { attachments: submitted.attachments }
+                ...(attachments.length
+                  ? { attachments }
                   : {}),
                 ...(Math.max(
                   imageCount,
-                  submitted?.attachments?.filter((attachment) => attachment.kind === "image")
-                    .length ?? 0,
+                  attachments.filter((attachment) => attachment.kind === "image").length,
                 ) > 0
                   ? {
                       imageCount: Math.max(
                         imageCount,
-                        submitted?.attachments?.filter(
-                          (attachment) => attachment.kind === "image",
-                        ).length ?? 0,
+                        attachments.filter((attachment) => attachment.kind === "image").length,
                       ),
                     }
                   : {}),
@@ -1811,12 +1898,39 @@ function mapThreadItem(
       const command = stringField(item, "command") ?? "unknown";
       const cwd = optionalStringField(item, "cwd");
       const exitCode = numberField(item, "exitCode");
-      const output = optionalStringField(item, "aggregatedOutput");
+      const aggregateOutput = optionalStringField(item, "aggregatedOutput");
       const stderr = optionalStringField(item, "stderr");
       const durationMs = firstFiniteNumberField(item, "durationMs", "duration_ms");
-      const toolCall = makeCommandToolCall(id, command, cwd, output, exitCode);
       const status = stringField(item, "status");
       const phaseStatus = itemPhaseToObservationStatus(phase, status);
+      if (phaseStatus === "running") {
+        const toolCall = makeCommandToolCall(id, command, cwd);
+        const observation = makeCommandObservation(id, command, cwd);
+        state.pendingToolCalls.set(id, { toolCall });
+        state.commandObservationByCallId.set(id, observation);
+        state.commandOutputByCallId.delete(id);
+        state.lastCommandOutputDeltaByCallId.delete(id);
+        return [
+          { type: "observation_started", turnId, observation },
+          { type: "tool_call_started", turnId, toolCall },
+        ];
+      }
+      const outputSnapshot = consumeProcessOutput(
+        state.commandOutputByCallId,
+        id,
+        aggregateOutput,
+        isCodexOutputDetailIncomplete(item),
+      );
+      const output = outputSnapshot?.tail;
+      const toolCall = {
+        ...makeCommandToolCall(id, command, cwd, output, exitCode),
+        ...(outputSnapshot
+          ? {
+              detailAvailable: outputSnapshot.detailAvailable,
+              detailSizeBytes: outputSnapshot.totalBytes,
+            }
+          : {}),
+      };
       const completedObservation = completeObservation(makeCommandObservation(id, command, cwd), {
         ...(output !== undefined ? { output } : {}),
         ...(stderr !== undefined ? { stderr } : {}),
@@ -1824,7 +1938,7 @@ function mapThreadItem(
         ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
       });
       const isSemanticSuccess = completedObservation.metrics?.semanticStatus === "search_no_matches";
-      const observation =
+      const observationBase =
         phaseStatus === "failed" && completedObservation.status !== "failed" && !isSemanticSuccess
           ? {
               ...completedObservation,
@@ -1832,13 +1946,22 @@ function mapThreadItem(
               summary: completedObservation.summary ?? "Command failed.",
             }
           : completedObservation;
-      if (phaseStatus === "running") {
-        return [
-          { type: "observation_started", turnId, observation: makeCommandObservation(id, command, cwd) },
-          { type: "tool_call_started", turnId, toolCall },
-        ];
-      }
+      const observation = {
+        ...observationBase,
+        ...(outputSnapshot
+          ? {
+              detailAvailable: outputSnapshot.detailAvailable,
+              detailSizeBytes: outputSnapshot.totalBytes,
+            }
+          : {}),
+      };
+      state.pendingToolCalls.delete(id);
+      state.commandObservationByCallId.delete(id);
+      state.lastCommandOutputDeltaByCallId.delete(id);
       return [
+        ...(outputSnapshot
+          ? [{ type: "process_output_snapshot" as const, turnId, output: outputSnapshot }]
+          : []),
         observation.status === "failed"
           ? { type: "observation_failed", turnId, observation }
           : { type: "observation_completed", turnId, observation },
@@ -1846,21 +1969,74 @@ function mapThreadItem(
       ];
     }
     case "fileChange": {
-      const toolCall = makeFileChangeToolCall(item);
+      const baseToolCall = makeFileChangeToolCall(item);
       const phaseStatus = itemPhaseToObservationStatus(phase, stringField(item, "status"));
-      const observation = { ...makeFileChangeObservation(item), status: phaseStatus };
+      const baseObservation = { ...makeFileChangeObservation(item), status: phaseStatus };
       if (phaseStatus === "running") {
+        state.patchOutputByCallId.delete(id);
+        state.lastPatchOutputDeltaByCallId.delete(id);
         return [
-          { type: "observation_started", turnId, observation: { ...observation, status: "running" } },
-          { type: "tool_call_started", turnId, toolCall },
+          { type: "observation_started", turnId, observation: { ...baseObservation, status: "running" } },
+          { type: "tool_call_started", turnId, toolCall: baseToolCall },
         ];
       }
+      const aggregateOutput =
+        optionalStringField(item, "aggregatedOutput") ??
+        optionalStringField(item, "output") ??
+        optionalStringField(item, "stdout");
+      const outputSnapshot = consumeProcessOutput(
+        state.patchOutputByCallId,
+        id,
+        aggregateOutput,
+        isCodexOutputDetailIncomplete(item),
+      );
+      state.lastPatchOutputDeltaByCallId.delete(id);
+      const output = outputSnapshot?.tail;
+      const toolCall: ToolCall = {
+        ...baseToolCall,
+        ...(outputSnapshot
+          ? {
+              detailAvailable: outputSnapshot.detailAvailable,
+              detailSizeBytes: outputSnapshot.totalBytes,
+            }
+          : {}),
+        ...(output
+          ? {
+              detail: {
+                artifacts: [
+                  ...(baseToolCall.detail?.artifacts ?? []),
+                  { kind: "text", label: "output", text: output },
+                ],
+              },
+            }
+          : {}),
+      };
+      const observation = {
+        ...(output ? updateObservationOutput(baseObservation, output) : baseObservation),
+        ...(outputSnapshot
+          ? {
+              detailAvailable: outputSnapshot.detailAvailable,
+              detailSizeBytes: outputSnapshot.totalBytes,
+            }
+          : {}),
+      };
+      const snapshotActivities = outputSnapshot
+        ? [
+            {
+              type: "process_output_snapshot" as const,
+              turnId,
+              output: outputSnapshot,
+            },
+          ]
+        : [];
       return observation.status === "failed"
         ? [
+            ...snapshotActivities,
             { type: "observation_failed", turnId, observation, error: "File change failed" },
             { type: "tool_call_failed", turnId, toolCallId: toolCall.id, error: "File change failed" },
           ]
         : [
+            ...snapshotActivities,
             { type: "observation_completed", turnId, observation },
             { type: "tool_call_completed", turnId, toolCall },
           ];
@@ -2771,37 +2947,15 @@ export function translateCodexAppServerNotification(
       if (!parsed) {
         return invalidStreamActivities(notification, "command execution output delta payload was not recognized");
       }
-      if (!appendDeltaIfNew(
+      const output = appendProcessOutputIfNew(
         state.commandOutputByCallId,
         state.lastCommandOutputDeltaByCallId,
         parsed.itemId,
         parsed.delta,
-      )) {
-        return [];
-      }
-      const output = state.commandOutputByCallId.get(parsed.itemId)?.join("") ?? parsed.delta;
-      const observation = state.commandObservationByCallId.get(parsed.itemId);
-      return [
-        ...(observation
-          ? [
-              translated(notification, {
-                type: "observation_updated",
-                observation: updateObservationOutput(observation, output),
-              }),
-            ]
-          : []),
-        translated(notification, {
-          type: "tool_call_delta",
-          toolCallId: parsed.itemId,
-          detail: {
-            artifacts: [{ kind: "text", label: "stdout", text: parsed.delta }],
-          },
-        }),
-        translated(notification, {
-          type: "terminal_output",
-          data: parsed.delta,
-        }),
-      ];
+      );
+      return output
+        ? [translated(notification, { type: "process_output_appended", output })]
+        : [];
     }
     case "command/exec/outputDelta": {
       const params = paramsRecord(notification);
@@ -2812,57 +2966,31 @@ export function translateCodexAppServerNotification(
       const deltaBase64 = stringField(params, "deltaBase64") ?? "";
       const stream = stringField(params, "stream") ?? "output";
       const data = Buffer.from(deltaBase64, "base64").toString("utf8");
-      return [
-        translated(notification, {
-          type: "observation_updated",
-          observation: {
-            id: `obs-command-exec-${processId}`,
-            kind: "terminal.interaction",
-            status: params.capReached === true ? "completed" : "running",
-            title: "Command exec output",
-            subject: { providerCallId: processId },
-            detail: { artifacts: [{ kind: "text", label: stream, text: data }] },
-          },
-        }),
-        translated(notification, { type: "terminal_output", data }),
-      ];
+      const output = appendProcessOutputIfNew(
+        state.commandOutputByCallId,
+        state.lastCommandOutputDeltaByCallId,
+        processId,
+        data,
+        stream === "stderr" ? "stderr" : stream === "stdout" ? "stdout" : "combined",
+      );
+      return output
+        ? [translated(notification, { type: "process_output_appended", output })]
+        : [];
     }
     case "codex/event/exec_command_output_delta": {
       const parsed = parseDeltaChunk(notification);
       if (!parsed) {
         return invalidStreamActivities(notification, "exec command output delta payload was not recognized");
       }
-      if (!appendDeltaIfNew(
+      const output = appendProcessOutputIfNew(
         state.commandOutputByCallId,
         state.lastCommandOutputDeltaByCallId,
         parsed.callId,
         parsed.chunk,
-      )) {
-        return [];
-      }
-      const output = state.commandOutputByCallId.get(parsed.callId)?.join("") ?? parsed.chunk;
-      const observation = state.commandObservationByCallId.get(parsed.callId);
-      return [
-        ...(observation
-          ? [
-              translated(notification, {
-                type: "observation_updated",
-                observation: updateObservationOutput(observation, output),
-              }),
-            ]
-          : []),
-        translated(notification, {
-          type: "tool_call_delta",
-          toolCallId: parsed.callId,
-          detail: {
-            artifacts: [{ kind: "text", label: "stdout", text: parsed.chunk }],
-          },
-        }),
-        translated(notification, {
-          type: "terminal_output",
-          data: parsed.chunk,
-        }),
-      ];
+      );
+      return output
+        ? [translated(notification, { type: "process_output_appended", output })]
+        : [];
     }
     case "codex/event/exec_command_end": {
       const parsed = parseExecCommandEnd(notification);
@@ -2870,13 +2998,18 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "exec command end payload was not recognized");
       }
       const pending = state.pendingToolCalls.get(parsed.callId);
-      const hadDeltaOutput = (state.commandOutputByCallId.get(parsed.callId)?.length ?? 0) > 0;
-      const deltaOutput = consumeDelta(state.commandOutputByCallId, parsed.callId);
+      const hadDeltaOutput = state.commandOutputByCallId.get(parsed.callId)?.hasOutput() ?? false;
+      const outputSnapshot = consumeProcessOutput(
+        state.commandOutputByCallId,
+        parsed.callId,
+        parsed.output,
+        parsed.detailIncomplete === true,
+      );
       const pendingObservation = state.commandObservationByCallId.get(parsed.callId);
       state.commandObservationByCallId.delete(parsed.callId);
       state.pendingToolCalls.delete(parsed.callId);
       state.lastCommandOutputDeltaByCallId.delete(parsed.callId);
-      const output = parsed.output ?? deltaOutput;
+      const output = outputSnapshot?.tail;
       const resultDisposition = pendingObservation
         ? classifyCodexCommandResult({
             kind: pendingObservation.kind,
@@ -2893,6 +3026,12 @@ export function translateCodexAppServerNotification(
       const toolCall = pending?.toolCall
         ? {
             ...pending.toolCall,
+            ...(outputSnapshot
+              ? {
+                  detailAvailable: outputSnapshot.detailAvailable,
+                  detailSizeBytes: outputSnapshot.totalBytes,
+                }
+              : {}),
             ...(output || parsed.stderr
               ? {
                   detail: {
@@ -2913,13 +3052,29 @@ export function translateCodexAppServerNotification(
           }
         : makeCommandToolCall(parsed.callId, "unknown", undefined, output, parsed.exitCode);
       const completedObservation = pendingObservation
-        ? completeObservation(pendingObservation, {
-            ...(output !== undefined ? { output } : {}),
-            ...(parsed.stderr !== undefined ? { stderr: parsed.stderr } : {}),
-            ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
-          })
+        ? {
+            ...completeObservation(pendingObservation, {
+              ...(output !== undefined ? { output } : {}),
+              ...(parsed.stderr !== undefined ? { stderr: parsed.stderr } : {}),
+              ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
+            }),
+            ...(outputSnapshot
+              ? {
+                  detailAvailable: outputSnapshot.detailAvailable,
+                  detailSizeBytes: outputSnapshot.totalBytes,
+                }
+              : {}),
+          }
         : null;
       const completed = [
+        ...(outputSnapshot
+          ? [
+              translated(notification, {
+                type: "process_output_snapshot",
+                output: outputSnapshot,
+              }),
+            ]
+          : []),
         ...(completedObservation
           ? [
               translated(
@@ -2940,7 +3095,7 @@ export function translateCodexAppServerNotification(
       ];
       const terminalActivities: CodexLiveTranslatedActivity[] = [];
       if (!hadDeltaOutput) {
-        const fallbackOutput = makeTerminalOutputFallback(parsed.output, parsed.stderr);
+        const fallbackOutput = makeTerminalOutputFallback(output, parsed.stderr);
         if (fallbackOutput) {
           terminalActivities.push(
             translated(notification, {
@@ -2999,33 +3154,15 @@ export function translateCodexAppServerNotification(
       if (!delta) {
         return invalidStreamActivities(notification, "file change output delta payload was not recognized");
       }
-      if (!appendDeltaIfNew(
+      const output = appendProcessOutputIfNew(
         state.patchOutputByCallId,
         state.lastPatchOutputDeltaByCallId,
         delta.itemId,
         delta.delta,
-      )) {
-        return [];
-      }
-      const output = state.patchOutputByCallId.get(delta.itemId)?.join("") ?? delta.delta;
-      const observation = state.patchObservationByCallId.get(delta.itemId);
-      return [
-        ...(observation
-          ? [
-              translated(notification, {
-                type: "observation_updated",
-                observation: updateObservationOutput(observation, output),
-              }),
-            ]
-          : []),
-        translated(notification, {
-          type: "tool_call_delta",
-          toolCallId: delta.itemId,
-          detail: {
-            artifacts: [{ kind: "text", label: "stdout", text: delta.delta }],
-          },
-        }),
-      ];
+      );
+      return output
+        ? [translated(notification, { type: "process_output_appended", output })]
+        : [];
     }
     case "codex/event/patch_apply_end": {
       const parsed = parsePatchEnd(notification);
@@ -3033,14 +3170,27 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "patch end payload was not recognized");
       }
       const pending = state.pendingToolCalls.get(parsed.callId);
-      const deltaOutput = consumeDelta(state.patchOutputByCallId, parsed.callId);
+      const outputSnapshot = consumeProcessOutput(
+        state.patchOutputByCallId,
+        parsed.callId,
+        parsed.stdout,
+        parsed.detailIncomplete === true,
+      );
       const pendingObservation = state.patchObservationByCallId.get(parsed.callId);
       state.pendingToolCalls.delete(parsed.callId);
       state.patchObservationByCallId.delete(parsed.callId);
       state.lastPatchOutputDeltaByCallId.delete(parsed.callId);
-      const stdout = parsed.stdout ?? deltaOutput;
+      const stdout = outputSnapshot?.tail;
       if (parsed.success === false) {
         return [
+          ...(outputSnapshot
+            ? [
+                translated(notification, {
+                  type: "process_output_snapshot",
+                  output: outputSnapshot,
+                }),
+              ]
+            : []),
           ...(pendingObservation
             ? [
                 translated(notification, {
@@ -3064,20 +3214,42 @@ export function translateCodexAppServerNotification(
       const toolCall = pending?.toolCall
         ? {
             ...pending.toolCall,
+            ...(outputSnapshot
+              ? {
+                  detailAvailable: outputSnapshot.detailAvailable,
+                  detailSizeBytes: outputSnapshot.totalBytes,
+                }
+              : {}),
             ...(stdout ? { detail: { artifacts: [{ kind: "text", label: "stdout", text: stdout } as ToolCallArtifact] } } : {}),
             ...(parsed.success === true ? { result: { success: true } } : {}),
             ...(stdout ? { summary: stdout.split(/\r?\n/)[0] } : {}),
           }
         : makePatchToolCall(parsed.callId, stdout, parsed.success === true ? 0 : undefined);
       return [
+        ...(outputSnapshot
+          ? [
+              translated(notification, {
+                type: "process_output_snapshot",
+                output: outputSnapshot,
+              }),
+            ]
+          : []),
         ...(pendingObservation
           ? [
               translated(notification, {
                 type: "observation_completed",
-                observation: completePatchObservation(pendingObservation, {
-                  success: true,
-                  ...(stdout !== undefined ? { output: stdout } : {}),
-                }),
+                observation: {
+                  ...completePatchObservation(pendingObservation, {
+                    success: true,
+                    ...(stdout !== undefined ? { output: stdout } : {}),
+                  }),
+                  ...(outputSnapshot
+                    ? {
+                        detailAvailable: outputSnapshot.detailAvailable,
+                        detailSizeBytes: outputSnapshot.totalBytes,
+                      }
+                    : {}),
+                },
               }),
             ]
           : []),

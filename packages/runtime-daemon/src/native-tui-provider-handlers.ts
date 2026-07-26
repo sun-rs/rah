@@ -1,37 +1,49 @@
 import type { ProviderKind } from "@rah/runtime-protocol";
-import { claudeNativeTuiProviderHandler } from "./native-tui-claude-provider-handler";
-import { codexNativeTuiProviderHandler } from "./native-tui-codex-provider-handler";
-import { opencodeNativeTuiProviderHandler } from "./native-tui-opencode-provider-handler";
+import { createClaudeNativeTuiProviderHandler } from "./native-tui-claude-provider-handler";
+import { createCodexNativeTuiProviderHandler } from "./native-tui-codex-provider-handler";
+import { createOpenCodeNativeTuiProviderHandler } from "./native-tui-opencode-provider-handler";
+import {
+  EMPTY_NATIVE_TUI_HISTORY_CATALOG,
+  type NativeTuiHistoryCatalog,
+} from "./native-tui-history-catalog";
 import type {
   NativeTuiBindingHandler,
   NativeTuiMirrorHandler,
   NativeTuiProviderHandler,
 } from "./native-tui-provider-runtime-types";
 
-const DEFAULT_NATIVE_TUI_PROVIDER_HANDLERS: readonly NativeTuiProviderHandler[] = [
-  codexNativeTuiProviderHandler,
-  claudeNativeTuiProviderHandler,
-  opencodeNativeTuiProviderHandler,
-];
+function defaultNativeTuiProviderHandlers(
+  historyCatalog: NativeTuiHistoryCatalog,
+): readonly NativeTuiProviderHandler[] {
+  return [
+    createCodexNativeTuiProviderHandler(historyCatalog),
+    createClaudeNativeTuiProviderHandler(historyCatalog),
+    createOpenCodeNativeTuiProviderHandler(historyCatalog),
+  ];
+}
 
-export function createDefaultNativeTuiBindingHandlers(): ReadonlyMap<
+export function createDefaultNativeTuiBindingHandlers(
+  historyCatalog: NativeTuiHistoryCatalog = EMPTY_NATIVE_TUI_HISTORY_CATALOG,
+): ReadonlyMap<
   ProviderKind,
   NativeTuiBindingHandler
 > {
   return new Map(
-    DEFAULT_NATIVE_TUI_PROVIDER_HANDLERS.map((handler): [ProviderKind, NativeTuiBindingHandler] => [
+    defaultNativeTuiProviderHandlers(historyCatalog).map((handler): [ProviderKind, NativeTuiBindingHandler] => [
       handler.provider,
       handler,
     ]),
   );
 }
 
-export function createDefaultNativeTuiMirrorHandlers(): ReadonlyMap<
+export function createDefaultNativeTuiMirrorHandlers(
+  historyCatalog: NativeTuiHistoryCatalog = EMPTY_NATIVE_TUI_HISTORY_CATALOG,
+): ReadonlyMap<
   ProviderKind,
   NativeTuiMirrorHandler
 > {
   return new Map(
-    DEFAULT_NATIVE_TUI_PROVIDER_HANDLERS.map((handler): [ProviderKind, NativeTuiMirrorHandler] => [
+    defaultNativeTuiProviderHandlers(historyCatalog).map((handler): [ProviderKind, NativeTuiMirrorHandler] => [
       handler.provider,
       handler,
     ]),

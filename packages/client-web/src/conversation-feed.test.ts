@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SessionQueuedInput } from "@rah/runtime-protocol";
+import type {
+  ConversationTurnProjection,
+  SessionQueuedInput,
+} from "@rah/runtime-protocol";
 
-import { conversationFeedWithInputQueue } from "./conversation-feed.js";
+import {
+  conversationFeedWithInputQueue,
+  conversationTurnsToFeed,
+  stableConversationLocalFeed,
+} from "./conversation-feed.js";
 import type { FeedEntry } from "./types.js";
 
 function queuedInput(
@@ -76,4 +83,103 @@ test("does not synthesize a second bubble for a distinct queued message", () => 
   );
 
   assert.deepEqual(projected, [canonical]);
+});
+
+test("keeps the chat-local feed stable across process-output-only updates", () => {
+  const optimisticUser = canonicalUserMessage({
+    key: "optimistic:user:message-1",
+  });
+  const firstProcessEntry: FeedEntry = {
+    key: "tool:command-1",
+    kind: "tool_call",
+    toolCall: {
+      id: "command-1",
+      kind: "command",
+      title: "Run command",
+      detailAvailable: true,
+    },
+    status: "running",
+    ts: "2026-07-20T00:00:02.000Z",
+  };
+  const updatedProcessEntry: FeedEntry = {
+    ...firstProcessEntry,
+    status: "completed",
+  };
+
+  const first = stableConversationLocalFeed([
+    optimisticUser,
+    firstProcessEntry,
+  ]);
+  const afterOutput = stableConversationLocalFeed(
+    [optimisticUser, updatedProcessEntry],
+    first,
+  );
+
+  assert.strictEqual(afterOutput, first);
+  assert.deepEqual(afterOutput, [optimisticUser]);
+
+  const replacedOptimisticUser = {
+    ...optimisticUser,
+    item: {
+      ...optimisticUser.item,
+      text: "updated optimistic message",
+    },
+  } satisfies FeedEntry;
+  const afterUserChange = stableConversationLocalFeed(
+    [replacedOptimisticUser, updatedProcessEntry],
+    afterOutput,
+  );
+
+  assert.notStrictEqual(afterUserChange, afterOutput);
+  assert.deepEqual(afterUserChange, [replacedOptimisticUser]);
+});
+
+test("keeps canonical and provider turn identities on historical timeline items", () => {
+  const turn: ConversationTurnProjection = {
+    id: "canonical-turn-1",
+    provider: "codex",
+    providerSessionId: "provider-session-1",
+    providerTurnId: "provider-turn-1",
+    status: "completed",
+    statusAuthority: "native",
+    startedAt: "2026-07-20T00:00:00.000Z",
+    completedAt: "2026-07-20T00:00:01.000Z",
+    durationMs: 1_000,
+    items: [
+      {
+        id: "canonical-item-1",
+        turnId: "canonical-turn-1",
+        providerItemId: "item:0",
+        role: "user",
+        status: "completed",
+        startedAt: "2026-07-20T00:00:00.000Z",
+        content: {
+          kind: "timeline",
+          item: {
+            kind: "user_message",
+            text: "message with an image",
+            imageCount: 1,
+          },
+        },
+        source: {
+          provider: "codex",
+          channel: "structured_persisted",
+          authority: "authoritative",
+        },
+        revision: 1,
+      },
+    ],
+    failedItemCount: 0,
+    itemsView: "summary",
+    revision: 1,
+  };
+
+  const [entry] = conversationTurnsToFeed([turn]);
+  assert.equal(entry?.kind, "timeline");
+  if (entry?.kind !== "timeline") {
+    return;
+  }
+  assert.equal(entry.turnId, "provider-turn-1");
+  assert.equal(entry.providerTurnId, "provider-turn-1");
+  assert.equal(entry.canonicalTurnId, "canonical-turn-1");
 });

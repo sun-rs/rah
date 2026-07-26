@@ -1,7 +1,18 @@
-import { existsSync, realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import os from "node:os";
 import path, { resolve } from "node:path";
 import type { StoredSessionState } from "./session-store";
+
+const DIRECTORY_IDENTITY_CACHE_LIMIT = 4_096;
+const DIRECTORY_IDENTITY_REFRESH_MS = 60_000;
+
+type DirectoryIdentityCacheEntry = {
+  canonical: string;
+  resolvedAt: number;
+};
+
+const directoryIdentityCache = new Map<string, DirectoryIdentityCacheEntry>();
+const directoryIdentityInFlight = new Map<string, Promise<string>>();
 
 export function normalizeDirectory(value: string | undefined): string | null {
   if (!value) {
@@ -35,20 +46,100 @@ export function canonicalDirectoryKey(value: string | undefined): string | null 
     return null;
   }
   const absolute = resolve(normalized);
+  const cached = directoryIdentityCache.get(absolute);
+  if (cached) {
+    // Refresh LRU order without ever touching the filesystem from a render,
+    // list, or authorization comparison hot path.
+    directoryIdentityCache.delete(absolute);
+    directoryIdentityCache.set(absolute, cached);
+    return cached.canonical;
+  }
+  return normalizeDirectory(absolute);
+}
+
+export async function canonicalDirectoryKeyAsync(
+  value: string | undefined,
+  options?: { forceRefresh?: boolean },
+): Promise<string | null> {
+  const normalized = normalizeDirectory(value);
+  if (!normalized) {
+    return null;
+  }
+  const absolute = resolve(normalized);
+  const cached = directoryIdentityCache.get(absolute);
+  if (
+    cached &&
+    !options?.forceRefresh &&
+    Date.now() - cached.resolvedAt < DIRECTORY_IDENTITY_REFRESH_MS
+  ) {
+    return cached.canonical;
+  }
+  const existing = directoryIdentityInFlight.get(absolute);
+  if (existing) {
+    return await existing;
+  }
+  const resolution = resolveCanonicalDirectoryIdentity(absolute)
+    .then((canonical) => {
+      cacheDirectoryIdentity(absolute, canonical);
+      cacheDirectoryIdentity(canonical, canonical);
+      return canonical;
+    })
+    .finally(() => {
+      directoryIdentityInFlight.delete(absolute);
+    });
+  directoryIdentityInFlight.set(absolute, resolution);
+  return await resolution;
+}
+
+export async function primeCanonicalDirectoryKeys(
+  values: readonly (string | undefined)[],
+): Promise<void> {
+  const unique = [...new Set(
+    values
+      .map((value) => normalizeDirectory(value))
+      .filter((value): value is string => value !== null),
+  )];
+  await Promise.all(unique.map((value) => canonicalDirectoryKeyAsync(value)));
+}
+
+async function resolveCanonicalDirectoryIdentity(absolute: string): Promise<string> {
   const missingSegments: string[] = [];
   let existingPrefix = absolute;
   const root = path.parse(absolute).root;
-  while (!existsSync(existingPrefix) && existingPrefix !== root) {
-    missingSegments.unshift(path.basename(existingPrefix));
-    existingPrefix = path.dirname(existingPrefix);
+  while (true) {
+    try {
+      const resolvedPrefix = await realpath(existingPrefix);
+      return (
+        normalizeDirectory(path.join(resolvedPrefix, ...missingSegments)) ??
+        normalizeDirectory(absolute) ??
+        absolute
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        existingPrefix === root ||
+        (code !== "ENOENT" && code !== "ENOTDIR")
+      ) {
+        return normalizeDirectory(absolute) ?? absolute;
+      }
+      missingSegments.unshift(path.basename(existingPrefix));
+      existingPrefix = path.dirname(existingPrefix);
+    }
   }
-  if (!existsSync(existingPrefix)) {
-    return normalized;
-  }
-  try {
-    return normalizeDirectory(path.join(realpathSync.native(existingPrefix), ...missingSegments));
-  } catch {
-    return normalized;
+}
+
+function cacheDirectoryIdentity(absolute: string, canonical: string): void {
+  directoryIdentityCache.delete(absolute);
+  directoryIdentityCache.set(absolute, {
+    canonical,
+    resolvedAt: Date.now(),
+  });
+  while (directoryIdentityCache.size > DIRECTORY_IDENTITY_CACHE_LIMIT) {
+    const oldest = directoryIdentityCache.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    directoryIdentityCache.delete(oldest);
   }
 }
 

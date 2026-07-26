@@ -1080,14 +1080,26 @@ export function readClaudeStoredSessionActivityBatch(args: {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const parsed = lines
+  return translateClaudeStoredSessionActivityLines({
+    lines,
+    providerSessionId: args.record.ref.providerSessionId,
+    state: args.state,
+  });
+}
+
+export function translateClaudeStoredSessionActivityLines(args: {
+  lines: readonly string[];
+  providerSessionId: string;
+  state: ClaudeStoredActivityState;
+}): ClaudeStoredActivityBatchItem[] {
+  const parsed = args.lines
     .map(safeParseClaudeRecord)
     .filter(
       (record): record is ClaudeRawRecord =>
         Boolean(record) && record?.type !== "custom-title",
     );
   return translateClaudeRecordsToActivities(parsed, {
-    providerSessionId: args.record.ref.providerSessionId,
+    providerSessionId: args.providerSessionId,
     state: args.state,
   });
 }

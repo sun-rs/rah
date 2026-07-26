@@ -33,6 +33,7 @@ import { toSessionSummary } from "./session-store";
 import type { ProviderAdapter } from "./provider-adapter";
 import type { FrozenHistoryBoundary, FrozenHistoryPageLoader } from "./history-snapshots";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
+import { turnArtifactOwnerKey } from "./turn-artifact-store";
 
 const hasSqlite = (() => {
   try {
@@ -735,6 +736,7 @@ class SnapshotPagingAdapter implements ProviderAdapter {
   readonly id = "snapshot-paging";
   readonly providers: Array<"codex"> = ["codex"];
   readonly historyBySessionId = new Map<string, RahEvent[]>();
+  readonly summaryBySessionId = new Map<string, ConversationEvidencePage>();
 
   startSession(_request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse> {
     throw new Error("not implemented");
@@ -807,6 +809,12 @@ class SnapshotPagingAdapter implements ProviderAdapter {
       events: events.slice(start),
       ...(start > 0 && events[start] ? { nextBeforeTs: events[start]!.ts } : {}),
     };
+  }
+
+  getConversationSummaryEvidencePage(
+    sessionId: string,
+  ): ConversationEvidencePage | undefined {
+    return this.summaryBySessionId.get(sessionId);
   }
 
   getContextUsage(_sessionId: string): ContextUsage | undefined {
@@ -960,6 +968,153 @@ class FrozenPagingAdapter implements ProviderAdapter {
 }
 
 describe("RuntimeEngine", () => {
+  test("restores frozen turn changes from provider identity after a daemon restart", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-turn-history-restart-"));
+    const previousRahHome = process.env.RAH_HOME;
+    process.env.RAH_HOME = path.join(tempDir, "rah-home");
+    const providerSessionId = "thread-turn-history";
+    const providerTurnId = "provider-turn-history";
+    const historyEvents = (
+      sessionId: string,
+      options?: { providerChanges?: boolean },
+    ): RahEvent[] => [
+      {
+        id: "history-turn-started",
+        seq: 1,
+        ts: "2026-07-24T00:00:00.000Z",
+        sessionId,
+        turnId: providerTurnId,
+        type: "turn.started",
+        source: {
+          provider: "codex",
+          channel: "structured_persisted",
+          authority: "authoritative",
+        },
+        payload: {},
+      },
+      ...(options?.providerChanges
+        ? [{
+            id: "history-turn-file-changes",
+            seq: 2,
+            ts: "2026-07-24T00:00:00.500Z",
+            sessionId,
+            turnId: providerTurnId,
+            type: "turn.file_changes.updated",
+            source: {
+              provider: "codex",
+              channel: "structured_persisted",
+              authority: "authoritative",
+            },
+            payload: {
+              fileChanges: {
+                files: [{ path: "src/demo.ts", additions: 4, deletions: 2 }],
+                totalAdditions: 4,
+                totalDeletions: 2,
+              },
+            },
+          } satisfies RahEvent]
+        : []),
+      {
+        id: "history-turn-completed",
+        seq: 3,
+        ts: "2026-07-24T00:00:01.000Z",
+        sessionId,
+        turnId: providerTurnId,
+        type: "turn.completed",
+        source: {
+          provider: "codex",
+          channel: "structured_persisted",
+          authority: "authoritative",
+        },
+        payload: {},
+      },
+    ];
+    let firstEngine: RuntimeEngine | undefined;
+    let secondEngine: RuntimeEngine | undefined;
+    let thirdEngine: RuntimeEngine | undefined;
+    try {
+      const firstAdapter = new SnapshotPagingAdapter();
+      firstEngine = new RuntimeEngine([firstAdapter]);
+      const firstState = firstEngine.sessionStore.createManagedSession({
+        provider: "codex",
+        providerSessionId,
+        launchSource: "web",
+        cwd: tempDir,
+        rootDir: tempDir,
+      });
+      firstAdapter.historyBySessionId.set(
+        firstState.session.id,
+        historyEvents(firstState.session.id),
+      );
+      await firstEngine.turnArtifacts.replaceTurnDiff(
+        turnArtifactOwnerKey(firstState.session.id, firstState.session),
+        providerTurnId,
+        "diff --git a/src/demo.ts b/src/demo.ts\n--- a/src/demo.ts\n+++ b/src/demo.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      );
+      await firstEngine.shutdown();
+      firstEngine = undefined;
+
+      const secondAdapter = new SnapshotPagingAdapter();
+      secondEngine = new RuntimeEngine([secondAdapter]);
+      const secondState = secondEngine.sessionStore.createManagedSession({
+        provider: "codex",
+        providerSessionId,
+        launchSource: "web",
+        cwd: tempDir,
+        rootDir: tempDir,
+      });
+      secondAdapter.historyBySessionId.set(
+        secondState.session.id,
+        historyEvents(secondState.session.id),
+      );
+
+      const page = await secondEngine.getSessionConversationTurns(
+        secondState.session.id,
+        { limit: 10 },
+      );
+      assert.deepEqual(page.turns[0]?.fileChanges, {
+        files: [{ path: "src/demo.ts", additions: 1, deletions: 1 }],
+        totalAdditions: 1,
+        totalDeletions: 1,
+      });
+
+      await secondEngine.shutdown();
+      secondEngine = undefined;
+      const thirdAdapter = new SnapshotPagingAdapter();
+      thirdEngine = new RuntimeEngine([thirdAdapter]);
+      const thirdState = thirdEngine.sessionStore.createManagedSession({
+        provider: "codex",
+        providerSessionId,
+        launchSource: "web",
+        cwd: tempDir,
+        rootDir: tempDir,
+      });
+      thirdAdapter.historyBySessionId.set(
+        thirdState.session.id,
+        historyEvents(thirdState.session.id, { providerChanges: true }),
+      );
+      const nativePage = await thirdEngine.getSessionConversationTurns(
+        thirdState.session.id,
+        { limit: 10 },
+      );
+      assert.deepEqual(nativePage.turns[0]?.fileChanges, {
+        files: [{ path: "src/demo.ts", additions: 4, deletions: 2 }],
+        totalAdditions: 4,
+        totalDeletions: 2,
+      });
+    } finally {
+      await firstEngine?.shutdown();
+      await secondEngine?.shutdown();
+      await thirdEngine?.shutdown();
+      if (previousRahHome === undefined) {
+        delete process.env.RAH_HOME;
+      } else {
+        process.env.RAH_HOME = previousRahHome;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects new work after shutdown begins", async () => {
     const engine = new RuntimeEngine();
     await engine.shutdown();
@@ -2075,6 +2230,95 @@ describe("RuntimeEngine", () => {
     );
 
     await engine.shutdown();
+  });
+
+  test("native turn summaries preserve authoritative Worked detail availability", async () => {
+    const adapter = new SnapshotPagingAdapter();
+    const providerTurnId = "provider-direct-answer";
+    const source = {
+      provider: "codex" as const,
+      channel: "structured_persisted" as const,
+      authority: "authoritative" as const,
+    };
+    adapter.summaryBySessionId.set("replay-1", {
+      sessionId: "replay-1",
+      detailMode: "summary",
+      turnProcessDetailsAvailable: {
+        [providerTurnId]: false,
+      },
+      events: [
+        {
+          id: "direct-turn-started",
+          seq: 1,
+          ts: "2026-07-25T00:00:00.000Z",
+          sessionId: "replay-1",
+          turnId: providerTurnId,
+          type: "turn.started",
+          source,
+          payload: {},
+        },
+        {
+          id: "direct-user",
+          seq: 2,
+          ts: "2026-07-25T00:00:00.001Z",
+          sessionId: "replay-1",
+          turnId: providerTurnId,
+          type: "timeline.item.added",
+          source,
+          payload: {
+            item: {
+              kind: "user_message",
+              text: "Answer directly",
+            },
+          },
+        },
+        {
+          id: "direct-final",
+          seq: 3,
+          ts: "2026-07-25T00:00:00.500Z",
+          sessionId: "replay-1",
+          turnId: providerTurnId,
+          type: "timeline.item.added",
+          source,
+          payload: {
+            item: {
+              kind: "assistant_message",
+              text: "Direct answer",
+              phase: "final_answer",
+            },
+          },
+        },
+        {
+          id: "direct-turn-completed",
+          seq: 4,
+          ts: "2026-07-25T00:00:00.600Z",
+          sessionId: "replay-1",
+          turnId: providerTurnId,
+          type: "turn.completed",
+          source,
+          payload: {},
+        },
+      ],
+    });
+    const engine = new RuntimeEngine([adapter]);
+    try {
+      const resumed = await engine.resumeSession({
+        provider: "codex",
+        providerSessionId: "provider-1",
+        preferStoredReplay: true,
+      });
+      const response = await engine.getSessionConversationTurns(
+        resumed.session.session.id,
+        { limit: 1 },
+      );
+
+      assert.equal(response.turns.length, 1);
+      assert.equal(response.turns[0]?.providerTurnId, providerTurnId);
+      assert.equal(response.turns[0]?.itemsView, "summary");
+      assert.equal(response.turns[0]?.processDetailsAvailable, false);
+    } finally {
+      await engine.shutdown();
+    }
   });
 
   test("filters provider history noise for Council-managed agent sessions", async () => {

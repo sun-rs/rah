@@ -4,6 +4,7 @@ import type {
   RahEvent,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import { composeConversationProjectionDeltas } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
@@ -25,6 +26,33 @@ type RecoverTransportRequest = {
 };
 
 let recoverTransportInFlight: RecoverTransportRequest | null = null;
+
+export const FOREGROUND_SYNC_FLUSH_INTERVAL_MS = 50;
+export const BACKGROUND_SYNC_FLUSH_INTERVAL_MS = 250;
+const MAX_PENDING_SYNC_EVENTS = 2_048;
+const MAX_SYNC_EVENTS_PER_FLUSH = 192;
+const MAX_SYNC_DELTAS_PER_FLUSH = 64;
+const MAX_COALESCED_PROCESS_OUTPUT_CHARS = 256 * 1024;
+const MAX_PENDING_SYNC_EVENT_BYTES = 16 * 1024 * 1024;
+export const MAX_SYNC_EVENT_BYTES_PER_FLUSH = 1024 * 1024;
+
+export function resolveSyncFlushPlan(args: {
+  hidden: boolean;
+  elapsedSinceLastFlushMs: number;
+}): { kind: "frame" } | { kind: "timer"; delayMs: number } {
+  if (args.hidden) {
+    return {
+      kind: "timer",
+      delayMs: BACKGROUND_SYNC_FLUSH_INTERVAL_MS,
+    };
+  }
+  const remainingMs =
+    FOREGROUND_SYNC_FLUSH_INTERVAL_MS -
+    Math.max(0, args.elapsedSinceLastFlushMs);
+  return remainingMs <= 0
+    ? { kind: "frame" }
+    : { kind: "timer", delayMs: Math.ceil(remainingMs) };
+}
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -101,6 +129,27 @@ function hiddenMessagePartEvent(event: RahEvent): boolean {
   return kind === "text" || kind === "reasoning" || kind === "step";
 }
 
+export function splitProjectionTransportEvents(events: readonly RahEvent[]): {
+  projectionEvents: RahEvent[];
+  dataPlaneSeq: number | null;
+} {
+  const projectionEvents: RahEvent[] = [];
+  let dataPlaneSeq: number | null = null;
+  for (const event of events) {
+    if (
+      event.type === "process.output.appended" ||
+      event.type === "session.discovery" ||
+      hiddenMessagePartEvent(event)
+    ) {
+      dataPlaneSeq =
+        dataPlaneSeq === null ? event.seq : Math.max(dataPlaneSeq, event.seq);
+      continue;
+    }
+    projectionEvents.push(event);
+  }
+  return { projectionEvents, dataPlaneSeq };
+}
+
 function timelineCoalesceKey(event: RahEvent): string | null {
   if (event.type !== "timeline.item.added" && event.type !== "timeline.item.updated") {
     return null;
@@ -112,9 +161,33 @@ function timelineCoalesceKey(event: RahEvent): string | null {
 export function coalesceProjectionEvents(events: RahEvent[]): RahEvent[] {
   const result: RahEvent[] = [];
   const indexByKey = new Map<string, number>();
+  const outputByKey = new Map<
+    string,
+    {
+      index: number;
+      chunks: string[];
+      latest: Extract<RahEvent, { type: "process.output.appended" }>;
+    }
+  >();
 
   for (const event of events) {
     if (hiddenMessagePartEvent(event)) {
+      continue;
+    }
+    if (event.type === "process.output.appended") {
+      const key = `process-output:${event.sessionId}:${event.payload.output.itemId}:${event.payload.output.stream}`;
+      const existing = outputByKey.get(key);
+      if (existing) {
+        existing.chunks.push(event.payload.output.data);
+        existing.latest = event;
+        continue;
+      }
+      outputByKey.set(key, {
+        index: result.length,
+        chunks: [event.payload.output.data],
+        latest: event,
+      });
+      result.push(event);
       continue;
     }
     const key = timelineCoalesceKey(event);
@@ -129,22 +202,120 @@ export function coalesceProjectionEvents(events: RahEvent[]): RahEvent[] {
     result.push(event);
   }
 
+  // Materialize each process tail once. Repeatedly concatenating a growing
+  // string here is quadratic and lets a chatty child process monopolize the
+  // browser main thread even though the final visible tail is bounded.
+  for (const { index, chunks, latest } of outputByKey.values()) {
+    const data = chunks
+      .join("")
+      .slice(-MAX_COALESCED_PROCESS_OUTPUT_CHARS);
+    result[index] = {
+      ...latest,
+      payload: {
+        output: {
+          ...latest.payload.output,
+          data,
+          offsetBytes: Math.max(
+            0,
+            latest.payload.output.totalBytes -
+              new TextEncoder().encode(data).byteLength,
+          ),
+        },
+      },
+    };
+  }
   return result;
+}
+
+export function syncEventApproximateBytes(event: RahEvent): number {
+  return event.type === "process.output.appended"
+    ? 256 + new TextEncoder().encode(event.payload.output.data).byteLength
+    : 2_048;
+}
+
+export function takeSyncEventPrefix(
+  events: readonly RahEvent[],
+  options: {
+    maxEvents?: number;
+    maxBytes?: number;
+  } = {},
+): { selected: RahEvent[]; remaining: RahEvent[] } {
+  const maxEvents = Math.max(1, options.maxEvents ?? MAX_SYNC_EVENTS_PER_FLUSH);
+  const maxBytes = Math.max(
+    1,
+    options.maxBytes ?? MAX_SYNC_EVENT_BYTES_PER_FLUSH,
+  );
+  let bytes = 0;
+  let count = 0;
+  for (const event of events) {
+    const eventBytes = syncEventApproximateBytes(event);
+    if (
+      count > 0 &&
+      (count >= maxEvents || bytes + eventBytes > maxBytes)
+    ) {
+      break;
+    }
+    bytes += eventBytes;
+    count += 1;
+  }
+  return {
+    selected: events.slice(0, count),
+    remaining: events.slice(count),
+  };
 }
 
 export function coalesceConversationProjectionDeltas(
   deltas: readonly ConversationProjectionDelta[],
 ): ConversationProjectionDelta[] {
-  const bySessionRevision = new Map<string, ConversationProjectionDelta>();
-  for (const delta of deltas) {
-    bySessionRevision.set(`${delta.sessionId}:${delta.revision}`, delta);
+  return composeConversationProjectionDeltas(deltas);
+}
+
+function appendPendingValues<T>(target: T[], values: readonly T[]): void {
+  for (const value of values) {
+    target.push(value);
   }
-  return [...bySessionRevision.values()].sort((left, right) => {
-    if (left.sessionId !== right.sessionId) {
-      return left.sessionId.localeCompare(right.sessionId);
+}
+
+function compactPendingProjectionEvents(events: RahEvent[]): {
+  events: RahEvent[];
+  bytes: number;
+} {
+  const coalesced = coalesceProjectionEvents(events);
+  let bytes = coalesced.reduce(
+    (total, event) => total + syncEventApproximateBytes(event),
+    0,
+  );
+  let count = coalesced.length;
+  if (
+    count < MAX_PENDING_SYNC_EVENTS &&
+    bytes < MAX_PENDING_SYNC_EVENT_BYTES
+  ) {
+    return { events: coalesced, bytes };
+  }
+
+  // Process append frames are a lossy live tail backed by a final snapshot and
+  // the daemon detail store. Under pressure discard their oldest coalesced
+  // tails before sacrificing semantic lifecycle or reconnecting the stream.
+  const keep = coalesced.map(() => true);
+  for (
+    let index = 0;
+    index < coalesced.length &&
+    (count >= MAX_PENDING_SYNC_EVENTS ||
+      bytes >= MAX_PENDING_SYNC_EVENT_BYTES);
+    index += 1
+  ) {
+    const event = coalesced[index];
+    if (event?.type !== "process.output.appended") {
+      continue;
     }
-    return left.revision - right.revision;
-  });
+    keep[index] = false;
+    count -= 1;
+    bytes -= syncEventApproximateBytes(event);
+  }
+  return {
+    events: coalesced.filter((_event, index) => keep[index]),
+    bytes,
+  };
 }
 
 function selectedResumedReplayClosedByEvents(
@@ -346,6 +517,7 @@ export async function recoverFromReplayGapCommand(args: {
 
 export function connectStoreSyncTransport(args: {
   getReplayFromSeq: () => number | undefined;
+  advanceReplaySeq: (seq: number) => void;
   isInitialLoaded: () => boolean;
   set: SessionSyncSetState;
   getNotificationProjections: () => ReadonlyMap<string, SessionProjection>;
@@ -374,31 +546,80 @@ export function connectStoreSyncTransport(args: {
   refreshWorkbenchState: (events: RahEvent[]) => Promise<void>;
 }) {
   let pendingProjectionEvents: RahEvent[] = [];
+  let pendingProjectionEventBytes = 0;
   let pendingUnreadEvents: RahEvent[] = [];
   let pendingConversationDeltas: ConversationProjectionDelta[] = [];
+  let pendingDataPlaneSeq: number | null = null;
   let pendingFlush: { kind: "frame" | "timer"; id: number } | null = null;
+  let lastFlushAt = 0;
 
-  const flushPendingEvents = () => {
-    if (pendingFlush !== null) {
-      if (pendingFlush.kind === "frame") {
-        window.cancelAnimationFrame(pendingFlush.id);
-      } else {
-        window.clearTimeout(pendingFlush.id);
-      }
-      pendingFlush = null;
-    }
-    if (pendingProjectionEvents.length === 0 && pendingConversationDeltas.length === 0) {
-      pendingUnreadEvents = [];
+  const monotonicNow = () =>
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+
+  const cancelPendingFlush = () => {
+    if (pendingFlush === null) {
       return;
     }
-    const projectionEvents = coalesceProjectionEvents(pendingProjectionEvents);
-    const unreadEvents = coalesceProjectionEvents(pendingUnreadEvents);
-    const conversationDeltas = coalesceConversationProjectionDeltas(
+    if (pendingFlush.kind === "frame") {
+      window.cancelAnimationFrame(pendingFlush.id);
+    } else {
+      window.clearTimeout(pendingFlush.id);
+    }
+    pendingFlush = null;
+  };
+
+  const flushPendingEvents = () => {
+    cancelPendingFlush();
+    lastFlushAt = monotonicNow();
+    if (
+      pendingProjectionEvents.length === 0 &&
+      pendingUnreadEvents.length === 0 &&
+      pendingConversationDeltas.length === 0 &&
+      pendingDataPlaneSeq === null
+    ) {
+      return;
+    }
+    const allProjectionEvents = coalesceProjectionEvents(pendingProjectionEvents);
+    const allUnreadEvents = coalesceProjectionEvents(pendingUnreadEvents);
+    const allConversationDeltas = coalesceConversationProjectionDeltas(
       pendingConversationDeltas,
     );
-    pendingProjectionEvents = [];
-    pendingUnreadEvents = [];
-    pendingConversationDeltas = [];
+    const projectionBatch = takeSyncEventPrefix(allProjectionEvents);
+    const unreadBatch = takeSyncEventPrefix(allUnreadEvents);
+    const projectionEvents = projectionBatch.selected;
+    const unreadEvents = unreadBatch.selected;
+    const conversationDeltas = allConversationDeltas.slice(
+      0,
+      MAX_SYNC_DELTAS_PER_FLUSH,
+    );
+    pendingProjectionEvents = projectionBatch.remaining;
+    pendingProjectionEventBytes = pendingProjectionEvents.reduce(
+      (total, event) => total + syncEventApproximateBytes(event),
+      0,
+    );
+    pendingUnreadEvents = unreadBatch.remaining;
+    pendingConversationDeltas = allConversationDeltas.slice(
+      MAX_SYNC_DELTAS_PER_FLUSH,
+    );
+    const dataPlaneSeqToAdvance =
+      pendingProjectionEvents.length === 0 &&
+      pendingUnreadEvents.length === 0 &&
+      pendingConversationDeltas.length === 0
+        ? pendingDataPlaneSeq
+        : null;
+    if (dataPlaneSeqToAdvance !== null) {
+      pendingDataPlaneSeq = null;
+    }
+    if (
+      projectionEvents.length === 0 &&
+      unreadEvents.length === 0 &&
+      conversationDeltas.length === 0
+    ) {
+      if (dataPlaneSeqToAdvance !== null) {
+        args.advanceReplaySeq(dataPlaneSeqToAdvance);
+      }
+      return;
+    }
     if (unreadEvents.length > 0) {
       args.notifyUnreadEvents?.({
         projections: args.getNotificationProjections(),
@@ -425,6 +646,17 @@ export function connectStoreSyncTransport(args: {
               conversationDeltas,
             )
           : projectionState.projections;
+      const nextError =
+        state.error && isTransportErrorMessage(state.error) ? null : state.error;
+      if (
+        projections === state.projections &&
+        projectionState.selectedSessionId === state.selectedSessionId &&
+        projectionState.sessionTopologyVersion === state.sessionTopologyVersion &&
+        unreadEvents.length === 0 &&
+        nextError === state.error
+      ) {
+        return state;
+      }
       return {
         ...projectionState,
         projections,
@@ -436,11 +668,24 @@ export function connectStoreSyncTransport(args: {
                 args.getVisibleSessionIds(),
                 unreadEvents,
               ),
-        error:
-          state.error && isTransportErrorMessage(state.error) ? null : state.error,
+        error: nextError,
       };
     });
+    if (dataPlaneSeqToAdvance !== null) {
+      args.advanceReplaySeq(dataPlaneSeqToAdvance);
+    }
     args.onConversationDeltasApplied?.(conversationDeltas);
+    if (
+      pendingProjectionEvents.length > 0 ||
+      pendingUnreadEvents.length > 0 ||
+      pendingConversationDeltas.length > 0 ||
+      pendingDataPlaneSeq !== null
+    ) {
+      // Continue on a new frame rather than monopolizing the browser main
+      // thread with an entire reconnect replay.
+      lastFlushAt = 0;
+      schedulePendingEventFlush();
+    }
   };
 
   const schedulePendingEventFlush = () => {
@@ -451,54 +696,114 @@ export function connectStoreSyncTransport(args: {
       pendingFlush = null;
       flushPendingEvents();
     };
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-      pendingFlush = { kind: "timer", id: window.setTimeout(runFlush, 0) };
+    const hidden =
+      typeof document !== "undefined" &&
+      document.visibilityState === "hidden";
+    const plan = resolveSyncFlushPlan({
+      hidden,
+      elapsedSinceLastFlushMs:
+        lastFlushAt === 0
+          ? Number.POSITIVE_INFINITY
+          : monotonicNow() - lastFlushAt,
+    });
+    if (plan.kind === "frame") {
+      pendingFlush = {
+        kind: "frame",
+        id: window.requestAnimationFrame(runFlush),
+      };
       return;
     }
-    pendingFlush = { kind: "frame", id: window.requestAnimationFrame(runFlush) };
-  };
-
-  const promotePendingFlushToBackgroundTimer = () => {
-    if (
-      pendingFlush?.kind !== "frame" ||
-      typeof document === "undefined" ||
-      document.visibilityState !== "hidden"
-    ) {
-      return;
-    }
-    window.cancelAnimationFrame(pendingFlush.id);
     pendingFlush = {
       kind: "timer",
       id: window.setTimeout(() => {
         pendingFlush = null;
-        flushPendingEvents();
-      }, 0),
+        if (
+          typeof document !== "undefined" &&
+          document.visibilityState !== "hidden"
+        ) {
+          pendingFlush = {
+            kind: "frame",
+            id: window.requestAnimationFrame(runFlush),
+          };
+          return;
+        }
+        runFlush();
+      }, plan.delayMs),
     };
   };
 
+  const reschedulePendingFlushForVisibility = () => {
+    if (pendingFlush === null) {
+      return;
+    }
+    cancelPendingFlush();
+    schedulePendingEventFlush();
+  };
+
   if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", promotePendingFlushToBackgroundTimer);
+    document.addEventListener(
+      "visibilitychange",
+      reschedulePendingFlushForVisibility,
+    );
   }
 
   connectSessionStoreTransport({
     getReplayFromSeq: args.getReplayFromSeq,
     isInitialLoaded: args.isInitialLoaded,
     onBatch: (batch) => {
-      const projectionEvents =
-        batch.events?.filter((event) => event.type !== "session.discovery") ?? [];
+      const splitEvents = splitProjectionTransportEvents(batch.events ?? []);
+      const projectionEvents = splitEvents.projectionEvents;
       const conversationDeltas = batch.conversationDeltas ?? [];
-      if (projectionEvents.length === 0 && conversationDeltas.length === 0) {
+      if (splitEvents.dataPlaneSeq !== null) {
+        pendingDataPlaneSeq =
+          pendingDataPlaneSeq === null
+            ? splitEvents.dataPlaneSeq
+            : Math.max(pendingDataPlaneSeq, splitEvents.dataPlaneSeq);
+      }
+      if (
+        projectionEvents.length === 0 &&
+        conversationDeltas.length === 0 &&
+        pendingDataPlaneSeq === null
+      ) {
         return;
       }
-      pendingProjectionEvents = [...pendingProjectionEvents, ...projectionEvents];
-      pendingConversationDeltas = [
-        ...pendingConversationDeltas,
-        ...conversationDeltas,
-      ];
-      if (!batch.initial) {
-        pendingUnreadEvents = [...pendingUnreadEvents, ...projectionEvents];
+      appendPendingValues(pendingProjectionEvents, projectionEvents);
+      pendingProjectionEventBytes += projectionEvents.reduce(
+        (total, event) => total + syncEventApproximateBytes(event),
+        0,
+      );
+      appendPendingValues(pendingConversationDeltas, conversationDeltas);
+      if (!batch.initial && !batch.replay) {
+        appendPendingValues(pendingUnreadEvents, projectionEvents);
+      }
+      if (
+        pendingProjectionEvents.length >= MAX_PENDING_SYNC_EVENTS ||
+        pendingProjectionEventBytes >= MAX_PENDING_SYNC_EVENT_BYTES
+      ) {
+        const compacted = compactPendingProjectionEvents(
+          pendingProjectionEvents,
+        );
+        pendingProjectionEvents = compacted.events;
+        pendingProjectionEventBytes = compacted.bytes;
+      }
+      if (
+        pendingProjectionEvents.length >= MAX_PENDING_SYNC_EVENTS ||
+        pendingProjectionEventBytes >= MAX_PENDING_SYNC_EVENT_BYTES ||
+        pendingConversationDeltas.length >= MAX_PENDING_SYNC_EVENTS
+      ) {
+        // A reconnect starts from the last applied sequence. Dropping this
+        // un-applied queue and reconnecting is safer than a multi-second
+        // synchronous catch-up that freezes the UI.
+        cancelPendingFlush();
+        pendingProjectionEvents = [];
+        pendingProjectionEventBytes = 0;
+        pendingUnreadEvents = [];
+        pendingConversationDeltas = [];
+        pendingDataPlaneSeq = null;
+        return false;
       }
       schedulePendingEventFlush();
+      return true;
     },
     onError: (error) => {
       args.set({ error: error.message });

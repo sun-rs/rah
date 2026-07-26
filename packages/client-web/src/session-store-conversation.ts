@@ -221,9 +221,10 @@ function lastFinalItem(
   return undefined;
 }
 
-function mergeFullTurnWithSummary(
+function mergeTurnWithRetainedItems(
   current: ConversationTurnProjection,
   incoming: ConversationTurnProjection,
+  itemsView: "summary" | "full",
 ): ConversationTurnProjection {
   const consumedIncoming = new Set<ConversationItemProjection>();
   const items = current.items.map((currentItem) => {
@@ -239,8 +240,31 @@ function mergeFullTurnWithSummary(
     if (currentItem.role === "process") {
       return mergeProcessItem(currentItem, match);
     }
+    const mergedContent =
+      itemsView === "full" &&
+      currentItem.content.kind === "timeline" &&
+      currentItem.content.item.kind === "user_message" &&
+      match.content.kind === "timeline" &&
+      match.content.item.kind === "user_message"
+        ? {
+            ...match.content,
+            item: {
+              ...match.content.item,
+              imageCount: Math.max(
+                currentItem.content.item.imageCount ?? 0,
+                match.content.item.imageCount ?? 0,
+              ),
+              ...(match.content.item.attachments?.length
+                ? { attachments: match.content.item.attachments }
+                : currentItem.content.item.attachments?.length
+                  ? { attachments: currentItem.content.item.attachments }
+                  : {}),
+            },
+          }
+        : match.content;
     return {
       ...match,
+      content: mergedContent,
       id: currentItem.id,
       turnId: currentItem.turnId,
       ...(currentItem.providerItemId
@@ -285,7 +309,7 @@ function mergeFullTurnWithSummary(
     ...incoming,
     items,
     ...resources,
-    itemsView: "full",
+    itemsView,
     failedItemCount: items.filter((item) => item.status === "failed").length,
     activities: summarizeConversationActivities(items),
     revision: Math.max(current.revision, incoming.revision),
@@ -298,12 +322,50 @@ function mergeFullTurnWithSummary(
   return merged;
 }
 
+function mergeFullTurnWithSummary(
+  current: ConversationTurnProjection,
+  incoming: ConversationTurnProjection,
+): ConversationTurnProjection {
+  return mergeTurnWithRetainedItems(current, incoming, "full");
+}
+
 function mergeTurnWithoutDetailDowngrade(
   current: ConversationTurnProjection,
   incoming: ConversationTurnProjection,
 ): ConversationTurnProjection {
   if (current.itemsView === "full" && incoming.itemsView !== "full") {
     return mergeFullTurnWithSummary(current, incoming);
+  }
+  // An actively growing provider history can expose a temporarily incomplete
+  // latest-page snapshot while its index catches up with the append-only
+  // source. Its liveness probe can also briefly classify that same trailing
+  // turn as interrupted between provider writes. A refresh without a final
+  // answer is not a deletion event, so retain user/reasoning/tool items that
+  // were already rendered. Explicit removals still arrive through
+  // ConversationProjectionDelta, while a canonical final answer follows the
+  // normal role-promotion path below.
+  const incomingHasFinalAnswer =
+    Boolean(incoming.finalAnswerItemId) ||
+    incoming.items.some((item) => item.role === "final");
+  const incomingOmitsRenderedItems = current.items.some(
+    (currentItem) =>
+      !incoming.items.some(
+        (incomingItem) =>
+          incomingItem.role === currentItem.role &&
+          sameConversationItemIdentity(currentItem, incomingItem),
+      ),
+  );
+  if (
+    !incomingHasFinalAnswer &&
+    (current.status === "in_progress" ||
+      incoming.status === "in_progress" ||
+      incomingOmitsRenderedItems)
+  ) {
+    return mergeTurnWithRetainedItems(
+      current,
+      incoming,
+      current.itemsView === "full" || incoming.itemsView === "full" ? "full" : "summary",
+    );
   }
   const currentProcessById = new Map(
     current.items.filter((item) => item.role === "process").map((item) => [item.id, item]),

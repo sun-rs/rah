@@ -1,16 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CodexAppServerTurnsPage } from "./codex-app-server-turns-page";
@@ -75,8 +73,10 @@ function providerPrefix(providerSessionId: string): string {
   return hash(providerSessionId, 16);
 }
 
-function readRolloutRevision(rolloutPath: string): RolloutRevision {
-  const stats = statSync(rolloutPath);
+async function readRolloutRevision(
+  rolloutPath: string,
+): Promise<RolloutRevision> {
+  const stats = await stat(rolloutPath);
   return {
     dev: stats.dev,
     ino: stats.ino,
@@ -113,22 +113,21 @@ function isHistoricalCacheValidation(
   );
 }
 
-function hashRolloutRange(
+async function hashRolloutRange(
   rolloutPath: string,
   start: number,
   length: number,
-): string | undefined {
+): Promise<string | undefined> {
   if (start < 0 || length <= 0) {
     return undefined;
   }
-  let fd: number | undefined;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    fd = openSync(rolloutPath, "r");
+    handle = await open(rolloutPath, "r");
     const body = Buffer.allocUnsafe(length);
     let offset = 0;
     while (offset < length) {
-      const bytesRead = readSync(
-        fd,
+      const { bytesRead } = await handle.read(
         body,
         offset,
         length - offset,
@@ -143,22 +142,22 @@ function hashRolloutRange(
   } catch {
     return undefined;
   } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
+    if (handle) {
+      await handle.close().catch(() => {});
     }
   }
 }
 
-function createHistoricalValidation(
+async function createHistoricalValidation(
   rolloutPath: string,
   revision: RolloutRevision,
-): HistoricalCacheValidation | undefined {
+): Promise<HistoricalCacheValidation | undefined> {
   const boundaryLength = Math.min(revision.size, HISTORICAL_BOUNDARY_BYTES);
   if (boundaryLength <= 0) {
     return undefined;
   }
   const boundaryStart = revision.size - boundaryLength;
-  const boundaryHash = hashRolloutRange(
+  const boundaryHash = await hashRolloutRange(
     rolloutPath,
     boundaryStart,
     boundaryLength,
@@ -169,11 +168,11 @@ function createHistoricalValidation(
   return { revision, boundaryStart, boundaryLength, boundaryHash };
 }
 
-function canReuseHistoricalPage(
+async function canReuseHistoricalPage(
   rolloutPath: string,
   currentRevision: RolloutRevision,
   validation: HistoricalCacheValidation | undefined,
-): boolean {
+): Promise<boolean> {
   if (!validation) {
     return false;
   }
@@ -192,11 +191,11 @@ function canReuseHistoricalPage(
     return false;
   }
   return (
-    hashRolloutRange(
+    (await hashRolloutRange(
       rolloutPath,
       validation.boundaryStart,
       validation.boundaryLength,
-    ) === validation.boundaryHash
+    )) === validation.boundaryHash
   );
 }
 
@@ -251,6 +250,7 @@ export class CodexTurnPageCache {
   >();
   private readonly generationByProvider = new Map<string, number>();
   private memoryBytes = 0;
+  private prunePromise: Promise<void> | undefined;
 
   constructor(options: CodexTurnPageCacheOptions = {}) {
     this.rootDir =
@@ -286,7 +286,7 @@ export class CodexTurnPageCache {
     sourceSettled: boolean;
     load(revision: RolloutRevision): Promise<CodexAppServerTurnsPage>;
   }): Promise<CodexAppServerTurnsPage> {
-    const revision = readRolloutRevision(args.rolloutPath);
+    const revision = await readRolloutRevision(args.rolloutPath);
     const historical = Boolean(args.cursor);
     const requestIdentity = {
       version: CACHE_VERSION,
@@ -306,7 +306,7 @@ export class CodexTurnPageCache {
           : "active",
     };
     const cacheKey = hash(JSON.stringify(requestIdentity));
-    const memoryPage = this.readMemory(
+    const memoryPage = await this.readMemory(
       cacheKey,
       args.rolloutPath,
       revision,
@@ -315,7 +315,7 @@ export class CodexTurnPageCache {
     if (memoryPage) {
       return memoryPage;
     }
-    const diskPage = this.readDisk(
+    const diskPage = await this.readDisk(
       cacheKey,
       args.providerSessionId,
       args.rolloutPath,
@@ -334,7 +334,7 @@ export class CodexTurnPageCache {
       this.generationByProvider.get(args.providerSessionId) ?? 0;
     const promise = args
       .load(revision)
-      .then((page) => {
+      .then(async (page) => {
         if (!isTurnsPage(page)) {
           throw new Error("Codex thread/turns/list returned an invalid page.");
         }
@@ -343,10 +343,10 @@ export class CodexTurnPageCache {
           generation
         ) {
           const historicalValidation = historical
-            ? createHistoricalValidation(args.rolloutPath, revision)
+            ? await createHistoricalValidation(args.rolloutPath, revision)
             : undefined;
           if (!historical || historicalValidation) {
-            this.store(
+            await this.store(
               cacheKey,
               args.providerSessionId,
               page,
@@ -365,7 +365,7 @@ export class CodexTurnPageCache {
     return promise;
   }
 
-  clear(providerSessionId: string): void {
+  async clear(providerSessionId: string): Promise<void> {
     this.generationByProvider.set(
       providerSessionId,
       (this.generationByProvider.get(providerSessionId) ?? 0) + 1,
@@ -378,13 +378,13 @@ export class CodexTurnPageCache {
     }
     const prefix = `${providerPrefix(providerSessionId)}-`;
     try {
-      for (const entry of readdirSync(this.rootDir, { withFileTypes: true })) {
+      for (const entry of await readdir(this.rootDir, { withFileTypes: true })) {
         if (
           entry.isFile() &&
           entry.name.startsWith(prefix) &&
           entry.name.endsWith(".json")
         ) {
-          rmSync(path.join(this.rootDir, entry.name), { force: true });
+          await rm(path.join(this.rootDir, entry.name), { force: true });
         }
       }
     } catch {
@@ -399,19 +399,23 @@ export class CodexTurnPageCache {
     );
   }
 
-  private readMemory(
+  private async readMemory(
     cacheKey: string,
     rolloutPath: string,
     revision: RolloutRevision,
     historical: boolean,
-  ): CodexAppServerTurnsPage | undefined {
+  ): Promise<CodexAppServerTurnsPage | undefined> {
     const entry = this.memory.get(cacheKey);
     if (!entry) {
       return undefined;
     }
     if (
       historical &&
-      !canReuseHistoricalPage(rolloutPath, revision, entry.historicalValidation)
+      !(await canReuseHistoricalPage(
+        rolloutPath,
+        revision,
+        entry.historicalValidation,
+      ))
     ) {
       this.memory.delete(cacheKey);
       this.memoryBytes -= entry.bytes;
@@ -422,35 +426,35 @@ export class CodexTurnPageCache {
     return entry.page;
   }
 
-  private readDisk(
+  private async readDisk(
     cacheKey: string,
     providerSessionId: string,
     rolloutPath: string,
     revision: RolloutRevision,
     historical: boolean,
-  ): CodexAppServerTurnsPage | undefined {
+  ): Promise<CodexAppServerTurnsPage | undefined> {
     const cachePath = this.cachePath(cacheKey, providerSessionId);
     try {
-      const stats = statSync(cachePath);
+      const stats = await stat(cachePath);
       if (stats.size > this.maxEntryBytes) {
-        rmSync(cachePath, { force: true });
+        await rm(cachePath, { force: true });
         return undefined;
       }
-      const body = readFileSync(cachePath, "utf8");
+      const body = await readFile(cachePath, "utf8");
       const parsed: unknown = JSON.parse(body);
       if (!isCacheEnvelope(parsed, cacheKey, providerSessionId)) {
-        rmSync(cachePath, { force: true });
+        await rm(cachePath, { force: true });
         return undefined;
       }
       if (
         historical &&
-        !canReuseHistoricalPage(
+        !(await canReuseHistoricalPage(
           rolloutPath,
           revision,
           parsed.historicalValidation,
-        )
+        ))
       ) {
-        rmSync(cachePath, { force: true });
+        await rm(cachePath, { force: true });
         return undefined;
       }
       this.remember(cacheKey, {
@@ -467,12 +471,12 @@ export class CodexTurnPageCache {
     }
   }
 
-  private store(
+  private async store(
     cacheKey: string,
     providerSessionId: string,
     page: CodexAppServerTurnsPage,
     historicalValidation?: HistoricalCacheValidation,
-  ): void {
+  ): Promise<void> {
     const envelope: CacheEnvelope = {
       version: CACHE_VERSION,
       cacheKey,
@@ -494,20 +498,23 @@ export class CodexTurnPageCache {
 
     let tempPath: string | undefined;
     try {
-      mkdirSync(this.rootDir, { recursive: true, mode: 0o700 });
+      await mkdir(this.rootDir, { recursive: true, mode: 0o700 });
       const cachePath = this.cachePath(cacheKey, providerSessionId);
       tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
-      writeFileSync(tempPath, body, {
+      await writeFile(tempPath, body, {
         encoding: "utf8",
         mode: 0o600,
         flag: "wx",
       });
-      renameSync(tempPath, cachePath);
+      await rename(tempPath, cachePath);
       tempPath = undefined;
-      this.pruneDisk();
+      // Persistence is complete at this point. Retention runs in one
+      // coalesced background lane so a cache hit never waits for a directory
+      // inventory and concurrent page loads cannot fan out pruning work.
+      void this.schedulePruneDisk();
     } catch {
       if (tempPath) {
-        rmSync(tempPath, { force: true });
+        await rm(tempPath, { force: true }).catch(() => {});
       }
       // The official response remains usable when persistence is unavailable.
     }
@@ -535,16 +542,46 @@ export class CodexTurnPageCache {
     }
   }
 
-  private pruneDisk(): void {
+  private schedulePruneDisk(): Promise<void> {
+    if (this.prunePromise) {
+      return this.prunePromise;
+    }
+    const promise = this.pruneDisk().finally(() => {
+      if (this.prunePromise === promise) {
+        this.prunePromise = undefined;
+      }
+    });
+    this.prunePromise = promise;
+    return promise;
+  }
+
+  private async pruneDisk(): Promise<void> {
     try {
-      const entries = readdirSync(this.rootDir, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-        .map((entry) => {
-          const filePath = path.join(this.rootDir, entry.name);
-          const stats = statSync(filePath);
-          return { filePath, bytes: stats.size, mtimeMs: stats.mtimeMs };
-        })
-        .sort((left, right) => left.mtimeMs - right.mtimeMs);
+      const directoryEntries = await readdir(this.rootDir, {
+        withFileTypes: true,
+      });
+      const entries: Array<{
+        filePath: string;
+        bytes: number;
+        mtimeMs: number;
+      }> = [];
+      for (const entry of directoryEntries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) {
+          continue;
+        }
+        const filePath = path.join(this.rootDir, entry.name);
+        try {
+          const stats = await stat(filePath);
+          entries.push({
+            filePath,
+            bytes: stats.size,
+            mtimeMs: stats.mtimeMs,
+          });
+        } catch {
+          // A concurrent clear may remove an entry between readdir and stat.
+        }
+      }
+      entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
       let totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
       while (
         entries.length > this.maxDiskEntries ||
@@ -554,7 +591,7 @@ export class CodexTurnPageCache {
         if (!oldest) {
           break;
         }
-        rmSync(oldest.filePath, { force: true });
+        await rm(oldest.filePath, { force: true });
         totalBytes -= oldest.bytes;
       }
     } catch {

@@ -1,11 +1,16 @@
 import {
   createClaudeStoredActivityState,
-  discoverClaudeStoredSessions,
-  readClaudeStoredSessionActivityBatch,
+  translateClaudeStoredSessionActivityLines,
+  type ClaudeStoredSessionRecord,
 } from "./claude-session-files";
+import {
+  createIncrementalJsonlCursor,
+  readIncrementalJsonlBatch,
+} from "./incremental-jsonl-reader";
 import {
   sameNativeTuiDirectory,
 } from "./native-tui-provider-handler-utils";
+import type { NativeTuiHistoryCatalog } from "./native-tui-history-catalog";
 import type {
   NativeTuiOutputObservation,
   NativeTuiMirrorUpdate,
@@ -38,18 +43,34 @@ function hasClaudePrompt(output: string): boolean {
   return tail.at(-1) ? /bypass permissions/i.test(tail.at(-1)!) : false;
 }
 
-function selectClaudeBindingRecord(session: NativeTuiProviderRuntimeSession) {
-  const records = discoverClaudeStoredSessions(session.cwd);
-  const byProviderSessionId = session.providerSessionId
-    ? records.find((candidate) => candidate.ref.providerSessionId === session.providerSessionId) ??
-      discoverClaudeStoredSessions().find(
-        (candidate) => candidate.ref.providerSessionId === session.providerSessionId,
-      )
-    : undefined;
-  if (byProviderSessionId) {
-    return byProviderSessionId;
+function claudeRecords(
+  historyCatalog: NativeTuiHistoryCatalog,
+): ClaudeStoredSessionRecord[] {
+  return historyCatalog.list("claude").map((record) => ({
+    ref: record.ref,
+    filePath: record.storagePath,
+  }));
+}
+
+function selectClaudeBindingRecord(
+  session: NativeTuiProviderRuntimeSession,
+  historyCatalog: NativeTuiHistoryCatalog,
+) {
+  const records = claudeRecords(historyCatalog);
+  if (session.providerSessionId) {
+    const boundRecord = records.find(
+      (candidate) =>
+        candidate.ref.providerSessionId === session.providerSessionId,
+    );
+    if (!boundRecord) {
+      historyCatalog.requestRefresh("claude");
+    }
+    // A bound runtime identity is authoritative. Never substitute the newest
+    // transcript from the same cwd while the catalog refresh is catching up:
+    // that would mirror another Claude session into this conversation.
+    return boundRecord;
   }
-  return records
+  const candidate = records
     .filter((record) =>
       sameNativeTuiDirectory(record.ref.cwd ?? record.ref.rootDir, session.cwd),
     )
@@ -60,6 +81,10 @@ function selectClaudeBindingRecord(session: NativeTuiProviderRuntimeSession) {
     .sort((left, right) =>
       (right.ref.updatedAt ?? "").localeCompare(left.ref.updatedAt ?? ""),
     )[0];
+  if (!candidate) {
+    historyCatalog.requestRefresh("claude");
+  }
+  return candidate;
 }
 
 function observeClaudeOutput(
@@ -72,8 +97,11 @@ function observeClaudeOutput(
   };
 }
 
-function probeClaudeBinding(session: NativeTuiProviderRuntimeSession) {
-  const record = selectClaudeBindingRecord(session);
+function probeClaudeBinding(
+  session: NativeTuiProviderRuntimeSession,
+  historyCatalog: NativeTuiHistoryCatalog,
+) {
+  const record = selectClaudeBindingRecord(session, historyCatalog);
   if (!record) {
     return null;
   }
@@ -83,12 +111,13 @@ function probeClaudeBinding(session: NativeTuiProviderRuntimeSession) {
   };
 }
 
-function updateClaudeMirror(
+async function updateClaudeMirror(
   session: NativeTuiProviderRuntimeSession,
   mirror: NativeTuiProviderMirror | undefined,
-): NativeTuiMirrorUpdate {
+  historyCatalog: NativeTuiHistoryCatalog,
+): Promise<NativeTuiMirrorUpdate> {
   if (mirror?.provider !== "claude") {
-    const record = selectClaudeBindingRecord(session);
+    const record = selectClaudeBindingRecord(session, historyCatalog);
     if (!record) {
       return { status: "missing" };
     }
@@ -96,28 +125,40 @@ function updateClaudeMirror(
       provider: "claude",
       providerSessionId: record.ref.providerSessionId,
       record,
+      jsonlCursor: createIncrementalJsonlCursor(),
       activityState: createClaudeStoredActivityState(),
     };
   }
 
   try {
+    const batch = await readIncrementalJsonlBatch(
+      mirror.record.filePath,
+      mirror.jsonlCursor,
+    );
     return {
       status: "ok",
       mirror,
-      items: readClaudeStoredSessionActivityBatch({
-        record: mirror.record,
+      items: translateClaudeStoredSessionActivityLines({
+        lines: batch.lines,
+        providerSessionId: mirror.record.ref.providerSessionId,
         state: mirror.activityState,
       }),
+      ...(batch.hasMore ? { hasMore: true } : {}),
     };
   } catch (error) {
     return { status: "failed", mirror, phase: "read_claude_jsonl", error };
   }
 }
 
-export const claudeNativeTuiProviderHandler: NativeTuiProviderHandler = {
-  provider: "claude",
-  canProbeBinding: true,
-  observeOutput: observeClaudeOutput,
-  probeBinding: probeClaudeBinding,
-  updateMirror: updateClaudeMirror,
-};
+export function createClaudeNativeTuiProviderHandler(
+  historyCatalog: NativeTuiHistoryCatalog,
+): NativeTuiProviderHandler {
+  return {
+    provider: "claude",
+    canProbeBinding: true,
+    observeOutput: observeClaudeOutput,
+    probeBinding: (session) => probeClaudeBinding(session, historyCatalog),
+    updateMirror: (session, mirror) =>
+      updateClaudeMirror(session, mirror, historyCatalog),
+  };
+}

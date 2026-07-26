@@ -8,6 +8,8 @@ import type {
   MessagePartRef,
   PermissionRequest,
   PermissionResolution,
+  ProcessOutputAppend,
+  ProcessOutputSnapshot,
   RahEvent,
   RuntimeOperation,
   TimelineIdentity,
@@ -179,6 +181,16 @@ export type ProviderActivity =
       type: "tool_call_failed";
       toolCallId: string;
       error: string;
+      turnId?: string;
+    }
+  | {
+      type: "process_output_appended";
+      output: ProcessOutputAppend;
+      turnId?: string;
+    }
+  | {
+      type: "process_output_snapshot";
+      output: ProcessOutputSnapshot;
       turnId?: string;
     }
   | {
@@ -998,6 +1010,61 @@ export function applyProviderActivity(
                     toolCallId: activity.toolCallId,
                     error: activity.error,
                   },
+                },
+                ts,
+              ),
+              activity.turnId,
+            ),
+            meta,
+          ),
+        ),
+      );
+      break;
+    case "process_output_appended":
+      if (shouldMirrorProviderTerminalOutputToPty(services.sessionStore.getSession(sessionId))) {
+        services.ptyHub.appendOutput(sessionId, activity.output.data);
+      }
+      services.processOutputs?.append({
+        sessionId,
+        ...(activity.turnId !== undefined ? { turnId: activity.turnId } : {}),
+        output: activity.output,
+      });
+      published.push(
+        services.eventBus.publish(
+          withRaw(
+            withTurnId(
+              withTs(
+                {
+                  sessionId,
+                  type: "process.output.appended",
+                  source,
+                  payload: { output: activity.output },
+                },
+                ts,
+              ),
+              activity.turnId,
+            ),
+            meta,
+          ),
+        ),
+      );
+      break;
+    case "process_output_snapshot":
+      services.processOutputs?.complete({
+        sessionId,
+        ...(activity.turnId !== undefined ? { turnId: activity.turnId } : {}),
+        output: activity.output,
+      });
+      published.push(
+        services.eventBus.publish(
+          withRaw(
+            withTurnId(
+              withTs(
+                {
+                  sessionId,
+                  type: "process.output.snapshot",
+                  source,
+                  payload: { output: activity.output },
                 },
                 ts,
               ),

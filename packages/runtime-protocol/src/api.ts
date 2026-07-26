@@ -637,6 +637,12 @@ export type ConversationEvidenceDetailMode = "full" | "summary" | "chat";
 export interface ConversationEvidencePage {
   sessionId: string;
   events: RahEvent[];
+  /**
+   * Provider-turn keyed detail availability carried alongside lightweight
+   * evidence. This avoids hydrating a turn merely to discover that its Worked
+   * section contains no renderable process rows.
+   */
+  turnProcessDetailsAvailable?: Record<string, boolean>;
   nextCursor?: string;
   nextBeforeTs?: string;
   detailMode?: ConversationEvidenceDetailMode;
@@ -687,7 +693,12 @@ export interface EventBatch {
   events: RahEvent[];
   conversationDeltas?: ConversationProjectionDelta[];
   replayGap?: ReplayGapNotice;
+  /** This frame belongs to a retained-event replay rather than the live tail. */
+  replay?: boolean;
+  /** Initial replay frames must not be treated as unread live activity. */
   initial?: boolean;
+  /** False on intermediate replay chunks and true on the final acknowledgement. */
+  replayComplete?: boolean;
 }
 
 export interface ProviderDiagnostic {

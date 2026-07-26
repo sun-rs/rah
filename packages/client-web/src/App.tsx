@@ -52,6 +52,7 @@ import {
   useWorkbenchSidebarPreferences,
   useWorkspaceSortModeState,
 } from "./hooks/useWorkbenchSidebarPreferences";
+import { useSidebarSectionOrders } from "./hooks/useSidebarSectionOrders";
 import {
   canSessionArchive,
   canSessionDelete,
@@ -296,6 +297,9 @@ const FOREGROUND_RECOVERY_DEBOUNCE_MS = 120;
 const FOREGROUND_RECOVERY_TIMEOUT_MS = 12_000;
 const FOREGROUND_RECOVERY_RETRY_DELAYS_MS = [600, 1_800, 4_000, 8_000, 12_000] as const;
 const VISIBLE_HISTORY_CATCHUP_FRESH_MS = 2_000;
+const READ_ONLY_CONVERSATION_SOURCE_POLL_MS = 1_500;
+const LEGACY_READ_ONLY_CONVERSATION_REFRESH_MS = 5_000;
+const READ_ONLY_SOURCE_REVISION_RETRY_MS = 30_000;
 const FOREGROUND_WAKE_HEARTBEAT_MS = 1_000;
 const FOREGROUND_WAKE_SUSPENSION_MS = 5_000;
 
@@ -852,6 +856,10 @@ export function App() {
     },
     setSidebarItemPinned,
   );
+  const sidebarSectionOrders = useSidebarSectionOrders(
+    sanitizedPinnedSidebarItems,
+    councils,
+  );
 
   const sideProjectionsByParentId = useMemo(() => {
     const grouped = new Map<string, typeof sideSessionEntries>();
@@ -1020,6 +1028,9 @@ export function App() {
   const projectionsRef = useRef(projections);
   const isInitialLoadedRef = useRef(isInitialLoaded);
   const visibleConversationCatchupFreshRef = useRef(new Map<string, { key: string; at: number }>());
+  const visibleConversationSourceRevisionRef = useRef(new Map<string, string>());
+  const visibleConversationLegacyRefreshAtRef = useRef(new Map<string, number>());
+  const sourceRevisionProbeUnavailableUntilRef = useRef(0);
   const foregroundRecoveryTimerRef = useRef<number | null>(null);
   const foregroundRecoveryControllerRef = useRef<AbortController | null>(null);
   const foregroundWakeTickAtRef = useRef(Date.now());
@@ -1155,6 +1166,131 @@ export function App() {
       void runForegroundRecovery();
     }, FOREGROUND_RECOVERY_DEBOUNCE_MS);
   }, [runForegroundRecovery]);
+
+  useEffect(() => {
+    let disposed = false;
+    let pollInFlight = false;
+    const controller = new AbortController();
+
+    const pollVisibleReadOnlySources = async () => {
+      if (
+        disposed ||
+        pollInFlight ||
+        !isInitialLoadedRef.current ||
+        (typeof document !== "undefined" && document.visibilityState !== "visible")
+      ) {
+        return;
+      }
+      pollInFlight = true;
+      const followedSessionIds = new Set<string>();
+      const refreshLegacySource = async (sessionId: string) => {
+        const now = Date.now();
+        const previous =
+          visibleConversationLegacyRefreshAtRef.current.get(sessionId) ?? 0;
+        if (now - previous < LEGACY_READ_ONLY_CONVERSATION_REFRESH_MS) {
+          return;
+        }
+        // Reserve the interval before awaiting so a slow provider scan cannot
+        // queue duplicate refreshes behind the current one.
+        visibleConversationLegacyRefreshAtRef.current.set(sessionId, now);
+        await refreshConversation(sessionId, {
+          signal: controller.signal,
+          replaceActive: true,
+          suppressError: true,
+        });
+      };
+      try {
+        await Promise.all(
+          visibleSessionIdsRef.current.map(async (sessionId) => {
+            const projection = projectionsRef.current.get(sessionId);
+            if (
+              !projection?.summary.session.providerSessionId ||
+              !isReadOnlyReplay(projection.summary)
+            ) {
+              return;
+            }
+            followedSessionIds.add(sessionId);
+            if (Date.now() < sourceRevisionProbeUnavailableUntilRef.current) {
+              await refreshLegacySource(sessionId);
+              return;
+            }
+            try {
+              const response = await api.readSessionConversationSourceRevision(sessionId, {
+                signal: controller.signal,
+              });
+              if (disposed || controller.signal.aborted) {
+                return;
+              }
+              sourceRevisionProbeUnavailableUntilRef.current = 0;
+              if (!response.sourceRevision) {
+                await refreshLegacySource(sessionId);
+                return;
+              }
+              const previous =
+                visibleConversationSourceRevisionRef.current.get(sessionId);
+              visibleConversationSourceRevisionRef.current.set(
+                sessionId,
+                response.sourceRevision,
+              );
+              // Refresh on first observation as well as changes. This closes
+              // the race where the source is appended between the initial
+              // turn-page read and this lightweight revision read.
+              if (previous === response.sourceRevision) {
+                return;
+              }
+              await refreshConversation(sessionId, {
+                signal: controller.signal,
+                replaceActive: true,
+                suppressError: true,
+              });
+            } catch {
+              if (disposed || controller.signal.aborted) {
+                return;
+              }
+              // A web build can be served by a still-running older daemon
+              // during an active provider turn. Probe the new lightweight
+              // route only occasionally and use a bounded latest-page refresh
+              // in between; provider history readers incrementally scan only
+              // the appended tail.
+              sourceRevisionProbeUnavailableUntilRef.current =
+                Date.now() + READ_ONLY_SOURCE_REVISION_RETRY_MS;
+              await refreshLegacySource(sessionId);
+            }
+          }),
+        );
+        for (const sessionId of visibleConversationSourceRevisionRef.current.keys()) {
+          if (!followedSessionIds.has(sessionId)) {
+            visibleConversationSourceRevisionRef.current.delete(sessionId);
+          }
+        }
+        for (const sessionId of visibleConversationLegacyRefreshAtRef.current.keys()) {
+          if (!followedSessionIds.has(sessionId)) {
+            visibleConversationLegacyRefreshAtRef.current.delete(sessionId);
+          }
+        }
+      } finally {
+        pollInFlight = false;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void pollVisibleReadOnlySources();
+      }
+    };
+    void pollVisibleReadOnlySources();
+    const timer = window.setInterval(
+      () => void pollVisibleReadOnlySources(),
+      READ_ONLY_CONVERSATION_SOURCE_POLL_MS,
+    );
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [refreshConversation]);
 
   useEffect(() => {
     setVisibleNotificationTargets(visibleNotificationTargets);
@@ -2041,6 +2177,10 @@ export function App() {
       onWorkspaceSortModeChange={setWorkspaceSortMode}
       runningSessionActivityAtById={runningSessionActivityAtById}
       pinnedItems={sanitizedPinnedSidebarItems}
+      pinnedOrderKeys={sidebarSectionOrders.pinnedOrderKeys}
+      councilOrderKeys={sidebarSectionOrders.councilOrderKeys}
+      onMovePinnedItem={sidebarSectionOrders.movePinned}
+      onMoveCouncil={sidebarSectionOrders.moveCouncil}
       onTogglePinSession={(workspaceDir, itemKey) =>
         togglePinnedSidebarItem(workspaceDir, itemKey)
       }

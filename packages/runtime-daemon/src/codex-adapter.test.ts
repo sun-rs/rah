@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  appendFileSync,
   chmodSync,
   mkdtempSync,
   mkdirSync,
@@ -21,6 +22,7 @@ import { resetDefaultManualProviderModelStoreForTests } from "./manual-provider-
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import type { CodexAppServerRpcClient } from "./codex-live-rpc";
+import { scanCodexStoredSessionCatalog } from "./codex-stored-sessions";
 
 function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const started = Date.now();
@@ -172,6 +174,20 @@ describe("CodexAdapter", () => {
     return wrapper;
   }
 
+  function hydrateStoredHistory(
+    adapter: CodexStoredHistoryAdapter,
+  ): ReturnType<CodexStoredHistoryAdapter["listStoredSessions"]> {
+    const scan = scanCodexStoredSessionCatalog();
+    adapter.hydrateStoredSessionsCatalog(
+      scan.records.map((record) => ({
+        ref: record.ref,
+        storagePath: record.rolloutPath,
+        archived: record.archived,
+      })),
+    );
+    return adapter.listStoredSessions();
+  }
+
   test("falls back to stored rollout replay when thread/resume is unavailable", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-cwd-"));
     const sessionId = "019d9999-aaaa-7bbb-8ccc-ddddeeeeffff";
@@ -204,7 +220,7 @@ rl.on('line', (line) => {
     const adapter = new CodexAdapter(services);
     const storedHistory = new CodexStoredHistoryAdapter(services);
 
-    const stored = storedHistory.listStoredSessions();
+    const stored = hydrateStoredHistory(storedHistory);
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.providerSessionId, sessionId);
     assert.equal(stored[0]?.cwd, cwd);
@@ -331,7 +347,7 @@ rl.on('line', (line) => {
       services,
       async () => client,
     );
-    storedHistory.listStoredSessions();
+    hydrateStoredHistory(storedHistory);
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -484,7 +500,7 @@ rl.on('line', (line) => {
       },
       { indexedSummaryThresholdBytes: 0 },
     );
-    storedHistory.listStoredSessions();
+    hydrateStoredHistory(storedHistory);
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -543,7 +559,7 @@ rl.on('line', (line) => {
       services,
       async () => client,
     );
-    storedHistory.listStoredSessions();
+    hydrateStoredHistory(storedHistory);
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -605,7 +621,7 @@ rl.on('line', (line) => {
       },
       async () => client,
     );
-    const ref = storedHistory.listStoredSessions()[0]!;
+    const ref = hydrateStoredHistory(storedHistory)[0]!;
 
     await storedHistory.archiveStoredSession(ref);
 
@@ -931,6 +947,7 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const storedHistory = new CodexStoredHistoryAdapter(services);
+    hydrateStoredHistory(storedHistory);
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -996,7 +1013,7 @@ rl.on('line', (line) => {
     );
     assert.equal(renamed.session.title, "Renamed Codex Session");
     assert.equal(
-      storedHistory.listStoredSessions()[0]?.title,
+      hydrateStoredHistory(storedHistory)[0]?.title,
       "Renamed Codex Session",
     );
 
@@ -1007,7 +1024,7 @@ rl.on('line', (line) => {
     };
     const freshStoredHistory = new CodexStoredHistoryAdapter(freshServices);
     assert.equal(
-      freshStoredHistory.listStoredSessions()[0]?.title,
+      hydrateStoredHistory(freshStoredHistory)[0]?.title,
       "Renamed Codex Session",
     );
 
@@ -1478,6 +1495,7 @@ rl.on('line', (line) => {
     void debugAdapter;
     const adapter = new CodexAdapter(services);
     const storedHistory = new CodexStoredHistoryAdapter(services);
+    hydrateStoredHistory(storedHistory);
 
     const resumed = await adapter.resumeSession({
       provider: "codex",
@@ -1508,6 +1526,108 @@ rl.on('line', (line) => {
       ),
     );
 
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("keeps stored replay identity after its runtime session is pruned", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-pruned-replay-cwd-"));
+    const sessionId = "019d7777-pruned-7ddd-8eee-ffff00001111";
+    const turnId = "turn-pruned-replay";
+    const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
+    mkdirSync(dir, { recursive: true });
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-04-15T04-00-00-${sessionId}.jsonl`,
+    );
+    writeRolloutLines(rolloutPath, [
+      JSON.stringify({
+        timestamp: "2026-04-15T04:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: sessionId,
+          timestamp: "2026-04-15T04:00:00.000Z",
+          cwd,
+          source: "cli",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T04:00:01.000Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: turnId },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T04:00:02.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "Update the file" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T04:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "patch_apply_end",
+          turn_id: turnId,
+          success: true,
+          changes: {
+            [path.join(cwd, "src/main.ts")]: {
+              type: "update",
+              unified_diff: "@@ -1 +1 @@\n-old\n+new",
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T04:00:04.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          turn_id: turnId,
+          last_agent_message: "Done",
+        },
+      }),
+    ]);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const storedHistory = new CodexStoredHistoryAdapter(services);
+    hydrateStoredHistory(storedHistory);
+    const resumed = storedHistory.resumeStoredSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      preferStoredReplay: true,
+    });
+    const runtimeSessionId = resumed.session.session.id;
+
+    services.sessionStore.removeSession(runtimeSessionId);
+
+    const diff = await storedHistory.getSessionConversationTurnFileDiff(
+      runtimeSessionId,
+      {
+        providerTurnId: turnId,
+        path: "src/main.ts",
+      },
+    );
+    assert.equal(diff?.sessionId, runtimeSessionId);
+    assert.equal(diff?.turnId, turnId);
+    assert.match(diff?.diff ?? "", /--- a\/src\/main\.ts/);
+    assert.match(diff?.diff ?? "", /\n-old\n\+new/);
+
+    const sourceRevision =
+      await storedHistory.getSessionConversationSourceRevision(runtimeSessionId);
+    assert.ok(sourceRevision);
+    appendFileSync(rolloutPath, `${JSON.stringify({
+      timestamp: "2026-04-15T04:00:05.000Z",
+      type: "event_msg",
+      payload: { type: "agent_reasoning", text: "continue" },
+    })}\n`);
+    assert.notEqual(
+      await storedHistory.getSessionConversationSourceRevision(runtimeSessionId),
+      sourceRevision,
+    );
+
+    await storedHistory.shutdown();
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -1634,6 +1754,7 @@ rl.on('line', (line) => {
     };
     const adapter = new CodexAdapter(services);
     const storedHistory = new CodexStoredHistoryAdapter(services);
+    hydrateStoredHistory(storedHistory);
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -1731,7 +1852,7 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const storedHistory = new CodexStoredHistoryAdapter(services);
-    const stored = storedHistory.listStoredSessions();
+    const stored = hydrateStoredHistory(storedHistory);
     const match = stored.find((item) => item.providerSessionId === sessionId);
     assert.equal(match?.preview, "真正的问题");
     assert.equal(match?.title, "真正的问题");
@@ -1794,7 +1915,7 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const storedHistory = new CodexStoredHistoryAdapter(services);
-    const stored = storedHistory.listStoredSessions();
+    const stored = hydrateStoredHistory(storedHistory);
     const match = stored.find((item) => item.providerSessionId === sessionId);
     assert.equal(match?.preview, "你好");
     assert.equal(match?.title, "你好");
@@ -1859,6 +1980,7 @@ rl.on('line', (line) => {
     };
     const adapter = new CodexAdapter(services);
     const storedHistory = new CodexStoredHistoryAdapter(services);
+    hydrateStoredHistory(storedHistory);
 
     const resumed = await adapter.resumeSession({
       provider: "codex",

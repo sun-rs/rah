@@ -96,7 +96,7 @@ export function timelineRole(item: TimelineItem): ConversationItemRole {
     case "assistant_message":
       return item.phase === "final_answer" ? "final" : "process";
     case "system":
-      return "system";
+      return item.placement === "process" ? "process" : "system";
     default:
       return "process";
   }

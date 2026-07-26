@@ -6,36 +6,41 @@ import type {
   ToolCallDetail,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
+import {
+  approximateJsonByteLength,
+  boundedJsonByteLength,
+} from "./bounded-json-size";
 
 const SMALL_RECORD_MAX_BYTES = 2_048;
 const SUBJECT_LIST_LIMIT = 20;
-
-function jsonByteSize(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return 0;
-  }
-}
+const OMITTED_DETAIL_SIZE_BUDGET_BYTES = 2 * 1024 * 1024;
 
 function compactRecord<T extends Record<string, unknown>>(value: T | undefined): T | undefined {
   if (value === undefined) {
     return undefined;
   }
-  return jsonByteSize(value) <= SMALL_RECORD_MAX_BYTES ? value : undefined;
+  return boundedJsonByteLength(value, SMALL_RECORD_MAX_BYTES) <= SMALL_RECORD_MAX_BYTES
+    ? value
+    : undefined;
 }
 
 function detailSize(detail: ToolCallDetail | undefined): number {
-  return detail === undefined ? 0 : jsonByteSize(detail);
+  return detail === undefined
+    ? 0
+    : boundedJsonByteLength(detail, OMITTED_DETAIL_SIZE_BUDGET_BYTES);
 }
 
 function compactToolCall(toolCall: ToolCall): ToolCall {
   const compactInput = compactRecord(toolCall.input);
   const compactResult = compactRecord(toolCall.result);
   const omittedInputSize =
-    toolCall.input && compactInput === undefined ? jsonByteSize(toolCall.input) : 0;
+    toolCall.input && compactInput === undefined
+      ? boundedJsonByteLength(toolCall.input, OMITTED_DETAIL_SIZE_BUDGET_BYTES)
+      : 0;
   const omittedResultSize =
-    toolCall.result && compactResult === undefined ? jsonByteSize(toolCall.result) : 0;
+    toolCall.result && compactResult === undefined
+      ? boundedJsonByteLength(toolCall.result, OMITTED_DETAIL_SIZE_BUDGET_BYTES)
+      : 0;
   const omittedDetailSize = detailSize(toolCall.detail);
   const omittedSize = omittedDetailSize + omittedInputSize + omittedResultSize;
   const compacted: ToolCall = {
@@ -178,7 +183,7 @@ export function summarizeHistoryPage(page: ConversationEvidencePage): Conversati
     ...page,
     events,
     detailMode: "summary",
-    approximateBytes: jsonByteSize({ ...page, events }),
+    approximateBytes: approximateJsonByteLength({ ...page, events }),
   };
 }
 
@@ -190,7 +195,7 @@ export function chatHistoryPage(page: ConversationEvidencePage): ConversationEvi
     ...page,
     events,
     detailMode: "chat",
-    approximateBytes: jsonByteSize({ ...page, events }),
+    approximateBytes: approximateJsonByteLength({ ...page, events }),
   };
 }
 
@@ -198,7 +203,7 @@ export function fullHistoryPage(page: ConversationEvidencePage): ConversationEvi
   return {
     ...page,
     detailMode: "full",
-    approximateBytes: jsonByteSize(page),
+    approximateBytes: approximateJsonByteLength(page),
   };
 }
 

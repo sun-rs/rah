@@ -371,7 +371,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.addWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
+          await engine.addWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
             storedSessionsMode: parseStoredSessionsModeFromRequest(req),
           }),
         );
@@ -384,7 +384,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.selectWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
+          await engine.selectWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
             storedSessionsMode: parseStoredSessionsModeFromRequest(req),
           }),
         );
@@ -397,7 +397,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.removeWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
+          await engine.removeWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
             storedSessionsMode: parseStoredSessionsModeFromRequest(req),
           }),
         );
@@ -669,7 +669,9 @@ export async function handleHttpRequest(args: {
 
     const attachmentMatch = /^\/api\/attachments\/([^/]+)$/.exec(pathname);
     if (req.method === "GET" && attachmentMatch) {
-      const resolved = resolveDeviceAttachment(decodeURIComponent(attachmentMatch[1]!));
+      const resolved = await resolveDeviceAttachment(
+        decodeURIComponent(attachmentMatch[1]!),
+      );
       const { path, ...attachment } = resolved;
       const response: AttachmentPreviewResponse = {
         attachment,
@@ -993,7 +995,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getWorkspaceSnapshot(workspaceMatch[1]!, {
+        await engine.getWorkspaceSnapshot(workspaceMatch[1]!, {
           ...(scopeRoot ? { scopeRoot } : {}),
         }),
       );
@@ -1007,7 +1009,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getWorkspaceSnapshot(filesMatch[1]!, {
+        await engine.getWorkspaceSnapshot(filesMatch[1]!, {
           ...(scopeRoot ? { scopeRoot } : {}),
         }),
       );
@@ -1060,7 +1062,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getTurnFileChanges(
+        await engine.getTurnFileChanges(
           decodeURIComponent(turnFileChangesMatch[1]!),
           decodeURIComponent(turnFileChangesMatch[2]!),
         ),
@@ -1080,7 +1082,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getTurnFileDiff(
+        await engine.getTurnFileDiff(
           decodeURIComponent(turnFileDiffMatch[1]!),
           decodeURIComponent(turnFileDiffMatch[2]!),
           diffPath,
@@ -1246,6 +1248,20 @@ export async function handleHttpRequest(args: {
           limit,
           ...(liveOnly ? { liveOnly: true } : {}),
         }),
+      );
+      return;
+    }
+
+    const conversationSourceRevisionMatch =
+      /^\/api\/sessions\/([^/]+)\/conversation\/source-revision$/.exec(pathname);
+    if (req.method === "GET" && conversationSourceRevisionMatch) {
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getSessionConversationSourceRevision(
+          conversationSourceRevisionMatch[1]!,
+        ),
       );
       return;
     }

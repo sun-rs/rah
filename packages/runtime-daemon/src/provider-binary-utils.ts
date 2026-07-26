@@ -1,7 +1,7 @@
 import { closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { execFile } from "node:child_process";
 import path from "node:path";
+import { runBackgroundCommand } from "./background-command";
 
 function containsPathSeparator(value: string): boolean {
   return value.includes("/") || value.includes("\\");
@@ -51,26 +51,23 @@ async function findCommandFromLoginShell(command: string): Promise<string | null
   if (process.platform === "win32") {
     return null;
   }
-  return await new Promise((resolve) => {
-    const child = execFile(
-      "/bin/zsh",
-      ["-lc", `command -v ${shellQuote(command)}`],
-      { timeout: 2_000, maxBuffer: 8_192 },
-      async (error, stdout) => {
-        if (error) {
-          resolve(null);
-          return;
-        }
-        const candidate = stdout.trim().split(/\r?\n/)[0];
-        if (!candidate || !path.isAbsolute(candidate)) {
-          resolve(null);
-          return;
-        }
-        resolve((await isExecutableFile(candidate)) ? candidate : null);
-      },
-    );
-    child.stdin?.destroy();
-  });
+  try {
+    const result = await runBackgroundCommand({
+      command: "/bin/zsh",
+      args: ["-lc", `command -v ${shellQuote(command)}`],
+      label: "provider binary lookup",
+      timeoutMs: 2_000,
+      maxStdoutBytes: 8_192,
+      maxStderrBytes: 8_192,
+    });
+    const candidate = result.stdout.trim().split(/\r?\n/)[0];
+    if (!candidate || !path.isAbsolute(candidate)) {
+      return null;
+    }
+    return (await isExecutableFile(candidate)) ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveBareCommand(command: string): Promise<string | null> {

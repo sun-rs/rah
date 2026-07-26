@@ -1,37 +1,40 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  isMainThread,
-  parentPort,
-  workerData,
-  type MessagePort,
-} from "node:worker_threads";
 import type {
+  ConversationTurnFileChangesProjection,
   ConversationTurnDirectoryItem,
   ConversationTurnDirectoryStatus,
 } from "@rah/runtime-protocol";
 import { scanSelectedJsonlLines } from "./bounded-jsonl-reader.ts";
+import { serveBackgroundIpcTask } from "./background-ipc-task";
+import { parsePersistedUserMessageContent } from "./session-input-attachments.ts";
 
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 9;
 const USER_PREVIEW_TEXT_LIMIT = 96;
 const ASSISTANT_PREVIEW_TEXT_LIMIT = 144;
-const SUMMARY_TEXT_LIMIT = 2 * 1024 * 1024;
+const SUMMARY_TEXT_LIMIT = 256 * 1024;
+const DEFAULT_SUMMARY_PAGE_TEXT_BUDGET = 4 * 1024 * 1024;
+const DIRECTORY_TRANSPORT_ITEM_LIMIT = 4_096;
 
 export type CodexIndexedTurn = ConversationTurnDirectoryItem & {
   startOffset: number;
   endOffset: number;
   hasFinalAnswer: boolean;
+  processDetailsAvailable: boolean;
   userText?: string;
   userItemId?: string;
+  userImageCount?: number;
   assistantText?: string;
   assistantItemId?: string;
   assistantPhase?: "commentary" | "final_answer";
+  fileChanges?: ConversationTurnFileChangesProjection;
 };
 
 export type CodexTurnDirectorySnapshot = {
   version: number;
   providerSessionId: string;
   rolloutPath: string;
+  workspaceRoot: string;
   source: {
     dev: number;
     ino: number;
@@ -41,17 +44,62 @@ export type CodexTurnDirectorySnapshot = {
   scannedBytes: number;
   generatedAt: string;
   items: CodexIndexedTurn[];
+  /**
+   * The on-disk index always starts at ordinal zero. Worker responses may
+   * retain only the newest compact directory entries so the daemon never
+   * parses an unbounded IPC payload.
+   */
+  retainedFromOrdinal?: number;
 };
 
-type WorkerRequest = {
+export type CodexTurnSummaryRange = {
+  id: string;
+  startOffset: number;
+  endOffset: number;
+};
+
+type DirectoryWorkerRequest = {
   kind: "codex-turn-directory";
   providerSessionId: string;
   rolloutPath: string;
   cachePath: string;
+  workspaceRoot: string;
 };
 
-type WorkerResponse =
+type SummaryWorkerRequest = {
+  kind: "codex-turn-summary-page";
+  rolloutPath: string;
+  cachePath: string;
+  workspaceRoot: string;
+  cursor?: {
+    turnId: string;
+    includeAnchor: boolean;
+  };
+  limit: number;
+  textBudgetBytes?: number;
+};
+
+type LookupWorkerRequest = {
+  kind: "codex-turn-lookup";
+  cachePath: string;
+  turnIds: string[];
+  includeFileChanges: boolean;
+};
+
+type WorkerRequest =
+  | DirectoryWorkerRequest
+  | SummaryWorkerRequest
+  | LookupWorkerRequest;
+
+export type CodexTurnSummaryPageWorkerResult = {
+  items: CodexIndexedTurn[];
+  hasOlder: boolean;
+};
+
+export type CodexTurnDirectoryWorkerResponse =
   | { ok: true; snapshot: CodexTurnDirectorySnapshot }
+  | { ok: true; summaryPage: CodexTurnSummaryPageWorkerResult }
+  | { ok: true; lookups: CodexIndexedTurn[] }
   | { ok: false; error: string };
 
 type ParsedLineContext = {
@@ -112,6 +160,29 @@ function messageContentText(payload: Record<string, unknown>): string {
     .join("\n");
 }
 
+function messageContentImageCount(payload: Record<string, unknown>): number {
+  if (!Array.isArray(payload.content)) {
+    return 0;
+  }
+  return payload.content.filter((part) => {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      return false;
+    }
+    const record = part as Record<string, unknown>;
+    return (
+      record.type === "image" ||
+      record.type === "input_image" ||
+      record.type === "inputImage" ||
+      record.type === "localImage" ||
+      (typeof record.url === "string" && record.url.startsWith("data:image/")) ||
+      (typeof record.image_url === "string" &&
+        record.image_url.startsWith("data:image/")) ||
+      (typeof record.imageUrl === "string" &&
+        record.imageUrl.startsWith("data:image/"))
+    );
+  }).length;
+}
+
 function completionStatus(reason: unknown): ConversationTurnDirectoryStatus {
   return reason === "interrupted" || reason === "user" ? "interrupted" : "failed";
 }
@@ -160,6 +231,99 @@ function removeRolledBackTurns(items: CodexIndexedTurn[], countValue: unknown): 
   items.splice(cutIndex);
 }
 
+function countPatchLines(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      additions += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}
+
+function contentLineCount(content: string): number {
+  if (content.length === 0) {
+    return 0;
+  }
+  const lineCount = content.split("\n").length;
+  return content.endsWith("\n") ? lineCount - 1 : lineCount;
+}
+
+function relativeChangePath(filePath: string, workspaceRoot: string): string {
+  if (!workspaceRoot || !path.isAbsolute(filePath)) {
+    return filePath;
+  }
+  const relative = path.relative(workspaceRoot, filePath);
+  return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`)
+    ? relative
+    : filePath;
+}
+
+function appendPatchSummary(
+  turn: CodexIndexedTurn,
+  payload: Record<string, unknown>,
+  workspaceRoot: string,
+): void {
+  if (payload.success !== true) {
+    return;
+  }
+  const rawChanges = payload.changes;
+  if (!rawChanges || typeof rawChanges !== "object" || Array.isArray(rawChanges)) {
+    return;
+  }
+  const summaries = new Map(
+    (turn.fileChanges?.files ?? []).map((file) => [file.path, { ...file }]),
+  );
+  for (const [rawPath, rawChange] of Object.entries(
+    rawChanges as Record<string, unknown>,
+  )) {
+    if (!rawChange || typeof rawChange !== "object" || Array.isArray(rawChange)) {
+      continue;
+    }
+    const change = rawChange as Record<string, unknown>;
+    const filePath = relativeChangePath(rawPath, workspaceRoot);
+    const kind = typeof change.type === "string" ? change.type : "update";
+    const diff =
+      typeof change.unified_diff === "string"
+        ? change.unified_diff
+        : typeof change.unifiedDiff === "string"
+          ? change.unifiedDiff
+          : "";
+    const content = typeof change.content === "string" ? change.content : "";
+    const counts = diff
+      ? countPatchLines(diff)
+      : kind === "add"
+        ? { additions: contentLineCount(content), deletions: 0 }
+        : kind === "delete"
+          ? { additions: 0, deletions: contentLineCount(content) }
+          : { additions: 0, deletions: 0 };
+    const existing = summaries.get(filePath) ?? {
+      path: filePath,
+      additions: 0,
+      deletions: 0,
+    };
+    existing.additions += counts.additions;
+    existing.deletions += counts.deletions;
+    summaries.set(filePath, existing);
+  }
+  // Codex Desktop presents the final turn diff in Git's deterministic path
+  // order, not in the chronological order of individual patch calls.
+  const files = [...summaries.values()].sort((left, right) =>
+    left.path === right.path ? 0 : left.path < right.path ? -1 : 1,
+  );
+  if (files.length === 0) {
+    return;
+  }
+  turn.fileChanges = {
+    files,
+    totalAdditions: files.reduce((total, file) => total + file.additions, 0),
+    totalDeletions: files.reduce((total, file) => total + file.deletions, 0),
+  };
+}
+
 function createFallbackTurn(
   items: CodexIndexedTurn[],
   timestamp: string,
@@ -174,6 +338,7 @@ function createFallbackTurn(
     startOffset: context.startOffset,
     endOffset: context.endOffset,
     hasFinalAnswer: false,
+    processDetailsAvailable: false,
   };
   items.push(turn);
   return turn;
@@ -182,14 +347,53 @@ function createFallbackTurn(
 function shouldParseLine(line: string): boolean {
   const head = line.slice(0, 1_024);
   if (/"type"\s*:\s*"event_msg"/.test(head)) {
-    return /"type"\s*:\s*"(?:task_started|task_complete|turn_aborted|thread_rolled_back|user_message|agent_message)"/.test(
+    return /"type"\s*:\s*"(?:task_started|task_complete|turn_aborted|thread_rolled_back|user_message|agent_message|patch_apply_end|web_search_begin|web_search_end|context_compacted|thread_goal_updated|thread_goal_cleared)"/.test(
       head,
     );
   }
   return (
     /"type"\s*:\s*"response_item"/.test(head) &&
-    /"type"\s*:\s*"message"/.test(head) &&
-    /"role"\s*:\s*"(?:user|assistant)"/.test(head)
+    ((
+      /"type"\s*:\s*"message"/.test(head) &&
+      /"role"\s*:\s*"(?:user|assistant)"/.test(head)
+    ) ||
+      /"type"\s*:\s*"(?:web_search_call|function_call|custom_tool_call|function_call_output|custom_tool_call_output)"/.test(
+        head,
+      ))
+  );
+}
+
+function recordHasRenderableProcessDetails(
+  record: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): boolean {
+  if (record.type === "event_msg") {
+    switch (payload.type) {
+      case "agent_message":
+        return payload.phase !== "final_answer";
+      case "patch_apply_end":
+      case "web_search_begin":
+      case "web_search_end":
+      case "context_compacted":
+      case "thread_goal_updated":
+      case "thread_goal_cleared":
+        return true;
+      default:
+        return false;
+    }
+  }
+  if (record.type !== "response_item") {
+    return false;
+  }
+  if (payload.type === "message") {
+    return payload.role === "assistant" && payload.phase !== "final_answer";
+  }
+  return (
+    payload.type === "web_search_call" ||
+    payload.type === "function_call" ||
+    payload.type === "custom_tool_call" ||
+    payload.type === "function_call_output" ||
+    payload.type === "custom_tool_call_output"
   );
 }
 
@@ -197,6 +401,8 @@ function applyRolloutLine(
   items: CodexIndexedTurn[],
   line: string,
   context: ParsedLineContext,
+  workspaceRoot: string,
+  captureSummaryText = false,
 ): void {
   if (!shouldParseLine(line)) {
     return;
@@ -217,6 +423,14 @@ function applyRolloutLine(
   }
   const timestamp = typeof record.timestamp === "string" ? record.timestamp : new Date().toISOString();
   const latest = items.at(-1);
+  const processTurn = findTurn(items, payload.turn_id) ?? latest;
+  if (
+    processTurn &&
+    recordHasRenderableProcessDetails(record, payload)
+  ) {
+    processTurn.processDetailsAvailable = true;
+    processTurn.endOffset = context.endOffset;
+  }
 
   if (record.type === "event_msg") {
     switch (payload.type) {
@@ -237,11 +451,16 @@ function applyRolloutLine(
           startOffset: context.startOffset,
           endOffset: context.endOffset,
           hasFinalAnswer: false,
+          processDetailsAvailable: false,
         });
         return;
       }
       case "user_message": {
-        const text = typeof payload.message === "string" ? payload.message : "";
+        const persisted =
+          typeof payload.message === "string"
+            ? parsePersistedUserMessageContent(payload.message)
+            : undefined;
+        const text = persisted?.text ?? "";
         if (!text || isBootstrapUserMessage(text)) {
           return;
         }
@@ -251,7 +470,16 @@ function applyRolloutLine(
         if (!turn.userPreview) {
           turn.userPreview = compactPreviewText(text, USER_PREVIEW_TEXT_LIMIT) || "Message";
         }
-        turn.userText ??= summaryText(text);
+        if (captureSummaryText) {
+          turn.userText ??= summaryText(text);
+        }
+        const imageCount = persisted?.imageCount ?? 0;
+        if (imageCount > 0) {
+          turn.userImageCount = Math.max(
+            turn.userImageCount ?? 0,
+            imageCount,
+          );
+        }
         turn.endOffset = context.endOffset;
         return;
       }
@@ -264,10 +492,21 @@ function applyRolloutLine(
         const preview = compactPreviewText(text, ASSISTANT_PREVIEW_TEXT_LIMIT);
         if (preview) {
           turn.assistantPreview = preview;
-          turn.assistantText = summaryText(text);
+          if (captureSummaryText) {
+            turn.assistantText = summaryText(text);
+          }
           turn.assistantPhase = payload.phase === "final_answer" ? "final_answer" : "commentary";
           turn.hasFinalAnswer = turn.assistantPhase === "final_answer" || turn.hasFinalAnswer;
         }
+        turn.endOffset = context.endOffset;
+        return;
+      }
+      case "patch_apply_end": {
+        const turn = findTurn(items, payload.turn_id) ?? items.at(-1);
+        if (!turn) {
+          return;
+        }
+        appendPatchSummary(turn, payload, workspaceRoot);
         turn.endOffset = context.endOffset;
         return;
       }
@@ -280,7 +519,9 @@ function applyRolloutLine(
           typeof payload.last_agent_message === "string" ? payload.last_agent_message : "";
         if (finalText) {
           turn.assistantPreview = compactPreviewText(finalText, ASSISTANT_PREVIEW_TEXT_LIMIT);
-          turn.assistantText = summaryText(finalText);
+          if (captureSummaryText) {
+            turn.assistantText = summaryText(finalText);
+          }
           turn.assistantPhase = "final_answer";
           turn.hasFinalAnswer = true;
         }
@@ -323,16 +564,28 @@ function applyRolloutLine(
     return;
   }
   if (payload.role === "user") {
-    if (isBootstrapUserMessage(text)) {
+    const persisted = parsePersistedUserMessageContent(text);
+    const visibleText = persisted.text;
+    if (isBootstrapUserMessage(visibleText)) {
       return;
     }
     const turn = items.at(-1)?.status === "in_progress"
       ? items.at(-1)!
       : createFallbackTurn(items, timestamp, context);
     if (!turn.userPreview) {
-      turn.userPreview = compactPreviewText(text, USER_PREVIEW_TEXT_LIMIT) || "Message";
+      turn.userPreview =
+        compactPreviewText(visibleText, USER_PREVIEW_TEXT_LIMIT) || "Message";
     }
-    turn.userText ??= summaryText(text);
+    if (captureSummaryText) {
+      turn.userText ??= summaryText(visibleText);
+    }
+    const imageCount = Math.max(
+      persisted.imageCount,
+      messageContentImageCount(payload),
+    );
+    if (imageCount > 0) {
+      turn.userImageCount = Math.max(turn.userImageCount ?? 0, imageCount);
+    }
     if (typeof payload.id === "string") {
       turn.userItemId ??= payload.id;
     }
@@ -347,7 +600,9 @@ function applyRolloutLine(
     const preview = compactPreviewText(text, ASSISTANT_PREVIEW_TEXT_LIMIT);
     if (preview) {
       turn.assistantPreview = preview;
-      turn.assistantText = summaryText(text);
+      if (captureSummaryText) {
+        turn.assistantText = summaryText(text);
+      }
       if (typeof payload.id === "string") {
         turn.assistantItemId = payload.id;
       }
@@ -362,13 +617,24 @@ async function scanAppendedLines(args: {
   rolloutPath: string;
   startOffset: number;
   items: CodexIndexedTurn[];
+  workspaceRoot: string;
+  captureSummaryText?: boolean;
+  endOffset?: number;
+  selectHead?: (head: string) => boolean;
 }): Promise<number> {
   const scannedBytes = await scanSelectedJsonlLines({
     filePath: args.rolloutPath,
     startOffset: args.startOffset,
-    selectHead: shouldParseLine,
+    ...(args.endOffset !== undefined ? { endOffset: args.endOffset } : {}),
+    selectHead: args.selectHead ?? shouldParseLine,
     onLine: ({ text, startOffset, endOffset }) => {
-      applyRolloutLine(args.items, text, { startOffset, endOffset });
+      applyRolloutLine(
+        args.items,
+        text,
+        { startOffset, endOffset },
+        args.workspaceRoot,
+        args.captureSummaryText ?? false,
+      );
     },
     onOversizedSelectedLine: (head, context) => {
       if (!/"type"\s*:\s*"response_item"/.test(head) || !/"role"\s*:\s*"user"/.test(head)) {
@@ -380,6 +646,7 @@ async function scanAppendedLines(args: {
       if (!turn.userPreview) {
         turn.userPreview = "Message with attachment";
       }
+      turn.userImageCount = Math.max(turn.userImageCount ?? 0, 1);
       turn.endOffset = context.endOffset;
     },
   });
@@ -388,6 +655,204 @@ async function scanAppendedLines(args: {
     current.endOffset = scannedBytes;
   }
   return scannedBytes;
+}
+
+function shouldParseSummaryLine(line: string): boolean {
+  const head = line.slice(0, 1_024);
+  if (/"type"\s*:\s*"event_msg"/.test(head)) {
+    return /"type"\s*:\s*"(?:task_started|task_complete|turn_aborted|user_message|agent_message)"/.test(
+      head,
+    );
+  }
+  return (
+    /"type"\s*:\s*"response_item"/.test(head) &&
+    /"type"\s*:\s*"message"/.test(head) &&
+    /"role"\s*:\s*"(?:user|assistant)"/.test(head)
+  );
+}
+
+export async function hydrateCodexTurnSummaries(
+  request: {
+    rolloutPath: string;
+    workspaceRoot: string;
+    turns: CodexTurnSummaryRange[];
+    textBudgetBytes?: number;
+  },
+): Promise<CodexIndexedTurn[]> {
+  if (request.turns.length === 0) {
+    return [];
+  }
+  const startOffset = Math.min(...request.turns.map((turn) => turn.startOffset));
+  const endOffset = Math.max(...request.turns.map((turn) => turn.endOffset));
+  const hydrated: CodexIndexedTurn[] = [];
+  await scanAppendedLines({
+    rolloutPath: request.rolloutPath,
+    startOffset,
+    endOffset,
+    items: hydrated,
+    workspaceRoot: request.workspaceRoot,
+    captureSummaryText: true,
+    selectHead: shouldParseSummaryLine,
+  });
+  const byId = new Map(hydrated.map((turn) => [turn.id, turn]));
+  const ordered: CodexIndexedTurn[] = request.turns.map((range) => {
+    const exact = byId.get(range.id);
+    if (exact) {
+      return exact;
+    }
+    const overlapping = hydrated.find(
+      (turn) =>
+        turn.startOffset < range.endOffset &&
+        turn.endOffset > range.startOffset,
+    );
+    return (
+      overlapping ?? ({
+        id: range.id,
+        ordinal: 0,
+        userPreview: "",
+        startedAt: "1970-01-01T00:00:00.000Z",
+        status: "in_progress" as const,
+        startOffset: range.startOffset,
+        endOffset: range.endOffset,
+        hasFinalAnswer: false,
+        processDetailsAvailable: false,
+      } satisfies CodexIndexedTurn)
+    );
+  });
+  let remainingTextBytes = Math.max(
+    0,
+    request.textBudgetBytes ?? DEFAULT_SUMMARY_PAGE_TEXT_BUDGET,
+  );
+  for (const turn of ordered) {
+    for (const field of ["userText", "assistantText"] as const) {
+      const text = turn[field];
+      if (!text) {
+        continue;
+      }
+      const bytes = Buffer.byteLength(text, "utf8");
+      if (bytes <= remainingTextBytes) {
+        remainingTextBytes -= bytes;
+        continue;
+      }
+      delete turn[field];
+    }
+  }
+  return ordered;
+}
+
+function compactIndexedTurn(
+  item: CodexIndexedTurn,
+  includeFileChanges = false,
+): CodexIndexedTurn {
+  const {
+    userText: _userText,
+    assistantText: _assistantText,
+    fileChanges,
+    ...compact
+  } = item;
+  return {
+    ...compact,
+    ...(includeFileChanges && fileChanges ? { fileChanges } : {}),
+  };
+}
+
+function transportSnapshot(
+  snapshot: CodexTurnDirectorySnapshot,
+): CodexTurnDirectorySnapshot {
+  const retainedFromOrdinal = Math.max(
+    0,
+    snapshot.items.length - DIRECTORY_TRANSPORT_ITEM_LIMIT,
+  );
+  return {
+    ...snapshot,
+    retainedFromOrdinal,
+    items: snapshot.items
+      .slice(retainedFromOrdinal)
+      .map((item) => compactIndexedTurn(item)),
+  };
+}
+
+async function hydrateCodexTurnSummaryPage(
+  request: SummaryWorkerRequest,
+): Promise<CodexTurnSummaryPageWorkerResult> {
+  const snapshot = await readCache(request.cachePath);
+  if (!snapshot) {
+    throw new Error("Codex turn directory cache is unavailable.");
+  }
+  const indexedTurns = snapshot.items.filter((item) => item.userPreview);
+  let startIndex = indexedTurns.length - 1;
+  if (request.cursor) {
+    const anchorIndex = indexedTurns.findIndex(
+      (item) => item.id === request.cursor!.turnId,
+    );
+    if (anchorIndex < 0) {
+      throw new Error("Codex history cursor no longer exists in the indexed rollout.");
+    }
+    startIndex = request.cursor.includeAnchor ? anchorIndex : anchorIndex - 1;
+  }
+  const limit = Math.max(1, Math.min(100, Math.floor(request.limit)));
+  const selected = indexedTurns
+    .slice(Math.max(0, startIndex - limit + 1), startIndex + 1)
+    .reverse();
+  const hydrated = await hydrateCodexTurnSummaries({
+    rolloutPath: request.rolloutPath,
+    workspaceRoot: request.workspaceRoot,
+    turns: selected.map((item) => ({
+      id: item.id,
+      startOffset: item.startOffset,
+      endOffset: item.endOffset,
+    })),
+    ...(request.textBudgetBytes !== undefined
+      ? { textBudgetBytes: request.textBudgetBytes }
+      : {}),
+  });
+  const hydratedById = new Map(hydrated.map((item) => [item.id, item]));
+  const items = selected.map((item) => {
+    const detail = hydratedById.get(item.id);
+    return {
+      ...compactIndexedTurn(item),
+      ...(detail?.userText !== undefined ? { userText: detail.userText } : {}),
+      ...(detail?.userItemId !== undefined
+        ? { userItemId: detail.userItemId }
+        : {}),
+      ...(detail?.userImageCount !== undefined
+        ? { userImageCount: detail.userImageCount }
+        : {}),
+      ...(detail?.assistantText !== undefined
+        ? { assistantText: detail.assistantText }
+        : {}),
+      ...(detail?.assistantItemId !== undefined
+        ? { assistantItemId: detail.assistantItemId }
+        : {}),
+      ...(detail?.assistantPhase !== undefined
+        ? { assistantPhase: detail.assistantPhase }
+        : {}),
+    };
+  });
+  const oldest = selected.at(-1);
+  const oldestIndex = oldest
+    ? indexedTurns.findIndex((item) => item.id === oldest.id)
+    : -1;
+  return {
+    items,
+    hasOlder: oldestIndex > 0,
+  };
+}
+
+async function lookupCodexTurns(
+  request: LookupWorkerRequest,
+): Promise<CodexIndexedTurn[]> {
+  if (request.turnIds.length === 0) {
+    return [];
+  }
+  const snapshot = await readCache(request.cachePath);
+  if (!snapshot) {
+    throw new Error("Codex turn directory cache is unavailable.");
+  }
+  const requested = new Set(request.turnIds);
+  return snapshot.items
+    .filter((item) => requested.has(item.id))
+    .map((item) => compactIndexedTurn(item, request.includeFileChanges));
 }
 
 async function readCache(cachePath: string): Promise<CodexTurnDirectorySnapshot | null> {
@@ -402,7 +867,11 @@ async function readCache(cachePath: string): Promise<CodexTurnDirectorySnapshot 
 function canIncrementCache(
   cached: CodexTurnDirectorySnapshot,
   source: CodexTurnDirectorySnapshot["source"],
+  workspaceRoot: string,
 ): boolean {
+  if (cached.workspaceRoot !== workspaceRoot) {
+    return false;
+  }
   if (cached.source.dev !== source.dev || cached.source.ino !== source.ino) {
     return false;
   }
@@ -423,8 +892,10 @@ async function writeCache(cachePath: string, snapshot: CodexTurnDirectorySnapsho
 }
 
 export async function scanCodexTurnDirectory(
-  request: Omit<WorkerRequest, "kind">,
+  request: Omit<DirectoryWorkerRequest, "kind">,
 ): Promise<CodexTurnDirectorySnapshot> {
+  const workspaceRoot =
+    typeof request.workspaceRoot === "string" ? request.workspaceRoot : "";
   const initialStats = await stat(request.rolloutPath);
   let source = {
     dev: initialStats.dev,
@@ -433,12 +904,16 @@ export async function scanCodexTurnDirectory(
     mtimeMs: initialStats.mtimeMs,
   };
   const cached = await readCache(request.cachePath);
-  const incremental = cached && canIncrementCache(cached, source) ? cached : null;
+  const incremental =
+    cached && canIncrementCache(cached, source, workspaceRoot)
+      ? cached
+      : null;
   const items = incremental ? incremental.items.map((item) => ({ ...item })) : [];
   const scannedBytes = await scanAppendedLines({
     rolloutPath: request.rolloutPath,
     startOffset: incremental?.scannedBytes ?? 0,
     items,
+    workspaceRoot,
   });
   const finalStats = await stat(request.rolloutPath);
   if (
@@ -464,6 +939,7 @@ export async function scanCodexTurnDirectory(
     version: CACHE_VERSION,
     providerSessionId: request.providerSessionId,
     rolloutPath: request.rolloutPath,
+    workspaceRoot,
     source,
     scannedBytes,
     generatedAt,
@@ -473,21 +949,52 @@ export async function scanCodexTurnDirectory(
   return snapshot;
 }
 
-async function runWorker(request: WorkerRequest, port: MessagePort): Promise<void> {
+async function runWorker(
+  request: WorkerRequest,
+): Promise<CodexTurnDirectoryWorkerResponse> {
   try {
+    if (request.kind === "codex-turn-summary-page") {
+      const summaryPage = await hydrateCodexTurnSummaryPage(request);
+      return {
+        ok: true,
+        summaryPage,
+      };
+    }
+    if (request.kind === "codex-turn-lookup") {
+      const lookups = await lookupCodexTurns(request);
+      return {
+        ok: true,
+        lookups,
+      };
+    }
     const snapshot = await scanCodexTurnDirectory(request);
-    port.postMessage({ ok: true, snapshot } satisfies WorkerResponse);
+    return {
+      ok: true,
+      snapshot: transportSnapshot(snapshot),
+    };
   } catch (error) {
-    port.postMessage({
+    return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
-    } satisfies WorkerResponse);
+    };
   }
 }
 
-if (!isMainThread && parentPort) {
-  const request = workerData as WorkerRequest;
-  if (request?.kind === "codex-turn-directory") {
-    void runWorker(request, parentPort);
-  }
-}
+serveBackgroundIpcTask<WorkerRequest, CodexTurnDirectoryWorkerResponse>({
+  label: "Codex turn history worker",
+  handle: (request) => {
+    if (
+      request?.kind !== "codex-turn-directory" &&
+      request?.kind !== "codex-turn-summary-page" &&
+      request?.kind !== "codex-turn-lookup"
+    ) {
+      throw new Error("Unknown Codex turn history worker request.");
+    }
+    return runWorker(request);
+  },
+  onError: (error) => ({
+    ok: false,
+    error: error instanceof Error ? error.message : String(error),
+  }),
+  maxResponseBytes: 8 * 1024 * 1024,
+});

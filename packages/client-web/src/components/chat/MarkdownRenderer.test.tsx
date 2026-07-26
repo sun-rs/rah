@@ -102,7 +102,7 @@ describe("MarkdownRenderer", () => {
     assert.equal(fileResourceKind("README.md"), "document");
   });
 
-  test("renders format-specific Inspector file badges", () => {
+  test("renders the shared Codex file glyphs at a stable 16px viewBox", () => {
     const html = renderToStaticMarkup(
       <div>
         <FileResourceIcon path="bin/rah.mjs" />
@@ -112,10 +112,31 @@ describe("MarkdownRenderer", () => {
     );
 
     assert.match(html, /data-file-extension="mjs"/);
-    assert.match(html, />JS<\/span>/);
+    assert.match(html, /data-file-icon-name="javascript"/);
+    assert.match(html, /data-file-icon-tone="semantic"/);
     assert.match(html, /data-file-extension="tsx"/);
+    assert.match(html, /data-file-icon-name="react"/);
     assert.match(html, /data-file-extension="md"/);
-    assert.match(html, />M↓<\/span>/);
+    assert.match(html, /data-file-icon-name="markdown"/);
+    assert.match(html, /viewBox="0 0 16 16"/);
+    assert.doesNotMatch(html, />JS<\/span>/);
+    assert.doesNotMatch(html, />M↓<\/span>/);
+  });
+
+  test("inherits the link color for inline chat file glyphs", () => {
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(() => undefined)}
+      >
+        {"[App.tsx](/Volumes/Data/src/App.tsx)"}
+      </ReactMarkdown>,
+    );
+
+    assert.match(html, /class="prose-chat-local-file-link"/);
+    assert.match(html, /data-file-icon-name="react"/);
+    assert.match(html, /data-file-icon-tone="inherit"/);
+    assert.doesNotMatch(html, /color:var\(--file-icon-cyan\)/);
   });
 
   test("does not link ordinary inline code spans", () => {
@@ -161,5 +182,20 @@ describe("MarkdownRenderer", () => {
     assert.match(html, /prose-chat-codeblock-copy/);
     assert.doesNotMatch(html, /prose-chat-codeblock-header/);
     assert.doesNotMatch(html, />text<\/span>/);
+  });
+
+  test("renders Mermaid fences as a lazy diagram surface instead of source code", () => {
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(undefined)}
+      >
+        {"```mermaid\nflowchart TD\n  A --> B\n```"}
+      </ReactMarkdown>,
+    );
+
+    assert.match(html, /data-testid="mermaid-diagram"/);
+    assert.match(html, /aria-label="Rendering diagram"/);
+    assert.doesNotMatch(html, /prose-chat-codeblock/);
   });
 });

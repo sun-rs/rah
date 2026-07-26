@@ -1,5 +1,6 @@
 export const DEFAULT_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS = 1_000;
 export const DEFAULT_NATIVE_TUI_MIRROR_INTERVAL_MS = 100;
+export const DEFAULT_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS = 1_600;
 export const DEFAULT_NATIVE_TUI_BINDING_WARN_AFTER_MS = 30_000;
 export const DEFAULT_NATIVE_TUI_MIRROR_WARN_AFTER_MS = 30_000;
 
@@ -41,6 +42,17 @@ export function nativeTuiMirrorIntervalMs(env: Env = process.env): number {
     env,
     "RAH_NATIVE_TUI_MIRROR_INTERVAL_MS",
     DEFAULT_NATIVE_TUI_MIRROR_INTERVAL_MS,
+  );
+}
+
+export function nativeTuiMirrorMaxIntervalMs(env: Env = process.env): number {
+  return Math.max(
+    nativeTuiMirrorIntervalMs(env),
+    positiveIntegerEnv(
+      env,
+      "RAH_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS",
+      DEFAULT_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS,
+    ),
   );
 }
 

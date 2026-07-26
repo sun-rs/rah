@@ -272,7 +272,14 @@ describe("applyProviderActivity", () => {
         services.sessionStore.getSession(sessionId)?.session,
       );
       assert.equal(
-        turnArtifacts.getTurnFileDiff(ownerId, "turn-1", "src/demo.ts", sessionId).diff,
+        (
+          await turnArtifacts.getTurnFileDiff(
+            ownerId,
+            "turn-1",
+            "src/demo.ts",
+            sessionId,
+          )
+        ).diff,
         unifiedDiff,
       );
     } finally {

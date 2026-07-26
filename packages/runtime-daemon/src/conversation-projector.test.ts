@@ -46,6 +46,23 @@ function event(
 }
 
 describe("conversation projector", () => {
+  test("projects process-scoped system notices inside the work group", () => {
+    const projection = projectConversation("session-1", [
+      event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
+      event(2, "timeline.item.added", CODEX_SOURCE, "turn-1", {
+        item: {
+          kind: "system",
+          text: "Conversation interrupted before this tool completed.",
+          placement: "process",
+        },
+      }),
+      event(3, "turn.canceled", CODEX_SOURCE, "turn-1", {}),
+    ]);
+
+    assert.equal(projection.turns[0]?.items[0]?.role, "process");
+    assert.equal(projection.turns[0]?.status, "interrupted");
+  });
+
   test("keeps a Codex compaction aggregate at its first position when updates arrive", () => {
     const compactionIdentity = createCodexAggregateTimelineIdentity({
       providerSessionId: "thread-1",

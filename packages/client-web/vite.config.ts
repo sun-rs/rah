@@ -25,6 +25,13 @@ export default defineConfig({
           if (!id.includes("node_modules")) {
             return undefined;
           }
+          // Mermaid is loaded only for fenced `mermaid` blocks. Its
+          // self-contained browser build and lazy diagram modules must remain
+          // in a separate async chunk; otherwise the general vendor bucket
+          // makes every ordinary chat pay the diagram-engine download cost.
+          if (id.includes("/mermaid/")) {
+            return "vendor-mermaid";
+          }
           // Keep React in the general vendor chunk. Splitting it out can create a
           // vendor <-> vendor-react cycle through shared Rollup helpers and
           // React-using packages such as lucide-react, which breaks production.

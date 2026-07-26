@@ -1,15 +1,19 @@
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import {
   createOpenCodeActivityState,
   translateOpenCodeMessage,
 } from "./opencode-activity";
 import type { OpenCodeMessageWithParts } from "./opencode-api";
 import {
-  discoverOpenCodeStoredSessions,
-  loadOpenCodeStoredMessages,
+  loadOpenCodeStoredMessagesAsync,
+  type OpenCodeStoredSessionRecord,
 } from "./opencode-stored-sessions";
+import { HISTORY_WORKLOAD_PRIORITY } from "./history-workload-governor";
 import {
   sameNativeTuiDirectory,
 } from "./native-tui-provider-handler-utils";
+import type { NativeTuiHistoryCatalog } from "./native-tui-history-catalog";
 import type {
   NativeTuiMirrorUpdate,
   NativeTuiOutputObservation,
@@ -22,6 +26,7 @@ import type {
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const OPENCODE_NATIVE_TUI_MIRROR_MESSAGE_LIMIT = 16;
 const OPENCODE_NATIVE_TUI_MIRROR_REVISION_LIMIT = 64;
+const OPENCODE_NATIVE_TUI_MIRROR_PART_TEXT_LIMIT = 64 * 1024;
 
 function isOpenCodeMessageReadyForNativeMirror(message: OpenCodeMessageWithParts): boolean {
   if (message.info.role === "user") {
@@ -35,10 +40,26 @@ function isOpenCodeMessageReadyForNativeMirror(message: OpenCodeMessageWithParts
 }
 
 function openCodeMessageRevision(message: OpenCodeMessageWithParts): string {
-  return JSON.stringify({
-    info: message.info,
-    parts: message.parts,
-  });
+  return createHash("sha256")
+    .update(JSON.stringify({
+      info: message.info,
+      parts: message.parts,
+    }))
+    .digest("base64url");
+}
+
+async function openCodeStorageRevision(databasePath: string): Promise<string> {
+  const fingerprints = await Promise.all(
+    [databasePath, `${databasePath}-wal`].map(async (filePath) => {
+      try {
+        const stats = await stat(filePath);
+        return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+      } catch {
+        return "missing";
+      }
+    }),
+  );
+  return fingerprints.join("|");
 }
 
 function openCodeMessageTimestamp(message: OpenCodeMessageWithParts): string | undefined {
@@ -49,8 +70,20 @@ function openCodeMessageTimestamp(message: OpenCodeMessageWithParts): string | u
   return new Date(ms).toISOString();
 }
 
-function probeOpenCodeBinding(session: NativeTuiProviderRuntimeSession) {
-  const candidate = discoverOpenCodeStoredSessions()
+function openCodeRecords(
+  historyCatalog: NativeTuiHistoryCatalog,
+): OpenCodeStoredSessionRecord[] {
+  return historyCatalog.list("opencode").map((record) => ({
+    ref: record.ref,
+    databasePath: record.storagePath,
+  }));
+}
+
+function probeOpenCodeBinding(
+  session: NativeTuiProviderRuntimeSession,
+  historyCatalog: NativeTuiHistoryCatalog,
+) {
+  const candidate = openCodeRecords(historyCatalog)
     .filter((record) =>
       sameNativeTuiDirectory(record.ref.cwd ?? record.ref.rootDir, session.cwd),
     )
@@ -62,6 +95,7 @@ function probeOpenCodeBinding(session: NativeTuiProviderRuntimeSession) {
       (right.ref.updatedAt ?? "").localeCompare(left.ref.updatedAt ?? ""),
     )[0];
   if (!candidate) {
+    historyCatalog.requestRefresh("opencode");
     return null;
   }
   return {
@@ -87,18 +121,20 @@ function observeOpenCodeOutput(
   };
 }
 
-function updateOpenCodeMirror(
+async function updateOpenCodeMirror(
   session: NativeTuiProviderRuntimeSession,
   mirror: NativeTuiProviderMirror | undefined,
-): NativeTuiMirrorUpdate {
+  historyCatalog: NativeTuiHistoryCatalog,
+): Promise<NativeTuiMirrorUpdate> {
   if (mirror?.provider !== "opencode") {
     if (!session.providerSessionId) {
       return { status: "missing" };
     }
-    const record = discoverOpenCodeStoredSessions().find(
+    const record = openCodeRecords(historyCatalog).find(
       (candidate) => candidate.ref.providerSessionId === session.providerSessionId,
     );
     if (!record) {
+      historyCatalog.requestRefresh("opencode");
       return { status: "missing" };
     }
     mirror = {
@@ -113,9 +149,29 @@ function updateOpenCodeMirror(
   }
 
   const items: NativeTuiProviderActivityEnvelope[] = [];
-  const messages = loadOpenCodeStoredMessages(mirror.record, {
-    limit: OPENCODE_NATIVE_TUI_MIRROR_MESSAGE_LIMIT,
-  });
+  const storageRevision = await openCodeStorageRevision(mirror.record.databasePath);
+  if (mirror.storageRevision === storageRevision) {
+    return { status: "ok", mirror, items };
+  }
+  let messages: OpenCodeMessageWithParts[];
+  try {
+    messages = await loadOpenCodeStoredMessagesAsync(mirror.record, {
+      limit: OPENCODE_NATIVE_TUI_MIRROR_MESSAGE_LIMIT,
+      maxPartTextChars: OPENCODE_NATIVE_TUI_MIRROR_PART_TEXT_LIMIT,
+      throwOnReadError: true,
+      workloadPriority: HISTORY_WORKLOAD_PRIORITY.liveMirror,
+    });
+  } catch {
+    // Preserve semantic lifecycle even when a provider persisted an unusually
+    // large tool payload. The detail remains in provider storage and can be
+    // loaded explicitly; the live mirror must stay bounded.
+    messages = await loadOpenCodeStoredMessagesAsync(mirror.record, {
+      limit: OPENCODE_NATIVE_TUI_MIRROR_MESSAGE_LIMIT,
+      summary: true,
+      throwOnReadError: true,
+      workloadPriority: HISTORY_WORKLOAD_PRIORITY.liveMirror,
+    });
+  }
   for (const message of messages) {
     if (!isOpenCodeMessageReadyForNativeMirror(message)) {
       continue;
@@ -148,13 +204,19 @@ function updateOpenCodeMirror(
       });
     }
   }
+  mirror.storageRevision = storageRevision;
   return { status: "ok", mirror, items };
 }
 
-export const opencodeNativeTuiProviderHandler: NativeTuiProviderHandler = {
-  provider: "opencode",
-  canProbeBinding: true,
-  observeOutput: observeOpenCodeOutput,
-  probeBinding: probeOpenCodeBinding,
-  updateMirror: updateOpenCodeMirror,
-};
+export function createOpenCodeNativeTuiProviderHandler(
+  historyCatalog: NativeTuiHistoryCatalog,
+): NativeTuiProviderHandler {
+  return {
+    provider: "opencode",
+    canProbeBinding: true,
+    observeOutput: observeOpenCodeOutput,
+    probeBinding: (session) => probeOpenCodeBinding(session, historyCatalog),
+    updateMirror: (session, mirror) =>
+      updateOpenCodeMirror(session, mirror, historyCatalog),
+  };
+}

@@ -1,20 +1,191 @@
-import { fork, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { createReadStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   StoredSessionCatalogProvider,
   StoredSessionCatalogProviderResult,
+  StoredSessionCatalogRecord,
+  StoredSessionCatalogTransferRow,
 } from "./stored-session-catalog-types";
+import type { BackgroundIpcChild } from "./background-ipc-task";
+import {
+  runBackgroundIpcTask,
+  terminateBackgroundIpcProcess,
+} from "./background-ipc-task";
+import { BoundedTaskScheduler } from "./bounded-task-scheduler";
+import {
+  HISTORY_WORKLOAD_PRIORITY,
+  sharedHistoryWorkloadScheduler,
+} from "./history-workload-governor";
 
-type WorkerResponse = {
-  ok: true;
-  results: StoredSessionCatalogProviderResult[];
-};
+type WorkerResponse =
+  | {
+      ok: true;
+      recordCount: number;
+      transferBytes: number;
+    }
+  | { ok: false; error: string };
+
+const MAX_TRANSFER_ROW_BYTES = 1024 * 1024;
+const MAX_WORKER_RESPONSE_BYTES = 64 * 1024;
 
 const ALL_CATALOG_PROVIDERS: StoredSessionCatalogProvider[] = [
   "codex",
   "claude",
   "opencode",
 ];
+
+function isCatalogProvider(
+  value: unknown,
+): value is StoredSessionCatalogProvider {
+  return value === "codex" || value === "claude" || value === "opencode";
+}
+
+function isCatalogRecord(
+  value: unknown,
+  provider: StoredSessionCatalogProvider,
+): value is StoredSessionCatalogRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Partial<StoredSessionCatalogRecord>;
+  return (
+    typeof record.storagePath === "string" &&
+    Boolean(record.ref) &&
+    typeof record.ref === "object" &&
+    !Array.isArray(record.ref) &&
+    record.ref.provider === provider &&
+    typeof record.ref.providerSessionId === "string"
+  );
+}
+
+function parseTransferRow(line: Buffer): StoredSessionCatalogTransferRow {
+  if (line.byteLength > MAX_TRANSFER_ROW_BYTES) {
+    throw new Error(
+      `Stored-session catalog transfer row exceeded ${MAX_TRANSFER_ROW_BYTES} bytes.`,
+    );
+  }
+  const parsed = JSON.parse(line.toString("utf8")) as Partial<StoredSessionCatalogTransferRow>;
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !isCatalogProvider(parsed.provider)
+  ) {
+    throw new Error("Stored-session catalog transfer contains an invalid row.");
+  }
+  if (parsed.kind === "record" && isCatalogRecord(parsed.record, parsed.provider)) {
+    return parsed as StoredSessionCatalogTransferRow;
+  }
+  if (
+    parsed.kind === "provider" &&
+    typeof parsed.complete === "boolean" &&
+    (parsed.error === undefined || typeof parsed.error === "string")
+  ) {
+    return parsed as StoredSessionCatalogTransferRow;
+  }
+  throw new Error("Stored-session catalog transfer contains an invalid row.");
+}
+
+export async function readStoredSessionCatalogTransfer(options: {
+  filePath: string;
+  providers: readonly StoredSessionCatalogProvider[];
+  expectedRecordCount: number;
+  expectedBytes: number;
+  signal?: AbortSignal;
+}): Promise<StoredSessionCatalogProviderResult[]> {
+  const records = new Map<
+    StoredSessionCatalogProvider,
+    StoredSessionCatalogRecord[]
+  >(options.providers.map((provider) => [provider, []]));
+  const statuses = new Map<
+    StoredSessionCatalogProvider,
+    Omit<StoredSessionCatalogProviderResult, "provider" | "records">
+  >();
+  let recordCount = 0;
+  let transferBytes = 0;
+  let remainder = Buffer.alloc(0);
+
+  const consumeLine = (line: Buffer) => {
+    if (line.byteLength === 0) {
+      return;
+    }
+    const row = parseTransferRow(line);
+    if (!records.has(row.provider)) {
+      throw new Error(
+        `Stored-session catalog transfer returned unrequested provider ${row.provider}.`,
+      );
+    }
+    if (row.kind === "record") {
+      recordCount += 1;
+      if (recordCount > options.expectedRecordCount) {
+        throw new Error(
+          "Stored-session catalog transfer returned more records than declared.",
+        );
+      }
+      records.get(row.provider)?.push(row.record);
+      return;
+    }
+    statuses.set(row.provider, {
+      complete: row.complete,
+      ...(row.error ? { error: row.error } : {}),
+    });
+  };
+
+  const stream = createReadStream(options.filePath, {
+    highWaterMark: 64 * 1024,
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  for await (const rawChunk of stream) {
+    const chunk = Buffer.isBuffer(rawChunk)
+      ? rawChunk
+      : Buffer.from(rawChunk as Uint8Array);
+    transferBytes += chunk.byteLength;
+    let buffer =
+      remainder.byteLength === 0
+        ? chunk
+        : Buffer.concat([remainder, chunk], remainder.byteLength + chunk.byteLength);
+    let start = 0;
+    for (;;) {
+      const newline = buffer.indexOf(0x0a, start);
+      if (newline < 0) {
+        break;
+      }
+      consumeLine(buffer.subarray(start, newline));
+      start = newline + 1;
+    }
+    remainder =
+      start === buffer.byteLength
+        ? Buffer.alloc(0)
+        : Buffer.from(buffer.subarray(start));
+    if (remainder.byteLength > MAX_TRANSFER_ROW_BYTES) {
+      throw new Error(
+        `Stored-session catalog transfer row exceeded ${MAX_TRANSFER_ROW_BYTES} bytes.`,
+      );
+    }
+    buffer = Buffer.alloc(0);
+  }
+  consumeLine(remainder);
+
+  if (recordCount !== options.expectedRecordCount) {
+    throw new Error(
+      `Stored-session catalog transfer declared ${options.expectedRecordCount} records but contained ${recordCount}.`,
+    );
+  }
+  if (transferBytes !== options.expectedBytes) {
+    throw new Error(
+      `Stored-session catalog transfer declared ${options.expectedBytes} bytes but contained ${transferBytes}.`,
+    );
+  }
+  return options.providers.map((provider) => ({
+    provider,
+    records: records.get(provider) ?? [],
+    ...(statuses.get(provider) ?? {
+      complete: false,
+      error: "Stored-session catalog transfer omitted provider status.",
+    }),
+  }));
+}
 
 function providerSetCovers(
   current: ReadonlySet<StoredSessionCatalogProvider>,
@@ -23,47 +194,21 @@ function providerSetCovers(
   return requested.every((provider) => current.has(provider));
 }
 
-function childExited(worker: ChildProcess): boolean {
-  return worker.exitCode !== null || worker.signalCode !== null;
-}
-
-async function waitForChildExit(worker: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (childExited(worker)) {
-    return true;
-  }
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (exited: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      worker.off("exit", onExit);
-      worker.off("error", onExit);
-      resolve(exited);
-    };
-    const onExit = () => finish(true);
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    timer.unref?.();
-    worker.once("exit", onExit);
-    worker.once("error", onExit);
-    if (childExited(worker)) {
-      finish(true);
-    }
-  });
-}
-
 /** Serializes heavy provider catalog discovery outside the daemon event loop. */
 export class StoredSessionCatalog {
-  private activeWorker: ChildProcess | undefined;
+  private activeWorker: BackgroundIpcChild | undefined;
   private inFlight:
     | {
         providers: Set<StoredSessionCatalogProvider>;
+        controller: AbortController;
         promise: Promise<StoredSessionCatalogProviderResult[]>;
       }
     | undefined;
   private closed = false;
+
+  constructor(
+    private readonly scheduler: BoundedTaskScheduler = sharedHistoryWorkloadScheduler,
+  ) {}
 
   refresh(
     provider?: StoredSessionCatalogProvider,
@@ -80,13 +225,23 @@ export class StoredSessionCatalog {
       return current.promise.then(() => this.refresh(provider));
     }
 
-    const promise = this.runWorker(providers).finally(() => {
-      if (this.inFlight?.promise === promise) {
-        this.inFlight = undefined;
-      }
-    });
+    const controller = new AbortController();
+    const promise = this.scheduler
+      .schedule(
+        (signal) => this.runWorker(providers, signal),
+        {
+          signal: controller.signal,
+          priority: HISTORY_WORKLOAD_PRIORITY.catalog,
+        },
+      )
+      .finally(() => {
+        if (this.inFlight?.promise === promise) {
+          this.inFlight = undefined;
+        }
+      });
     this.inFlight = {
       providers: new Set(providers),
+      controller,
       promise,
     };
     return promise;
@@ -94,67 +249,67 @@ export class StoredSessionCatalog {
 
   async shutdown(): Promise<void> {
     this.closed = true;
+    const inFlight = this.inFlight;
+    const settlement = inFlight?.promise.catch(() => []);
+    inFlight?.controller.abort(
+      new DOMException("Stored-session catalog closed", "AbortError"),
+    );
     const worker = this.activeWorker;
     this.activeWorker = undefined;
-    if (!worker || childExited(worker)) {
-      return;
+    if (worker) {
+      await terminateBackgroundIpcProcess(worker);
     }
-    worker.kill("SIGTERM");
-    if (await waitForChildExit(worker, 1_500)) {
-      return;
-    }
-    worker.kill("SIGKILL");
-    await waitForChildExit(worker, 1_000);
+    await settlement;
   }
 
-  private runWorker(
+  private async runWorker(
     providers: StoredSessionCatalogProvider[],
+    signal: AbortSignal,
   ): Promise<StoredSessionCatalogProviderResult[]> {
-    return new Promise((resolve, reject) => {
-      const worker = fork(
-        fileURLToPath(new URL("./stored-session-catalog-worker.ts", import.meta.url)),
-        [],
+    const transferRoot = await mkdtemp(
+      path.join(os.tmpdir(), "rah-stored-session-catalog-"),
+    );
+    const outputPath = path.join(transferRoot, "catalog.jsonl");
+    try {
+      const response = await runBackgroundIpcTask<
         {
-          execArgv: ["--import", "tsx"],
-          stdio: ["ignore", "ignore", "inherit", "ipc"],
+          kind: "stored-session-catalog";
+          providers: StoredSessionCatalogProvider[];
+          outputPath: string;
         },
-      );
-      worker.send({
-        kind: "stored-session-catalog",
-        providers,
+        WorkerResponse
+      >({
+        script: new URL("./stored-session-catalog-worker.ts", import.meta.url),
+        request: {
+          kind: "stored-session-catalog",
+          providers,
+          outputPath,
+        },
+        label: "Stored-session catalog worker",
+        signal,
+        timeoutMs: 120_000,
+        maxResponseBytes: MAX_WORKER_RESPONSE_BYTES,
+        onSpawn: (worker) => {
+          this.activeWorker = worker;
+        },
+        onClose: (worker) => {
+          if (this.activeWorker === worker) {
+            this.activeWorker = undefined;
+          }
+        },
       });
-      this.activeWorker = worker;
-      let settled = false;
-      const finish = () => {
-        if (this.activeWorker === worker) {
-          this.activeWorker = undefined;
-        }
-      };
-      worker.once("message", (message: unknown) => {
-        const response = message as WorkerResponse;
-        settled = true;
-        finish();
-        resolve(response.results);
-      });
-      worker.once("error", (error: Error) => {
-        settled = true;
-        finish();
-        reject(error);
-      });
-      worker.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
-        finish();
-        if (!settled) {
-          reject(
-            new Error(
-              code === 0
-                ? "Stored-session catalog worker exited without a result."
-                : `Stored-session catalog worker exited with ${
-                    signal ? `signal ${signal}` : `code ${code}`
-                  }.`,
-            ),
-          );
-        }
-      });
-    });
+      if (response.ok) {
+        return await readStoredSessionCatalogTransfer({
+          filePath: outputPath,
+          providers,
+          expectedRecordCount: response.recordCount,
+          expectedBytes: response.transferBytes,
+          signal,
+        });
+      }
+      throw new Error(response.error);
+    } finally {
+      await rm(transferRoot, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }

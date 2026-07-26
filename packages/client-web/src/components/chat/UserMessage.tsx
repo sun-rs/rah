@@ -73,29 +73,40 @@ function CollapsibleUserMessageText(props: { text: string }) {
 
   return (
     <div>
-      <div
-        ref={textRef}
-        className={`chat-body-text whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
-          expanded ? "" : "overflow-hidden"
-        }`}
-        style={expanded ? undefined : { maxHeight: USER_MESSAGE_COLLAPSED_MAX_HEIGHT }}
-        data-testid="user-message-text"
-      >
-        {props.text}
+      <div className="relative">
+        <div
+          ref={textRef}
+          className={`chat-body-text whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${
+            expanded ? "" : "overflow-hidden"
+          }`}
+          style={expanded ? undefined : { maxHeight: USER_MESSAGE_COLLAPSED_MAX_HEIGHT }}
+          data-testid="user-message-text"
+        >
+          {props.text}
+        </div>
+        {overflowing && !expanded ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-7"
+            data-testid="user-message-collapse-fade"
+            style={{
+              background:
+                "linear-gradient(to bottom, transparent 0%, var(--user-bubble-bg) 100%)",
+            }}
+          />
+        ) : null}
       </div>
       {overflowing ? (
-        <div className="mt-2 text-sm text-[var(--app-muted)]">
-          {!expanded ? <div aria-hidden="true" className="leading-none">...</div> : null}
-          <button
-            type="button"
-            className="mt-1 inline-flex items-center gap-1 rounded-sm font-medium text-[var(--app-muted)] outline-none transition-colors hover:text-[var(--app-fg)] focus-visible:ring-2 focus-visible:ring-[var(--app-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-subtle-bg)]"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((current) => !current)}
-          >
-            <span>{expanded ? "Show less" : "Show more"}</span>
-            {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-          </button>
-        </div>
+        <button
+          type="button"
+          className="inline-flex h-5 items-center gap-0.5 rounded-sm text-xs font-medium leading-none text-[var(--app-muted)] outline-none transition-colors hover:text-[var(--app-fg)] focus-visible:ring-2 focus-visible:ring-[var(--app-accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--user-bubble-bg)]"
+          aria-expanded={expanded}
+          data-testid="user-message-expand-toggle"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span>{expanded ? "Show less" : "Show more"}</span>
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
       ) : null}
     </div>
   );
@@ -107,8 +118,11 @@ export function UserMessage(props: {
   attachments?: SessionInputAttachment[] | undefined;
   entryKey?: string | undefined;
   onOpenLocalFile?: ((path: string) => void) | undefined;
+  onLoadDetail?: (() => Promise<void> | void) | undefined;
 }) {
   const [copied, setCopied] = useState(false);
+  const detailRequestKeyRef = useRef<string | null>(null);
+  const { ref: messageRef, nearViewport } = useNearViewport<HTMLDivElement>();
   const visibleContent = useMemo(
     () => visibleUserMessageContent(props.content),
     [props.content],
@@ -119,6 +133,25 @@ export function UserMessage(props: {
     visibleContent.imageCount,
     attachmentImageCount,
   );
+  const missingImageCount = Math.max(0, imageCount - attachmentImageCount);
+
+  useEffect(() => {
+    if (!nearViewport || missingImageCount === 0 || !props.onLoadDetail) {
+      return;
+    }
+    const requestKey = props.entryKey ?? props.content;
+    if (detailRequestKeyRef.current === requestKey) {
+      return;
+    }
+    detailRequestKeyRef.current = requestKey;
+    void Promise.resolve(props.onLoadDetail());
+  }, [
+    missingImageCount,
+    nearViewport,
+    props.content,
+    props.entryKey,
+    props.onLoadDetail,
+  ]);
 
   const handleCopy = async () => {
     if ((await copyTextToClipboard(visibleContent.text)) === "copied") {
@@ -129,22 +162,19 @@ export function UserMessage(props: {
 
   return (
     <div
+      ref={messageRef}
       className="flex items-start justify-end gap-3"
       data-testid="chat-user-message"
       data-feed-key={props.entryKey}
     >
       <div className="min-w-0 max-w-[85%] sm:max-w-[75%]">
-        <div className="rounded-2xl rounded-tr-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-[var(--app-fg)]">
-          {props.attachments?.length ? (
+        <div className="rounded-2xl rounded-tr-md border border-[var(--user-bubble-border)] bg-[var(--user-bubble-bg)] px-3 py-2 text-[var(--user-bubble-fg)]">
+          {props.attachments?.length || imageCount > attachmentImageCount ? (
             <UserMessageAttachments
-              attachments={props.attachments}
+              attachments={props.attachments ?? []}
+              missingImageCount={missingImageCount}
               onOpenLocalFile={props.onOpenLocalFile}
             />
-          ) : imageCount > 0 ? (
-            <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-xs font-medium text-[var(--app-hint)]">
-              <ImageIcon size={13} />
-              <span>{imageCount === 1 ? "Image x1" : `Images x${imageCount}`}</span>
-            </div>
           ) : null}
           {visibleContent.text ? (
             <CollapsibleUserMessageText text={visibleContent.text} />
@@ -168,8 +198,10 @@ export function UserMessage(props: {
 
 function UserMessageAttachments(props: {
   attachments: SessionInputAttachment[];
+  missingImageCount: number;
   onOpenLocalFile?: ((path: string) => void) | undefined;
 }) {
+  const visibleMissingImages = Math.min(props.missingImageCount, 5);
   return (
     <div className="mb-2 flex max-w-full flex-wrap gap-2" aria-label="Message attachments">
       {props.attachments.map((attachment) => (
@@ -179,6 +211,29 @@ function UserMessageAttachments(props: {
           onOpenLocalFile={props.onOpenLocalFile}
         />
       ))}
+      {Array.from({ length: visibleMissingImages }, (_, index) => {
+        const remaining =
+          index === visibleMissingImages - 1
+            ? props.missingImageCount > visibleMissingImages
+              ? props.missingImageCount - visibleMissingImages + 1
+              : 0
+            : 0;
+        return (
+          <div
+            key={`missing-image-${index}`}
+            className="relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--user-bubble-border)] bg-[var(--app-bg)] text-[var(--app-hint)]"
+            aria-label="Unavailable image attachment"
+            title="Image preview unavailable"
+          >
+            <ImageIcon size={20} />
+            {remaining > 0 ? (
+              <span className="absolute inset-x-1 bottom-1 rounded bg-[var(--app-bg)] px-1 py-0.5 text-center text-[10px] font-medium">
+                +{remaining}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

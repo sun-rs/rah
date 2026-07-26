@@ -146,12 +146,18 @@ export interface ConversationTurnProjection {
   outputs?: ConversationOutputProjection[];
   /** Provider-neutral resources consulted or supplied to this turn. */
   sources?: ConversationSourceProjection[];
-  /** Authoritative file changes attributed to this completed provider turn. */
+  /** Authoritative file changes attributed to this provider turn so far. */
   fileChanges?: ConversationTurnFileChangesProjection;
   finalAnswerItemId?: string;
   failedItemCount: number;
   /** Whether this turn contains only a lightweight item summary or hydrated items. */
   itemsView?: "summary" | "full";
+  /**
+   * Whether a lightweight history summary has renderable process detail that
+   * can be hydrated on demand. `false` is authoritative: transient reasoning
+   * alone must not expose an empty Worked disclosure.
+   */
+  processDetailsAvailable?: boolean;
   usage?: ContextUsage;
   error?: ConversationError;
   identityConfidence?: TimelineIdentityConfidence;
@@ -174,6 +180,16 @@ export interface ConversationTurnsPageResponse extends ConversationProjection {
   liveRevision?: number;
 }
 
+/**
+ * Lightweight freshness token for a provider-owned conversation source.
+ * Clients use it to follow read-only replays without repeatedly downloading
+ * the latest turn page while the underlying history is unchanged.
+ */
+export interface ConversationSourceRevisionResponse {
+  sessionId: string;
+  sourceRevision: string | null;
+}
+
 export type ConversationTurnStateProjection = Omit<ConversationTurnProjection, "items">;
 
 export interface ConversationTurnDelta {
@@ -189,6 +205,120 @@ export interface ConversationProjectionDelta {
   sourceSeq?: number;
   upsertTurns: ConversationTurnDelta[];
   removeTurnIds?: string[];
+}
+
+function composeConversationTurnDelta(
+  current: ConversationTurnDelta,
+  next: ConversationTurnDelta,
+): ConversationTurnDelta {
+  const upsertItems = new Map(
+    current.upsertItems.map((item) => [item.id, item] as const),
+  );
+  const removeItemIds = new Set(current.removeItemIds ?? []);
+  for (const itemId of next.removeItemIds ?? []) {
+    upsertItems.delete(itemId);
+    removeItemIds.add(itemId);
+  }
+  for (const item of next.upsertItems) {
+    removeItemIds.delete(item.id);
+    upsertItems.set(item.id, item);
+  }
+  return {
+    turn: next.turn,
+    upsertItems: [...upsertItems.values()],
+    ...(removeItemIds.size > 0
+      ? { removeItemIds: [...removeItemIds] }
+      : {}),
+  };
+}
+
+function composeContiguousConversationDelta(
+  current: ConversationProjectionDelta,
+  next: ConversationProjectionDelta,
+): ConversationProjectionDelta {
+  const upsertTurns = new Map(
+    current.upsertTurns.map((turn) => [turn.turn.id, turn] as const),
+  );
+  const removeTurnIds = new Set(current.removeTurnIds ?? []);
+  for (const turnId of next.removeTurnIds ?? []) {
+    upsertTurns.delete(turnId);
+    removeTurnIds.add(turnId);
+  }
+  for (const turn of next.upsertTurns) {
+    removeTurnIds.delete(turn.turn.id);
+    const existing = upsertTurns.get(turn.turn.id);
+    upsertTurns.set(
+      turn.turn.id,
+      existing ? composeConversationTurnDelta(existing, turn) : turn,
+    );
+  }
+  return {
+    sessionId: current.sessionId,
+    baseRevision: current.baseRevision,
+    revision: next.revision,
+    ...(next.sourceSeq !== undefined
+      ? { sourceSeq: next.sourceSeq }
+      : current.sourceSeq !== undefined
+        ? { sourceSeq: current.sourceSeq }
+        : {}),
+    upsertTurns: [...upsertTurns.values()],
+    ...(removeTurnIds.size > 0
+      ? { removeTurnIds: [...removeTurnIds] }
+      : {}),
+  };
+}
+
+/**
+ * Deduplicate and collapse contiguous revisions without losing item/turn
+ * removals. This is the transport-level compaction primitive shared by the
+ * daemon replay path and the browser's defensive ingress buffer.
+ */
+export function composeConversationProjectionDeltas(
+  deltas: readonly ConversationProjectionDelta[],
+): ConversationProjectionDelta[] {
+  const bySession = new Map<string, Map<number, ConversationProjectionDelta>>();
+  for (const delta of deltas) {
+    let revisions = bySession.get(delta.sessionId);
+    if (!revisions) {
+      revisions = new Map();
+      bySession.set(delta.sessionId, revisions);
+    }
+    revisions.set(delta.revision, delta);
+  }
+
+  const result: ConversationProjectionDelta[] = [];
+  for (const revisions of bySession.values()) {
+    const ordered = [...revisions.values()].sort(
+      (left, right) => left.revision - right.revision,
+    );
+    let composed: ConversationProjectionDelta | undefined;
+    for (const delta of ordered) {
+      if (!composed) {
+        composed = delta;
+        continue;
+      }
+      if (delta.baseRevision === composed.revision) {
+        composed = composeContiguousConversationDelta(composed, delta);
+        continue;
+      }
+      result.push(composed);
+      composed = delta;
+    }
+    if (composed) {
+      result.push(composed);
+    }
+  }
+  return result.sort((left, right) => {
+    const leftSeq = left.sourceSeq ?? Number.MAX_SAFE_INTEGER;
+    const rightSeq = right.sourceSeq ?? Number.MAX_SAFE_INTEGER;
+    if (leftSeq !== rightSeq) {
+      return leftSeq - rightSeq;
+    }
+    if (left.sessionId !== right.sessionId) {
+      return left.sessionId.localeCompare(right.sessionId);
+    }
+    return left.revision - right.revision;
+  });
 }
 
 export interface ConversationItemDetailResponse {

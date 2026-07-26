@@ -401,27 +401,29 @@ describe("translateCodexAppServerNotification", () => {
       type: "terminal_output",
       data: "$ echo hello\r\n",
     });
-    assert.equal(delta[0]?.activity.type, "observation_updated");
-    assert.equal(delta[1]?.activity.type, "tool_call_delta");
-    assert.deepEqual(delta[2]?.activity, {
-      type: "terminal_output",
-      data: "hello",
-    });
-
-    assert.equal(completed[0]?.activity.type, "observation_completed");
-    if (completed[0]?.activity.type === "observation_completed") {
-      assert.equal(completed[0].activity.observation.status, "completed");
+    assert.deepEqual(delta.map((item) => item.activity.type), [
+      "process_output_appended",
+    ]);
+    if (delta[0]?.activity.type === "process_output_appended") {
+      assert.equal(delta[0].activity.output.itemId, "call-1");
+      assert.equal(delta[0].activity.output.data, "hello");
     }
-    assert.equal(completed[1]?.activity.type, "tool_call_completed");
-    if (completed[1]?.activity.type === "tool_call_completed") {
-      assert.deepEqual(completed[1].activity.toolCall.result, { exitCode: 0 });
+
+    assert.equal(completed[0]?.activity.type, "process_output_snapshot");
+    assert.equal(completed[1]?.activity.type, "observation_completed");
+    if (completed[1]?.activity.type === "observation_completed") {
+      assert.equal(completed[1].activity.observation.status, "completed");
+    }
+    assert.equal(completed[2]?.activity.type, "tool_call_completed");
+    if (completed[2]?.activity.type === "tool_call_completed") {
+      assert.deepEqual(completed[2].activity.toolCall.result, { exitCode: 0 });
       assert.ok(
-        completed[1].activity.toolCall.detail?.artifacts.some(
+        completed[2].activity.toolCall.detail?.artifacts.some(
           (artifact) => artifact.kind === "text" && artifact.label === "stdout",
         ),
       );
     }
-    assert.deepEqual(completed[2]?.activity, {
+    assert.deepEqual(completed[3]?.activity, {
       type: "terminal_output",
       data: "\r\n[exit 0]\r\n$ ",
     });
@@ -468,17 +470,18 @@ describe("translateCodexAppServerNotification", () => {
     );
 
     assert.deepEqual(completed.map((item) => item.activity.type), [
+      "process_output_snapshot",
       "observation_failed",
       "tool_call_completed",
     ]);
-    const observation = completed[0]?.activity;
+    const observation = completed[1]?.activity;
     assert.equal(observation?.type, "observation_failed");
     if (observation?.type === "observation_failed") {
       assert.equal(observation.observation.status, "failed");
       assert.equal(observation.observation.exitCode, 101);
       assert.equal(observation.error, undefined);
     }
-    const tool = completed[1]?.activity;
+    const tool = completed[2]?.activity;
     assert.equal(tool?.type, "tool_call_completed");
     if (tool?.type === "tool_call_completed") {
       assert.deepEqual(tool.toolCall.result, { exitCode: 101 });
@@ -592,10 +595,11 @@ describe("translateCodexAppServerNotification", () => {
       "tool_call_started",
     ]);
     assert.deepEqual(completed.map((item) => item.activity.type), [
+      "process_output_snapshot",
       "observation_completed",
       "tool_call_completed",
     ]);
-    const observation = completed[0]?.activity;
+    const observation = completed[1]?.activity;
     assert.equal(observation?.type, "observation_completed");
     if (observation?.type === "observation_completed") {
       assert.equal(observation.observation.status, "completed");
@@ -677,7 +681,10 @@ describe("translateCodexAppServerNotification", () => {
       state,
     );
 
-    assert.deepEqual(completed.slice(2).map((item) => item.activity), [
+    assert.equal(completed[0]?.activity.type, "process_output_snapshot");
+    assert.equal(completed[1]?.activity.type, "observation_completed");
+    assert.equal(completed[2]?.activity.type, "tool_call_completed");
+    assert.deepEqual(completed.slice(3).map((item) => item.activity), [
       {
         type: "terminal_output",
         data: "/workspace/demo",
@@ -753,8 +760,9 @@ describe("translateCodexAppServerNotification", () => {
     });
     assert.equal(patchStarted[0]?.activity.type, "observation_started");
     assert.equal(patchStarted[1]?.activity.type, "tool_call_started");
-    assert.equal(patchCompleted[0]?.activity.type, "observation_completed");
-    assert.equal(patchCompleted[1]?.activity.type, "tool_call_completed");
+    assert.equal(patchCompleted[0]?.activity.type, "process_output_snapshot");
+    assert.equal(patchCompleted[1]?.activity.type, "observation_completed");
+    assert.equal(patchCompleted[2]?.activity.type, "tool_call_completed");
   });
 
   test("maps fileChange items with object-style and alias diff payloads", () => {
@@ -1669,7 +1677,7 @@ describe("translateCodexAppServerNotification", () => {
     assert.deepEqual(repeatedReasoningSection, []);
     assert.deepEqual(
       firstCommandDelta.map((item) => item.activity.type),
-      ["tool_call_delta", "terminal_output"],
+      ["process_output_appended"],
     );
     assert.deepEqual(repeatedCommandDelta, []);
   });

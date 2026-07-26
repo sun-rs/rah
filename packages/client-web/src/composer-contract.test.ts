@@ -349,6 +349,10 @@ describe("composer contract", () => {
       EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName,
       /focus:outline-none/,
     );
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName,
+      /\bfont-normal\b/,
+    );
     assert.doesNotMatch(
       EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName,
       /focus:ring-/,
@@ -357,6 +361,12 @@ describe("composer contract", () => {
       EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName,
       /\bleading-6\b/,
     );
+    assert.match(
+      EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName,
+      /\bfont-normal\b/,
+    );
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\bfont-normal\b/);
+    assert.match(COMPOSER_LAYOUT.textareaContentClassName, /\bfont-normal\b/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /bottom-3/);
     assert.equal(shouldCompactEmptyStateSessionControls(null), true);
     assert.equal(shouldCompactEmptyStateSessionControls(619), true);

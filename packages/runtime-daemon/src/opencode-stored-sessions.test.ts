@@ -12,15 +12,19 @@ import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import {
   createOpenCodeStoredSessionFrozenHistoryPageLoader,
-  deleteOpenCodeStoredSession,
+  deleteOpenCodeStoredSessionAsync,
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
+  findOpenCodeStoredSessionRecordAsync,
   getOpenCodeStoredSessionHistoryPage,
   getOpenCodeStoredSessionTurnDetail,
+  getOpenCodeStoredSessionTurnDetailAsync,
   getOpenCodeStoredSessionTurnDirectory,
+  getOpenCodeStoredSessionTurnDirectoryAsync,
   getOpenCodeStoredSessionTurnHistoryPage,
+  getOpenCodeStoredSessionTurnHistoryPageAsync,
   loadOpenCodeStoredMessages,
-  restoreOpenCodeStoredSession,
+  restoreOpenCodeStoredSessionAsync,
   resumeOpenCodeStoredSession,
 } from "./opencode-stored-sessions";
 
@@ -420,6 +424,46 @@ test("pages OpenCode stored history by exact user turns", { skip: !hasSqlite }, 
   }
 });
 
+test(
+  "serves bounded OpenCode interactive history through asynchronous subprocesses",
+  { skip: !hasSqlite },
+  async () => {
+    const assistantText = "x".repeat(24 * 1024);
+    const dataDir = createOpenCodeFixture({ assistantText });
+    try {
+      const record = await findOpenCodeStoredSessionRecordAsync("ses_active", { dataDir });
+      assert.ok(record);
+
+      const summary = await getOpenCodeStoredSessionTurnHistoryPageAsync({
+        sessionId: "runtime-session",
+        record,
+        limit: 1,
+      });
+      const summaryTexts = timelineMessageTexts(summary.events);
+      assert.equal(summaryTexts[0], "Hello");
+      assert.equal(summaryTexts[1]?.length, 16 * 1024);
+
+      const detail = await getOpenCodeStoredSessionTurnDetailAsync({
+        sessionId: "runtime-session",
+        record,
+        providerTurnId: "opencode:msg_user",
+      });
+      assert.ok(detail);
+      assert.equal(timelineMessageTexts(detail.events)[1], assistantText);
+
+      const directory = await getOpenCodeStoredSessionTurnDirectoryAsync({
+        sessionId: "runtime-session",
+        record,
+      });
+      assert.equal(directory.complete, true);
+      assert.equal(directory.items.length, 1);
+      assert.equal(directory.items[0]?.assistantPreview, "x".repeat(160));
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test("builds the OpenCode turn directory from native roots without replaying full parts", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {
@@ -598,10 +642,10 @@ test("preserves OpenCode stored assistant markdown line breaks and indentation",
   }
 });
 
-test("discovers and restores provider-native OpenCode archives", { skip: !hasSqlite }, () => {
+test("discovers and restores provider-native OpenCode archives", { skip: !hasSqlite }, async () => {
   const dataDir = createOpenCodeFixture();
   try {
-    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    const record = await findOpenCodeStoredSessionRecordAsync("ses_active", { dataDir });
     assert.ok(record);
     execFileSync("sqlite3", [
       record.databasePath,
@@ -611,7 +655,7 @@ test("discovers and restores provider-native OpenCode archives", { skip: !hasSql
       (entry) => entry.ref.providerSessionId === "ses_active",
     );
     assert.equal(archived?.ref.providerState?.archived, true);
-    restoreOpenCodeStoredSession(record);
+    await restoreOpenCodeStoredSessionAsync(record);
     const restored = discoverOpenCodeStoredSessions({ dataDir }).find(
       (entry) => entry.ref.providerSessionId === "ses_active",
     );
@@ -621,7 +665,7 @@ test("discovers and restores provider-native OpenCode archives", { skip: !hasSql
   }
 });
 
-test("permanently deletes OpenCode sessions through the provider CLI", { skip: !hasSqlite }, () => {
+test("permanently deletes OpenCode sessions through the provider CLI", { skip: !hasSqlite }, async () => {
   const xdgDataHome = mkdtempSync(path.join(os.tmpdir(), "rah-opencode-delete-"));
   const dataDir = path.join(xdgDataHome, "opencode");
   const binDir = path.join(xdgDataHome, "bin");
@@ -637,11 +681,11 @@ test("permanently deletes OpenCode sessions through the provider CLI", { skip: !
   process.env.RAH_OPENCODE_BINARY = fakeOpenCode;
   createOpenCodeFixture({ dataDir });
   try {
-    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    const record = await findOpenCodeStoredSessionRecordAsync("ses_active", { dataDir });
     assert.ok(record);
-    deleteOpenCodeStoredSession(record);
-    assert.equal(findOpenCodeStoredSessionRecord("ses_active", { dataDir }), null);
-    assert.ok(findOpenCodeStoredSessionRecord("ses_archived", { dataDir }));
+    await deleteOpenCodeStoredSessionAsync(record);
+    assert.equal(await findOpenCodeStoredSessionRecordAsync("ses_active", { dataDir }), null);
+    assert.ok(await findOpenCodeStoredSessionRecordAsync("ses_archived", { dataDir }));
   } finally {
     if (previousBinary === undefined) {
       delete process.env.RAH_OPENCODE_BINARY;
@@ -652,27 +696,27 @@ test("permanently deletes OpenCode sessions through the provider CLI", { skip: !
   }
 });
 
-test("OpenCode stored history adapter keeps last-good cache when sqlite refresh fails", { skip: !hasSqlite }, () => {
+test("OpenCode stored history adapter lists only its hydrated cache", { skip: !hasSqlite }, () => {
   const xdgDataHome = mkdtempSync(path.join(os.tmpdir(), "rah-opencode-cache-"));
   const dataDir = path.join(xdgDataHome, "opencode");
   const previousXdgDataHome = process.env.XDG_DATA_HOME;
-  const previousConsoleWarn = console.warn;
-  const warnings: string[] = [];
   process.env.XDG_DATA_HOME = xdgDataHome;
-  console.warn = (message?: unknown) => {
-    warnings.push(String(message));
-  };
   createOpenCodeFixture({ dataDir });
   try {
     const adapter = new OpenCodeStoredHistoryAdapter({} as RuntimeServices);
+    const records = discoverOpenCodeStoredSessions({ dataDir });
+    adapter.hydrateStoredSessionsCatalog(
+      records.map((record) => ({
+        ref: record.ref,
+        storagePath: record.databasePath,
+      })),
+    );
     const first = adapter.listStoredSessions();
     assert.equal(first.length, 2);
 
     writeFileSync(path.join(dataDir, "opencode.db"), "not a sqlite database", "utf8");
-    assert.deepEqual(adapter.refreshStoredSessionsCatalog(), first);
-    assert.ok(warnings.some((message) => message.includes("OpenCode history refresh failed")));
+    assert.deepEqual(adapter.listStoredSessions(), first);
   } finally {
-    console.warn = previousConsoleWarn;
     if (previousXdgDataHome === undefined) {
       delete process.env.XDG_DATA_HOME;
     } else {

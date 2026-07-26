@@ -6,6 +6,7 @@ import type {
   ConversationTurnProjection,
   ConversationTurnsPageResponse,
 } from "@rah/runtime-protocol";
+import { approximateJsonByteLength } from "./bounded-json-size";
 
 type ConversationResourceFields = Pick<
   ConversationResourceIndexResponse,
@@ -320,7 +321,7 @@ async function buildResourceIndex(args: {
     generatedAt: new Date().toISOString(),
     ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
   };
-  response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+  response.approximateBytes = approximateJsonByteLength(response);
   return { response, turns: indexedTurns };
 }
 

@@ -147,7 +147,16 @@ export type TimelineItem =
   | { kind: "plan"; text: string; explanation?: string; steps?: TimelinePlanStep[] }
   | { kind: "step"; title: string; status: "started" | "completed" | "interrupted"; text?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "todo"; items: Array<{ text: string; completed: boolean }> }
-  | { kind: "system"; text: string }
+  | {
+      kind: "system";
+      text: string;
+      /**
+       * Conversation notices are standalone transcript rows. Process notices
+       * explain a turn lifecycle boundary and belong below its disclosure
+       * header with the rest of the work evidence.
+       */
+      placement?: "conversation" | "process";
+    }
   | { kind: "error"; text: string }
   | { kind: "retry"; attempt: number; error?: string }
   | { kind: "side_question"; question: string; response?: string; error?: string }
@@ -171,6 +180,36 @@ export type ToolCallArtifact =
 
 export interface ToolCallDetail {
   artifacts: ToolCallArtifact[];
+}
+
+/**
+ * Append-only provider process output. Streaming output is deliberately kept
+ * separate from tool/observation snapshots so producers never need to rebuild
+ * or retransmit the full accumulated string for every chunk.
+ */
+export type ProcessOutputStream = "stdout" | "stderr" | "combined";
+
+export interface ProcessOutputAppend {
+  itemId: string;
+  stream: ProcessOutputStream;
+  sequence: number;
+  offsetBytes: number;
+  data: string;
+  totalBytes: number;
+}
+
+/**
+ * Bounded materialized tail emitted when a process settles. Full output, when
+ * available, is loaded through the existing conversation item detail API.
+ */
+export interface ProcessOutputSnapshot {
+  itemId: string;
+  stream: ProcessOutputStream;
+  totalBytes: number;
+  retainedBytes: number;
+  truncatedBeforeBytes: number;
+  tail: string;
+  detailAvailable?: boolean;
 }
 
 /**
@@ -502,6 +541,9 @@ export type RahEventPayloadMap = {
   "tool.call.delta": { toolCallId: string; detail: ToolCallDetail };
   "tool.call.completed": { toolCall: ToolCall };
   "tool.call.failed": { toolCallId: string; error: string; detail?: ToolCallDetail };
+
+  "process.output.appended": { output: ProcessOutputAppend };
+  "process.output.snapshot": { output: ProcessOutputSnapshot };
 
   "observation.started": { observation: WorkbenchObservation };
   "observation.updated": { observation: WorkbenchObservation };

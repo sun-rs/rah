@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  CodexHistoryLivenessTracker,
   canFinalizeCodexStoredHistory,
   externalWriterRecordsFromLsofOutput,
   hasExternalWriterFromLsofOutput,
@@ -99,7 +100,7 @@ describe("codex history liveness", () => {
 
     assert.equal(
       canFinalizeCodexStoredHistory({
-        rolloutPath,
+        rolloutMtimeMs: 1_000,
         hasRahManagedWriter: false,
         nowMs: 4_000,
         stableMs: 2_000,
@@ -109,7 +110,7 @@ describe("codex history liveness", () => {
     );
     assert.equal(
       canFinalizeCodexStoredHistory({
-        rolloutPath,
+        rolloutMtimeMs: 1_000,
         hasRahManagedWriter: true,
         nowMs: 4_000,
         stableMs: 2_000,
@@ -119,7 +120,7 @@ describe("codex history liveness", () => {
     );
     assert.equal(
       canFinalizeCodexStoredHistory({
-        rolloutPath,
+        rolloutMtimeMs: 1_000,
         hasRahManagedWriter: false,
         nowMs: 4_000,
         stableMs: 2_000,
@@ -129,7 +130,7 @@ describe("codex history liveness", () => {
     );
     assert.equal(
       canFinalizeCodexStoredHistory({
-        rolloutPath,
+        rolloutMtimeMs: 1_000,
         hasRahManagedWriter: false,
         nowMs: 2_000,
         stableMs: 2_000,
@@ -145,7 +146,7 @@ describe("codex history liveness", () => {
 
     assert.equal(
       canFinalizeCodexStoredHistory({
-        rolloutPath,
+        rolloutMtimeMs: 1_000,
         hasRahManagedWriter: false,
         nowMs: 4_000,
         stableMs: 2_000,
@@ -156,7 +157,7 @@ describe("codex history liveness", () => {
     );
     assert.equal(
       canFinalizeCodexStoredHistory({
-        rolloutPath,
+        rolloutMtimeMs: 1_000,
         hasRahManagedWriter: false,
         nowMs: 4_000,
         stableMs: 2_000,
@@ -165,5 +166,104 @@ describe("codex history liveness", () => {
       }),
       false,
     );
+  });
+
+  test("liveness tracker keeps host inspection asynchronous, single-flight, and cached", async () => {
+    const rolloutPath = writeRolloutWithMtime(1_000);
+    let now = 4_000;
+    let probes = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const tracker = new CodexHistoryLivenessTracker({
+      now: () => now,
+      cacheMs: 1_000,
+      probe: async () => {
+        probes += 1;
+        await probeGate;
+        return { lsofOutput: "" };
+      },
+    });
+
+    assert.equal(
+      tracker.peekOrRefresh({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      false,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      tracker.peekOrRefresh({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      false,
+    );
+    assert.equal(probes, 1);
+    releaseProbe();
+    assert.equal(
+      await tracker.resolve({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      true,
+    );
+    assert.equal(
+      tracker.peekOrRefresh({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      true,
+    );
+    assert.equal(probes, 1);
+
+    now += 1_001;
+    assert.equal(
+      tracker.peekOrRefresh({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      false,
+    );
+    assert.equal(
+      await tracker.resolve({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      true,
+    );
+    assert.equal(probes, 2);
+    tracker.shutdown();
+  });
+
+  test("liveness tracker never probes a managed or unstable rollout", async () => {
+    const rolloutPath = writeRolloutWithMtime(3_500);
+    let probes = 0;
+    const tracker = new CodexHistoryLivenessTracker({
+      now: () => 4_000,
+      probe: async () => {
+        probes += 1;
+        return { lsofOutput: "" };
+      },
+    });
+
+    assert.equal(
+      await tracker.resolve({
+        rolloutPath,
+        hasRahManagedWriter: true,
+      }),
+      false,
+    );
+    assert.equal(
+      await tracker.resolve({
+        rolloutPath,
+        hasRahManagedWriter: false,
+      }),
+      false,
+    );
+    assert.equal(probes, 0);
+    tracker.shutdown();
   });
 });

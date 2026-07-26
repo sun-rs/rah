@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { Menu, X } from "lucide-react";
+import { X } from "lucide-react";
 import {
   ConversationHeaderStateIconView,
   conversationMetaToneClassName,
@@ -19,6 +19,7 @@ import {
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
 } from "../header-button-styles";
+import { MobileSidebarToggleButton } from "../shells/MobileSidebarToggleButton";
 import {
   readRememberedSessionSideSizing,
   readRememberedSessionSideSurface,
@@ -426,15 +427,10 @@ export function SessionSideDock(props: {
       <div className="flex h-full min-h-0 flex-col lg:hidden">
         <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2">
           {props.showMobileSidebarControl && props.onOpenMobileSidebar ? (
-            <button
-              type="button"
-              className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] md:!hidden"
-              onClick={props.onOpenMobileSidebar}
-              aria-label="Open sidebar"
-              title="Open sidebar"
-            >
-              <Menu size={20} />
-            </button>
+            <MobileSidebarToggleButton
+              className="md:!hidden"
+              onOpen={props.onOpenMobileSidebar}
+            />
           ) : null}
           <button
             type="button"

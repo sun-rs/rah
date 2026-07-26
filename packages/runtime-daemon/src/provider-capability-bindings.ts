@@ -28,12 +28,16 @@ export function hasStoredHistoryCapability(
       .getSessionConversationItemDetail === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationTurnDetail === "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
+      .getSessionConversationTurnFileDiff === "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
+      .getSessionConversationSourceRevision === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionConversationDirectory ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessions === "function" ||
-    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).refreshStoredSessionsCatalog ===
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).hydrateStoredSessionsCatalog ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessionWatchRoots ===
       "function" ||
@@ -73,6 +77,18 @@ export function bindStoredHistoryCapability(
             adapter.getSessionConversationTurnDetail.bind(adapter),
         }
       : {}),
+    ...(adapter.getSessionConversationTurnFileDiff
+      ? {
+          getSessionConversationTurnFileDiff:
+            adapter.getSessionConversationTurnFileDiff.bind(adapter),
+        }
+      : {}),
+    ...(adapter.getSessionConversationSourceRevision
+      ? {
+          getSessionConversationSourceRevision:
+            adapter.getSessionConversationSourceRevision.bind(adapter),
+        }
+      : {}),
     ...(adapter.createFrozenHistoryPageLoader
       ? { createFrozenHistoryPageLoader: adapter.createFrozenHistoryPageLoader.bind(adapter) }
       : {}),
@@ -81,9 +97,6 @@ export function bindStoredHistoryCapability(
       : {}),
     ...(adapter.listStoredSessions
       ? { listStoredSessions: adapter.listStoredSessions.bind(adapter) }
-      : {}),
-    ...(adapter.refreshStoredSessionsCatalog
-      ? { refreshStoredSessionsCatalog: adapter.refreshStoredSessionsCatalog.bind(adapter) }
       : {}),
     ...(adapter.hydrateStoredSessionsCatalog
       ? { hydrateStoredSessionsCatalog: adapter.hydrateStoredSessionsCatalog.bind(adapter) }

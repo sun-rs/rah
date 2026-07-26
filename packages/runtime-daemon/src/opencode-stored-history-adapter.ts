@@ -5,6 +5,7 @@ import type {
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import { existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import type {
   ProviderAdapter,
   ProviderShutdownAdapter,
@@ -13,18 +14,14 @@ import type {
 } from "./provider-adapter";
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import {
-  deleteOpenCodeStoredSession,
-  createOpenCodeStoredSessionFrozenHistoryPageLoader,
-  discoverOpenCodeStoredSessions,
-  findOpenCodeStoredSessionRecord,
-  getOpenCodeStoredSessionHistoryPage,
-  getOpenCodeStoredSessionTurnDetail,
-  getOpenCodeStoredSessionTurnDirectory,
-  getOpenCodeStoredSessionTurnHistoryPage,
-  OpenCodeSqliteReadError,
+  deleteOpenCodeStoredSessionAsync,
+  findOpenCodeStoredSessionRecordAsync,
+  getOpenCodeStoredSessionTurnDetailAsync,
+  getOpenCodeStoredSessionTurnDirectoryAsync,
+  getOpenCodeStoredSessionTurnHistoryPageAsync,
   resolveOpenCodeStoredSessionWatchRoots,
   resumeOpenCodeStoredSession,
-  restoreOpenCodeStoredSession,
+  restoreOpenCodeStoredSessionAsync,
   type OpenCodeStoredSessionRecord,
 } from "./opencode-stored-sessions";
 import {
@@ -52,7 +49,7 @@ export class OpenCodeStoredHistoryAdapter
 
   constructor(private readonly services: RuntimeServices) {}
 
-  resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
+  async resumeStoredSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "opencode",
@@ -60,14 +57,11 @@ export class OpenCodeStoredHistoryAdapter
       preferStoredReplay: true,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
-    const record =
-      this.storedSessionIndex.get(request.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
-      findOpenCodeStoredSessionRecord(request.providerSessionId);
-    if (!record) {
-      throw new Error(`Unknown OpenCode session ${request.providerSessionId}.`);
-    }
     try {
+      const record = await this.findRecord(request.providerSessionId);
+      if (!record) {
+        throw new Error(`Unknown OpenCode session ${request.providerSessionId}.`);
+      }
       return finalizeStoredReplayResume({
         services: this.services,
         provider: "opencode",
@@ -86,33 +80,41 @@ export class OpenCodeStoredHistoryAdapter
     }
   }
 
-  getConversationEvidencePage(
+  async getSessionConversationSourceRevision(
     sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): ConversationEvidencePage {
-    void options?.cursor;
-    const record = this.findRecordForRuntimeSession(sessionId);
+  ): Promise<string | undefined> {
+    const record = await this.findRecordForRuntimeSession(sessionId);
     if (!record) {
-      return { sessionId, events: [] };
+      return undefined;
     }
-    return getOpenCodeStoredSessionHistoryPage({
-      sessionId,
-      record,
-      ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
-      ...(options?.limit ? { limit: options.limit } : {}),
-    });
+    const revisions: string[] = [];
+    for (const sourcePath of [
+      record.databasePath,
+      `${record.databasePath}-wal`,
+      `${record.databasePath}-shm`,
+    ]) {
+      try {
+        const source = await stat(sourcePath);
+        revisions.push(
+          `${sourcePath === record.databasePath ? "db" : sourcePath.endsWith("-wal") ? "wal" : "shm"}:${Math.trunc(source.mtimeMs)}:${source.size}`,
+        );
+      } catch {
+        // SQLite sidecars are optional and may disappear after a checkpoint.
+      }
+    }
+    return revisions.length > 0 ? revisions.join("|") : undefined;
   }
 
-  getConversationSummaryEvidencePage(
+  async getConversationSummaryEvidencePage(
     sessionId: string,
     options: { cursor?: string; limit?: number } = {},
-  ): ConversationEvidencePage | undefined {
-    const record = this.findRecordForRuntimeSession(sessionId);
+  ): Promise<ConversationEvidencePage | undefined> {
+    const record = await this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return undefined;
     }
     const runtime = this.services.sessionStore.getSession(sessionId)?.session.runtime;
-    return getOpenCodeStoredSessionTurnHistoryPage({
+    return getOpenCodeStoredSessionTurnHistoryPageAsync({
       sessionId,
       record,
       ...(options.cursor ? { cursor: options.cursor } : {}),
@@ -125,8 +127,8 @@ export class OpenCodeStoredHistoryAdapter
     });
   }
 
-  getSessionConversationDirectory(sessionId: string) {
-    const record = this.findRecordForRuntimeSession(sessionId);
+  async getSessionConversationDirectory(sessionId: string) {
+    const record = await this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return {
         sessionId,
@@ -136,45 +138,26 @@ export class OpenCodeStoredHistoryAdapter
         generatedAt: new Date().toISOString(),
       };
     }
-    return getOpenCodeStoredSessionTurnDirectory({ sessionId, record });
+    return getOpenCodeStoredSessionTurnDirectoryAsync({ sessionId, record });
   }
 
-  getSessionConversationTurnDetail(
+  async getSessionConversationTurnDetail(
     sessionId: string,
     options: { providerTurnId: string },
-  ): ConversationEvidencePage | undefined {
-    const record = this.findRecordForRuntimeSession(sessionId);
+  ): Promise<ConversationEvidencePage | undefined> {
+    const record = await this.findRecordForRuntimeSession(sessionId);
     if (!record) {
       return undefined;
     }
-    return getOpenCodeStoredSessionTurnDetail({
+    return getOpenCodeStoredSessionTurnDetailAsync({
       sessionId,
       record,
       providerTurnId: options.providerTurnId,
     });
   }
 
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const record = this.findRecordForRuntimeSession(sessionId);
-    if (!record) {
-      return undefined;
-    }
-    return createOpenCodeStoredSessionFrozenHistoryPageLoader({
-      sessionId,
-      record,
-    });
-  }
-
   listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
     return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
   }
 
   hydrateStoredSessionsCatalog(records: readonly StoredSessionCatalogRecord[]): void {
@@ -193,10 +176,7 @@ export class OpenCodeStoredHistoryAdapter
   }
 
   async archiveStoredSession(session: StoredSessionRef): Promise<"provider_native"> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId) ??
-      findOpenCodeStoredSessionRecord(session.providerSessionId);
+    const record = await this.findRecord(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
     }
@@ -206,6 +186,7 @@ export class OpenCodeStoredHistoryAdapter
     const recordedCwd = record.ref.cwd ?? record.ref.rootDir;
     const cwd = recordedCwd && existsSync(recordedCwd) ? recordedCwd : process.cwd();
     const server = await this.getArchiveServer(cwd);
+    let archivedAtMs: number;
     try {
       const updated = await archiveOpenCodeSession({
         handle: {
@@ -220,31 +201,36 @@ export class OpenCodeStoredHistoryAdapter
           `OpenCode did not confirm native archive for ${session.providerSessionId}.`,
         );
       }
+      archivedAtMs = updated.time.archived;
     } catch (error) {
       await this.resetArchiveServer();
       throw error;
     }
-    this.refreshStoredSessionIndex();
+    this.storedSessionIndex.set(session.providerSessionId, {
+      ...record,
+      ref: {
+        ...record.ref,
+        providerState: {
+          ...record.ref.providerState,
+          archived: true,
+          archivedAt: new Date(archivedAtMs).toISOString(),
+        },
+      },
+    });
     return "provider_native";
   }
 
-  removeStoredSession(session: StoredSessionRef): void {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId) ??
-      findOpenCodeStoredSessionRecord(session.providerSessionId);
+  async removeStoredSession(session: StoredSessionRef): Promise<void> {
+    const record = await this.findRecord(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
     }
-    deleteOpenCodeStoredSession(record);
+    await deleteOpenCodeStoredSessionAsync(record);
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  restoreStoredSession(session: StoredSessionRef): void {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId) ??
-      findOpenCodeStoredSessionRecord(session.providerSessionId);
+  async restoreStoredSession(session: StoredSessionRef): Promise<void> {
+    const record = await this.findRecord(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
     }
@@ -252,45 +238,52 @@ export class OpenCodeStoredHistoryAdapter
     // schema only accepts a numeric archived timestamp and silently ignores
     // null. Clearing the provider-owned field is therefore the narrow,
     // reversible counterpart until an official unarchive endpoint exists.
-    restoreOpenCodeStoredSession(record);
-    this.refreshStoredSessionIndex();
+    await restoreOpenCodeStoredSessionAsync(record);
+    const { archived: _archived, archivedAt: _archivedAt, ...providerState } =
+      record.ref.providerState ?? {};
+    void _archived;
+    void _archivedAt;
+    const { providerState: _oldProviderState, ...ref } = record.ref;
+    void _oldProviderState;
+    this.storedSessionIndex.set(session.providerSessionId, {
+      ...record,
+      ref: {
+        ...ref,
+        ...(Object.keys(providerState).length > 0 ? { providerState } : {}),
+      },
+    });
   }
 
   async shutdown(): Promise<void> {
     await this.resetArchiveServer();
   }
 
-  private findRecordForRuntimeSession(sessionId: string): OpenCodeStoredSessionRecord | undefined {
+  private async findRecordForRuntimeSession(
+    sessionId: string,
+  ): Promise<OpenCodeStoredSessionRecord | undefined> {
     const state = this.services.sessionStore.getSession(sessionId);
     const providerSessionId = state?.session.providerSessionId;
     if (!providerSessionId) {
       return undefined;
     }
-    return (
-      this.storedSessionIndex.get(providerSessionId) ??
-      this.refreshStoredSessionIndex().get(providerSessionId) ??
-      findOpenCodeStoredSessionRecord(providerSessionId)
-    ) ?? undefined;
+    // Normal conversation reads never start a SQLite discovery query. The
+    // process-wide catalog owns discovery and hydrates this map; targeted
+    // asynchronous lookup remains available only to explicit lifecycle work.
+    return this.storedSessionIndex.get(providerSessionId);
   }
 
-  private refreshStoredSessionIndex(): Map<string, OpenCodeStoredSessionRecord> {
-    try {
-      this.storedSessionIndex = new Map(
-        discoverOpenCodeStoredSessions({ throwOnReadError: true }).map((record) => [
-          record.ref.providerSessionId,
-          record,
-        ]),
-      );
-    } catch (error) {
-      if (error instanceof OpenCodeSqliteReadError) {
-        console.warn(
-          `[rah] OpenCode history refresh failed; keeping ${this.storedSessionIndex.size} cached session(s). ${error.message}`,
-        );
-        return this.storedSessionIndex;
-      }
-      throw error;
+  private async findRecord(
+    providerSessionId: string,
+  ): Promise<OpenCodeStoredSessionRecord | null> {
+    const cached = this.storedSessionIndex.get(providerSessionId);
+    if (cached) {
+      return cached;
     }
-    return this.storedSessionIndex;
+    const record = await findOpenCodeStoredSessionRecordAsync(providerSessionId);
+    if (record) {
+      this.storedSessionIndex.set(providerSessionId, record);
+    }
+    return record;
   }
 
   private async getArchiveServer(cwd: string): Promise<OpenCodeServerHandle> {

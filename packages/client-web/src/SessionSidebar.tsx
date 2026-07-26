@@ -6,6 +6,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import type { CouncilSnapshot, DebugScenarioDescriptor, StoredSessionRef } from "@rah/runtime-protocol";
@@ -42,9 +46,123 @@ import {
   type SidebarWorkspaceViewModel,
 } from "./sidebar-view-model";
 import { COUNCIL_ACCENT_TITLE_CLASSNAME } from "./council/council-theme";
+import {
+  reconcileSidebarSectionOrder,
+  sidebarCouncilOrderKey,
+  sidebarPinnedOrderKey,
+  type SidebarDropPosition,
+} from "./sidebar-section-order";
 
 const sessionWorkspaceBranchCache = new Map<string, string | null>();
 const sessionWorkspaceBranchRequests = new Map<string, Promise<string | null>>();
+const PINNED_SIDEBAR_DRAG_TYPE = "application/x-rah-sidebar-pinned-order-key";
+const COUNCIL_SIDEBAR_DRAG_TYPE = "application/x-rah-sidebar-council-order-key";
+const SIDEBAR_POINTER_FOCUS_ATTRIBUTE = "data-sidebar-pointer-focus";
+
+function markSidebarPointerFocus(event: ReactPointerEvent<HTMLDivElement>) {
+  event.currentTarget.setAttribute(SIDEBAR_POINTER_FOCUS_ATTRIBUTE, "true");
+}
+
+function clearSidebarPointerFocusForKeyboard(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+) {
+  if (event.key === "Tab") {
+    event.currentTarget.removeAttribute(SIDEBAR_POINTER_FOCUS_ATTRIBUTE);
+  }
+}
+
+function clearSidebarPointerFocusAfterBlur(
+  event: ReactFocusEvent<HTMLDivElement>,
+) {
+  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+    event.currentTarget.removeAttribute(SIDEBAR_POINTER_FOCUS_ATTRIBUTE);
+  }
+}
+
+type SidebarReorderBinding = {
+  itemKey: string;
+  mimeType: string;
+  onMove: (
+    sourceKey: string,
+    targetKey: string,
+    position: SidebarDropPosition,
+  ) => void;
+};
+
+function transferIncludes(
+  event: ReactDragEvent<HTMLDivElement>,
+  mimeType: string,
+): boolean {
+  return Array.from(event.dataTransfer.types).includes(mimeType);
+}
+
+function useSidebarReorderDropTarget(binding: SidebarReorderBinding | undefined) {
+  const [dropPosition, setDropPosition] = useState<SidebarDropPosition | null>(null);
+
+  const onDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!binding || !transferIncludes(event, binding.mimeType)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setDropPosition(
+      event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+    );
+  };
+
+  const onDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (
+      event.relatedTarget instanceof Node &&
+      event.currentTarget.contains(event.relatedTarget)
+    ) {
+      return;
+    }
+    setDropPosition(null);
+  };
+
+  const onDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!binding || !transferIncludes(event, binding.mimeType)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceKey = event.dataTransfer.getData(binding.mimeType);
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const position =
+      dropPosition ??
+      (event.clientY < bounds.top + bounds.height / 2 ? "before" : "after");
+    setDropPosition(null);
+    if (sourceKey) {
+      binding.onMove(sourceKey, binding.itemKey, position);
+    }
+  };
+
+  return {
+    clearDropPosition: () => setDropPosition(null),
+    dropPosition,
+    onDragLeave,
+    onDragOver,
+    onDrop,
+  };
+}
+
+function SidebarDropIndicator(props: { position: SidebarDropPosition | null }) {
+  if (!props.position) {
+    return null;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={`pointer-events-none absolute left-1 right-1 z-[3] flex items-center ${
+        props.position === "before" ? "-top-1" : "-bottom-1"
+      }`}
+    >
+      <span className="h-2 w-2 shrink-0 rounded-full border-2 border-[var(--app-focus)] bg-[var(--app-bg)]" />
+      <span className="h-0.5 min-w-0 flex-1 rounded-full bg-[var(--app-focus)]" />
+    </span>
+  );
+}
 
 function loadSessionWorkspaceBranch(workspaceDir: string): Promise<string | null> {
   if (sessionWorkspaceBranchCache.has(workspaceDir)) {
@@ -95,11 +213,7 @@ function FadingSingleLineText(props: { children: string; className: string }) {
   return (
     <span
       ref={titleRef}
-      className={`${props.className} ${
-        overflowing
-          ? "[mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)]"
-          : ""
-      }`}
+      className={`${props.className} ${overflowing ? "rah-sidebar-fade-end" : ""}`}
     >
       {props.children}
     </span>
@@ -115,29 +229,30 @@ function FadingTooltipTitle(props: { children: string }) {
 }
 
 function SidebarStatusIndicator(props: { status: SidebarActivityStatus }) {
+  if (props.status === "stopped") {
+    return null;
+  }
   const label = props.status === "running"
     ? "Running"
     : props.status === "working"
       ? "Working"
       : props.status === "unread"
         ? "Unread completed turn"
-        : props.status === "error"
-          ? "Error"
-          : "Stopped";
+        : "Error";
   return (
     <span
       className={SIDEBAR_LAYOUT.sessionStatusSlotClassName}
-      aria-label={props.status === "stopped" ? undefined : label}
-      title={props.status === "stopped" ? undefined : label}
+      aria-label={label}
+      title={label}
     >
       {props.status === "working" ? (
         <span className="h-2.5 w-2.5 animate-spin rounded-full border border-current border-r-transparent text-[var(--app-hint)]" />
       ) : props.status === "unread" ? (
-        <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+        <span className="h-2 w-2 rounded-full bg-sky-500" />
       ) : props.status === "error" ? (
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+        <span className="h-2 w-2 rounded-full bg-red-500" />
       ) : props.status === "running" ? (
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        <span className="h-2 w-2 rounded-full bg-emerald-500" />
       ) : null}
     </span>
   );
@@ -331,7 +446,8 @@ function WorkspaceSortMenu(props: {
 
 function RunningSessionRow(props: {
   session: SidebarWorkspaceViewModel["sessions"][number];
-  draggable: boolean;
+  canvasDraggable: boolean;
+  reorder?: SidebarReorderBinding;
   onTogglePin: () => void;
   onArchive: () => void;
   onSelect: () => void;
@@ -349,14 +465,14 @@ function RunningSessionRow(props: {
       ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
       : SIDEBAR_LAYOUT.sessionRowIdleClassName
   }`;
-  const actionCount = Number(props.session.archivable) + 1;
-  const selectButtonClassName = `${SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName} ${
-    actionCount > 1
-      ? SIDEBAR_LAYOUT.sessionDualActionPaddingClassName
-      : actionCount === 1
-        ? SIDEBAR_LAYOUT.sessionSingleActionPaddingClassName
-        : ""
-  } ${props.session.pinned ? SIDEBAR_LAYOUT.sessionPinnedActionPaddingClassName : ""}`;
+  const selectButtonClassName = SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName;
+  const actionGroupClassName = `${SIDEBAR_LAYOUT.sessionActionGroupBaseClassName} ${
+    props.session.archivable
+      ? SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName
+      : SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName
+  }`;
+  const reorderDropTarget = useSidebarReorderDropTarget(props.reorder);
+  const draggable = props.canvasDraggable || props.reorder !== undefined;
 
   const clearTooltipTimer = () => {
     if (tooltipTimerRef.current !== null) {
@@ -389,23 +505,39 @@ function RunningSessionRow(props: {
     <div
       ref={rowRef}
       className={rowClassName}
-      draggable={props.draggable}
+      draggable={draggable}
+      data-sidebar-reorder-key={props.reorder?.itemKey}
+      data-sidebar-drop-position={reorderDropTarget.dropPosition ?? undefined}
+      onPointerDownCapture={markSidebarPointerFocus}
+      onKeyDownCapture={clearSidebarPointerFocusForKeyboard}
       onMouseEnter={() => openTooltip(true)}
       onMouseLeave={closeTooltip}
       onFocusCapture={() => openTooltip(false)}
       onBlurCapture={(event) => {
+        clearSidebarPointerFocusAfterBlur(event);
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
           closeTooltip();
         }
       }}
       onDragStart={(event) => {
-        if (!props.draggable) {
+        if (!draggable) {
           return;
         }
-        event.dataTransfer.setData("application/x-rah-session-id", props.session.id);
+        closeTooltip();
+        if (props.canvasDraggable) {
+          event.dataTransfer.setData("application/x-rah-session-id", props.session.id);
+        }
+        if (props.reorder) {
+          event.dataTransfer.setData(props.reorder.mimeType, props.reorder.itemKey);
+        }
         event.dataTransfer.effectAllowed = "move";
       }}
+      onDragOver={reorderDropTarget.onDragOver}
+      onDragLeave={reorderDropTarget.onDragLeave}
+      onDrop={reorderDropTarget.onDrop}
+      onDragEnd={reorderDropTarget.clearDropPosition}
     >
+      <SidebarDropIndicator position={reorderDropTarget.dropPosition} />
       <div className={SIDEBAR_LAYOUT.sessionInlineRowClassName}>
         <button
           type="button"
@@ -420,36 +552,42 @@ function RunningSessionRow(props: {
               variant="bare"
             />
           </span>
-          <SidebarStatusIndicator status={props.session.status} />
           <FadingSingleLineText className={titleClassName}>
             {props.session.title}
           </FadingSingleLineText>
         </button>
         <div className={SIDEBAR_LAYOUT.sessionActionSlotClassName}>
-          <button
-            type="button"
-            onClick={props.onTogglePin}
-            className={`${SIDEBAR_LAYOUT.sessionActionButtonClassName} ${
-              props.session.pinned
-                ? SIDEBAR_LAYOUT.sessionPinActiveClassName
-                : SIDEBAR_LAYOUT.sessionPinHiddenClassName
-            }`}
-            title={props.session.pinned ? "Unpin" : "Pin"}
-            aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
-          >
-            <Pin size={14} className={props.session.pinned ? "fill-current" : ""} />
-          </button>
-          {props.session.archivable ? (
-            <button
-              type="button"
-              onClick={props.onArchive}
-              className={`${SIDEBAR_LAYOUT.sessionActionButtonClassName} ${SIDEBAR_LAYOUT.sessionPinHiddenClassName}`}
-              title="Archive"
-              aria-label="Archive session"
-            >
-              <Archive size={14} />
-            </button>
-          ) : null}
+          <SidebarStatusIndicator status={props.session.status} />
+          <span className={actionGroupClassName}>
+            <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
+              <button
+                type="button"
+                onClick={props.onTogglePin}
+                className={`${SIDEBAR_LAYOUT.sessionActionButtonClassName} ${SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName} ${
+                  props.session.pinned
+                    ? SIDEBAR_LAYOUT.sessionPinSelectedToneClassName
+                    : ""
+                }`}
+                title={props.session.pinned ? "Unpin" : "Pin"}
+                aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
+              >
+                <Pin size={14} className={props.session.pinned ? "fill-current" : ""} />
+              </button>
+            </span>
+            {props.session.archivable ? (
+              <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
+                <button
+                  type="button"
+                  onClick={props.onArchive}
+                  className={`${SIDEBAR_LAYOUT.sessionActionButtonClassName} ${SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName}`}
+                  title="Archive"
+                  aria-label="Archive session"
+                >
+                  <Archive size={14} />
+                </button>
+              </span>
+            ) : null}
+          </span>
         </div>
       </div>
       <SessionRowTooltip
@@ -465,7 +603,8 @@ function RunningSessionRow(props: {
 
 function CouncilRow(props: {
   council: SidebarCouncilViewModel;
-  draggable: boolean;
+  canvasDraggable: boolean;
+  reorder: SidebarReorderBinding;
   onSelect: () => void;
 }) {
   const rowClassName = `${SIDEBAR_LAYOUT.sessionRowBaseClassName} ${
@@ -474,19 +613,30 @@ function CouncilRow(props: {
       : SIDEBAR_LAYOUT.sessionRowIdleClassName
   }`;
   const selectButtonClassName = SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName;
+  const reorderDropTarget = useSidebarReorderDropTarget(props.reorder);
 
   return (
     <div
       className={rowClassName}
-      draggable={props.draggable}
+      draggable
+      data-sidebar-reorder-key={props.reorder.itemKey}
+      data-sidebar-drop-position={reorderDropTarget.dropPosition ?? undefined}
+      onPointerDownCapture={markSidebarPointerFocus}
+      onKeyDownCapture={clearSidebarPointerFocusForKeyboard}
+      onBlurCapture={clearSidebarPointerFocusAfterBlur}
       onDragStart={(event) => {
-        if (!props.draggable) {
-          return;
+        if (props.canvasDraggable) {
+          event.dataTransfer.setData("application/x-rah-council-id", props.council.id);
         }
-        event.dataTransfer.setData("application/x-rah-council-id", props.council.id);
+        event.dataTransfer.setData(props.reorder.mimeType, props.reorder.itemKey);
         event.dataTransfer.effectAllowed = "move";
       }}
+      onDragOver={reorderDropTarget.onDragOver}
+      onDragLeave={reorderDropTarget.onDragLeave}
+      onDrop={reorderDropTarget.onDrop}
+      onDragEnd={reorderDropTarget.clearDropPosition}
     >
+      <SidebarDropIndicator position={reorderDropTarget.dropPosition} />
       <div className={SIDEBAR_LAYOUT.sessionInlineRowClassName}>
         <button
           type="button"
@@ -496,13 +646,15 @@ function CouncilRow(props: {
           <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
             <CouncilLogo className={SIDEBAR_LAYOUT.sessionIconClassName} tone="black" variant="bare" />
           </span>
-          <SidebarStatusIndicator status={props.council.status} />
           <FadingSingleLineText
             className={`${SIDEBAR_LAYOUT.sessionTitleClassName} ${COUNCIL_ACCENT_TITLE_CLASSNAME}`}
           >
             {props.council.title}
           </FadingSingleLineText>
         </button>
+        <div className={SIDEBAR_LAYOUT.sessionActionSlotClassName}>
+          <SidebarStatusIndicator status={props.council.status} />
+        </div>
       </div>
     </div>
   );
@@ -546,6 +698,9 @@ function WorkspaceRow(props: {
       {/* Workspace header */}
       <div
         className={SIDEBAR_LAYOUT.workspaceHeaderClassName}
+        onPointerDownCapture={markSidebarPointerFocus}
+        onKeyDownCapture={clearSidebarPointerFocusForKeyboard}
+        onBlurCapture={clearSidebarPointerFocusAfterBlur}
       >
         <button
           type="button"
@@ -559,65 +714,69 @@ function WorkspaceRow(props: {
           <span className={SIDEBAR_LAYOUT.workspaceDisclosureIconClassName}>
             {expanded ? <FolderOpen size={14} /> : <Folder size={14} />}
           </span>
-          <span className={SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName}>
+          <FadingSingleLineText className={SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName}>
             {props.workspace.displayName}
-          </span>
+          </FadingSingleLineText>
         </button>
         <div
           className={`${SIDEBAR_LAYOUT.workspaceActionSlotClassName} ${
             showRemove ? "opacity-100 pointer-events-auto" : SIDEBAR_LAYOUT.workspaceActionHiddenClassName
           }`}
         >
-          {showRemove ? (
-            <button
-              type="button"
-              aria-disabled={workspaceRemovalBlocked}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-              }}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (workspaceRemovalBlocked) {
-                  return;
-                }
-                props.onRemoveWorkspace();
-              }}
-              className={`${SIDEBAR_LAYOUT.workspaceActionButtonClassName} ${
-                workspaceRemovalBlocked
-                  ? SIDEBAR_LAYOUT.workspaceActionDisabledClassName
-                  : SIDEBAR_LAYOUT.workspaceActionDangerClassName
-              }`}
-              aria-label={workspaceRemovalLabel}
-              title={workspaceRemovalLabel}
-            >
-              <X size={12} strokeWidth={2.5} />
-            </button>
-          ) : (
+          <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
+            {showRemove ? (
+              <button
+                type="button"
+                aria-disabled={workspaceRemovalBlocked}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (workspaceRemovalBlocked) {
+                    return;
+                  }
+                  props.onRemoveWorkspace();
+                }}
+                className={`${SIDEBAR_LAYOUT.workspaceActionButtonClassName} ${
+                  workspaceRemovalBlocked
+                    ? SIDEBAR_LAYOUT.workspaceActionDisabledClassName
+                    : SIDEBAR_LAYOUT.workspaceActionDangerClassName
+                }`}
+                aria-label={workspaceRemovalLabel}
+                title={workspaceRemovalLabel}
+              >
+                <X size={12} strokeWidth={2.5} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={SIDEBAR_LAYOUT.workspaceActionButtonClassName}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowRemove(true);
+                }}
+                title="More"
+              >
+                <MoreHorizontal size={14} />
+              </button>
+            )}
+          </span>
+          <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
             <button
               type="button"
               className={SIDEBAR_LAYOUT.workspaceActionButtonClassName}
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowRemove(true);
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onSelectWorkspace();
               }}
-              title="More"
+              aria-label="New task in workspace"
+              title="New task in workspace"
             >
-              <MoreHorizontal size={14} />
+              <SquarePen size={14} />
             </button>
-          )}
-          <button
-            type="button"
-            className={SIDEBAR_LAYOUT.workspaceActionButtonClassName}
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onSelectWorkspace();
-            }}
-            aria-label="New task in workspace"
-            title="New task in workspace"
-          >
-            <SquarePen size={14} />
-          </button>
+          </span>
         </div>
       </div>
 
@@ -628,7 +787,7 @@ function WorkspaceRow(props: {
             <RunningSessionRow
               key={item.stableKey}
               session={item}
-              draggable={props.enableSessionDrag && item.running}
+              canvasDraggable={props.enableSessionDrag && item.running}
               onTogglePin={() => props.onTogglePinSession(item.pinItemKey)}
               onArchive={() => props.onArchiveSession(item)}
               onSelect={() => props.onSelectSession(item)}
@@ -647,6 +806,18 @@ export function SessionSidebar(props: {
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   runningSessionActivityAtById?: ReadonlyMap<string, string> | undefined;
   pinnedItems: readonly SidebarPinnedItemRef[];
+  pinnedOrderKeys: readonly string[];
+  councilOrderKeys: readonly string[];
+  onMovePinnedItem: (
+    sourceKey: string,
+    targetKey: string,
+    position: SidebarDropPosition,
+  ) => void;
+  onMoveCouncil: (
+    sourceKey: string,
+    targetKey: string,
+    position: SidebarDropPosition,
+  ) => void;
   onTogglePinSession: (workspaceDir: string, itemKey: string) => void;
   onAddWorkspace: (value: string) => void;
   onRemoveWorkspace: (value: string) => void;
@@ -723,6 +894,46 @@ export function SessionSidebar(props: {
     () => partitionSidebarPinnedItems(workspaceViewModels, props.pinnedItems),
     [props.pinnedItems, workspaceViewModels],
   );
+  const pinnedAvailableKeys = useMemo(
+    () =>
+      sidebarPartition.pinnedItems.map(({ workspaceDir, item }) =>
+        sidebarPinnedOrderKey(workspaceDir, item.pinItemKey)
+      ),
+    [sidebarPartition.pinnedItems],
+  );
+  const councilAvailableKeys = useMemo(
+    () => councilItems.map((item) => sidebarCouncilOrderKey(item.id)),
+    [councilItems],
+  );
+  const pinnedSectionOrder = useMemo(
+    () => reconcileSidebarSectionOrder(props.pinnedOrderKeys, pinnedAvailableKeys),
+    [pinnedAvailableKeys, props.pinnedOrderKeys],
+  );
+  const councilSectionOrder = useMemo(
+    () => reconcileSidebarSectionOrder(props.councilOrderKeys, councilAvailableKeys),
+    [councilAvailableKeys, props.councilOrderKeys],
+  );
+  const orderedPinnedItems = useMemo(() => {
+    const itemByKey = new Map(
+      sidebarPartition.pinnedItems.map((item) => [
+        sidebarPinnedOrderKey(item.workspaceDir, item.item.pinItemKey),
+        item,
+      ] as const),
+    );
+    return pinnedSectionOrder.flatMap((key) => {
+      const item = itemByKey.get(key);
+      return item ? [item] : [];
+    });
+  }, [pinnedSectionOrder, sidebarPartition.pinnedItems]);
+  const orderedCouncilItems = useMemo(() => {
+    const itemByKey = new Map(
+      councilItems.map((item) => [sidebarCouncilOrderKey(item.id), item] as const),
+    );
+    return councilSectionOrder.flatMap((key) => {
+      const item = itemByKey.get(key);
+      return item ? [item] : [];
+    });
+  }, [councilItems, councilSectionOrder]);
   const workspaceCount = sidebarPartition.workspaces.length;
   const sessionCount = workspaceViewModels.reduce(
     (count, workspace) => count + workspace.sessions.length,
@@ -744,37 +955,45 @@ export function SessionSidebar(props: {
 
   return (
     <div className={SIDEBAR_LAYOUT.rootClassName}>
-      {sidebarPartition.pinnedItems.length > 0 ? (
+      {orderedPinnedItems.length > 0 ? (
         <div className={SIDEBAR_LAYOUT.pinnedSectionClassName}>
           <div className={SIDEBAR_LAYOUT.pinnedHeaderClassName}>Pinned</div>
           <div className={SIDEBAR_LAYOUT.pinnedListClassName}>
-            {sidebarPartition.pinnedItems.map(({ workspaceDir, item }) => (
-              <RunningSessionRow
-                key={`${workspaceDir}:${item.stableKey}`}
-                session={item}
-                draggable={props.enableSessionDrag === true && item.running}
-                onTogglePin={() => props.onTogglePinSession(workspaceDir, item.pinItemKey)}
-                onArchive={() => {
-                  if (item.runtimeSessionId) {
-                    props.onArchiveRunningSession(item.runtimeSessionId);
-                  } else if (item.storedRef) {
-                    props.onArchiveStoredSession(item.storedRef);
-                  }
-                }}
-                onSelect={() => {
-                  if (item.runtimeSessionId) {
-                    props.onSelectSession(workspaceDir, item.runtimeSessionId);
-                  } else if (item.storedRef) {
-                    props.onSelectStoredSession(workspaceDir, item.storedRef);
-                  }
-                }}
-              />
-            ))}
+            {orderedPinnedItems.map(({ workspaceDir, item }) => {
+              const orderKey = sidebarPinnedOrderKey(workspaceDir, item.pinItemKey);
+              return (
+                <RunningSessionRow
+                  key={orderKey}
+                  session={item}
+                  canvasDraggable={props.enableSessionDrag === true && item.running}
+                  reorder={{
+                    itemKey: orderKey,
+                    mimeType: PINNED_SIDEBAR_DRAG_TYPE,
+                    onMove: props.onMovePinnedItem,
+                  }}
+                  onTogglePin={() => props.onTogglePinSession(workspaceDir, item.pinItemKey)}
+                  onArchive={() => {
+                    if (item.runtimeSessionId) {
+                      props.onArchiveRunningSession(item.runtimeSessionId);
+                    } else if (item.storedRef) {
+                      props.onArchiveStoredSession(item.storedRef);
+                    }
+                  }}
+                  onSelect={() => {
+                    if (item.runtimeSessionId) {
+                      props.onSelectSession(workspaceDir, item.runtimeSessionId);
+                    } else if (item.storedRef) {
+                      props.onSelectStoredSession(workspaceDir, item.storedRef);
+                    }
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
       ) : null}
 
-      {councilItems.length > 0 ? (
+      {orderedCouncilItems.length > 0 ? (
         <section
           className={SIDEBAR_LAYOUT.councilSectionClassName}
           aria-label="Running Councils"
@@ -784,17 +1003,22 @@ export function SessionSidebar(props: {
             <span>Councils</span>
             <span
               className={SIDEBAR_LAYOUT.councilCountClassName}
-              title={`${councilItems.length} running Councils`}
+              title={`${orderedCouncilItems.length} running Councils`}
             >
-              {councilItems.length}
+              {orderedCouncilItems.length}
             </span>
           </div>
           <div className={SIDEBAR_LAYOUT.councilListClassName}>
-            {councilItems.map((item) => (
+            {orderedCouncilItems.map((item) => (
               <CouncilRow
                 key={item.stableKey}
                 council={item}
-                draggable={props.enableCouncilDrag === true}
+                canvasDraggable={props.enableCouncilDrag === true}
+                reorder={{
+                  itemKey: sidebarCouncilOrderKey(item.id),
+                  mimeType: COUNCIL_SIDEBAR_DRAG_TYPE,
+                  onMove: props.onMoveCouncil,
+                }}
                 onSelect={() => props.onSelectCouncil?.(item.workspaceDir, item.id)}
               />
             ))}
@@ -823,19 +1047,24 @@ export function SessionSidebar(props: {
           </span>
         </div>
         <div className={SIDEBAR_LAYOUT.toolbarActionsClassName}>
-          <WorkspaceSortMenu
-            value={props.workspaceSortMode}
-            onChange={props.onWorkspaceSortModeChange}
-            onExpandAll={expandAll}
-            onCollapseAll={collapseAll}
-          />
-          <WorkspacePicker
-            currentDir=""
-            triggerLabel=""
-            triggerIcon={<FolderPlus size={14} />}
-            triggerClassName={SIDEBAR_LAYOUT.toolbarIconButtonClassName}
-            onSelect={props.onAddWorkspace}
-          />
+          <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
+            <WorkspaceSortMenu
+              value={props.workspaceSortMode}
+              onChange={props.onWorkspaceSortModeChange}
+              onExpandAll={expandAll}
+              onCollapseAll={collapseAll}
+            />
+          </span>
+          <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
+            <WorkspacePicker
+              currentDir=""
+              triggerLabel=""
+              triggerIcon={<FolderPlus size={14} />}
+              triggerClassName={SIDEBAR_LAYOUT.toolbarIconButtonClassName}
+              triggerAriaLabel="Add workspace"
+              onSelect={props.onAddWorkspace}
+            />
+          </span>
         </div>
       </div>
 

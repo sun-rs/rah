@@ -1,14 +1,16 @@
 import { pathToFileURL } from "node:url";
 import { resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import type {
   SessionInputAttachment,
   SessionInputRequest,
 } from "@rah/runtime-protocol";
 import {
-  resolveManagedAttachmentPath,
+  describeManagedAttachmentPath,
   resolveDeviceAttachments,
   type ResolvedSessionInputAttachment,
 } from "./device-attachments";
+import { registerProviderHistoryImagePath } from "./provider-history-attachments";
 
 export type CodexTurnInput =
   | { type: "text"; text: string }
@@ -27,13 +29,18 @@ export interface PersistedUserMessageContent {
   text: string;
   attachments: SessionInputAttachment[];
   imageCount: number;
+  mentionedFiles: Array<{ name: string; path: string }>;
 }
 
 const PERSISTED_IMAGE_BLOCK_PATTERN =
   /<image\b(?=[^>]*\bpath="([^"\r\n]+)")[^>]*>\s*<\/image>/gi;
+const CODEX_FILE_MENTION_ENVELOPE_PATTERN =
+  /^\s*# Files mentioned by the user:\s*\n([\s\S]*?)\n## My request for Codex:\s*\n([\s\S]*)$/;
+const CODEX_FILE_MENTION_PATTERN = /^## (.+?): (.+)$/gm;
 const REMOTE_ATTACHMENT_ROOTS = [
   resolve("/tmp/codex-remote-attachments"),
   resolve("/private/tmp/codex-remote-attachments"),
+  resolve(tmpdir()),
 ];
 
 function isTrustedRemoteAttachmentPath(candidatePath: string): boolean {
@@ -43,21 +50,55 @@ function isTrustedRemoteAttachmentPath(candidatePath: string): boolean {
   );
 }
 
+function unwrapCodexFileMentionEnvelope(content: string): {
+  text: string;
+  mentionedFiles: Array<{ name: string; path: string }>;
+} {
+  const envelope = CODEX_FILE_MENTION_ENVELOPE_PATTERN.exec(content);
+  if (!envelope) {
+    return { text: content, mentionedFiles: [] };
+  }
+  const mentionedFiles: Array<{ name: string; path: string }> = [];
+  for (const match of envelope[1]!.matchAll(CODEX_FILE_MENTION_PATTERN)) {
+    const name = match[1]?.trim();
+    const path = match[2]?.trim();
+    if (name && path) {
+      mentionedFiles.push({ name, path });
+    }
+  }
+  return {
+    text: envelope[2] ?? "",
+    mentionedFiles,
+  };
+}
+
 export function parsePersistedUserMessageContent(
   content: string,
 ): PersistedUserMessageContent {
+  const unwrapped = unwrapCodexFileMentionEnvelope(content);
   const attachments = new Map<string, SessionInputAttachment>();
   let imageCount = 0;
-  const text = content
+  const text = unwrapped.text
     .replace(PERSISTED_IMAGE_BLOCK_PATTERN, (block, candidatePath: string) => {
-      const attachment = resolveManagedAttachmentPath(candidatePath);
+      const attachment = describeManagedAttachmentPath(candidatePath);
       if (attachment?.kind === "image") {
-        const { path: _path, ...publicAttachment } = attachment;
-        attachments.set(attachment.id, publicAttachment);
+        attachments.set(attachment.id, attachment);
         imageCount += 1;
         return "";
       }
-      if (isTrustedRemoteAttachmentPath(candidatePath)) {
+      const mentionedFile = unwrapped.mentionedFiles.find(
+        (file) => resolve(file.path) === resolve(candidatePath),
+      );
+      if (mentionedFile || isTrustedRemoteAttachmentPath(candidatePath)) {
+        const remoteAttachment = isTrustedRemoteAttachmentPath(candidatePath)
+          ? registerProviderHistoryImagePath(
+              candidatePath,
+              mentionedFile?.name,
+            )
+          : null;
+        if (remoteAttachment) {
+          attachments.set(remoteAttachment.id, remoteAttachment);
+        }
         imageCount += 1;
         return "";
       }
@@ -72,6 +113,7 @@ export function parsePersistedUserMessageContent(
     text,
     attachments: [...attachments.values()],
     imageCount,
+    mentionedFiles: unwrapped.mentionedFiles,
   };
 }
 

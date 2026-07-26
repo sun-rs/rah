@@ -329,6 +329,11 @@ export class CouncilRuntime {
       await this.closeCouncilAgentSessions(council.id);
     }));
     const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    try {
+      await this.store.flush();
+    } catch (error) {
+      failures.push(error);
+    }
     if (failures.length > 0) {
       throw new AggregateError(failures, `Failed to shut down ${failures.length} Council runtime(s).`);
     }

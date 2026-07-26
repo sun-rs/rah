@@ -7,10 +7,15 @@ import type {
   SessionSummary,
 } from "@rah/runtime-protocol";
 import {
+  BACKGROUND_SYNC_FLUSH_INTERVAL_MS,
+  FOREGROUND_SYNC_FLUSH_INTERVAL_MS,
   applyProjectionEventsToSyncState,
   coalesceConversationProjectionDeltas,
   coalesceProjectionEvents,
   recoverTransportCommand,
+  resolveSyncFlushPlan,
+  splitProjectionTransportEvents,
+  takeSyncEventPrefix,
 } from "./session-store-sync";
 import { applyEventsToProjectionMap } from "./session-store-projections";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
@@ -18,6 +23,45 @@ import type { SessionProjection } from "./types";
 
 type RecoverArgs = Parameters<typeof recoverTransportCommand>[0];
 type RecoverState = ReturnType<RecoverArgs["get"]>;
+
+describe("session sync flush scheduling", () => {
+  test("uses the next frame for a foreground batch after an idle period", () => {
+    assert.deepEqual(
+      resolveSyncFlushPlan({
+        hidden: false,
+        elapsedSinceLastFlushMs: FOREGROUND_SYNC_FLUSH_INTERVAL_MS,
+      }),
+      { kind: "frame" },
+    );
+  });
+
+  test("bounds foreground rendering frequency while preserving the pending batch", () => {
+    assert.deepEqual(
+      resolveSyncFlushPlan({
+        hidden: false,
+        elapsedSinceLastFlushMs: 12,
+      }),
+      {
+        kind: "timer",
+        delayMs: FOREGROUND_SYNC_FLUSH_INTERVAL_MS - 12,
+      },
+    );
+  });
+
+  test("coalesces background work instead of spinning a zero-delay timer", () => {
+    assert.deepEqual(
+      resolveSyncFlushPlan({
+        hidden: true,
+        elapsedSinceLastFlushMs: Number.POSITIVE_INFINITY,
+      }),
+      {
+        kind: "timer",
+        delayMs: BACKGROUND_SYNC_FLUSH_INTERVAL_MS,
+      },
+    );
+    assert.ok(BACKGROUND_SYNC_FLUSH_INTERVAL_MS > 0);
+  });
+});
 
 function emptySessionsResponse(): ListSessionsResponse {
   return {
@@ -170,7 +214,7 @@ function createRecoverHarness(
 }
 
 describe("session store recovery", () => {
-  test("orders and deduplicates conversation deltas by session revision", () => {
+  test("orders, deduplicates, and composes contiguous conversation deltas", () => {
     const projectionDelta = (
       sessionId: string,
       revision: number,
@@ -192,7 +236,6 @@ describe("session store recovery", () => {
     assert.deepEqual(
       deltas.map((delta) => [delta.sessionId, delta.revision, delta.sourceSeq]),
       [
-        ["session-1", 1, 9],
         ["session-1", 2, 11],
         ["session-2", 2, 20],
       ],
@@ -234,6 +277,83 @@ describe("session store recovery", () => {
     assert.equal(events.length, 2);
     assert.equal(events[0]?.seq, 3);
     assert.equal(events[1]?.seq, 4);
+  });
+
+  test("coalesces a noisy process tail once and bounds work by bytes", () => {
+    const chunks = Array.from({ length: 10_000 }, (_value, index) =>
+      event(index + 1, {
+        type: "process.output.appended",
+        payload: {
+          output: {
+            itemId: "command-1",
+            stream: "combined",
+            sequence: index + 1,
+            offsetBytes: index,
+            data: "x",
+            totalBytes: index + 1,
+          },
+        },
+      }),
+    );
+    const coalesced = coalesceProjectionEvents(chunks);
+    assert.equal(coalesced.length, 1);
+    assert.equal(
+      coalesced[0]?.type === "process.output.appended"
+        ? coalesced[0].payload.output.data.length
+        : 0,
+      10_000,
+    );
+
+    const large = (itemId: string, seq: number) =>
+      event(seq, {
+        type: "process.output.appended",
+        payload: {
+          output: {
+            itemId,
+            stream: "combined",
+            sequence: 1,
+            offsetBytes: 0,
+            data: "x".repeat(700 * 1024),
+            totalBytes: 700 * 1024,
+          },
+        },
+      });
+    const batch = takeSyncEventPrefix(
+      [large("command-a", 20_001), large("command-b", 20_002)],
+      { maxEvents: 192, maxBytes: 1024 * 1024 },
+    );
+    assert.equal(batch.selected.length, 1);
+    assert.equal(batch.remaining.length, 1);
+  });
+
+  test("keeps high-volume output off the global projection data path", () => {
+    const output = event(2, {
+      type: "process.output.appended",
+      payload: {
+        output: {
+          itemId: "command-1",
+          stream: "combined",
+          sequence: 1,
+          offsetBytes: 0,
+          data: "x".repeat(128 * 1024),
+          totalBytes: 128 * 1024,
+        },
+      },
+    });
+    const semantic = event(3, {
+      type: "turn.completed",
+      payload: {
+        turn: {
+          id: "turn-1",
+          status: "completed",
+        },
+      } as never,
+    });
+
+    const split = splitProjectionTransportEvents([output, semantic]);
+
+    assert.deepEqual(split.projectionEvents, [semantic]);
+    assert.equal(split.dataPlaneSeq, 2);
   });
 
   test("drops message part events that are never rendered by the feed", () => {

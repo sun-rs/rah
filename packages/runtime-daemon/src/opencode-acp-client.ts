@@ -1,7 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  applyBackgroundProcessPriority,
+  backgroundProcessLaunch,
+} from "./background-process-priority";
+import { BackpressuredByteIngress } from "./backpressured-byte-ingress";
 import { resolveOpenCodeBinary } from "./opencode-api";
 import { providerBinaryArgv } from "./provider-binary-utils";
 
@@ -28,6 +34,8 @@ interface PendingRequest {
   reject: (error: unknown) => void;
   timeout: NodeJS.Timeout;
 }
+
+const MAX_ACP_JSON_LINE_BYTES = 8 * 1024 * 1024;
 
 export interface OpenCodeAcpSessionUpdate {
   sessionId: string;
@@ -62,6 +70,8 @@ export class OpenCodeAcpClient {
   private nextId = 1;
   private stdoutBuffer = "";
   private stderrBuffer = "";
+  private stdoutIngress: BackpressuredByteIngress | null = null;
+  private stderrIngress: BackpressuredByteIngress | null = null;
   private readonly pending = new Map<number, PendingRequest>();
   private closed = false;
 
@@ -80,41 +90,110 @@ export class OpenCodeAcpClient {
     if (!command) {
       throw new Error("OpenCode ACP command is empty.");
     }
-    const child = spawn(command, [...prefixArgs, "acp", "--cwd", this.cwd], {
+    const launch = backgroundProcessLaunch(command, [
+      ...prefixArgs,
+      "acp",
+      "--cwd",
+      this.cwd,
+    ]);
+    const child = spawn(launch.command, launch.args, {
       cwd: this.cwd,
       env: process.env,
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
+    applyBackgroundProcessPriority(
+      child.pid,
+      "OpenCode ACP",
+      launch.priority,
+    );
     this.child = child;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => this.handleStdout(chunk));
-    child.stderr.on("data", (chunk: string) => {
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let stdoutFlushed = false;
+    let stderrFlushed = false;
+    let exitState:
+      | { code: number | null; signal: NodeJS.Signals | null }
+      | undefined;
+
+    const appendStderr = (chunk: string) => {
       this.stderrBuffer = (this.stderrBuffer + chunk).slice(-8192);
+    };
+    const flushDecoders = () => {
+      if (stdoutEnded && !stdoutFlushed && stdoutIngress.isIdle()) {
+        stdoutFlushed = true;
+        this.handleStdout(stdoutDecoder.end());
+      }
+      if (stderrEnded && !stderrFlushed && stderrIngress.isIdle()) {
+        stderrFlushed = true;
+        appendStderr(stderrDecoder.end());
+      }
+    };
+    const finalizeExit = () => {
+      flushDecoders();
+      if (
+        !exitState ||
+        !stdoutIngress.isIdle() ||
+        !stderrIngress.isIdle() ||
+        !stdoutFlushed ||
+        !stderrFlushed
+      ) {
+        return;
+      }
+      stdoutIngress.dispose();
+      stderrIngress.dispose();
+      this.stdoutIngress = null;
+      this.stderrIngress = null;
+      if (this.closed) {
+        return;
+      }
+      this.closed = true;
+      const suffix = this.stderrBuffer.trim() ? `: ${this.stderrBuffer.trim()}` : "";
+      const error = new Error(
+        `OpenCode ACP exited with code ${exitState.code ?? "null"} signal ${exitState.signal ?? "null"}${suffix}`,
+      );
+      this.rejectPending(error);
+    };
+    const stdoutIngress = new BackpressuredByteIngress({
+      consume: (chunk) => this.handleStdout(stdoutDecoder.write(chunk)),
+      pauseSource: () => child.stdout.pause(),
+      resumeSource: () => child.stdout.resume(),
+      onIdle: finalizeExit,
+    });
+    const stderrIngress = new BackpressuredByteIngress({
+      consume: (chunk) => appendStderr(stderrDecoder.write(chunk)),
+      pauseSource: () => child.stderr.pause(),
+      resumeSource: () => child.stderr.resume(),
+      onIdle: finalizeExit,
+    });
+    this.stdoutIngress = stdoutIngress;
+    this.stderrIngress = stderrIngress;
+    child.stdout.on("data", (chunk: Buffer) => stdoutIngress.enqueue(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderrIngress.enqueue(chunk));
+    child.stdout.once("end", () => {
+      stdoutEnded = true;
+      finalizeExit();
+    });
+    child.stderr.once("end", () => {
+      stderrEnded = true;
+      finalizeExit();
     });
     const spawned = new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
     });
     child.once("exit", (code, signal) => {
-      if (this.closed) {
-        return;
-      }
-      this.closed = true;
-      const suffix = this.stderrBuffer.trim() ? `: ${this.stderrBuffer.trim()}` : "";
-      const error = new Error(`OpenCode ACP exited with code ${code ?? "null"} signal ${signal ?? "null"}${suffix}`);
-      for (const [id, pending] of this.pending) {
-        clearTimeout(pending.timeout);
-        pending.reject(error);
-        this.pending.delete(id);
-      }
+      exitState = { code, signal };
+      finalizeExit();
     });
     try {
       await spawned;
     } catch (error) {
       this.closed = true;
       this.child = null;
+      this.disposeIngress();
       throw error;
     }
     child.once("error", (error) => {
@@ -122,11 +201,7 @@ export class OpenCodeAcpClient {
         return;
       }
       this.closed = true;
-      for (const [id, pending] of this.pending) {
-        clearTimeout(pending.timeout);
-        pending.reject(error);
-        this.pending.delete(id);
-      }
+      this.rejectPending(error);
     });
     await this.request("initialize", {
       protocolVersion: 1,
@@ -183,14 +258,11 @@ export class OpenCodeAcpClient {
 
   async close(): Promise<void> {
     this.closed = true;
-    for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("OpenCode ACP client closed"));
-      this.pending.delete(id);
-    }
+    this.rejectPending(new Error("OpenCode ACP client closed"));
     const child = this.child;
     this.child = null;
     if (!child?.pid || child.exitCode !== null || child.signalCode !== null) {
+      this.disposeIngress();
       return;
     }
     await new Promise<void>((resolveDone) => {
@@ -202,6 +274,7 @@ export class OpenCodeAcpClient {
         done = true;
         clearTimeout(killTimer);
         child.off("exit", finish);
+        this.disposeIngress();
         resolveDone();
       };
       const killTimer = setTimeout(() => {
@@ -267,10 +340,26 @@ export class OpenCodeAcpClient {
     this.stdoutBuffer += chunk;
     const lines = this.stdoutBuffer.split("\n");
     this.stdoutBuffer = lines.pop() ?? "";
+    if (Buffer.byteLength(this.stdoutBuffer, "utf8") > MAX_ACP_JSON_LINE_BYTES) {
+      this.failProtocol(
+        new Error(
+          `OpenCode ACP emitted a JSON line larger than ${MAX_ACP_JSON_LINE_BYTES} bytes.`,
+        ),
+      );
+      return;
+    }
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
+      }
+      if (Buffer.byteLength(trimmed, "utf8") > MAX_ACP_JSON_LINE_BYTES) {
+        this.failProtocol(
+          new Error(
+            `OpenCode ACP emitted a JSON line larger than ${MAX_ACP_JSON_LINE_BYTES} bytes.`,
+          ),
+        );
+        return;
       }
       let message: JsonRpcIncoming;
       try {
@@ -363,6 +452,32 @@ export class OpenCodeAcpClient {
         throw error;
       }
     }
+  }
+
+  private failProtocol(error: Error): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.rejectPending(error);
+    if (this.child) {
+      this.signalChild(this.child, "SIGTERM");
+    }
+  }
+
+  private rejectPending(error: Error): void {
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+      this.pending.delete(id);
+    }
+  }
+
+  private disposeIngress(): void {
+    this.stdoutIngress?.dispose();
+    this.stderrIngress?.dispose();
+    this.stdoutIngress = null;
+    this.stderrIngress = null;
   }
 }
 

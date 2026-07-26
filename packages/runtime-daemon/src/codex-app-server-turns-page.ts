@@ -3,6 +3,7 @@ import {
   createCodexAppServerTranslationState,
   translateCodexAppServerThreadSnapshot,
 } from "./codex-app-server-activity";
+import { approximateJsonByteLength } from "./bounded-json-size";
 import { EventBus } from "./event-bus";
 import { applyProviderActivity } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
@@ -82,6 +83,18 @@ export function materializeCodexAppServerTurnsPage(args: {
   page: CodexAppServerTurnsPage;
   includeRaw?: boolean;
 }): ConversationEvidencePage {
+  const turnProcessDetailsAvailable = Object.fromEntries(
+    args.page.data.flatMap((turn) => {
+      if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+        return [];
+      }
+      const record = turn as Record<string, unknown>;
+      return typeof record.id === "string" &&
+        typeof record.processDetailsAvailable === "boolean"
+        ? [[record.id, record.processDetailsAvailable] as const]
+        : [];
+    }),
+  );
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -134,9 +147,12 @@ export function materializeCodexAppServerTurnsPage(args: {
     sessionId: args.sessionId,
     events,
     detailMode: "summary",
+    ...(Object.keys(turnProcessDetailsAvailable).length > 0
+      ? { turnProcessDetailsAvailable }
+      : {}),
     ...(args.page.nextCursor ? { nextCursor: args.page.nextCursor } : {}),
   };
-  response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+  response.approximateBytes = approximateJsonByteLength(response);
   return response;
 }
 

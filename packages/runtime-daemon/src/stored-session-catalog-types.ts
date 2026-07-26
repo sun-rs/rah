@@ -27,3 +27,21 @@ export type StoredSessionCatalogProviderResult = {
   complete?: boolean;
   error?: string;
 };
+
+/**
+ * Newline-delimited transfer rows used between the low-priority discovery
+ * process and the daemon. Each record is independently bounded and parsed so
+ * a large provider catalog never becomes one giant IPC/JSON.parse operation.
+ */
+export type StoredSessionCatalogTransferRow =
+  | {
+      kind: "record";
+      provider: StoredSessionCatalogProvider;
+      record: StoredSessionCatalogRecord;
+    }
+  | {
+      kind: "provider";
+      provider: StoredSessionCatalogProvider;
+      complete: boolean;
+      error?: string;
+    };

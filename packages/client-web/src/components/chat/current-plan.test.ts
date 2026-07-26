@@ -163,6 +163,32 @@ describe("current plan", () => {
     assert.match(html, /aria-label="Task summary"/);
     assert.match(html, />Task summary</);
     assert.match(html, /Working · 1\/2/);
+    assert.match(html, /chat-task-summary relative/);
+    assert.match(html, /data-testid="task-summary-overlay"/);
+    assert.match(html, /absolute bottom-\[calc\(100%-1px\)\]/);
+    assert.match(html, /group-hover:visible/);
+    assert.doesNotMatch(html, /chat-task-summary[^"]*border-t/);
     assert.doesNotMatch(html, /Current plan/);
+  });
+
+  test("offers the active turn file changes from the task overlay", () => {
+    const item = planItem("plan-1", "turn-1", 1);
+    const turn = conversationTurn("turn-1", [item], "in_progress");
+    turn.fileChanges = {
+      files: [{ path: "src/active.ts", additions: 9, deletions: 2 }],
+      totalAdditions: 9,
+      totalDeletions: 2,
+    };
+    const html = renderToStaticMarkup(
+      createElement(TaskSummaryDock, {
+        plan: latestCurrentPlan([turn])!,
+        onReviewChanges: () => undefined,
+      }),
+    );
+
+    assert.match(html, /aria-label="Review files changed by this turn"/);
+    assert.match(html, /1 file changed/);
+    assert.match(html, />\+9</);
+    assert.match(html, />-2</);
   });
 });

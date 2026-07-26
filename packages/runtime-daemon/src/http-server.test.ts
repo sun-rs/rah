@@ -1241,6 +1241,36 @@ describe("startRahDaemon", () => {
     assert.deepEqual(closeCalls, [{ code: 1013, reason: "test slow client" }]);
   });
 
+  test("rejects oversized websocket messages before JSON serialization and send", () => {
+    const closeCalls: Array<{ code?: number; reason?: string }> = [];
+    const socket = {
+      readyState: 1,
+      bufferedAmount: 0,
+      send: () => {
+        throw new Error("send should not be called");
+      },
+      close: (code?: number, reason?: string) => {
+        closeCalls.push({
+          ...(code !== undefined ? { code } : {}),
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      },
+    };
+
+    assert.equal(
+      sendJsonWithBackpressure(
+        socket,
+        { output: "x".repeat(8_192) },
+        {
+          maxMessageBytes: 1_024,
+          oversizedCloseReason: "test oversized frame",
+        },
+      ),
+      false,
+    );
+    assert.deepEqual(closeCalls, [{ code: 1009, reason: "test oversized frame" }]);
+  });
+
   test("rejects unregistered workspace file reads", async () => {
     const response = await requestJson({
       port,

@@ -1,15 +1,11 @@
 import type { ClipboardEventHandler, RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
-import { Menu } from "lucide-react";
 import type { ProviderChoice } from "../../ProviderSelector";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
 import { NewSessionComposer } from "./NewSessionComposer";
 import { CouncilLogo } from "../../CouncilLogo";
-import {
-  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
-  HEADER_EDGE_TOGGLE_ICON_SIZE,
-} from "../header-button-styles";
+import { MobileSidebarToggleButton } from "../shells/MobileSidebarToggleButton";
 
 export function WorkbenchEmptyPane(props: {
   sidebarOpen: boolean;
@@ -56,18 +52,13 @@ export function WorkbenchEmptyPane(props: {
   const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="pointer-events-none absolute left-2 top-3 z-20 flex items-center">
+      <div className="pointer-events-none absolute left-2 top-2 z-20 flex items-center">
         <div className="flex min-w-0 items-center">
           {showLeftSidebarControls ? (
-            <button
-              type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} pointer-events-auto inline-flex md:hidden`}
-              onClick={props.onOpenLeft}
-              aria-label="Open sidebar"
-              title="Open sidebar"
-            >
-              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-            </button>
+            <MobileSidebarToggleButton
+              className="pointer-events-auto md:hidden"
+              onOpen={props.onOpenLeft}
+            />
           ) : null}
           {showLeftSidebarControls && !props.sidebarOpen ? (
             <span className="hidden h-8 w-8 shrink-0 md:block" aria-hidden="true" />

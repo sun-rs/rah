@@ -1,7 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runBackgroundCommand } from "./background-command";
 
 const RAH_NATIVE_SERVER_OWNER = "rah";
 const RAH_NATIVE_SERVER_OWNER_KEY = "RAH_NATIVE_SERVER_OWNER";
@@ -33,8 +30,13 @@ async function listProcesses(): Promise<ProcessEntry[]> {
   if (process.platform === "win32") {
     return [];
   }
-  const { stdout } = await execFileAsync("ps", ["eww", "-axo", "pid=,command="], {
-    maxBuffer: 2 * 1024 * 1024,
+  const { stdout } = await runBackgroundCommand({
+    command: "ps",
+    args: ["eww", "-axo", "pid=,command="],
+    label: "RAH native local-server process inventory",
+    timeoutMs: 5_000,
+    maxStdoutBytes: 2 * 1024 * 1024,
+    maxStderrBytes: 256 * 1024,
   });
   return stdout
     .split("\n")

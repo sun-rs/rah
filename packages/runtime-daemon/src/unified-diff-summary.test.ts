@@ -23,8 +23,8 @@ new file mode 100644
 
   assert.deepEqual(summary, {
     files: [
-      { path: "src/a.ts", additions: 2, deletions: 1 },
       { path: "docs/readme.md", additions: 2, deletions: 0 },
+      { path: "src/a.ts", additions: 2, deletions: 1 },
     ],
     totalAdditions: 4,
     totalDeletions: 1,

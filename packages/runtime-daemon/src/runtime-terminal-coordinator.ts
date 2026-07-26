@@ -2691,6 +2691,7 @@ export class RuntimeTerminalCoordinator {
   }
 
   async shutdown(): Promise<void> {
+    this.mirrorRuntime.shutdown();
     const tmuxSessions = Array.from(this.tuiMuxSessions.values());
     const tmuxResults = await Promise.allSettled(
       tmuxSessions.map(async (tmux) => {

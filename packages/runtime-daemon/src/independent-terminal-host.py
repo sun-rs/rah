@@ -7,6 +7,7 @@ import pty
 import selectors
 import signal
 import struct
+import subprocess
 import sys
 import termios
 import time
@@ -24,6 +25,7 @@ CLIENT_FRAME_CLOSE = 3
 
 FRAME_HEADER_SIZE = 5
 MAX_CLIENT_FRAME_BYTES = 16 * 1024 * 1024
+DEFAULT_BACKGROUND_NICE = 10
 
 
 def send_frame(frame_type: int, payload: bytes = b"") -> None:
@@ -117,6 +119,75 @@ def normalize_terminal_env(env: Dict[str, str], rows: int, cols: int) -> Dict[st
     return env
 
 
+def resolve_background_nice() -> int:
+    raw = os.environ.get("RAH_BACKGROUND_PROCESS_NICE", "")
+    if not raw.strip():
+        return DEFAULT_BACKGROUND_NICE
+    try:
+        parsed = int(raw, 10)
+    except (TypeError, ValueError):
+        return DEFAULT_BACKGROUND_NICE
+    return max(0, min(19, parsed))
+
+
+def apply_background_priority() -> None:
+    """
+    Lower only the provider/shell child, not the PTY relay.
+
+    Commands and test processes spawned by the provider inherit this niceness,
+    while the relay and RAH daemon remain responsive enough to drain output and
+    service stop/input requests. This is best-effort on hosts that restrict
+    getpriority/setpriority.
+    """
+    target = resolve_background_nice()
+    if target <= 0:
+        return
+    try:
+        current = os.getpriority(os.PRIO_PROCESS, 0)
+        if current < target:
+            os.setpriority(os.PRIO_PROCESS, 0, target)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        os.nice(target)
+    except (AttributeError, OSError):
+        pass
+
+
+def start_darwin_background_policy(pid: int) -> Optional[subprocess.Popen]:
+    """
+    Add Darwin's inherited I/O/QoS policy without owning a wrapper PID.
+
+    The PTY child lowers its CPU priority before exec, so provider code cannot
+    race ahead at foreground CPU priority. The relay applies taskpolicy to that
+    stable child PID asynchronously and later reaps the helper. This keeps stop
+    and kill semantics attached to the actual provider process instead of a
+    supervising taskpolicy wrapper.
+    """
+    taskpolicy = "/usr/sbin/taskpolicy"
+    if not (
+        sys.platform == "darwin"
+        and resolve_background_nice() > 0
+        and os.path.isfile(taskpolicy)
+    ):
+        return None
+    try:
+        return subprocess.Popen(
+            [taskpolicy, "-b", "-p", str(pid)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except OSError:
+        return None
+
+
+def exec_background_process(command: str, args: list[str], env: Dict[str, str]) -> None:
+    os.execvpe(command, [command, *args], env)
+
+
 def parse_wait_status(status: int) -> Dict[str, Any]:
     if os.WIFEXITED(status):
         return {"exitCode": os.WEXITSTATUS(status)}
@@ -148,12 +219,15 @@ def main() -> int:
             print(f"failed to chdir to {cwd}: {error}", file=sys.stderr)
             os._exit(1)
 
+        apply_background_priority()
         env = normalize_terminal_env(os.environ.copy(), rows, cols)
         command = resolve_command()
         if command:
             args = resolve_command_args()
-            os.execvpe(command, [command, *args], env)
-        os.execvpe(shell, [shell, "-i"], env)
+            exec_background_process(command, args, env)
+        exec_background_process(shell, ["-i"], env)
+
+    background_policy_process = start_darwin_background_policy(pid)
 
     try:
         set_winsize(master_fd, rows, cols)
@@ -179,6 +253,11 @@ def main() -> int:
 
     try:
         while True:
+            if (
+                background_policy_process is not None
+                and background_policy_process.poll() is not None
+            ):
+                background_policy_process = None
             for key, _ in selector.select(0.1):
                 if key.data == "pty":
                     try:
@@ -348,6 +427,16 @@ def main() -> int:
                     send_legacy({"type": "exit", **child_status})
                 break
     finally:
+        if (
+            background_policy_process is not None
+            and background_policy_process.poll() is None
+        ):
+            background_policy_process.terminate()
+            try:
+                background_policy_process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                background_policy_process.kill()
+                background_policy_process.wait()
         try:
             selector.close()
         except Exception:

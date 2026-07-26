@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ListSessionsResponse, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type {
+  ListSessionsResponse,
+  RahEvent,
+  SessionSummary,
+  StoredSessionRef,
+} from "@rah/runtime-protocol";
 import {
   createPendingStoredReplayProjection,
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
-import { applySessionsResponse, replaceSessionsResponse } from "./session-store-projections";
+import {
+  applyEventsToProjectionMap,
+  applySessionsResponse,
+  replaceSessionsResponse,
+} from "./session-store-projections";
 import { appendOptimisticUserMessage, type SessionProjection } from "./types";
 
 function sessionsResponse(
@@ -104,6 +113,53 @@ function projectionWithQueuedInput(
     },
   );
 }
+
+test("process output advances the replay cursor without invalidating projections", () => {
+  const currentProjection = projectionWithQueuedInput();
+  const current = new Map([
+    [currentProjection.summary.session.id, currentProjection],
+  ]);
+  let lastSeq = 0;
+  let queued = false;
+  const outputEvent = {
+    id: "event-42",
+    seq: 42,
+    ts: "2026-06-06T12:02:00.000Z",
+    sessionId: currentProjection.summary.session.id,
+    turnId: "turn-1",
+    source: {
+      provider: "codex",
+      channel: "structured_live",
+      authority: "derived",
+    },
+    type: "process.output.appended",
+    payload: {
+      output: {
+        itemId: "command-1",
+        stream: "combined",
+        sequence: 1,
+        offsetBytes: 0,
+        data: "noisy output",
+        totalBytes: 12,
+      },
+    },
+  } satisfies RahEvent;
+
+  const next = applyEventsToProjectionMap(current, [outputEvent], {
+    updateLastSeq: (seq) => {
+      lastSeq = seq;
+    },
+    clearPendingSession: () => undefined,
+    queuePendingEvent: () => {
+      queued = true;
+    },
+  });
+
+  assert.strictEqual(next, current);
+  assert.strictEqual(next.get(currentProjection.summary.session.id), currentProjection);
+  assert.equal(lastSeq, 42);
+  assert.equal(queued, false);
+});
 
 test("replaceSessionsResponse keeps a pending stored replay projection until the server returns it", () => {
   const ref: StoredSessionRef = {

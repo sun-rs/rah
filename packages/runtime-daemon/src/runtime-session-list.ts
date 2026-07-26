@@ -36,10 +36,10 @@ export function discoverStoredSessions(
 ): StoredSessionRef[] {
   const discovered = new Map<string, StoredSessionRef>();
   for (const adapter of adapters) {
-    const storedSessions =
-      adapter.refreshStoredSessionsCatalog?.() ??
-      adapter.listStoredSessions?.() ??
-      [];
+    // This path only projects indexes that RuntimeEngine has already hydrated.
+    // Provider discovery belongs to StoredSessionCatalog's low-priority child
+    // process; a synchronous list request must never traverse provider storage.
+    const storedSessions = adapter.listStoredSessions?.() ?? [];
     for (const stored of storedSessions) {
       discovered.set(`${stored.provider}:${stored.providerSessionId}`, stored);
     }

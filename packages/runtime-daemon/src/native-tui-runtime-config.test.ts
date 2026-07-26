@@ -4,11 +4,13 @@ import {
   DEFAULT_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS,
   DEFAULT_NATIVE_TUI_BINDING_WARN_AFTER_MS,
   DEFAULT_NATIVE_TUI_MIRROR_INTERVAL_MS,
+  DEFAULT_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS,
   DEFAULT_NATIVE_TUI_MIRROR_WARN_AFTER_MS,
   booleanEnv,
   nativeTuiBindingProbeIntervalMs,
   nativeTuiBindingWarnAfterMs,
   nativeTuiMirrorIntervalMs,
+  nativeTuiMirrorMaxIntervalMs,
   nativeTuiMirrorWarnAfterMs,
   positiveIntegerEnv,
 } from "./native-tui-runtime-config";
@@ -20,6 +22,10 @@ describe("native TUI runtime config", () => {
       DEFAULT_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS,
     );
     assert.equal(nativeTuiMirrorIntervalMs({}), DEFAULT_NATIVE_TUI_MIRROR_INTERVAL_MS);
+    assert.equal(
+      nativeTuiMirrorMaxIntervalMs({}),
+      DEFAULT_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS,
+    );
     assert.equal(nativeTuiBindingWarnAfterMs({}), DEFAULT_NATIVE_TUI_BINDING_WARN_AFTER_MS);
     assert.equal(nativeTuiMirrorWarnAfterMs({}), DEFAULT_NATIVE_TUI_MIRROR_WARN_AFTER_MS);
   });
@@ -28,14 +34,26 @@ describe("native TUI runtime config", () => {
     const env = {
       RAH_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS: "250",
       RAH_NATIVE_TUI_MIRROR_INTERVAL_MS: "500",
+      RAH_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS: "4000",
       RAH_NATIVE_TUI_BINDING_WARN_AFTER_MS: "2500",
       RAH_NATIVE_TUI_MIRROR_WARN_AFTER_MS: "3000",
     };
 
     assert.equal(nativeTuiBindingProbeIntervalMs(env), 250);
     assert.equal(nativeTuiMirrorIntervalMs(env), 500);
+    assert.equal(nativeTuiMirrorMaxIntervalMs(env), 4000);
     assert.equal(nativeTuiBindingWarnAfterMs(env), 2500);
     assert.equal(nativeTuiMirrorWarnAfterMs(env), 3000);
+  });
+
+  test("never lets the mirror maximum fall below the active cadence", () => {
+    assert.equal(
+      nativeTuiMirrorMaxIntervalMs({
+        RAH_NATIVE_TUI_MIRROR_INTERVAL_MS: "500",
+        RAH_NATIVE_TUI_MIRROR_MAX_INTERVAL_MS: "100",
+      }),
+      500,
+    );
   });
 
   test("falls back for empty, zero, negative, and non-numeric values", () => {

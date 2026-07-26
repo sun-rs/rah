@@ -2,10 +2,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
+import {
+  applyBackgroundProcessPriority,
+  backgroundProcessLaunch,
+} from "./background-process-priority";
 import { rahNativeServerEnv } from "./native-local-server-orphans";
 import type { OpenCodePromptPart } from "./session-input-attachments";
+import { BackpressuredByteIngress } from "./backpressured-byte-ingress";
 
 const OPENCODE_HEALTHCHECK_REQUEST_TIMEOUT_MS = 1_500;
 const OPENCODE_ID_RANDOM_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -17,6 +23,7 @@ export interface OpenCodeServerHandle {
   cwd: string;
   child: ChildProcess;
   authHeader?: string;
+  outputIngresses?: BackpressuredByteIngress[];
 }
 
 export interface OpenCodeSessionInfo {
@@ -195,7 +202,15 @@ export async function startOpenCodeServer(params: {
   if (!command) {
     throw new Error("OpenCode server command is empty.");
   }
-  const child = spawn(command, [...prefixArgs, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+  const launch = backgroundProcessLaunch(command, [
+    ...prefixArgs,
+    "serve",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    String(port),
+  ]);
+  const child = spawn(launch.command, launch.args, {
     cwd: params.cwd,
     env: {
       ...process.env,
@@ -205,6 +220,11 @@ export async function startOpenCodeServer(params: {
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
+  applyBackgroundProcessPriority(
+    child.pid,
+    "OpenCode server",
+    launch.priority,
+  );
   let rejectStartup: ((error: Error) => void) | null = null;
   const startupError = new Promise<never>((_, reject) => {
     rejectStartup = reject;
@@ -213,17 +233,24 @@ export async function startOpenCodeServer(params: {
     params.onOutput?.(`${error.message}\n`);
     rejectStartup?.(error);
   });
-  child.stdout.on("data", (chunk: Buffer) => {
-    params.onOutput?.(chunk.toString("utf8"));
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    params.onOutput?.(chunk.toString("utf8"));
-  });
+  const outputIngresses = params.onOutput
+    ? [
+        attachBackpressuredServerOutput(child.stdout, params.onOutput),
+        attachBackpressuredServerOutput(child.stderr, params.onOutput),
+      ]
+    : [];
+  if (!params.onOutput) {
+    // The server protocol uses HTTP/SSE, not stdio. Drain incidental logs
+    // without allocating strings or scheduling one JS callback per chunk.
+    child.stdout.resume();
+    child.stderr.resume();
+  }
   const password = process.env.OPENCODE_SERVER_PASSWORD;
   const handle: OpenCodeServerHandle = {
     baseUrl: `http://127.0.0.1:${port}`,
     cwd: params.cwd,
     child,
+    ...(outputIngresses.length > 0 ? { outputIngresses } : {}),
     ...(password
       ? { authHeader: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` }
       : {}),
@@ -256,9 +283,11 @@ async function assertOpenCodeWorkingDirectory(cwd: string): Promise<void> {
 
 export async function stopOpenCodeServer(handle: OpenCodeServerHandle): Promise<void> {
   if (!handle.child.pid) {
+    handle.outputIngresses?.forEach((ingress) => ingress.dispose());
     return;
   }
   if (handle.child.exitCode !== null || handle.child.signalCode !== null) {
+    handle.outputIngresses?.forEach((ingress) => ingress.dispose());
     return;
   }
   await new Promise<void>((resolve) => {
@@ -270,6 +299,7 @@ export async function stopOpenCodeServer(handle: OpenCodeServerHandle): Promise<
       done = true;
       clearTimeout(killTimer);
       handle.child.off("exit", finish);
+      handle.outputIngresses?.forEach((ingress) => ingress.dispose());
       resolve();
     };
     const killTimer = setTimeout(() => {
@@ -279,6 +309,50 @@ export async function stopOpenCodeServer(handle: OpenCodeServerHandle): Promise<
     handle.child.once("exit", finish);
     signalOpenCodeServer(handle, "SIGTERM");
   });
+}
+
+function attachBackpressuredServerOutput(
+  stream: NonNullable<ChildProcess["stdout"]>,
+  onOutput: (data: string) => void,
+): BackpressuredByteIngress {
+  const decoder = new StringDecoder("utf8");
+  let ended = false;
+  let flushed = false;
+  let ingress: BackpressuredByteIngress;
+  const emit = (text: string) => {
+    try {
+      onOutput(text);
+    } catch {
+      // Diagnostic output consumers must not destabilize the server transport.
+    }
+  };
+  const flush = () => {
+    if (!ended || flushed || !ingress.isIdle()) {
+      return;
+    }
+    flushed = true;
+    const tail = decoder.end();
+    if (tail) {
+      emit(tail);
+    }
+  };
+  ingress = new BackpressuredByteIngress({
+    consume: (chunk) => {
+      const text = decoder.write(chunk);
+      if (text) {
+        emit(text);
+      }
+    },
+    pauseSource: () => stream.pause(),
+    resumeSource: () => stream.resume(),
+    onIdle: flush,
+  });
+  stream.on("data", (chunk: Buffer) => ingress.enqueue(chunk));
+  stream.once("end", () => {
+    ended = true;
+    flush();
+  });
+  return ingress;
 }
 
 function signalOpenCodeServer(handle: OpenCodeServerHandle, signal: NodeJS.Signals): void {

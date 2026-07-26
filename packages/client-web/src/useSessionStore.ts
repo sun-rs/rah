@@ -933,6 +933,9 @@ async function recoverFromReplayGap(batch: EventBatch) {
 function connectStoreTransport() {
   connectStoreSyncTransport({
     getReplayFromSeq: () => (lastEventSeq > 0 ? lastEventSeq + 1 : undefined),
+    advanceReplaySeq: (seq) => {
+      lastEventSeq = Math.max(lastEventSeq, seq);
+    },
     isInitialLoaded: () => useSessionStore.getState().isInitialLoaded,
     set: useSessionStore.setState as never,
     getNotificationProjections: () => useSessionStore.getState().projections,

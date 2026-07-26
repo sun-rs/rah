@@ -61,27 +61,43 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_LAYOUT.sidebarScrollClassName, /\bpr-0\.5\b/);
   });
 
-  test("locks fixed action slots and row heights", () => {
-    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\babsolute\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bright-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\babsolute\b/);
+  test("locks trailing action rails and row heights", () => {
+    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bml-auto\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bw-16\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bmd:w-14\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bml-auto\b/);
     assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bflex\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bright-0\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bshrink-0\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /\bw-0\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /group-hover\/session:w-8/);
+    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /md:group-hover\/session:w-7/);
+    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /group-hover\/session:w-16/);
+    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /md:group-hover\/session:w-14/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /\bw-8\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /\bh-8\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /md:w-7/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /md:h-7/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionActionButtonClassName, /\babsolute\b/);
     assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /\bh-8\b/);
     assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /\bw-8\b/);
     assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /md:h-7/);
     assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /md:w-7/);
-    assert.match(SIDEBAR_LAYOUT.sessionDualActionPaddingClassName, /group-hover\/session:pr-16/);
-    assert.match(SIDEBAR_LAYOUT.sessionDualActionPaddingClassName, /md:group-hover\/session:pr-14/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinnedActionPaddingClassName, /\bpr-16\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinnedActionPaddingClassName, /md:pr-14/);
+    assert.equal(
+      SIDEBAR_LAYOUT.workspaceActionButtonClassName,
+      SIDEBAR_LAYOUT.sessionActionButtonClassName,
+    );
+    assert.equal(
+      SIDEBAR_LAYOUT.toolbarIconButtonClassName,
+      SIDEBAR_LAYOUT.sessionActionButtonClassName,
+    );
+    assert.match(SIDEBAR_LAYOUT.toolbarActionsClassName, /\bw-16\b/);
+    assert.match(SIDEBAR_LAYOUT.toolbarClassName, /min-h-\[34px\]/);
+    assert.match(SIDEBAR_LAYOUT.toolbarClassName, /md:min-h-\[28px\]/);
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\brelative\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /min-h-\[34px\]/);
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /md:min-h-\[28px\]/);
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /min-h-\[34px\]/);
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /md:min-h-\[28px\]/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bborder\b/);
   });
 
   test("keeps blocked workspace removal inert without retargeting the tap", () => {
@@ -125,6 +141,9 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(shellSource, /MobileWorkbenchHeaderActions/);
     assert.match(shellSource, /headerLayout="inline"/);
     assert.match(shellSource, /closePlacement="start"/);
+    assert.match(shellSource, /closeIcon=\{<Menu size=\{HEADER_EDGE_TOGGLE_ICON_SIZE\} \/>\}/);
+    assert.match(shellSource, /closeLabel="Collapse sidebar"/);
+    assert.match(shellSource, /initialFocus="content"/);
     assert.match(shellSource, /viewportClassName="md:!hidden"/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bh-8\b/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bw-8\b/);
@@ -288,7 +307,12 @@ describe("sidebar layout contract", () => {
     assert.match(threadSource, /onOpenTurnFileChange\?: \(turnId: string, path: string\) => void/);
     assert.match(
       threadSource,
-      /setReviewScope\(\{\s*kind:\s*"turn",[\s\S]*?turnId:\s*row\.turnId,/,
+      /const openTurnReview = useCallback\([\s\S]*?setReviewScope\(\{\s*kind:\s*"turn",/,
+    );
+    assert.match(threadSource, /onReview=\{\(\) => openTurnReview\(row\.turnId, row\.fileChanges\)\}/);
+    assert.match(
+      threadSource,
+      /onReviewChanges:\s*\(\) =>\s*openTurnReview\(currentPlanTurnId, currentPlanFileChanges\)/,
     );
     assert.match(
       threadSource,
@@ -384,26 +408,62 @@ describe("sidebar layout contract", () => {
   });
 
   test("locks sidebar indentation and meta width tokens", () => {
-    assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "space-y-px pt-px pl-3 pr-0.5");
-    assert.match(SIDEBAR_LAYOUT.sessionStatusSlotClassName, /\bw-2\.5\b/);
-    assert.match(
-      SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName,
-      /grid-cols-\[1\.25rem_0\.625rem_minmax\(0,1fr\)\]/,
+    assert.equal(SIDEBAR_LAYOUT.pinnedListClassName, "space-y-px");
+    assert.equal(SIDEBAR_LAYOUT.councilListClassName, "space-y-px");
+    assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "space-y-px pt-px");
+    assert.equal(
+      SIDEBAR_LAYOUT.sessionStatusSlotClassName,
+      SIDEBAR_LAYOUT.sessionActionCellClassName,
     );
+    assert.match(SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName, /\bflex\b/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName, /grid-cols/);
   });
 
   test("uses matched workspace and session icon slots for aligned titles", () => {
     assert.match(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /\bflex-1\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /\bpr-14\b/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /\bpr-14\b/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /active:bg/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /focus-visible:ring/);
     assert.match(SIDEBAR_LAYOUT.workspaceDisclosureIconClassName, /\bh-7\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceDisclosureIconClassName, /\bw-7\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionIconSlotClassName, /\bh-6\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionIconSlotClassName, /\bw-5\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionIconSlotClassName, /\bh-7\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionIconSlotClassName, /\bw-7\b/);
     assert.equal(SIDEBAR_LAYOUT.sessionIconClassName, "h-3.5 w-3.5");
     assert.match(SIDEBAR_LAYOUT.sessionTitleClassName, /overflow-hidden/);
     assert.match(SIDEBAR_LAYOUT.sessionTitleClassName, /whitespace-nowrap/);
+    assert.match(SIDEBAR_LAYOUT.sessionTitleClassName, /\bpl-0\.5\b/);
+    assert.match(
+      SIDEBAR_LAYOUT.sessionTitleClassName,
+      /\bfont-normal\b/,
+    );
+    assert.match(
+      SIDEBAR_LAYOUT.sessionTitleClassName,
+      /var\(--app-fg\)_76%/,
+    );
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionTitleClassName, /\btruncate\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\btruncate\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /overflow-hidden/);
+    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /whitespace-nowrap/);
+    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\bpl-0\.5\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\bfont-semibold\b/);
+    assert.match(
+      SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName,
+      /var\(--app-fg\)_94%/,
+    );
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\btruncate\b/);
+  });
+
+  test("uses one full-width hover shell for pinned, Council, workspace, and session rows", () => {
+    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\bpl-1\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\bpr-0\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bw-full\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bpl-1\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bpr-0\b/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.pinnedListClassName, /\bpl-/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.councilListClassName, /\bpl-/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionListClassName, /\bpl-/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.pinnedListClassName, /\bpr-/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.councilListClassName, /\bpr-/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionListClassName, /\bpr-/);
   });
 
   test("makes the whole workspace label region the disclosure control", () => {
@@ -419,10 +479,16 @@ describe("sidebar layout contract", () => {
 
   test("uses transient workspace feedback without a persistent workspace selection fill", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
+    const stylesSource = readSource("./styles.css");
 
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /hover:bg-\[color:color-mix/);
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /focus-within:bg-\[color:color-mix/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /active:bg-\[color:color-mix/);
+    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\brah-sidebar-row\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /hover:bg-\[var\(--rah-sidebar-row-hover-bg\)\]/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceHeaderClassName, /focus-within:bg-/);
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)\s*\{[\s\S]*background:\s*var\(--rah-sidebar-row-hover-bg\)/,
+    );
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /(?:hover|focus|active):bg-/);
     assert.doesNotMatch(sidebarSource, /workspaceHeaderSelectedClassName/);
     assert.doesNotMatch(sidebarSource, /workspaceTitleSelectedClassName/);
   });
@@ -438,17 +504,20 @@ describe("sidebar layout contract", () => {
   });
 
   test("keeps selected sessions at the same neutral depth as ordinary hover", () => {
-    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /color-mix\(in_oklab,var\(--app-fg\)_5%/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /bg-\[var\(--rah-sidebar-row-hover-bg\)\]/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /font-medium/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /hover:bg-/);
     assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /shadow-none/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /emerald/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /inset_3px_0_0_0/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\brah-sidebar-row\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /hover:bg-\[var\(--rah-sidebar-row-hover-bg\)\]/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowIdleClassName, /active:bg-/);
   });
 
   test("renders running Councils as an independent unpinned section", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
-    const pinnedIndex = sidebarSource.indexOf("sidebarPartition.pinnedItems.length");
+    const pinnedIndex = sidebarSource.indexOf("orderedPinnedItems.length");
     const councilIndex = sidebarSource.indexOf("data-sidebar-council-section");
     const toolbarIndex = sidebarSource.indexOf("{/* Toolbar */}");
     const workspaceRowSource = sidebarSource.slice(
@@ -468,30 +537,139 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(sidebarSource, /(?:Pin|Unpin) Council/);
   });
 
-  test("renders the unified compact status indicator before fading titles", () => {
+  test("persists independent drag order for Pinned and Council rows", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
+    const orderSource = readSource("./sidebar-section-order.ts");
+    const orderHookSource = readSource("./hooks/useSidebarSectionOrders.ts");
+    const stylesSource = readSource("./styles.css");
+
+    assert.match(orderHookSource, /PINNED_SIDEBAR_ORDER_KEY/);
+    assert.match(orderHookSource, /COUNCIL_SIDEBAR_ORDER_KEY/);
+    assert.match(orderHookSource, /usePersistentSidebarSectionOrder/);
+    assert.match(sidebarSource, /orderedPinnedItems\.map/);
+    assert.match(sidebarSource, /orderedCouncilItems\.map/);
+    assert.match(sidebarSource, /application\/x-rah-sidebar-pinned-order-key/);
+    assert.match(sidebarSource, /application\/x-rah-sidebar-council-order-key/);
+    assert.match(sidebarSource, /data-sidebar-drop-position/);
+    assert.match(orderSource, /window\.localStorage\.setItem/);
+    assert.match(sidebarSource, /function SidebarDropIndicator/);
+    assert.match(sidebarSource, /border-2 border-\[var\(--app-focus\)\]/);
+    assert.match(sidebarSource, /h-0\.5 min-w-0 flex-1 rounded-full bg-\[var\(--app-focus\)\]/);
+    assert.match(
+      sidebarSource,
+      /<SidebarDropIndicator position=\{reorderDropTarget\.dropPosition\} \/>/,
+    );
+    assert.doesNotMatch(stylesSource, /\[data-sidebar-drop-position="before"\]::before/);
+  });
+
+  test("renders status in the fixed trailing rail after the fading title", () => {
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+    const stylesSource = readSource("./styles.css");
 
     assert.match(sidebarSource, /function SidebarStatusIndicator/);
+    assert.match(sidebarSource, /if \(props\.status === "stopped"\) \{\s*return null;/);
     assert.match(sidebarSource, /animate-spin/);
     assert.match(sidebarSource, /bg-sky-500/);
     assert.match(sidebarSource, /bg-red-500/);
     assert.match(sidebarSource, /bg-emerald-500/);
+    assert.doesNotMatch(sidebarSource, /h-1\.5 w-1\.5 rounded-full bg-(?:sky|red|emerald)-500/);
+    assert.match(sidebarSource, /h-2 w-2 rounded-full bg-sky-500/);
     assert.match(sidebarSource, /<SidebarStatusIndicator status=\{props\.session\.status\} \/>/);
     assert.match(sidebarSource, /<SidebarStatusIndicator status=\{props\.council\.status\} \/>/);
+    assert.match(
+      sidebarSource,
+      /FadingSingleLineText[\s\S]*sessionActionSlotClassName[\s\S]*SidebarStatusIndicator status=\{props\.session\.status\}/,
+    );
+    assert.match(
+      sidebarSource,
+      /FadingSingleLineText className=\{SIDEBAR_LAYOUT\.workspaceDisclosureTitleClassName\}/,
+    );
     assert.match(sidebarSource, /ResizeObserver/);
-    assert.match(sidebarSource, /mask-image:linear-gradient/);
+    assert.match(stylesSource, /\.rah-sidebar-fade-end\s*\{[\s\S]*-webkit-mask-image:\s*linear-gradient/);
+    assert.match(stylesSource, /\.rah-sidebar-fade-end\s*\{[\s\S]*mask-image:\s*linear-gradient/);
   });
 
   test("keeps hidden hover actions non-interactive until revealed", () => {
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+    const stylesSource = readSource("./styles.css");
+
     assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /pointer-events-none/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinHiddenClassName, /pointer-events-none/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /pointer-events-none/);
+    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /\bw-0\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /\bw-0\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\brelative\b/);
+    assert.match(
+      SIDEBAR_LAYOUT.sessionActionGroupBaseClassName,
+      /rah-sidebar-session-hover-actions/,
+    );
+    assert.match(
+      stylesSource,
+      /@media \(hover: hover\) and \(pointer: fine\)[\s\S]*\.rah-sidebar-session-hover-actions\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*0;/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-row\s*\{[\s\S]*--rah-sidebar-row-hover-bg:[\s\S]*var\(--app-sidebar-bg\)/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-session-hover-actions\s*\{[\s\S]*background:\s*var\(--rah-sidebar-row-hover-bg\)/,
+    );
+    assert.doesNotMatch(
+      stylesSource,
+      /\.rah-sidebar-session-hover-actions\s*\{[^}]*backdrop-filter:/,
+    );
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionActionButtonClassName, /(?:hover|focus-visible|active):bg-(?!transparent)/);
+    assert.doesNotMatch(
+      sidebarSource,
+      /props\.session\.pinned\s*\?\s*props\.session\.archivable/,
+    );
+    assert.match(
+      sidebarSource,
+      /sessionActionButtonClassName\} \$\{SIDEBAR_LAYOUT\.sessionActionButtonHiddenClassName\}/,
+    );
+    assert.doesNotMatch(
+      SIDEBAR_LAYOUT.sessionPinSelectedToneClassName,
+      /opacity-100|pointer-events-auto/,
+    );
   });
 
   test("reveals hover-only actions for keyboard focus and coarse pointers", () => {
-    assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /group-focus-within\/workspace:opacity-100/);
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+    const stylesSource = readSource("./styles.css");
+
+    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /group-focus-within/);
     assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /coarse-pointer-action-visible/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinHiddenClassName, /group-focus-within\/session:opacity-100/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinHiddenClassName, /coarse-pointer-action-visible/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /group-focus-within/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /group-focus-within/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /group-focus-within/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /coarse-pointer-action-visible/);
+    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /coarse-pointer-session-actions-single/);
+    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /coarse-pointer-session-actions-dual/);
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)[\s\S]*\.coarse-pointer-action-visible\s*\{[\s\S]*opacity:\s*1;[\s\S]*pointer-events:\s*auto;/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)[\s\S]*\.coarse-pointer-session-actions-dual\s*\{[\s\S]*width:\s*4rem;/,
+    );
+    assert.match(
+      sidebarSource,
+      /SIDEBAR_POINTER_FOCUS_ATTRIBUTE = "data-sidebar-pointer-focus"/,
+    );
+    assert.equal(
+      (sidebarSource.match(/onPointerDownCapture=\{markSidebarPointerFocus\}/g) ?? [])
+        .length,
+      3,
+    );
+    assert.equal(
+      (
+        sidebarSource.match(
+          /onKeyDownCapture=\{clearSidebarPointerFocusForKeyboard\}/g,
+        ) ?? []
+      ).length,
+      3,
+    );
   });
 
   test("keeps archive and pin in separate slots and confirms archive before mutation", () => {
@@ -511,7 +689,11 @@ describe("sidebar layout contract", () => {
     assert.match(appSource, /onArchiveRunningSession=\{\(sessionId\) => \{\s*requestArchiveRuntimeSession\(sessionId\)/);
     assert.match(appSource, /onArchiveHistorySession=\{requestArchiveHistorySession\}/);
     assert.match(stylesSource, /\.coarse-pointer-action-target\s*\{[\s\S]*min-height:\s*2rem;[\s\S]*min-width:\s*2rem;/);
-    assert.match(stylesSource, /\.coarse-pointer-session-dual-padding\s*\{[\s\S]*padding-right:\s*4rem !important;/);
+    assert.match(stylesSource, /\.coarse-pointer-action-cell\s*\{[\s\S]*height:\s*2rem !important;[\s\S]*width:\s*2rem !important;/);
+    assert.match(stylesSource, /\.coarse-pointer-session-actions-single\s*\{[\s\S]*width:\s*2rem !important;/);
+    assert.match(stylesSource, /\.coarse-pointer-session-actions-dual\s*\{[\s\S]*width:\s*4rem !important;/);
+    assert.doesNotMatch(stylesSource, /width:\s*1\.75rem !important/);
+    assert.doesNotMatch(stylesSource, /width:\s*3\.5rem !important/);
   });
 
   test("routes session and council pages through shared conversation chrome", () => {
@@ -577,10 +759,12 @@ describe("sidebar layout contract", () => {
     const sheetSource = readSource("./components/Sheet.tsx");
     const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
     const headerSource = readSource("./components/workbench/shells/ConversationHeader.tsx");
+    const mobileToggleSource = readSource("./components/workbench/shells/MobileSidebarToggleButton.tsx");
     const sidePanelSource = readSource("./components/workbench/shells/ConversationSidePanelShell.tsx");
     const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
     const openingPaneSource = readSource("./components/workbench/panes/WorkbenchOpeningPane.tsx");
     const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
+    const sideDockSource = readSource("./components/workbench/session/SessionSideDock.tsx");
     const inspectorHeaderSource = readSource("./inspector/InspectorHeader.tsx");
 
     assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 20);
@@ -594,18 +778,25 @@ describe("sidebar layout contract", () => {
     for (const source of [
       sheetSource,
       shellSource,
-      headerSource,
-      emptyPaneSource,
-      canvasSource,
+      mobileToggleSource,
     ]) {
       assert.match(source, /HEADER_EDGE_TOGGLE_ICON_SIZE/);
     }
+    for (const source of [
+      headerSource,
+      emptyPaneSource,
+      canvasSource,
+      sideDockSource,
+    ]) {
+      assert.match(source, /MobileSidebarToggleButton/);
+    }
+    assert.match(mobileToggleSource, /fixed left-2 top-\[calc\(env\(safe-area-inset-top,0px\)\+0\.5rem\)\] z-40/);
 
     assert.doesNotMatch(sidePanelSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
     assert.doesNotMatch(sidePanelSource, /PanelRight/);
     assert.doesNotMatch(emptyPaneSource, /<header/);
     assert.doesNotMatch(emptyPaneSource, /border-b/);
-    assert.match(emptyPaneSource, /absolute left-2 top-3/);
+    assert.match(emptyPaneSource, /absolute left-2 top-2/);
     assert.match(openingPaneSource, /ConversationHeader/);
     assert.doesNotMatch(openingPaneSource, /ConversationHeaderPanelToggleButton/);
     assert.doesNotMatch(openingPaneSource, /<header/);
@@ -835,7 +1026,7 @@ describe("sidebar layout contract", () => {
     assert.match(appSource, /const effectiveCanvasMaximizedPaneId = canvasMaximizedPaneId;/);
     assert.match(appSource, /layoutEditingDisabled=\{mobileCanvasLayoutOnly\}/);
     assert.match(appSource, /mobileCanvasLayoutOnly \? setMobileCanvasLayout : setCanvasLayout/);
-    assert.match(canvasWorkbenchSource, /onClick=\{props\.onOpenLeft\}/);
+    assert.match(canvasWorkbenchSource, /onOpen=\{props\.onOpenLeft\}/);
     assert.match(canvasWorkbenchSource, /min-\[700px\]:hidden/);
     assert.match(canvasWorkbenchSource, /max-\[699px\]:hidden/);
     assert.match(canvasWorkbenchSource, /paneCount > 1/);

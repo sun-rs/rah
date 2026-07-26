@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import type {
   ProviderDiagnostic,
   ProviderKind,
   ProviderRuntimeHealthDiagnostic,
 } from "@rah/runtime-protocol";
 import { providerBinaryArgv, resolveConfiguredBinary } from "./provider-binary-utils";
+import { runBackgroundCommand } from "./background-command";
 
 export type CoreLiveDiagnosticProvider = Extract<
   ProviderKind,
@@ -366,72 +366,31 @@ async function runCodexDoctor(
       error: "No Codex launch command configured.",
     };
   }
-  return await new Promise((resolve) => {
-    const child = spawn(command, [...baseArgs, "doctor", "--json", "--summary", "--no-color", "--ascii"], {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+  try {
+    const result = await runBackgroundCommand({
+      command,
+      args: [
+        ...baseArgs,
+        "doctor",
+        "--json",
+        "--summary",
+        "--no-color",
+        "--ascii",
+      ],
+      label: "Codex doctor",
+      timeoutMs: CODEX_DOCTOR_TIMEOUT_MS,
+      maxStdoutBytes: 2 * 1024 * 1024,
+      maxStderrBytes: 256 * 1024,
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      child.kill("SIGTERM");
-      resolve({
-        source: "codex_doctor",
-        status: "unknown",
-        error: "Timed out while running codex doctor.",
-      });
-    }, CODEX_DOCTOR_TIMEOUT_MS);
-    child.stdout.on("data", (chunk) => {
-      stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    child.once("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve({
-        source: "codex_doctor",
-        status: "unknown",
-        error: error.message,
-      });
-    });
-    child.once("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      const stdoutText = Buffer.concat(stdout).toString("utf8").trim();
-      const stderrText = Buffer.concat(stderr).toString("utf8").trim();
-      if (code !== 0) {
-        resolve({
-          source: "codex_doctor",
-          status: "unknown",
-          error: stderrText || `codex doctor exited with code ${code ?? 0}.`,
-        });
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdoutText) as CodexDoctorReport;
-        resolve(summarizeCodexDoctorReport(parsed));
-      } catch (error) {
-        resolve({
-          source: "codex_doctor",
-          status: "unknown",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    });
-  });
+    const parsed = JSON.parse(result.stdout.trim()) as CodexDoctorReport;
+    return summarizeCodexDoctorReport(parsed);
+  } catch (error) {
+    return {
+      source: "codex_doctor",
+      status: "unknown",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function getCodexDoctorDiagnostic(
@@ -598,67 +557,28 @@ function probeInstalledProviderVersion(
     });
   }
 
-  return new Promise((resolve) => {
-    const child = spawn(command, [...baseArgs, "--version"], {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      child.kill("SIGTERM");
-      resolve({
-        status: "launch_error",
-        detail: "Timed out while probing provider version.",
-      });
-    }, 5_000);
-
-    child.stdout.on("data", (chunk) => {
-      stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-
-    child.once("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve({
-        status: error.message.includes("ENOENT") ? "missing_binary" : "launch_error",
-        detail: error.message,
-      });
-    });
-
-    child.once("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      const stdoutText = Buffer.concat(stdout).toString("utf8").trim();
-      const stderrText = Buffer.concat(stderr).toString("utf8").trim();
-      const installedVersion = extractVersionString(stdoutText || stderrText);
-      if (code === 0) {
-        resolve({
-          status: "ready",
-          ...(installedVersion ? { installedVersion } : {}),
-        });
-        return;
-      }
-      resolve({
-        status: "launch_error",
+  return runBackgroundCommand({
+    command,
+    args: [...baseArgs, "--version"],
+    label: "provider version probe",
+    timeoutMs: 5_000,
+    maxStdoutBytes: 256 * 1024,
+    maxStderrBytes: 256 * 1024,
+  })
+    .then((result) => {
+      const installedVersion = extractVersionString(
+        result.stdout.trim() || result.stderr.trim(),
+      );
+      return {
+        status: "ready" as const,
         ...(installedVersion ? { installedVersion } : {}),
-        detail: stderrText || `Exited with code ${code ?? 0}.`,
-      });
-    });
-  });
+      };
+    })
+    .catch((error: unknown) => ({
+      status:
+        error instanceof Error && error.message.includes("ENOENT")
+          ? ("missing_binary" as const)
+          : ("launch_error" as const),
+      detail: error instanceof Error ? error.message : String(error),
+    }));
 }

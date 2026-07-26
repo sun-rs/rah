@@ -12,6 +12,7 @@ import type {
   ConversationItemDetailResponse,
   ConversationResourceIndexResponse,
   ConversationTurnDetailResponse,
+  ConversationTurnProjection,
   ConversationTurnsPageResponse,
   CouncilAgentTuiResponse,
   CouncilMessagesPageResponse,
@@ -91,6 +92,7 @@ import { ConversationResourceIndexStore } from "./conversation-resource-index";
 import { summarizeConversationTurnsForTransport } from "./conversation-transport-summary";
 import { buildConversationTurnDirectory } from "./conversation-turn-directory";
 import { conversationEventBelongsToLiveProjection } from "./conversation-live-policy";
+import { approximateJsonByteLength } from "./bounded-json-size";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -125,6 +127,7 @@ import type {
   ProviderWorkspaceInspectionAdapter,
 } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
+import { ProcessOutputStore } from "./process-output-store";
 import { RuntimeStructuredProviderCoordinator } from "./provider-control/runtime-structured-provider-coordinator";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import { TurnArtifactStore, turnArtifactOwnerKey } from "./turn-artifact-store";
@@ -168,11 +171,14 @@ import {
   createDefaultNativeTuiMirrorProvider,
   type NativeTuiMirrorProvider,
 } from "./native-tui-mirror-provider";
+import { NativeTuiHistoryCatalogIndex } from "./native-tui-history-catalog";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
+  canonicalDirectoryKey,
   findOwningWorkspaceDirectory,
   isReadOnlyReplaySession,
   normalizeDirectory,
+  primeCanonicalDirectoryKeys,
   resolveUserPath,
   sessionBelongsToWorkspace,
   workspaceDirsFromState,
@@ -312,6 +318,7 @@ async function runShutdownStep(label: string, task: () => Promise<unknown> | unk
 export class RuntimeEngine {
   readonly eventBus: EventBus;
   readonly conversationStore: ConversationProjectionStore;
+  readonly processOutputs: ProcessOutputStore;
   readonly ptyHub: PtyHub;
   readonly sessionStore: SessionStore;
   readonly workbenchState: WorkbenchStateStore;
@@ -334,14 +341,31 @@ export class RuntimeEngine {
     StoredSessionCatalogProvider,
     StoredSessionCatalogRecord[]
   >();
+  private pendingStoredSessionCatalogSnapshot:
+    | StoredSessionCatalogRecord[]
+    | undefined;
+  private storedSessionCatalogPersistTask: Promise<void> | undefined;
+  private storedSessionCatalogPersistError: unknown;
   private readonly storedSessionMonitor: StoredSessionMonitor;
   private readonly storedSessionCatalog: StoredSessionCatalog | undefined;
+  /**
+   * Provider-native history is also required by native TUI sessions when the
+   * engine is constructed with injected adapters. Keep that discovery path
+   * separate from the injected adapter catalog so a cache miss can be
+   * resolved by the bounded child-process scanner without mutating the
+   * caller-owned stored-session list.
+   *
+   * Production aliases this to `storedSessionCatalog`; injected engines own a
+   * lazy, native-TUI-only catalog.
+   */
+  private readonly nativeTuiStoredSessionCatalog: StoredSessionCatalog;
   private readonly workspaceScopeAuthorizer: WorkspaceScopeAuthorizer;
   private readonly terminals: RuntimeTerminalCoordinator;
   private readonly sessionLifecycle: RuntimeSessionLifecycle;
   private readonly structuredProviders: RuntimeStructuredProviderCoordinator;
   private readonly nativeTuiProviders: NativeTuiProviderRuntime;
   private readonly nativeTuiMirrors: NativeTuiMirrorProvider;
+  private readonly nativeTuiHistoryCatalog: NativeTuiHistoryCatalogIndex;
   private readonly council: CouncilRuntime;
 
   private readonly structuredLiveAdaptersByProvider = new Map<
@@ -386,6 +410,7 @@ export class RuntimeEngine {
     ProviderCapabilityView<ProviderShutdownAdapter>
   >();
   private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
+  private readonly storedReplayProviders = new Map<string, ProviderKind>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
   private readonly nativeTuiRehydratedSessionIds = new Set<string>();
   private readonly liveProviderSessionResumeReservations = new Map<string, number>();
@@ -406,11 +431,23 @@ export class RuntimeEngine {
     this.sessionLibrary = new StoredSessionLibraryStore();
     this.sessionLibrary.load();
     this.eventBus = new EventBus();
+    this.processOutputs = new ProcessOutputStore();
     this.ptyHub = new PtyHub();
     this.historySnapshots = new HistorySnapshotStore();
     this.turnArtifacts = new TurnArtifactStore();
-    this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime();
-    this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider();
+    this.nativeTuiHistoryCatalog = new NativeTuiHistoryCatalogIndex({
+      refresh: (provider) =>
+        this.refreshNativeTuiHistoryCatalogInBackground(
+          provider,
+          "native TUI history cache miss",
+        ),
+    });
+    this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime(
+      this.nativeTuiHistoryCatalog,
+    );
+    this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider(
+      this.nativeTuiHistoryCatalog,
+    );
     this.council = new CouncilRuntime({
       eventBus: this.eventBus,
       startSession: async (request) => {
@@ -523,6 +560,7 @@ export class RuntimeEngine {
 
     const resolvedAdapters: ProviderAdapter[] = adapters ?? createDefaultProviderAdapters({
       eventBus: this.eventBus,
+      processOutputs: this.processOutputs,
       ptyHub: this.ptyHub,
       sessionStore: this.sessionStore,
       turnArtifacts: this.turnArtifacts,
@@ -532,7 +570,9 @@ export class RuntimeEngine {
       this.registerAdapter(adapter);
     }
     if (adapters === undefined) {
-      this.storedSessionCatalog = new StoredSessionCatalog();
+      const catalog = new StoredSessionCatalog();
+      this.storedSessionCatalog = catalog;
+      this.nativeTuiStoredSessionCatalog = catalog;
       const storedSnapshot = loadStoredSessionCatalogSnapshot();
       const cachedRecords = storedSnapshot.length > 0
         ? storedSnapshot
@@ -547,6 +587,7 @@ export class RuntimeEngine {
       );
     } else {
       this.storedSessionCatalog = undefined;
+      this.nativeTuiStoredSessionCatalog = new StoredSessionCatalog();
       this.refreshStoredSessionsCache();
     }
     this.storedSessionMonitor = new StoredSessionMonitor({
@@ -645,6 +686,7 @@ export class RuntimeEngine {
   async listSessionsForRequest(
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): Promise<ListSessionsResponse> {
+    await this.primeWorkbenchDirectoryIdentities();
     const storedSessionsMode = options?.storedSessionsMode ?? "recent";
     if (storedSessionsMode === "all") {
       await this.refreshStoredSessionsCatalog();
@@ -885,33 +927,37 @@ export class RuntimeEngine {
     this.council.markCouncilMcpReady(councilId, agentId);
   }
 
-  addWorkspace(
+  async addWorkspace(
     rawDir: string,
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
-  ): ListSessionsResponse {
+  ): Promise<ListSessionsResponse> {
+    await this.primeWorkbenchDirectoryIdentities([rawDir]);
     this.workbenchState.selectWorkspace(rawDir);
     return this.currentWorkbenchSessions(options);
   }
 
-  selectWorkspace(
+  async selectWorkspace(
     rawDir: string,
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
-  ): ListSessionsResponse {
+  ): Promise<ListSessionsResponse> {
+    await this.primeWorkbenchDirectoryIdentities([rawDir]);
     this.workbenchState.selectWorkspace(rawDir);
     return this.currentWorkbenchSessions(options);
   }
 
-  removeWorkspace(
+  async removeWorkspace(
     rawDir: string,
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
-  ): ListSessionsResponse {
+  ): Promise<ListSessionsResponse> {
     const directory = normalizeDirectory(rawDir);
     if (!directory) {
       throw new Error("Workspace directory is required.");
     }
+    await this.primeWorkbenchDirectoryIdentities([directory]);
     this.refreshRememberedState();
     const liveStates = this.sessionStore.listSessions();
     const workspaceDirs = workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates);
+    const directoryKey = canonicalDirectoryKey(directory);
     const hasRunningSessions = liveStates.some((state) => {
       if (isReadOnlyReplaySession(state)) {
         return false;
@@ -920,7 +966,7 @@ export class RuntimeEngine {
         workspaceDirs,
         state.session.rootDir || state.session.cwd,
       );
-      return owner === directory;
+      return canonicalDirectoryKey(owner ?? undefined) === directoryKey;
     });
     if (hasRunningSessions) {
       throw new Error("Cannot remove a workspace with active running sessions.");
@@ -947,9 +993,7 @@ export class RuntimeEngine {
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): Promise<ListSessionsResponse> {
     this.requireStoredSessionClosed(provider, providerSessionId, "delete");
-    if (this.storedSessionCatalog) {
-      await this.refreshStoredSessionsCatalog({ provider });
-    }
+    await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
     const session = this.lastDiscoveredStoredSessions.find(
       (entry) =>
         entry.provider === provider && entry.providerSessionId === providerSessionId,
@@ -987,6 +1031,7 @@ export class RuntimeEngine {
       clientId?: string;
     },
   ): Promise<ListSessionsResponse> {
+    await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
     let stoppedRuntimeRef: StoredSessionRef | null = null;
     let managedRuntime: StoredSessionState | undefined;
     if (options?.runtimeSessionId) {
@@ -1188,9 +1233,7 @@ export class RuntimeEngine {
     this.updateStoredSessionsCache(nextStoredSessions, { publish: true });
     if (archiveBackend === "provider_native" && isStoredSessionCatalogProvider(provider)) {
       const records = this.storedSessionCatalogRecords.get(provider) ?? [];
-      this.storedSessionCatalogRecords.set(
-        provider,
-        records.map((record) =>
+      const nextRecords = records.map((record) =>
           record.ref.providerSessionId === providerSessionId
             ? {
                 ...record,
@@ -1205,8 +1248,9 @@ export class RuntimeEngine {
                 },
               }
             : record,
-        ),
       );
+      this.storedSessionCatalogRecords.set(provider, nextRecords);
+      this.nativeTuiHistoryCatalog.replaceProvider(provider, nextRecords);
       this.persistStoredSessionCatalogRecords();
     } else if (archiveBackend === "rah_snapshot") {
       this.removeStoredSessionCatalogRecord({ provider, providerSessionId });
@@ -1224,6 +1268,7 @@ export class RuntimeEngine {
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): Promise<ListSessionsResponse> {
     this.requireStoredSessionClosed(provider, providerSessionId, "restore");
+    await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
     const identity = { provider, providerSessionId };
     const registryRecord = this.sessionLibrary.find(identity);
     const session = this.lastDiscoveredStoredSessions.find(
@@ -1270,9 +1315,7 @@ export class RuntimeEngine {
     this.updateStoredSessionsCache(nextStoredSessions, { publish: true });
     if (providerNativeArchive && isStoredSessionCatalogProvider(provider)) {
       const records = this.storedSessionCatalogRecords.get(provider) ?? [];
-      this.storedSessionCatalogRecords.set(
-        provider,
-        records.map((record) => {
+      const nextRecords = records.map((record) => {
           if (record.ref.providerSessionId !== providerSessionId) {
             return record;
           }
@@ -1290,8 +1333,9 @@ export class RuntimeEngine {
               ...(Object.keys(providerState).length > 0 ? { providerState } : {}),
             },
           };
-        }),
-      );
+        });
+      this.storedSessionCatalogRecords.set(provider, nextRecords);
+      this.nativeTuiHistoryCatalog.replaceProvider(provider, nextRecords);
       this.persistStoredSessionCatalogRecords();
     }
     return this.buildSessionsResponse(
@@ -1639,6 +1683,10 @@ export class RuntimeEngine {
   ): Promise<ResumeSessionResponse> {
     this.assertProviderSessionNotBeingLiveResumed(request);
     this.pruneOrphanSessions();
+    await this.ensureStoredSessionCatalogRecord(
+      request.provider,
+      request.providerSessionId,
+    );
     const adapter = this.storedHistoryAdaptersByProvider.get(request.provider);
     if (!adapter?.resumeStoredSession && this.structuredLiveAllowedForInjectedAdapters) {
       return await this.structuredProviders.resumeSession(request);
@@ -1647,6 +1695,7 @@ export class RuntimeEngine {
       throw new Error(`Provider ${request.provider} does not support stored history replay.`);
     }
     const response = await adapter.resumeStoredSession(request);
+    this.storedReplayProviders.set(response.session.session.id, request.provider);
     if (
       request.historySourceSessionId &&
       request.historySourceSessionId !== response.session.session.id
@@ -1655,8 +1704,31 @@ export class RuntimeEngine {
         request.historySourceSessionId,
         response.session.session.id,
       );
+      this.storedReplayProviders.delete(request.historySourceSessionId);
     }
     return response;
+  }
+
+  /**
+   * Explicit lifecycle operations may legitimately target a provider session
+   * that arrived after the last catalog snapshot. Resolve that race through
+   * the background catalog worker, never by letting an adapter scan provider
+   * storage on the daemon event loop.
+   */
+  private async ensureStoredSessionCatalogRecord(
+    provider: ProviderKind,
+    providerSessionId: string,
+  ): Promise<void> {
+    if (
+      !this.storedSessionCatalog ||
+      !isStoredSessionCatalogProvider(provider) ||
+      (this.storedSessionCatalogRecords.get(provider) ?? []).some(
+        (record) => record.ref.providerSessionId === providerSessionId,
+      )
+    ) {
+      return;
+    }
+    await this.refreshStoredSessionsCatalog({ provider });
   }
 
   private assertStructuredLiveBackendAllowed(
@@ -2036,13 +2108,13 @@ export class RuntimeEngine {
     }
   }
 
-  getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
+  async getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
     if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
         sessionId,
         options?.scopeRoot,
       );
-      return this.requireStructuredWorkspaceInspectionAdapter(sessionId).getWorkspaceSnapshot(
+      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).getWorkspaceSnapshot(
         sessionId,
         {
           ...(scopeRoot ? { scopeRoot } : {}),
@@ -2050,11 +2122,11 @@ export class RuntimeEngine {
       );
     }
     const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
-    const snapshot = getWorkspaceSnapshot(scopeRoot ?? session.cwd);
+    const snapshot = await getWorkspaceSnapshot(scopeRoot ?? session.cwd);
     return {
       sessionId,
       cwd: snapshot.cwd,
@@ -2067,7 +2139,7 @@ export class RuntimeEngine {
     options?: { scopeRoot?: string; baseBranch?: string },
   ) {
     if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
         sessionId,
         options?.scopeRoot,
       );
@@ -2080,7 +2152,7 @@ export class RuntimeEngine {
       );
     }
     const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
@@ -2120,7 +2192,7 @@ export class RuntimeEngine {
     },
   ) {
     if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
         sessionId,
         options?.scopeRoot,
       );
@@ -2138,7 +2210,7 @@ export class RuntimeEngine {
       );
     }
     const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
@@ -2156,24 +2228,83 @@ export class RuntimeEngine {
     };
   }
 
-  getTurnFileChanges(sessionId: string, turnId: string) {
+  async getTurnFileChanges(sessionId: string, turnId: string) {
     const ownerId = turnArtifactOwnerKey(
       sessionId,
       this.sessionStore.getSession(sessionId)?.session,
     );
-    return this.turnArtifacts.getTurnFileChanges(ownerId, turnId, sessionId);
+    return await this.turnArtifacts.getTurnFileChanges(ownerId, turnId, sessionId);
   }
 
-  getTurnFileDiff(sessionId: string, turnId: string, filePath: string) {
+  async getTurnFileDiff(sessionId: string, turnId: string, filePath: string) {
     const ownerId = turnArtifactOwnerKey(
       sessionId,
       this.sessionStore.getSession(sessionId)?.session,
     );
-    return this.turnArtifacts.getTurnFileDiff(ownerId, turnId, filePath, sessionId);
+    try {
+      return await this.turnArtifacts.getTurnFileDiff(
+        ownerId,
+        turnId,
+        filePath,
+        sessionId,
+      );
+    } catch (artifactError) {
+      const restored =
+        await this.storedHistoryAdapterForSession(
+          sessionId,
+        )?.getSessionConversationTurnFileDiff?.(sessionId, {
+          providerTurnId: turnId,
+          path: filePath,
+        });
+      if (restored) {
+        return restored;
+      }
+      throw artifactError;
+    }
+  }
+
+  private async restorePersistedTurnFileChanges(
+    sessionId: string,
+    turns: readonly ConversationTurnProjection[],
+  ): Promise<ConversationTurnProjection[]> {
+    const ownerId = turnArtifactOwnerKey(
+      sessionId,
+      this.sessionStore.getSession(sessionId)?.session,
+    );
+    return await Promise.all(turns.map(async (turn) => {
+      // A provider-native per-turn summary is the protocol authority when it
+      // exists (for Codex this mirrors patch_apply_end accounting). Persisted
+      // RAH snapshots are the cross-restart fallback for providers or older
+      // turns that do not expose that history.
+      if (turn.fileChanges !== undefined) {
+        return turn;
+      }
+      const artifactTurnIds = [
+        turn.providerTurnId,
+        turn.id,
+      ].filter(
+        (turnId, index, values): turnId is string =>
+          typeof turnId === "string" && values.indexOf(turnId) === index,
+      );
+      for (const artifactTurnId of artifactTurnIds) {
+        const persisted = await this.turnArtifacts.findTurnFileChanges(
+          ownerId,
+          artifactTurnId,
+          sessionId,
+        );
+        if (persisted) {
+          return {
+            ...turn,
+            fileChanges: persisted.fileChanges,
+          };
+        }
+      }
+      return turn;
+    }));
   }
 
   async getWorkspaceGitStatus(dir: string, options?: { baseBranch?: string }) {
-    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
+    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return await getWorkspaceGitStatusAsync(workspaceDir, {
       scopeRoot: workspaceDir,
       ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
@@ -2185,7 +2316,7 @@ export class RuntimeEngine {
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; baseBranch?: string },
   ) {
-    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
+    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return {
       sessionId: "",
       path,
@@ -2236,7 +2367,7 @@ export class RuntimeEngine {
     options?: { scopeRoot?: string; imagePreviewMode?: "bounded" | "full" },
   ) {
     if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
         sessionId,
         options?.scopeRoot,
       );
@@ -2250,7 +2381,7 @@ export class RuntimeEngine {
       );
     }
     const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
@@ -2268,7 +2399,7 @@ export class RuntimeEngine {
     path: string,
     options?: { imagePreviewMode?: "bounded" | "full" },
   ) {
-    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
+    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return await readWorkspaceFileFromDirectoryAsync(workspaceDir, path, {
       scopeRoot: workspaceDir,
       ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
@@ -2292,7 +2423,7 @@ export class RuntimeEngine {
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
@@ -2304,7 +2435,7 @@ export class RuntimeEngine {
   }
 
   async searchWorkspaceFiles(dir: string, query: string, limit = 100): Promise<SessionFileSearchResponse> {
-    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
+    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return {
       sessionId: "",
       query,
@@ -2358,7 +2489,7 @@ export class RuntimeEngine {
         ),
         liveRevision: resident.liveRevision,
       };
-      response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+      response.approximateBytes = approximateJsonByteLength(response);
       return response;
     }
     const historyEventLimit = Math.min(500, Math.max(100, turnLimit * 40));
@@ -2402,6 +2533,16 @@ export class RuntimeEngine {
           turns: projectedHistory.turns.map((turn) => ({
             ...turn,
             itemsView: "summary" as const,
+            ...(turn.providerTurnId !== undefined &&
+            historyPage.turnProcessDetailsAvailable?.[turn.providerTurnId] !==
+              undefined
+              ? {
+                  processDetailsAvailable:
+                    historyPage.turnProcessDetailsAvailable[
+                      turn.providerTurnId
+                    ],
+                }
+              : {}),
           })),
         }
       : projectedHistory;
@@ -2414,9 +2555,12 @@ export class RuntimeEngine {
         }
       : this.conversationStore.overlayLiveSnapshot(projection);
     const { liveRevision, ...responseProjection } = liveSnapshot;
-    const pageTurns = nativeTurnPage
+    const pageTurns = await this.restorePersistedTurnFileChanges(
+      sessionId,
+      nativeTurnPage
       ? responseProjection.turns
-      : responseProjection.turns.slice(-turnLimit);
+      : responseProjection.turns.slice(-turnLimit),
+    );
     const response: ConversationTurnsPageResponse = {
       ...responseProjection,
       liveRevision,
@@ -2427,8 +2571,19 @@ export class RuntimeEngine {
         ? { nextCursor: historyPage.nextCursor ?? historyPage.nextBeforeTs }
         : {}),
     };
-    response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+    response.approximateBytes = approximateJsonByteLength(response);
     return response;
+  }
+
+  async getSessionConversationSourceRevision(sessionId: string) {
+    const sourceRevision =
+      await this.storedHistoryAdapterForSession(
+        sessionId,
+      )?.getSessionConversationSourceRevision?.(sessionId);
+    return {
+      sessionId,
+      sourceRevision: sourceRevision ?? null,
+    };
   }
 
   async getSessionConversationTurnDetail(
@@ -2455,18 +2610,21 @@ export class RuntimeEngine {
     if (!projectedTurn) {
       return undefined;
     }
-    const turn = {
+    const [turn] = await this.restorePersistedTurnFileChanges(sessionId, [{
       ...projectedTurn,
       id: options.turnId,
       itemsView: "full" as const,
       items: projectedTurn.items.map((item) => ({ ...item, turnId: options.turnId })),
-    };
+    }]);
+    if (!turn) {
+      return undefined;
+    }
     const response: ConversationTurnDetailResponse = {
       sessionId,
       turnId: options.turnId,
       turn,
     };
-    response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+    response.approximateBytes = approximateJsonByteLength(response);
     return response;
   }
 
@@ -2476,6 +2634,7 @@ export class RuntimeEngine {
   ): Promise<ConversationResourceIndexResponse> {
     const adapter = this.storedHistoryAdapterForSession(sessionId);
     const historyRevision =
+      (await adapter?.getSessionConversationSourceRevision?.(sessionId)) ??
       adapter?.createFrozenHistoryPageLoader?.(sessionId)?.boundary?.sourceRevision;
     const state = this.sessionStore.getSession(sessionId);
     const liveRevision = this.conversationStore.snapshot(sessionId).liveRevision;
@@ -2555,17 +2714,94 @@ export class RuntimeEngine {
       return undefined;
     }
     const turnId = options.turnId ?? turn.id;
+    const storedProcessOutput = await this.processOutputs.read(
+      sessionId,
+      options.providerItemId,
+    );
+    const hydratedItem = storedProcessOutput
+      ? (() => {
+          if (item.content.kind === "tool") {
+            const toolCall = item.content.toolCall;
+            const retainedArtifacts = (toolCall.detail?.artifacts ?? []).filter(
+              (artifact) =>
+                !(
+                  artifact.kind === "text" &&
+                  (artifact.label === "output" || artifact.label === "stdout")
+                ),
+            );
+            return {
+              ...item,
+              detailAvailable: true,
+              content: {
+                ...item.content,
+                toolCall: {
+                  ...toolCall,
+                  detailAvailable: true,
+                  detailSizeBytes: storedProcessOutput.output.totalBytes,
+                  detail: {
+                    ...toolCall.detail,
+                    artifacts: [
+                      ...retainedArtifacts,
+                      {
+                        kind: "text" as const,
+                        label: "output",
+                        text: storedProcessOutput.text,
+                      },
+                    ],
+                  },
+                },
+              },
+            };
+          }
+          if (item.content.kind === "observation") {
+            const observation = item.content.observation;
+            const retainedArtifacts = (
+              observation.detail?.artifacts ?? []
+            ).filter(
+              (artifact) =>
+                !(
+                  artifact.kind === "text" &&
+                  (artifact.label === "output" || artifact.label === "stdout")
+                ),
+            );
+            return {
+              ...item,
+              detailAvailable: true,
+              content: {
+                ...item.content,
+                observation: {
+                  ...observation,
+                  detailAvailable: true,
+                  detailSizeBytes: storedProcessOutput.output.totalBytes,
+                  detail: {
+                    ...observation.detail,
+                    artifacts: [
+                      ...retainedArtifacts,
+                      {
+                        kind: "text" as const,
+                        label: "output",
+                        text: storedProcessOutput.text,
+                      },
+                    ],
+                  },
+                },
+              },
+            };
+          }
+          return item;
+        })()
+      : item;
     const response: ConversationItemDetailResponse = {
       sessionId,
       turnId,
       itemId: options.itemId,
       item: {
-        ...item,
+        ...hydratedItem,
         id: options.itemId,
         turnId,
       },
     };
-    response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+    response.approximateBytes = approximateJsonByteLength(response);
     return response;
   }
 
@@ -2609,7 +2845,9 @@ export class RuntimeEngine {
   private storedHistoryAdapterForSession(
     sessionId: string,
   ): ProviderStoredHistoryAdapter | undefined {
-    const ownerProvider = this.structuredSessionOwners.get(sessionId);
+    const ownerProvider =
+      this.structuredSessionOwners.get(sessionId) ??
+      this.storedReplayProviders.get(sessionId);
     if (ownerProvider) {
       return this.storedHistoryAdaptersByProvider.get(ownerProvider);
     }
@@ -2693,6 +2931,7 @@ export class RuntimeEngine {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.storedReplayProviders.clear();
     if (this.providerModelCatalogRefreshTimer !== undefined) {
       clearTimeout(this.providerModelCatalogRefreshTimer);
       this.providerModelCatalogRefreshTimer = undefined;
@@ -2700,6 +2939,14 @@ export class RuntimeEngine {
     this.conversationStore.close();
     await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
     await runShutdownStep("stored session catalog", () => this.storedSessionCatalog?.shutdown());
+    if (this.nativeTuiStoredSessionCatalog !== this.storedSessionCatalog) {
+      await runShutdownStep("native TUI stored session catalog", () =>
+        this.nativeTuiStoredSessionCatalog.shutdown(),
+      );
+    }
+    await runShutdownStep("stored session catalog snapshot", () =>
+      this.flushStoredSessionCatalogRecords(),
+    );
     await runShutdownStep("council runtime", () => this.council.shutdown());
     await runShutdownStep("terminal sessions", () => this.terminals.shutdown());
     await Promise.all(
@@ -2708,6 +2955,7 @@ export class RuntimeEngine {
       ),
     );
     await runShutdownStep("turn artifact flush", () => this.turnArtifacts.flush());
+    await runShutdownStep("process output flush", () => this.processOutputs.flush());
     await runShutdownStep("native local-server cleanup", async () => {
       const closedNativeServerPids = await cleanupRahNativeServerOrphans({
         includeCurrentDaemon: true,
@@ -2917,6 +3165,58 @@ export class RuntimeEngine {
     }
   }
 
+  private async refreshNativeTuiHistoryCatalog(
+    provider: StoredSessionCatalogProvider,
+  ): Promise<void> {
+    if (this.nativeTuiStoredSessionCatalog === this.storedSessionCatalog) {
+      await this.refreshStoredSessionsCatalog({ publish: true, provider });
+      return;
+    }
+    const results = await this.nativeTuiStoredSessionCatalog.refresh(provider);
+    for (const result of results) {
+      if (!result.records) {
+        console.warn("[rah] native TUI history catalog refresh failed", {
+          provider: result.provider,
+          error: result.error ?? "unknown error",
+        });
+        continue;
+      }
+      const current = this.nativeTuiHistoryCatalog.list(result.provider);
+      const records = reconcileStoredSessionCatalogRecords({
+        current,
+        incoming: result.records,
+        complete: result.complete === true,
+      });
+      this.nativeTuiHistoryCatalog.replaceProvider(result.provider, records);
+      if (result.complete !== true) {
+        console.warn("[rah] native TUI history catalog scan was incomplete", {
+          provider: result.provider,
+          discovered: result.records.length,
+          previous: current.length,
+          ...(result.error ? { error: result.error } : {}),
+        });
+      }
+    }
+  }
+
+  private async refreshNativeTuiHistoryCatalogInBackground(
+    provider: StoredSessionCatalogProvider,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.refreshNativeTuiHistoryCatalog(provider);
+    } catch (error) {
+      if (this.shuttingDown) {
+        return;
+      }
+      console.warn("[rah] background native TUI history catalog refresh failed", {
+        reason,
+        provider,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private scheduleProviderModelCatalogRefresh(delayMs: number): void {
     if (this.shuttingDown || this.providerModelCatalogRefreshTimer !== undefined) {
       return;
@@ -2978,12 +3278,56 @@ export class RuntimeEngine {
         records.filter((record) => record.ref.provider === provider),
       );
     }
+    this.nativeTuiHistoryCatalog.replace(records);
   }
 
   private persistStoredSessionCatalogRecords(): void {
-    writeStoredSessionCatalogSnapshot(
-      [...this.storedSessionCatalogRecords.values()].flat(),
-    );
+    this.pendingStoredSessionCatalogSnapshot = [
+      ...this.storedSessionCatalogRecords.values(),
+    ].flat();
+    if (this.storedSessionCatalogPersistTask) {
+      return;
+    }
+    this.storedSessionCatalogPersistError = undefined;
+    const task = this.drainStoredSessionCatalogSnapshots()
+      .catch((error) => {
+        this.storedSessionCatalogPersistError = error;
+        console.warn("[rah] stored-session catalog snapshot persist failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.storedSessionCatalogPersistTask === task) {
+          this.storedSessionCatalogPersistTask = undefined;
+        }
+        if (this.pendingStoredSessionCatalogSnapshot) {
+          this.persistStoredSessionCatalogRecords();
+        }
+      });
+    this.storedSessionCatalogPersistTask = task;
+  }
+
+  private async drainStoredSessionCatalogSnapshots(): Promise<void> {
+    while (this.pendingStoredSessionCatalogSnapshot) {
+      const snapshot = this.pendingStoredSessionCatalogSnapshot;
+      this.pendingStoredSessionCatalogSnapshot = undefined;
+      await writeStoredSessionCatalogSnapshot(snapshot);
+    }
+  }
+
+  private async flushStoredSessionCatalogRecords(): Promise<void> {
+    if (
+      this.pendingStoredSessionCatalogSnapshot &&
+      !this.storedSessionCatalogPersistTask
+    ) {
+      this.persistStoredSessionCatalogRecords();
+    }
+    while (this.storedSessionCatalogPersistTask) {
+      await this.storedSessionCatalogPersistTask;
+    }
+    if (this.storedSessionCatalogPersistError) {
+      throw this.storedSessionCatalogPersistError;
+    }
   }
 
   private removeStoredSessionCatalogRecord(
@@ -2994,12 +3338,11 @@ export class RuntimeEngine {
       return;
     }
     const records = this.storedSessionCatalogRecords.get(identity.provider) ?? [];
-    this.storedSessionCatalogRecords.set(
-      identity.provider,
-      records.filter(
-        (record) => record.ref.providerSessionId !== identity.providerSessionId,
-      ),
+    const nextRecords = records.filter(
+      (record) => record.ref.providerSessionId !== identity.providerSessionId,
     );
+    this.storedSessionCatalogRecords.set(identity.provider, nextRecords);
+    this.nativeTuiHistoryCatalog.replaceProvider(identity.provider, nextRecords);
     if (options?.persist ?? true) {
       this.persistStoredSessionCatalogRecords();
     }
@@ -3034,6 +3377,10 @@ export class RuntimeEngine {
       });
       changedProvider = true;
       this.storedSessionCatalogRecords.set(result.provider, providerRecords);
+      this.nativeTuiHistoryCatalog.replaceProvider(
+        result.provider,
+        providerRecords,
+      );
       this.storedHistoryAdaptersByProvider
         .get(result.provider)
         ?.hydrateStoredSessionsCatalog?.(providerRecords);
@@ -3294,6 +3641,21 @@ export class RuntimeEngine {
     this.rememberedPinnedSidebarItems = refreshed.pinnedSidebarItems;
   }
 
+  private async primeWorkbenchDirectoryIdentities(
+    extraDirectories: readonly (string | undefined)[] = [],
+  ): Promise<void> {
+    await primeCanonicalDirectoryKeys([
+      ...this.rememberedWorkspaceDirs,
+      ...this.rememberedHiddenWorkspaces,
+      this.rememberedActiveWorkspaceDir,
+      ...this.sessionStore.listSessions().flatMap((state) => [
+        state.session.rootDir,
+        state.session.cwd,
+      ]),
+      ...extraDirectories,
+    ]);
+  }
+
   private pruneOrphanSessions(): void {
     for (const state of [...this.sessionStore.listSessions()]) {
       if (state.clients.length > 0) {
@@ -3355,6 +3717,7 @@ export class RuntimeEngine {
     this.sessionStore.removeSession(sessionId);
     this.ptyHub.removeSession(sessionId);
     this.historySnapshots.clear(sessionId);
+    this.storedReplayProviders.delete(sessionId);
     this.structuredSessionOwners.delete(sessionId);
     this.terminals.clearSessionState(sessionId);
     this.eventBus.publish({

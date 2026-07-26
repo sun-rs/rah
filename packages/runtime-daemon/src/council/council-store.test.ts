@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CouncilStore } from "./council-store";
 
-test("CouncilStore persists councils, agents, ordered messages, and stopped status", () => {
+test("CouncilStore persists councils, agents, ordered messages, and stopped status", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-"));
   const filePath = path.join(root, "councils.json");
   try {
@@ -57,6 +64,7 @@ test("CouncilStore persists councils, agents, ordered messages, and stopped stat
     store.stopCouncil(created.id);
     const renamedStopped = store.updateCouncil(created.id, { title: "Renamed Stopped Council" });
     assert.equal(renamedStopped.title, "Renamed Stopped Council");
+    await store.flush();
     const persisted = JSON.parse(readFileSync(filePath, "utf8")) as { messages?: unknown[] };
     assert.deepEqual(persisted.messages, []);
     assert.ok(existsSync(path.join(root, "messages", `${encodeURIComponent(created.id)}.jsonl`)));
@@ -72,12 +80,17 @@ test("CouncilStore persists councils, agents, ordered messages, and stopped stat
     reloaded.deleteCouncil(created.id);
     assert.equal(reloaded.listCouncils().length, 0);
     assert.throws(() => reloaded.snapshot(created.id), /Unknown council/);
+    await reloaded.flush();
+    assert.equal(
+      existsSync(path.join(root, "messages", `${encodeURIComponent(created.id)}.jsonl`)),
+      false,
+    );
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore normalizes slashes in agent labels and ids", () => {
+test("CouncilStore normalizes slashes in agent labels and ids", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-label-"));
   const filePath = path.join(root, "councils.json");
   try {
@@ -99,12 +112,13 @@ test("CouncilStore normalizes slashes in agent labels and ids", () => {
       label: "default/max",
     });
     assert.equal(added.id, "default-max");
+    await store.flush();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore normalizes file claim paths before conflict checks", () => {
+test("CouncilStore normalizes file claim paths before conflict checks", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-claims-"));
   try {
     const store = new CouncilStore(path.join(root, "councils.json"));
@@ -132,12 +146,13 @@ test("CouncilStore normalizes file claim paths before conflict checks", () => {
       () => store.claimFile(created.id, created.agents[0]!.id, path.join(root, "..", "outside.ts")),
       /must remain inside the council workspace/,
     );
+    await store.flush();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore snapshot returns the full transcript unless a limit is requested", () => {
+test("CouncilStore snapshot returns the full transcript unless a limit is requested", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-full-snapshot-"));
   try {
     const store = new CouncilStore(path.join(root, "councils.json"));
@@ -169,12 +184,13 @@ test("CouncilStore snapshot returns the full transcript unless a limit is reques
     const limited = store.snapshot(created.id, { limit: 200 });
     assert.equal(limited.messages.length, 200);
     assert.equal(limited.messages[0]!.id, first.id + 21);
+    await store.flush();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore exposes message metadata, tail windows, and older pages", () => {
+test("CouncilStore exposes message metadata, tail windows, and older pages", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-message-window-"));
   try {
     const store = new CouncilStore(path.join(root, "councils.json"));
@@ -222,12 +238,13 @@ test("CouncilStore exposes message metadata, tail windows, and older pages", () 
     assert.equal(older.total, 10);
     assert.equal(older.hasMoreBefore, true);
     assert.equal(older.nextBeforeMessageId, older.messages[0]!.id);
+    await store.flush();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore lists persisted metadata without loading transcripts and recovers stale message ids", () => {
+test("CouncilStore lists persisted metadata without loading transcripts and recovers stale message ids", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-lazy-meta-"));
   const filePath = path.join(root, "councils.json");
   try {
@@ -255,6 +272,7 @@ test("CouncilStore lists persisted metadata without loading transcripts and reco
       text: "first answer",
     });
 
+    await store.flush();
     const persisted = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
     persisted.nextMessageId = 1;
     writeFileSync(filePath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
@@ -268,6 +286,7 @@ test("CouncilStore lists persisted metadata without loading transcripts and reco
     });
     assert.equal(appended.id, first.id + 3);
 
+    await recovered.flush();
     const lazy = new CouncilStore(filePath);
     const [summary] = lazy.listCouncils({
       metadataOnly: true,
@@ -288,7 +307,7 @@ test("CouncilStore lists persisted metadata without loading transcripts and reco
   }
 });
 
-test("CouncilStore migrates legacy inline messages when no message log exists", () => {
+test("CouncilStore migrates legacy inline messages when no message log exists", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-legacy-inline-"));
   const filePath = path.join(root, "councils.json");
   try {
@@ -297,6 +316,7 @@ test("CouncilStore migrates legacy inline messages when no message log exists", 
       workspace: root,
       agents: [{ provider: "codex", label: "Agent A" }],
     });
+    await store.flush();
     const persisted = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
     delete persisted.messageMeta;
     persisted.messages = [{
@@ -315,12 +335,13 @@ test("CouncilStore migrates legacy inline messages when no message log exists", 
     assert.equal(migrated.listCouncils({ metadataOnly: true })[0]?.meta?.messageCount, 1);
     const migratedFile = JSON.parse(readFileSync(filePath, "utf8")) as { messages?: unknown[] };
     assert.deepEqual(migratedFile.messages, []);
+    await migrated.flush();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore marks councils and active agents failed with diagnostic detail", () => {
+test("CouncilStore marks councils and active agents failed with diagnostic detail", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-fail-"));
   try {
     const store = new CouncilStore(path.join(root, "councils.json"));
@@ -336,12 +357,13 @@ test("CouncilStore marks councils and active agents failed with diagnostic detai
     assert.equal(failed.error, "launch failed");
     assert.equal(failed.agents[0]!.status, "failed");
     assert.equal(failed.agents[0]!.lastStatusDetail, "launch failed");
+    await store.flush();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
 });
 
-test("CouncilStore assigns numbered council titles when title is omitted", () => {
+test("CouncilStore assigns numbered council titles when title is omitted", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-title-"));
   try {
     const store = new CouncilStore(path.join(root, "councils.json"));
@@ -363,6 +385,136 @@ test("CouncilStore assigns numbered council titles when title is omitted", () =>
     assert.equal(first.title, "Council-0001");
     assert.equal(second.title, "Council-0002");
     assert.equal(named.title, "Architecture Review");
+    await store.flush();
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilStore keeps the event loop responsive while flushing a large message batch", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-pressure-"));
+  const filePath = path.join(root, "councils.json");
+  try {
+    const store = new CouncilStore(filePath);
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Agent A" }],
+    });
+    const messageCount = 6_000;
+    for (let index = 0; index < messageCount; index += 1) {
+      store.appendMessage({
+        councilId: created.id,
+        actorId: created.agents[0]!.id,
+        role: "agent",
+        text: `message ${index + 1} ${"x".repeat(160)}`,
+      });
+    }
+
+    let heartbeatTicks = 0;
+    const heartbeat = setInterval(() => {
+      heartbeatTicks += 1;
+    }, 1);
+    try {
+      await store.flush();
+    } finally {
+      clearInterval(heartbeat);
+    }
+
+    assert.ok(
+      heartbeatTicks > 0,
+      "Council persistence should yield while serializing and writing a large batch",
+    );
+    const messageLogPath = path.join(
+      root,
+      "messages",
+      `${encodeURIComponent(created.id)}.jsonl`,
+    );
+    assert.equal(
+      readFileSync(messageLogPath, "utf8").trim().split("\n").length,
+      messageCount,
+    );
+    const reloaded = new CouncilStore(filePath);
+    const [summary] = reloaded.listCouncils({ metadataOnly: true });
+    assert.equal(summary?.meta?.messageCount, messageCount);
+    assert.equal(reloaded.lastMessageId(created.id), messageCount);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilStore truncates an interrupted journal tail before appending again", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-tail-repair-"));
+  const filePath = path.join(root, "councils.json");
+  try {
+    const store = new CouncilStore(filePath);
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Agent A" }],
+    });
+    const first = store.appendMessage({
+      councilId: created.id,
+      actorId: created.agents[0]!.id,
+      role: "agent",
+      text: "first complete message",
+    });
+    await store.flush();
+
+    const messageLogPath = path.join(
+      root,
+      "messages",
+      `${encodeURIComponent(created.id)}.jsonl`,
+    );
+    appendFileSync(messageLogPath, '{"id":2,"councilId":"interrupted');
+
+    const recovered = new CouncilStore(filePath);
+    const second = recovered.appendMessage({
+      councilId: created.id,
+      actorId: created.agents[0]!.id,
+      role: "agent",
+      text: "second complete message",
+    });
+    assert.equal(second.id, first.id + 1);
+    await recovered.flush();
+
+    const reloaded = new CouncilStore(filePath);
+    assert.deepEqual(
+      reloaded.snapshot(created.id).messages.map((message) => message.id),
+      [first.id, second.id],
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilStore treats retried journal records as idempotent", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-idempotent-log-"));
+  const filePath = path.join(root, "councils.json");
+  try {
+    const store = new CouncilStore(filePath);
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Agent A" }],
+    });
+    const message = store.appendMessage({
+      councilId: created.id,
+      actorId: created.agents[0]!.id,
+      role: "agent",
+      text: "persist me exactly once",
+    });
+    await store.flush();
+
+    const messageLogPath = path.join(
+      root,
+      "messages",
+      `${encodeURIComponent(created.id)}.jsonl`,
+    );
+    appendFileSync(messageLogPath, `${JSON.stringify(message)}\n`);
+
+    const reloaded = new CouncilStore(filePath);
+    assert.deepEqual(
+      reloaded.snapshot(created.id).messages.map((candidate) => candidate.id),
+      [message.id],
+    );
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

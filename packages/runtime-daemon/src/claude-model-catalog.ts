@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   query as claudeQuery,
   type ModelInfo as ClaudeSdkModelInfo,
+  type SpawnedProcess as ClaudeSdkSpawnedProcess,
+  type SpawnOptions as ClaudeSdkSpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
+import { runBackgroundCommand } from "./background-command";
+import {
+  applyBackgroundProcessPriority,
+  backgroundProcessLaunch,
+} from "./background-process-priority";
 import type {
   ModelCapabilityProfile,
   ProviderModelCatalog,
@@ -290,13 +297,37 @@ function buildClaudeModelDescriptors(modelInfos: readonly ClaudeModelCatalogInfo
 
 async function* emptyClaudeInput(): AsyncGenerator<never> {}
 
+function spawnBackgroundClaudeSdkProcess(
+  options: ClaudeSdkSpawnOptions,
+): ClaudeSdkSpawnedProcess {
+  const launch = backgroundProcessLaunch(options.command, options.args);
+  const child = spawn(launch.command, launch.args, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: options.env,
+    signal: options.signal,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  applyBackgroundProcessPriority(
+    child.pid,
+    "Claude SDK model probe",
+    launch.priority,
+  );
+  // The SDK abstraction exposes stdout but not stderr. Always drain the latter
+  // so a verbose CLI cannot fill its pipe and stall the finite catalog probe.
+  child.stderr.resume();
+  return child;
+}
+
 async function fetchClaudeSupportedModels(cwd?: string): Promise<ClaudeModelCatalogInfo[]> {
   if (process.env.RAH_CLAUDE_MODEL_CATALOG_OFFLINE === "1") {
     return [];
   }
   const query = claudeQuery({
     prompt: emptyClaudeInput(),
-    options: cwd ? { cwd } : {},
+    options: {
+      ...(cwd ? { cwd } : {}),
+      spawnClaudeCodeProcess: spawnBackgroundClaudeSdkProcess,
+    },
   });
   const timeout = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error("Timed out while reading Claude models.")), CLAUDE_MODEL_FETCH_TIMEOUT_MS);
@@ -314,21 +345,15 @@ async function fetchClaudeModeDescriptorsFromHelp(): Promise<SessionModeDescript
   if (!command) {
     throw new Error("Claude help command is empty.");
   }
-  const helpText = await new Promise<string>((resolve, reject) => {
-    const child = execFile(
-      command,
-      [...prefixArgs, "--help"],
-      { timeout: CLAUDE_HELP_FETCH_TIMEOUT_MS, maxBuffer: 128_000 },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(`${stdout}\n${stderr}`);
-      },
-    );
-    child.stdin?.destroy();
+  const result = await runBackgroundCommand({
+    command,
+    args: [...prefixArgs, "--help"],
+    label: "Claude help probe",
+    timeoutMs: CLAUDE_HELP_FETCH_TIMEOUT_MS,
+    maxStdoutBytes: 128_000,
+    maxStderrBytes: 128_000,
   });
+  const helpText = `${result.stdout}\n${result.stderr}`;
   return buildClaudeModeDescriptorsFromHelp(helpText);
 }
 

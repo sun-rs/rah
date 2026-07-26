@@ -8,6 +8,7 @@ import type { CodexStoredSessionRecord } from "./codex-stored-sessions";
 import type { OpenCodeActivityState } from "./opencode-activity";
 import type { OpenCodeStoredSessionRecord } from "./opencode-stored-sessions";
 import type { ProviderActivity, ProviderActivityMeta } from "./provider-activity";
+import type { IncrementalJsonlCursor } from "./incremental-jsonl-reader";
 
 export type NativeTuiProviderRuntimeSession = {
   sessionId: string;
@@ -49,13 +50,14 @@ export type NativeTuiProviderMirror =
       provider: "codex";
       providerSessionId: string;
       record: CodexStoredSessionRecord;
-      processedLineCount: number;
+      jsonlCursor: IncrementalJsonlCursor;
       translationState: CodexRolloutTranslationState;
     }
   | {
       provider: "claude";
       providerSessionId: string;
       record: ClaudeStoredSessionRecord;
+      jsonlCursor: IncrementalJsonlCursor;
       activityState: ClaudeStoredActivityState;
     }
   | {
@@ -63,6 +65,7 @@ export type NativeTuiProviderMirror =
       providerSessionId: string;
       record: OpenCodeStoredSessionRecord;
       processedMessageRevisions: Map<string, string>;
+      storageRevision?: string;
       activityState: OpenCodeActivityState;
     };
 
@@ -74,6 +77,7 @@ export type NativeTuiMirrorUpdate =
       status: "ok";
       mirror: NativeTuiProviderMirror;
       items: NativeTuiProviderActivityEnvelope[];
+      hasMore?: boolean;
     };
 
 export type NativeTuiBindingHandler = {
@@ -91,7 +95,7 @@ export type NativeTuiMirrorHandler = {
   updateMirror(
     session: NativeTuiProviderRuntimeSession,
     mirror: NativeTuiProviderMirror | undefined,
-  ): NativeTuiMirrorUpdate;
+  ): Promise<NativeTuiMirrorUpdate>;
 };
 
 export type NativeTuiProviderHandler = NativeTuiBindingHandler & NativeTuiMirrorHandler;

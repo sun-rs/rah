@@ -142,6 +142,9 @@ export function WorkbenchSidebarShell(props: {
         side="left"
         headerLayout="inline"
         closePlacement="start"
+        closeIcon={<Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />}
+        closeLabel="Collapse sidebar"
+        initialFocus="content"
         viewportClassName="md:!hidden"
         title={<span>RAH</span>}
         bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"

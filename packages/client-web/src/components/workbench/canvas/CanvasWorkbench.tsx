@@ -5,7 +5,6 @@ import {
   Eraser,
   Grid2X2,
   Maximize2,
-  Menu,
   Minus,
   Minimize2,
   Rows2,
@@ -28,8 +27,6 @@ import {
 } from "../../../canvas-layout";
 import {
   HEADER_ACTION_GROUP_CLASS,
-  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
-  HEADER_EDGE_TOGGLE_ICON_SIZE,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
@@ -38,6 +35,7 @@ import {
   HEADER_SEGMENTED_LABEL_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
+import { MobileSidebarToggleButton } from "../shells/MobileSidebarToggleButton";
 import { CanvasLayoutDesigner, CanvasPaneSplitButton } from "./CanvasLayoutControls";
 
 export type CanvasPaneView = {
@@ -349,15 +347,10 @@ export function CanvasWorkbench(props: {
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-2 backdrop-blur-sm">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {props.showLeftSidebarControls ? (
-            <button
-              type="button"
-              className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} inline-flex min-[700px]:hidden`}
-              onClick={props.onOpenLeft}
-              aria-label="Open sidebar"
-              title="Open sidebar"
-            >
-              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-            </button>
+            <MobileSidebarToggleButton
+              className="min-[700px]:hidden"
+              onOpen={props.onOpenLeft}
+            />
           ) : null}
           {props.showLeftSidebarControls && !props.sidebarOpen ? (
             <span className="hidden h-8 w-8 shrink-0 min-[700px]:block" aria-hidden="true" />

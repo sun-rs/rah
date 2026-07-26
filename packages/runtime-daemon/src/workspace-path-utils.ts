@@ -1,12 +1,19 @@
-import { execFile, spawn } from "node:child_process";
-import { promises as fs, readdirSync, type Stats } from "node:fs";
+import { spawn } from "node:child_process";
+import { promises as fs, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type {
   NotebookPreviewData,
   SessionFileResponse,
   SessionFileSearchItem,
 } from "@rah/runtime-protocol";
+import { runBackgroundCommand } from "./background-command";
+import {
+  applyBackgroundProcessPriority,
+  backgroundProcessLaunch,
+} from "./background-process-priority";
+import { BackpressuredByteIngress } from "./backpressured-byte-ingress";
 
 const DEFAULT_MAX_READABLE_FILE_BYTES = 1_000_000;
 const NOTEBOOK_MAX_READABLE_FILE_BYTES = 8_000_000;
@@ -70,31 +77,22 @@ async function execFileUtf8(
   args: string[],
   options?: { cwd?: string; maxBuffer?: number; timeout?: number },
 ): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      {
-        encoding: "utf8",
-        ...(options?.cwd ? { cwd: options.cwd } : {}),
-        ...(options?.maxBuffer ? { maxBuffer: options.maxBuffer } : {}),
-        ...(options?.timeout ? { timeout: options.timeout } : {}),
-      },
-      (error, stdout) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(stdout);
-      },
-    );
+  const result = await runBackgroundCommand({
+    command,
+    args,
+    label: `workspace ${path.basename(command)}`,
+    ...(options?.cwd ? { cwd: options.cwd } : {}),
+    ...(options?.maxBuffer ? { maxStdoutBytes: options.maxBuffer } : {}),
+    ...(options?.timeout ? { timeoutMs: options.timeout } : {}),
+    maxStderrBytes: 512 * 1024,
   });
+  return result.stdout;
 }
 
-export function getWorkspaceSnapshot(cwd: string) {
+export async function getWorkspaceSnapshot(cwd: string) {
   return {
     cwd,
-    nodes: readWorkspaceNodes(cwd),
+    nodes: await readWorkspaceNodes(cwd),
   };
 }
 
@@ -124,14 +122,22 @@ async function searchWorkspaceFilesWithRipgrep(
   limit: number,
 ): Promise<SessionFileSearchItem[]> {
   return await new Promise<SessionFileSearchItem[]>((resolve, reject) => {
-    const child = spawn("rg", ["--files", "."], {
+    const launch = backgroundProcessLaunch("rg", ["--files", "."]);
+    const child = spawn(launch.command, launch.args, {
       cwd,
       stdio: ["ignore", "pipe", "ignore"],
     });
+    applyBackgroundProcessPriority(
+      child.pid,
+      "workspace file index",
+      launch.priority,
+    );
     const results: SessionFileSearchItem[] = [];
+    const decoder = new StringDecoder("utf8");
     let carry = "";
     let settled = false;
     let stoppedEarly = false;
+    let childClosed = false;
 
     const finish = (value: SessionFileSearchItem[]) => {
       if (settled) {
@@ -139,6 +145,7 @@ async function searchWorkspaceFilesWithRipgrep(
       }
       settled = true;
       clearTimeout(timeout);
+      ingress.dispose();
       resolve(value);
     };
     const fail = (error: Error) => {
@@ -147,6 +154,7 @@ async function searchWorkspaceFilesWithRipgrep(
       }
       settled = true;
       clearTimeout(timeout);
+      ingress.dispose();
       reject(error);
     };
     const stopEarly = () => {
@@ -185,17 +193,27 @@ async function searchWorkspaceFilesWithRipgrep(
         carry = "";
       }
     };
+    const maybeFinish = () => {
+      if (settled || !childClosed || !ingress.isIdle()) {
+        return;
+      }
+      consume(decoder.end(), true);
+      finish(results);
+    };
+    const ingress = new BackpressuredByteIngress({
+      consume: (chunk) => consume(decoder.write(chunk)),
+      pauseSource: () => child.stdout.pause(),
+      resumeSource: () => child.stdout.resume(),
+      onIdle: maybeFinish,
+    });
     const timeout = setTimeout(() => stopEarly(), WORKSPACE_FILE_SEARCH_TIMEOUT_MS);
     timeout.unref?.();
 
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => consume(String(chunk)));
+    child.stdout.on("data", (chunk: Buffer) => ingress.enqueue(chunk));
     child.on("error", fail);
     child.on("close", () => {
-      if (!settled) {
-        consume("", true);
-        finish(results);
-      }
+      childClosed = true;
+      maybeFinish();
     });
   });
 }
@@ -734,9 +752,9 @@ function isLikelyBinary(buffer: Buffer): boolean {
   return nonPrintableCount / buffer.length > 0.1;
 }
 
-function readWorkspaceNodes(cwd: string) {
+async function readWorkspaceNodes(cwd: string) {
   try {
-    return readdirSync(cwd, { withFileTypes: true })
+    return (await fs.readdir(cwd, { withFileTypes: true }))
       .sort((left, right) => {
         if (left.isDirectory() !== right.isDirectory()) {
           return left.isDirectory() ? -1 : 1;

@@ -23,7 +23,7 @@ import {
   SquareTerminal,
   Trash2,
 } from "lucide-react";
-import type { SessionProjection } from "../../../types";
+import type { FeedEntry, SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
 import { CouncilLogo } from "../../CouncilLogo";
@@ -80,7 +80,10 @@ import {
   shouldReplayInitialSessionTuiOutput,
 } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
-import { conversationTurnsToFeed } from "../../../conversation-feed";
+import {
+  conversationTurnsToFeed,
+  stableConversationLocalFeed,
+} from "../../../conversation-feed";
 import type { SessionSideLayout } from "../session/session-side-state";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
@@ -348,15 +351,21 @@ export function WorkbenchSelectedPane(props: {
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
   const chatThreadKey = chatThreadKeyForSession(props.selectedSummary);
   const conversation = props.selectedProjection?.conversation;
+  const conversationLocalFeedRef = useRef<readonly FeedEntry[]>([]);
+  const conversationLocalFeed = stableConversationLocalFeed(
+    props.selectedProjection?.feed ?? [],
+    conversationLocalFeedRef.current,
+  );
+  conversationLocalFeedRef.current = conversationLocalFeed;
   const chatFeed = useMemo(
     () => conversationTurnsToFeed(
       conversation?.turns ?? [],
-      props.selectedProjection?.feed ?? [],
+      conversationLocalFeed,
     ),
     [
       conversation?.revision,
       conversation?.turns,
-      props.selectedProjection?.feed,
+      conversationLocalFeed,
     ],
   );
   const chatCanLoadOlderHistory = Boolean(conversation?.nextCursor);

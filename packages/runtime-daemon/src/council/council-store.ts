@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-  appendFileSync,
   closeSync,
+  createWriteStream,
   existsSync,
   fstatSync,
   mkdirSync,
@@ -9,11 +9,19 @@ import {
   readFileSync,
   readSync,
   renameSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
+import {
+  mkdir as mkdirAsync,
+  open as openAsync,
+  rename as renameAsync,
+  rm as rmAsync,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type {
   CouncilAgent,
   CouncilAgentConfig,
@@ -28,6 +36,7 @@ import type {
   CouncilMessagesPageResponse,
 } from "@rah/runtime-protocol";
 import { conversationStateFromLegacyCouncilStatus } from "@rah/runtime-protocol";
+import { streamJsonChunks } from "../json-response-stream";
 import { isClientVisibleCouncilMessage } from "./council-message-visibility";
 
 type CouncilStoreFile = {
@@ -348,6 +357,203 @@ function councilMessageFilePath(filePath: string, councilId: string): string {
   return path.join(councilMessagesDir(filePath), `${encodeURIComponent(councilId)}.jsonl`);
 }
 
+function cloneCouncilMeta(meta: CouncilMeta): CouncilMeta {
+  return {
+    messageCount: meta.messageCount,
+    ...(meta.firstUserMessage ? { firstUserMessage: { ...meta.firstUserMessage } } : {}),
+    ...(meta.firstAgentMessage ? { firstAgentMessage: { ...meta.firstAgentMessage } } : {}),
+    ...(meta.lastContentMessage ? { lastContentMessage: { ...meta.lastContentMessage } } : {}),
+    ...(meta.lastMessage ? { lastMessage: { ...meta.lastMessage } } : {}),
+  };
+}
+
+function cloneCouncilStoreState(state: CouncilStoreFile): CouncilStoreFile {
+  return {
+    councils: state.councils.map((council) => ({ ...council })),
+    agents: state.agents.map((agent) => ({
+      ...agent,
+      ...(agent.providerSessionIds
+        ? { providerSessionIds: [...agent.providerSessionIds] }
+        : {}),
+      ...(agent.optionValues ? { optionValues: { ...agent.optionValues } } : {}),
+    })),
+    messages: [],
+    claims: state.claims.map((claim) => ({ ...claim })),
+    controls: state.controls.map((control) => ({
+      ...control,
+      // Control payloads enter through the JSON protocol and are owned by the
+      // store after appendControl returns. Keep the immutable reference rather
+      // than performing an unbounded structuredClone on the daemon hot path.
+      ...(control.data !== undefined ? { data: control.data } : {}),
+    })),
+    nextMessageId: state.nextMessageId,
+    nextControlId: state.nextControlId,
+    messageMeta: Object.fromEntries(
+      Object.entries(state.messageMeta).map(([councilId, meta]) => [
+        councilId,
+        cloneCouncilMeta(meta),
+      ]),
+    ),
+  };
+}
+
+function writeCouncilStoreSnapshotSync(
+  filePath: string,
+  state: CouncilStoreFile,
+): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    `${JSON.stringify({ ...state, messages: [] }, null, 2)}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
+  );
+  renameSync(temporaryPath, filePath);
+}
+
+async function writeCouncilStoreSnapshot(
+  filePath: string,
+  state: CouncilStoreFile,
+): Promise<void> {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  await mkdirAsync(path.dirname(filePath), { recursive: true });
+  try {
+    await pipeline(
+      Readable.from(streamJsonChunks(state)),
+      createWriteStream(temporaryPath, {
+        flags: "wx",
+        mode: 0o600,
+      }),
+    );
+    await renameAsync(temporaryPath, filePath);
+  } catch (error) {
+    await rmAsync(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function* streamCouncilMessageBatch(
+  messages: readonly CouncilMessage[],
+): AsyncGenerator<Buffer> {
+  for (const message of messages) {
+    yield* streamJsonChunks(message);
+    yield Buffer.from("\n");
+  }
+}
+
+async function appendCouncilMessageBatch(
+  filePath: string,
+  messages: readonly CouncilMessage[],
+): Promise<void> {
+  if (messages.length === 0) {
+    return;
+  }
+  await mkdirAsync(path.dirname(filePath), { recursive: true });
+  await repairCouncilMessageLogTail(filePath);
+  const lastPersistedMessageId = await readCouncilMessageLogLastIdAsync(filePath);
+  const pendingMessages = messages.filter(
+    (message) => message.id > lastPersistedMessageId,
+  );
+  if (pendingMessages.length === 0) {
+    return;
+  }
+  await pipeline(
+    Readable.from(streamCouncilMessageBatch(pendingMessages)),
+    createWriteStream(filePath, {
+      flags: "a",
+      mode: 0o600,
+    }),
+  );
+}
+
+async function repairCouncilMessageLogTail(filePath: string): Promise<void> {
+  let file;
+  try {
+    file = await openAsync(filePath, "r+");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  try {
+    const { size } = await file.stat();
+    if (size === 0) {
+      return;
+    }
+    const finalByte = Buffer.allocUnsafe(1);
+    const finalRead = await file.read(finalByte, 0, 1, size - 1);
+    if (finalRead.bytesRead === 1 && finalByte[0] === 0x0a) {
+      return;
+    }
+
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let end = size;
+    while (end > 0) {
+      const length = Math.min(buffer.byteLength, end);
+      const start = end - length;
+      const read = await file.read(buffer, 0, length, start);
+      const newline = buffer.subarray(0, read.bytesRead).lastIndexOf(0x0a);
+      if (newline >= 0) {
+        await file.truncate(start + newline + 1);
+        return;
+      }
+      end = start;
+    }
+    await file.truncate(0);
+  } finally {
+    await file.close();
+  }
+}
+
+async function readCouncilMessageLogLastIdAsync(filePath: string): Promise<number> {
+  let file;
+  try {
+    file = await openAsync(filePath, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
+  try {
+    const { size } = await file.stat();
+    if (size <= 0) {
+      return 0;
+    }
+    let windowSize = Math.min(size, 64 * 1024);
+    while (windowSize <= size) {
+      const buffer = Buffer.allocUnsafe(windowSize);
+      const read = await file.read(buffer, 0, windowSize, size - windowSize);
+      const lines = buffer.subarray(0, read.bytesRead).toString("utf8").split(/\r?\n/);
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line = lines[index]!.trim();
+        if (!line || (windowSize < size && index === 0)) {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(line) as { id?: unknown };
+          if (typeof parsed.id === "number" && Number.isInteger(parsed.id)) {
+            return parsed.id;
+          }
+        } catch {
+          // Expand the read window when the final message exceeds the current tail.
+        }
+      }
+      if (windowSize === size) {
+        return 0;
+      }
+      windowSize = Math.min(size, windowSize * 2);
+    }
+    return 0;
+  } finally {
+    await file.close();
+  }
+}
+
 function readCouncilMessageLog(filePath: string): CouncilMessage[] {
   if (!existsSync(filePath)) {
     return [];
@@ -367,12 +573,13 @@ function readCouncilMessageLog(filePath: string): CouncilMessage[] {
         typeof parsed.actorId === "string" &&
         Array.isArray(parsed.parts)
       ) {
-        messages.push(parsed);
+        upsertMessageById(messages, parsed);
       }
     } catch {
       // Keep the council usable even if a single log line is corrupted.
     }
   }
+  messages.sort((left, right) => left.id - right.id);
   return messages;
 }
 
@@ -443,13 +650,33 @@ export class CouncilStore {
   private state: CouncilStoreFile;
   private readonly messagesByCouncil = new Map<string, CouncilMessage[]>();
   private readonly loadedMessageCouncils = new Set<string>();
+  private pendingMessageAppends: CouncilMessage[] = [];
+  private readonly pendingMessageLogDeletions = new Set<string>();
+  private persistenceDirty = false;
+  private persistenceTask: Promise<void> | undefined;
+  private persistenceError: unknown;
 
   constructor(private readonly filePath = defaultStoreFilePath()) {
     this.state = loadStoreFile(filePath);
     const legacyMessages = this.state.messages;
     this.state.messages = [];
     const metadataMissing = this.state.councils.some((council) => !this.state.messageMeta[council.id]);
-    if (metadataMissing || legacyMessages.length > 0) {
+    const messageLogLastIds = new Map(
+      this.state.councils.map((council) => [
+        council.id,
+        readCouncilMessageLogLastId(this.messageFilePath(council.id)),
+      ]),
+    );
+    const nextMessageIdFromLogs = Math.max(
+      1,
+      ...[...messageLogLastIds.values()].map((lastMessageId) => lastMessageId + 1),
+    );
+    const messageLogsOutpaceMetadata = nextMessageIdFromLogs > this.state.nextMessageId;
+    const requiresMessageRecovery =
+      metadataMissing ||
+      legacyMessages.length > 0 ||
+      messageLogsOutpaceMetadata;
+    if (requiresMessageRecovery) {
       this.loadMessageLogsForMigration(legacyMessages);
       for (const council of this.state.councils) {
         this.state.messageMeta[council.id] = councilMetaFromMessages(
@@ -457,24 +684,17 @@ export class CouncilStore {
         );
       }
     }
-    const nextMessageIdFromLogs = this.state.councils.reduce(
-      (nextId, council) => Math.max(
-        nextId,
-        readCouncilMessageLogLastId(this.messageFilePath(council.id)) + 1,
-      ),
-      1,
-    );
     this.state.nextMessageId = Math.max(
       this.state.nextMessageId,
-      metadataMissing || legacyMessages.length > 0 ? this.maxMessageId() + 1 : 1,
+      requiresMessageRecovery ? this.maxMessageId() + 1 : 1,
       legacyMessages.reduce((max, message) => Math.max(max, message.id + 1), 1),
       nextMessageIdFromLogs,
     );
     if (legacyMessages.length > 0) {
       this.writeAllMessageLogs();
     }
-    if (metadataMissing || legacyMessages.length > 0) {
-      this.persist();
+    if (requiresMessageRecovery) {
+      this.persistStartupMigration();
     }
     this.messagesByCouncil.clear();
     this.loadedMessageCouncils.clear();
@@ -713,9 +933,8 @@ export class CouncilStore {
       this.state.messageMeta[message.councilId] ?? emptyCouncilMeta(),
       message,
     );
-    this.appendMessageToLog(message);
     council.updatedAt = timestamp;
-    this.persist();
+    this.persist(message);
     return cloneCouncilMessage(message);
   }
 
@@ -1014,10 +1233,36 @@ export class CouncilStore {
     this.messagesByCouncil.delete(councilId);
     this.loadedMessageCouncils.delete(councilId);
     delete this.state.messageMeta[councilId];
-    rmSync(this.messageFilePath(councilId), { force: true });
+    this.pendingMessageAppends = this.pendingMessageAppends.filter(
+      (message) => message.councilId !== councilId,
+    );
+    this.pendingMessageLogDeletions.add(councilId);
     this.state.claims = this.state.claims.filter((claim) => claim.councilId !== councilId);
     this.state.controls = this.state.controls.filter((control) => control.councilId !== councilId);
     this.persist();
+  }
+
+  /**
+   * Waits until all Council mutations accepted by the in-memory store are
+   * durably reflected in the message journals and atomic metadata snapshot.
+   * Normal shutdown must call this method so the write-behind queue never
+   * turns process exit into an implicit data-loss boundary.
+   */
+  async flush(): Promise<void> {
+    while (true) {
+      const task = this.persistenceTask;
+      if (task) {
+        await task.catch(() => {});
+        continue;
+      }
+      if (this.persistenceError) {
+        throw this.persistenceError;
+      }
+      if (!this.hasPendingPersistence()) {
+        return;
+      }
+      this.schedulePersistence();
+    }
   }
 
   requireAgent(councilId: string, agentId: string): CouncilAgent {
@@ -1053,11 +1298,103 @@ export class CouncilStore {
     }
   }
 
-  private persist(): void {
-    mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmpPath, `${JSON.stringify({ ...this.state, messages: [] }, null, 2)}\n`, "utf8");
-    renameSync(tmpPath, this.filePath);
+  private persist(message?: CouncilMessage): void {
+    if (message) {
+      this.pendingMessageAppends.push(cloneCouncilMessage(message));
+    }
+    this.persistenceDirty = true;
+    this.schedulePersistence();
+  }
+
+  private persistStartupMigration(): void {
+    writeCouncilStoreSnapshotSync(this.filePath, this.state);
+  }
+
+  private hasPendingPersistence(): boolean {
+    return (
+      this.persistenceDirty ||
+      this.pendingMessageAppends.length > 0 ||
+      this.pendingMessageLogDeletions.size > 0
+    );
+  }
+
+  private schedulePersistence(): void {
+    if (this.persistenceTask || !this.hasPendingPersistence()) {
+      return;
+    }
+    this.persistenceError = undefined;
+    const task = this.runPersistenceTask();
+    this.persistenceTask = task;
+    void task.catch(() => {
+      // flush() exposes the recorded failure to normal shutdown. Attaching a
+      // rejection handler here prevents a background durability failure from
+      // becoming an unhandled-rejection process crash before shutdown.
+    });
+  }
+
+  private async runPersistenceTask(): Promise<void> {
+    try {
+      await this.drainPersistence();
+    } catch (error) {
+      this.persistenceError = error;
+      console.error("[rah:council-store] asynchronous persistence failed", {
+        filePath: this.filePath,
+        error,
+      });
+      throw error;
+    } finally {
+      this.persistenceTask = undefined;
+      if (!this.persistenceError && this.hasPendingPersistence()) {
+        this.schedulePersistence();
+      }
+    }
+  }
+
+  private async drainPersistence(): Promise<void> {
+    await yieldToEventLoop();
+    while (this.hasPendingPersistence()) {
+      const messageAppends = this.pendingMessageAppends;
+      this.pendingMessageAppends = [];
+      const messageLogDeletions = [...this.pendingMessageLogDeletions];
+      this.pendingMessageLogDeletions.clear();
+      const shouldWriteSnapshot = this.persistenceDirty;
+      this.persistenceDirty = false;
+      const snapshot = shouldWriteSnapshot
+        ? cloneCouncilStoreState(this.state)
+        : undefined;
+
+      try {
+        const messagesByCouncil = new Map<string, CouncilMessage[]>();
+        for (const message of messageAppends) {
+          const messages = messagesByCouncil.get(message.councilId) ?? [];
+          messages.push(message);
+          messagesByCouncil.set(message.councilId, messages);
+        }
+        for (const [councilId, messages] of messagesByCouncil) {
+          await appendCouncilMessageBatch(this.messageFilePath(councilId), messages);
+        }
+        if (snapshot) {
+          await writeCouncilStoreSnapshot(this.filePath, snapshot);
+        }
+        for (const councilId of messageLogDeletions) {
+          await rmAsync(this.messageFilePath(councilId), { force: true });
+        }
+      } catch (error) {
+        this.pendingMessageAppends = [
+          ...messageAppends,
+          ...this.pendingMessageAppends,
+        ];
+        if (snapshot) {
+          this.persistenceDirty = true;
+        }
+        for (const councilId of messageLogDeletions) {
+          this.pendingMessageLogDeletions.add(councilId);
+        }
+        throw error;
+      }
+
+      await yieldToEventLoop();
+    }
   }
 
   private messagesForCouncil(councilId: string): CouncilMessage[] {
@@ -1106,11 +1443,6 @@ export class CouncilStore {
       writeFileSync(tmpPath, body ? `${body}\n` : "", "utf8");
       renameSync(tmpPath, this.messageFilePath(councilId));
     }
-  }
-
-  private appendMessageToLog(message: CouncilMessage): void {
-    mkdirSync(councilMessagesDir(this.filePath), { recursive: true });
-    appendFileSync(this.messageFilePath(message.councilId), `${JSON.stringify(message)}\n`, "utf8");
   }
 
   private maxMessageId(): number {

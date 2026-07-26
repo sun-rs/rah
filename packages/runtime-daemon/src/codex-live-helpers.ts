@@ -32,12 +32,69 @@ import {
   deleteRuntimeQueuedInput,
   publishSessionInputQueue,
 } from "./session-input-queue";
+import {
+  codexNotificationCoalescing,
+  materializeCodexCoalescedNotification,
+  markCodexCompletionOutputIncomplete,
+  prepareCodexNotificationForIngress,
+  type CodexNotificationCoalescing,
+} from "./codex-notification-ingress";
+import { boundedJsonByteLength } from "./bounded-json-size";
 
 type BufferedServerRequest = {
   request: JsonRpcRequest;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 };
+
+type QueuedCodexNotification = {
+  notification: JsonRpcNotification;
+  bytes: number;
+  droppable: boolean;
+  latencyTolerant: boolean;
+  processOutputKey?: string;
+  completionOutputKey?: string;
+  coalesceKey?: string;
+  coalesceMode?: Exclude<CodexNotificationCoalescing["mode"], "latest">;
+  coalescedChunks?: string[];
+  coalescedChunkHead?: number;
+  coalescedChunkBytes?: number;
+  coalescedBaseBytes?: number;
+};
+
+const MAX_CODEX_NOTIFICATION_QUEUE_ITEMS = 2_048;
+const MAX_CODEX_NOTIFICATION_QUEUE_BYTES = 4 * 1024 * 1024;
+const MAX_CODEX_COALESCED_DELTA_BYTES = 256 * 1024;
+const MAX_CODEX_NOTIFICATION_DRAIN_ITEMS = 32;
+const MAX_CODEX_NOTIFICATION_DRAIN_MS = 4;
+const CODEX_DATA_PLANE_DRAIN_INTERVAL_MS = 25;
+const MAX_BUFFERED_SERVER_REQUESTS = 256;
+const MAX_INCOMPLETE_PROCESS_OUTPUT_KEYS = 4_096;
+
+function isDroppableCodexNotification(notification: JsonRpcNotification): boolean {
+  const method = notification.method.toLowerCase();
+  return (
+    method.includes("delta") ||
+    method.endsWith("/progress") ||
+    method.includes("outputdelta")
+  );
+}
+
+function codexNotificationBytes(notification: JsonRpcNotification): number {
+  return boundedJsonByteLength(
+    notification,
+    MAX_CODEX_NOTIFICATION_QUEUE_BYTES,
+  );
+}
+
+function codexDeltaChunkBytes(
+  mode: Exclude<CodexNotificationCoalescing["mode"], "latest">,
+  chunk: string,
+): number {
+  return mode === "base64-delta"
+    ? Buffer.byteLength(chunk, "base64")
+    : Buffer.byteLength(chunk, "utf8");
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -136,6 +193,8 @@ function shouldAttachCurrentTurn(activity: ProviderActivity): boolean {
     case "tool_call_delta":
     case "tool_call_completed":
     case "tool_call_failed":
+    case "process_output_appended":
+    case "process_output_snapshot":
     case "observation_started":
     case "observation_updated":
     case "observation_completed":
@@ -859,37 +918,419 @@ export function createLiveSessionBridge(
   services: RuntimeServices,
   client: CodexAppServerRpcClient,
 ) {
-  const bufferedNotifications: JsonRpcNotification[] = [];
+  const notificationEntries: QueuedCodexNotification[] = [];
+  let notificationHead = 0;
+  const coalescedNotificationEntries = new Map<
+    string,
+    QueuedCodexNotification
+  >();
+  const incompleteProcessOutputKeys = new Set<string>();
   const bufferedRequests: BufferedServerRequest[] = [];
   let liveSession: LiveCodexSession | null = null;
-  let notificationQueue = Promise.resolve();
+  let queuedNotificationBytes = 0;
+  let queuedUrgentNotifications = 0;
+  let drainingNotifications = false;
+  let notificationDrainScheduled = false;
+  let notificationDrainScheduledUrgent = false;
+  let cancelScheduledNotificationDrain: (() => void) | null = null;
+  let bridgeOverloaded = false;
+  const notificationDrainWaiters = new Set<() => void>();
+
+  const queuedNotificationCount = () =>
+    notificationEntries.length - notificationHead;
+
+  const compactConsumedNotificationEntries = () => {
+    if (
+      notificationHead < 256 ||
+      notificationHead * 2 < notificationEntries.length
+    ) {
+      return;
+    }
+    notificationEntries.splice(0, notificationHead);
+    notificationHead = 0;
+  };
+
+  const markProcessOutputIncomplete = (key: string | undefined) => {
+    if (!key) {
+      return;
+    }
+    incompleteProcessOutputKeys.delete(key);
+    incompleteProcessOutputKeys.add(key);
+    while (
+      incompleteProcessOutputKeys.size > MAX_INCOMPLETE_PROCESS_OUTPUT_KEYS
+    ) {
+      const oldest = incompleteProcessOutputKeys.values().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      incompleteProcessOutputKeys.delete(oldest);
+    }
+  };
+
+  const forgetCoalescedEntry = (entry: QueuedCodexNotification) => {
+    if (
+      entry.coalesceKey &&
+      coalescedNotificationEntries.get(entry.coalesceKey) === entry
+    ) {
+      coalescedNotificationEntries.delete(entry.coalesceKey);
+    }
+  };
+
+  const resolveNotificationDrainWaiters = () => {
+    if (
+      drainingNotifications ||
+      notificationDrainScheduled ||
+      queuedNotificationCount() > 0
+    ) {
+      return;
+    }
+    for (const resolve of notificationDrainWaiters) {
+      resolve();
+    }
+    notificationDrainWaiters.clear();
+  };
+
+  const removeQueuedDroppableNotifications = (): boolean => {
+    const retained: QueuedCodexNotification[] = [];
+    let retainedBytes = 0;
+    let removedAny = false;
+    for (
+      let index = notificationHead;
+      index < notificationEntries.length;
+      index += 1
+    ) {
+      const entry = notificationEntries[index]!;
+      if (entry.droppable) {
+        markProcessOutputIncomplete(entry.processOutputKey);
+        forgetCoalescedEntry(entry);
+        removedAny = true;
+        continue;
+      }
+      retained.push(entry);
+      retainedBytes += entry.bytes;
+    }
+    if (!removedAny) {
+      return false;
+    }
+    notificationEntries.splice(0, notificationEntries.length, ...retained);
+    notificationHead = 0;
+    queuedNotificationBytes = retainedBytes;
+    queuedUrgentNotifications = retained.reduce(
+      (count, entry) => count + (entry.latencyTolerant ? 0 : 1),
+      0,
+    );
+    return true;
+  };
+
+  const cancelNotificationDrain = () => {
+    cancelScheduledNotificationDrain?.();
+    cancelScheduledNotificationDrain = null;
+    notificationDrainScheduled = false;
+    notificationDrainScheduledUrgent = false;
+  };
+
+  const markBridgeOverloaded = (notification: JsonRpcNotification) => {
+    if (bridgeOverloaded) {
+      return;
+    }
+    bridgeOverloaded = true;
+    console.error("[rah] Codex notification bridge exceeded its bounded queue", {
+      sessionId: liveSession?.sessionId,
+      method: notification.method,
+      queuedItems: queuedNotificationCount(),
+      queuedBytes: queuedNotificationBytes,
+    });
+    notificationEntries.length = 0;
+    notificationHead = 0;
+    queuedNotificationBytes = 0;
+    queuedUrgentNotifications = 0;
+    coalescedNotificationEntries.clear();
+    cancelNotificationDrain();
+    // A semantic-event flood means ordering can no longer be guaranteed.
+    // Dispose the provider channel and let the normal reconnect/resume path
+    // rebuild canonical state instead of allowing daemon memory to grow.
+    void client.dispose().catch(() => undefined);
+  };
+
+  const scheduleNotificationDrain = (urgent = false) => {
+    if (
+      drainingNotifications ||
+      !liveSession ||
+      bridgeOverloaded
+    ) {
+      return;
+    }
+    if (notificationDrainScheduled) {
+      if (!urgent || notificationDrainScheduledUrgent) {
+        return;
+      }
+      // A lifecycle, permission, or completion event must not wait behind the
+      // data-plane cadence. Promote the existing delayed drain.
+      cancelNotificationDrain();
+    }
+    notificationDrainScheduled = true;
+    notificationDrainScheduledUrgent = urgent;
+    const run = () => {
+      cancelScheduledNotificationDrain = null;
+      notificationDrainScheduled = false;
+      notificationDrainScheduledUrgent = false;
+      void drainNotifications();
+    };
+    if (urgent) {
+      const immediate = setImmediate(run);
+      cancelScheduledNotificationDrain = () => clearImmediate(immediate);
+      return;
+    }
+    const timer = setTimeout(run, CODEX_DATA_PLANE_DRAIN_INTERVAL_MS);
+    timer.unref?.();
+    cancelScheduledNotificationDrain = () => clearTimeout(timer);
+  };
+
+  const drainNotifications = async () => {
+    if (drainingNotifications || !liveSession || bridgeOverloaded) {
+      resolveNotificationDrainWaiters();
+      return;
+    }
+    drainingNotifications = true;
+    const startedAt = performance.now();
+    let processed = 0;
+    try {
+      while (
+        liveSession &&
+        queuedNotificationCount() > 0 &&
+        !bridgeOverloaded &&
+        processed < MAX_CODEX_NOTIFICATION_DRAIN_ITEMS &&
+        performance.now() - startedAt < MAX_CODEX_NOTIFICATION_DRAIN_MS
+      ) {
+        const entry = notificationEntries[notificationHead++]!;
+        queuedNotificationBytes -= entry.bytes;
+        if (!entry.latencyTolerant) {
+          queuedUrgentNotifications = Math.max(
+            0,
+            queuedUrgentNotifications - 1,
+          );
+        }
+        forgetCoalescedEntry(entry);
+        compactConsumedNotificationEntries();
+        processed += 1;
+        try {
+          const notification =
+            entry.coalesceMode && entry.coalescedChunks
+              ? materializeCodexCoalescedNotification(
+                  entry.notification,
+                  entry.coalesceMode,
+                  entry.coalescedChunks.slice(
+                    entry.coalescedChunkHead ?? 0,
+                  ),
+                )
+              : entry.notification;
+          await handleCodexLiveNotification(services, liveSession, notification);
+        } catch (error) {
+          console.warn("[rah] failed to apply Codex live notification", {
+            sessionId: liveSession.sessionId,
+            method: entry.notification.method,
+            error,
+          });
+        }
+      }
+    } finally {
+      drainingNotifications = false;
+      if (queuedNotificationBytes < 0) {
+        queuedNotificationBytes = 0;
+      }
+      if (liveSession && queuedNotificationCount() > 0 && !bridgeOverloaded) {
+        scheduleNotificationDrain(queuedUrgentNotifications > 0);
+      }
+      resolveNotificationDrainWaiters();
+    }
+  };
 
   const enqueueNotification = (
-    target: LiveCodexSession,
     notification: JsonRpcNotification,
   ) => {
-    notificationQueue = notificationQueue
-      .then(() => handleCodexLiveNotification(services, target, notification))
-      .catch((error) => {
-        console.warn("[rah] failed to apply Codex live notification", {
-          sessionId: target.sessionId,
-          method: notification.method,
-          error,
-        });
-      });
+    if (bridgeOverloaded) {
+      return;
+    }
+    const prepared = prepareCodexNotificationForIngress(notification);
+    if (prepared.truncatedProcessOutput) {
+      markProcessOutputIncomplete(
+        prepared.processOutputKey ?? prepared.completionOutputKey,
+      );
+    }
+    let boundedNotification = prepared.notification;
+    if (
+      prepared.completionOutputKey &&
+      incompleteProcessOutputKeys.has(prepared.completionOutputKey)
+    ) {
+      boundedNotification =
+        markCodexCompletionOutputIncomplete(boundedNotification);
+    }
+    const coalescing = codexNotificationCoalescing(boundedNotification);
+    const coalesceKey = coalescing?.key;
+    const droppable = isDroppableCodexNotification(boundedNotification);
+    const coalescedChunkBytes =
+      coalescing && coalescing.mode !== "latest"
+        ? codexDeltaChunkBytes(coalescing.mode, coalescing.chunk)
+        : undefined;
+    const notificationBytes = codexNotificationBytes(boundedNotification);
+    const entry: QueuedCodexNotification = {
+      notification: boundedNotification,
+      bytes: notificationBytes,
+      droppable,
+      latencyTolerant: droppable || coalescing !== undefined,
+      ...(prepared.processOutputKey
+        ? { processOutputKey: prepared.processOutputKey }
+        : {}),
+      ...(prepared.completionOutputKey
+        ? { completionOutputKey: prepared.completionOutputKey }
+        : {}),
+      ...(coalesceKey ? { coalesceKey } : {}),
+      ...(coalescing && coalescing.mode !== "latest"
+        ? {
+            coalesceMode: coalescing.mode,
+            coalescedChunks: [coalescing.chunk],
+            coalescedChunkHead: 0,
+            coalescedChunkBytes: coalescedChunkBytes!,
+            coalescedBaseBytes: Math.max(
+              0,
+              notificationBytes - (coalescedChunkBytes ?? 0),
+            ),
+          }
+        : {}),
+    };
+    const previousCoalescedEntry = coalesceKey
+      ? coalescedNotificationEntries.get(coalesceKey)
+      : undefined;
+    if (previousCoalescedEntry) {
+      const previousBytes = previousCoalescedEntry.bytes;
+      const previousLatencyTolerant =
+        previousCoalescedEntry.latencyTolerant;
+      if (
+        previousCoalescedEntry.coalesceMode &&
+        entry.coalesceMode === previousCoalescedEntry.coalesceMode &&
+        entry.coalescedChunks?.length === 1
+      ) {
+        const chunk = entry.coalescedChunks[0]!;
+        const chunkBytes = entry.coalescedChunkBytes ?? 0;
+        previousCoalescedEntry.notification = entry.notification;
+        previousCoalescedEntry.coalescedChunks?.push(chunk);
+        previousCoalescedEntry.coalescedChunkBytes =
+          (previousCoalescedEntry.coalescedChunkBytes ?? 0) + chunkBytes;
+        previousCoalescedEntry.coalescedBaseBytes =
+          entry.coalescedBaseBytes ?? 0;
+        let head = previousCoalescedEntry.coalescedChunkHead ?? 0;
+        const chunks = previousCoalescedEntry.coalescedChunks ?? [];
+        while (
+          (previousCoalescedEntry.coalescedChunkBytes ?? 0) >
+            MAX_CODEX_COALESCED_DELTA_BYTES &&
+          head < chunks.length - 1
+        ) {
+          const removed = chunks[head++]!;
+          previousCoalescedEntry.coalescedChunkBytes =
+            (previousCoalescedEntry.coalescedChunkBytes ?? 0) -
+            codexDeltaChunkBytes(
+              previousCoalescedEntry.coalesceMode,
+              removed,
+            );
+          markProcessOutputIncomplete(
+            previousCoalescedEntry.processOutputKey ??
+              entry.processOutputKey,
+          );
+        }
+        previousCoalescedEntry.coalescedChunkHead = head;
+        if (head >= 64 && head * 2 >= chunks.length) {
+          chunks.splice(0, head);
+          previousCoalescedEntry.coalescedChunkHead = 0;
+        }
+        previousCoalescedEntry.bytes = Math.min(
+          MAX_CODEX_NOTIFICATION_QUEUE_BYTES + 1,
+          (previousCoalescedEntry.coalescedBaseBytes ?? 0) +
+            (previousCoalescedEntry.coalescedChunkBytes ?? 0),
+        );
+      } else {
+        previousCoalescedEntry.notification = entry.notification;
+        previousCoalescedEntry.bytes = entry.bytes;
+      }
+      previousCoalescedEntry.droppable = entry.droppable;
+      previousCoalescedEntry.latencyTolerant = entry.latencyTolerant;
+      if (entry.processOutputKey) {
+        previousCoalescedEntry.processOutputKey = entry.processOutputKey;
+      } else {
+        delete previousCoalescedEntry.processOutputKey;
+      }
+      if (entry.completionOutputKey) {
+        previousCoalescedEntry.completionOutputKey = entry.completionOutputKey;
+      } else {
+        delete previousCoalescedEntry.completionOutputKey;
+      }
+      queuedNotificationBytes +=
+        previousCoalescedEntry.bytes - previousBytes;
+      if (
+        previousLatencyTolerant !==
+        previousCoalescedEntry.latencyTolerant
+      ) {
+        queuedUrgentNotifications += previousCoalescedEntry.latencyTolerant
+          ? -1
+          : 1;
+      }
+      if (queuedNotificationBytes > MAX_CODEX_NOTIFICATION_QUEUE_BYTES) {
+        markBridgeOverloaded(boundedNotification);
+      }
+      scheduleNotificationDrain(queuedUrgentNotifications > 0);
+      return;
+    }
+    const exceedsQueueBudget = () =>
+      queuedNotificationCount() >= MAX_CODEX_NOTIFICATION_QUEUE_ITEMS ||
+      queuedNotificationBytes + entry.bytes > MAX_CODEX_NOTIFICATION_QUEUE_BYTES;
+    if (exceedsQueueBudget() && entry.droppable) {
+      markProcessOutputIncomplete(entry.processOutputKey);
+      return;
+    }
+    if (exceedsQueueBudget()) {
+      removeQueuedDroppableNotifications();
+      if (
+        entry.completionOutputKey &&
+        incompleteProcessOutputKeys.has(entry.completionOutputKey)
+      ) {
+        entry.notification = markCodexCompletionOutputIncomplete(
+          entry.notification,
+        );
+        entry.bytes = codexNotificationBytes(entry.notification);
+      }
+    }
+    if (exceedsQueueBudget()) {
+      markBridgeOverloaded(notification);
+      return;
+    }
+    notificationEntries.push(entry);
+    if (entry.coalesceKey) {
+      coalescedNotificationEntries.set(entry.coalesceKey, entry);
+    }
+    queuedNotificationBytes += entry.bytes;
+    if (!entry.latencyTolerant) {
+      queuedUrgentNotifications += 1;
+    }
+    if (entry.completionOutputKey) {
+      incompleteProcessOutputKeys.delete(entry.completionOutputKey);
+    }
+    // Provider callbacks are transport ingress, not a work loop. Always yield
+    // before translating notifications so a noisy Codex child cannot occupy
+    // the daemon's current RPC/read callback and starve RAH control traffic.
+    scheduleNotificationDrain(!entry.latencyTolerant);
   };
 
   client.setNotificationHandler((notification) => {
-    if (!liveSession) {
-      bufferedNotifications.push(notification);
-      return;
-    }
-    enqueueNotification(liveSession, notification);
+    enqueueNotification(notification);
   });
 
   client.setRequestHandler((request) => {
     if (liveSession) {
       return handleCodexLiveRequest(services, liveSession, request);
+    }
+    if (bufferedRequests.length >= MAX_BUFFERED_SERVER_REQUESTS) {
+      return Promise.reject(
+        new Error("Codex server request queue is full before session activation."),
+      );
     }
     return new Promise((resolve, reject) => {
       bufferedRequests.push({
@@ -904,17 +1345,19 @@ export function createLiveSessionBridge(
     activate(nextLiveSession: LiveCodexSession) {
       liveSession = nextLiveSession;
       nextLiveSession.flushNotifications = async () => {
-        while (true) {
-          const pending = notificationQueue;
-          await pending;
-          if (pending === notificationQueue) {
-            return;
-          }
+        cancelNotificationDrain();
+        void drainNotifications();
+        while (
+          drainingNotifications ||
+          notificationDrainScheduled ||
+          queuedNotificationCount() > 0
+        ) {
+          await new Promise<void>((resolve) => {
+            notificationDrainWaiters.add(resolve);
+          });
         }
       };
-      for (const notification of bufferedNotifications.splice(0)) {
-        enqueueNotification(nextLiveSession, notification);
-      }
+      scheduleNotificationDrain(queuedUrgentNotifications > 0);
       for (const pending of bufferedRequests.splice(0)) {
         void handleCodexLiveRequest(services, nextLiveSession, pending.request).then(
           pending.resolve,

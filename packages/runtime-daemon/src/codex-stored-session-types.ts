@@ -6,6 +6,17 @@ export interface CodexStoredSessionRecord {
   archived: boolean;
 }
 
+export function codexStoredSessionWorkspaceRoot(
+  record: CodexStoredSessionRecord,
+): string | undefined {
+  for (const candidate of [record.ref.cwd, record.ref.rootDir]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 export const REHYDRATED_CAPABILITIES = {
   liveAttach: false,
   structuredTimeline: true,

@@ -107,7 +107,22 @@ test("transport recovery waits for the restarted socket initial replay boundary"
     await Promise.resolve();
     assert.equal(recovered, false);
 
-    restarted.message({ events: [], initial: true });
+    restarted.message({
+      events: [{ seq: 43 }],
+      initial: true,
+      replay: true,
+      replayComplete: false,
+    });
+    await Promise.resolve();
+    assert.equal(recovered, false);
+    assert.equal(sessionStoreTransportIsHealthy(), false);
+
+    restarted.message({
+      events: [],
+      initial: true,
+      replay: true,
+      replayComplete: true,
+    });
     await recovery;
     assert.equal(recovered, true);
     assert.equal(sessionStoreTransportIsHealthy(), true);

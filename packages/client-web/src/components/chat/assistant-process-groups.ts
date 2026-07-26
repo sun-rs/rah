@@ -3,7 +3,6 @@ import type {
   ConversationActivityDescriptor,
   ConversationActivityKind,
   ConversationActivitySummary,
-  ConversationOutputProjection,
   ConversationTurnFileChangesProjection,
   ConversationTurnStatus,
   TimelineRuntimeModel,
@@ -21,6 +20,7 @@ export type AssistantProcessGroup = {
   entries: FeedEntry[];
   completed: boolean;
   active: boolean;
+  hasFinalAnswer: boolean;
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
@@ -35,16 +35,22 @@ export type ChatDisplayRow =
   | { kind: "feed_entry"; key: string; entry: FeedEntry }
   | AssistantProcessGroup
   | {
-      kind: "turn_outputs";
-      key: string;
-      outputs: ConversationOutputProjection[];
-    }
-  | {
       kind: "turn_file_changes";
       key: string;
       turnId: string;
       fileChanges: ConversationTurnFileChangesProjection;
+    }
+  | {
+      kind: "turn_copy_action";
+      key: string;
+      content: string;
     };
+
+export function defaultAssistantProcessGroupExpanded(
+  group: Pick<AssistantProcessGroup, "completed" | "turnStatus">,
+): boolean {
+  return !group.completed || group.turnStatus === "interrupted";
+}
 
 type ReasoningFeedEntry = Extract<FeedEntry, { kind: "timeline" }> & {
   item: Extract<Extract<FeedEntry, { kind: "timeline" }>["item"], { kind: "reasoning" }>;

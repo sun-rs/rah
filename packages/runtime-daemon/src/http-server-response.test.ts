@@ -69,3 +69,57 @@ test("writeJson honors an explicit gzip opt-out", async () => {
     assert.deepEqual(JSON.parse(response.body.toString("utf8")), payload);
   });
 });
+
+test("writeJson streams oversized identity responses without one giant buffer", async () => {
+  const payload = {
+    generatedAt: new Date("2026-07-25T00:00:00.000Z"),
+    omitted: undefined,
+    items: Array.from({ length: 8_000 }, (_, index) => ({
+      index,
+      text: `history-${index}-\"-${"内容".repeat(8)}`,
+      optional: index % 2 === 0 ? undefined : true,
+      array: [undefined, index, Number.NaN],
+    })),
+  };
+  await withJsonServer(payload, async (port) => {
+    const response = await getRawJson(port, "identity");
+    assert.equal(response.headers["content-encoding"], undefined);
+    assert.equal(response.headers["content-length"], undefined);
+    assert.equal(response.headers.vary, "accept-encoding");
+    assert.deepEqual(
+      JSON.parse(response.body.toString("utf8")),
+      JSON.parse(JSON.stringify(payload)),
+    );
+  });
+});
+
+test("writeJson yields the daemon event loop while streaming a large response", async () => {
+  const payload = {
+    items: Array.from({ length: 40_000 }, (_, index) => ({
+      index,
+      text: `turn-${index}-${"x".repeat(32)}`,
+    })),
+  };
+  let eventLoopTurnObserved = false;
+  const server = createServer((req, res) => {
+    writeJson(req, res, 200, payload);
+    setImmediate(() => {
+      eventLoopTurnObserved = true;
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    const response = await getRawJson(address.port, "identity");
+    assert.equal(eventLoopTurnObserved, true);
+    assert.equal(JSON.parse(response.body.toString("utf8")).items.length, 40_000);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});

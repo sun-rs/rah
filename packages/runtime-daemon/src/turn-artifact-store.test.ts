@@ -58,15 +58,15 @@ test("replaces the authoritative snapshot for the same turn instead of accumulat
   assert.deepEqual(secondSummary.files, [
     { path: "src/new.ts", additions: 1, deletions: 1 },
   ]);
-  assert.deepEqual(store.getTurnFileChanges("session-1", "turn-1").fileChanges.files, [
+  assert.deepEqual((await store.getTurnFileChanges("session-1", "turn-1")).fileChanges.files, [
     { path: "src/new.ts", additions: 1, deletions: 1 },
   ]);
   assert.match(
-    store.getTurnFileDiff("session-1", "turn-1", "src/new.ts").diff,
+    (await store.getTurnFileDiff("session-1", "turn-1", "src/new.ts")).diff,
     /\+second/,
   );
-  assert.throws(
-    () => store.getTurnFileDiff("session-1", "turn-1", "src/old.ts"),
+  await assert.rejects(
+    store.getTurnFileDiff("session-1", "turn-1", "src/old.ts"),
     /Unknown turn file/,
   );
 
@@ -90,16 +90,24 @@ test("persists frozen turn artifacts across store instances and isolates session
 
   const reopened = new TurnArtifactStore({ rootDir });
   assert.match(
-    reopened.getTurnFileDiff("session-1", "turn-1", "src/demo.ts").diff,
+    (await reopened.getTurnFileDiff("session-1", "turn-1", "src/demo.ts")).diff,
     /\+two/,
   );
   assert.match(
-    reopened.getTurnFileDiff("session-2", "turn-1", "src/demo.ts").diff,
+    (await reopened.getTurnFileDiff("session-2", "turn-1", "src/demo.ts")).diff,
     /\+three/,
   );
-  assert.throws(
-    () => reopened.getTurnFileChanges("session-3", "turn-1"),
+  await assert.rejects(
+    reopened.getTurnFileChanges("session-3", "turn-1"),
     /Unknown turn artifact/,
+  );
+  assert.equal(
+    await reopened.findTurnFileChanges("session-3", "turn-1"),
+    undefined,
+  );
+  assert.deepEqual(
+    (await reopened.findTurnFileChanges("session-1", "turn-1"))?.fileChanges.files,
+    [{ path: "src/demo.ts", additions: 1, deletions: 1 }],
   );
 });
 
@@ -129,7 +137,7 @@ test("uses provider thread identity across runtime resume while isolating forked
     unifiedDiff("src/demo.ts", "one", "two"),
   );
 
-  const resumedChanges = store.getTurnFileChanges(
+  const resumedChanges = await store.getTurnFileChanges(
     resumedOwner,
     "turn-1",
     resumedRuntimeId,
@@ -138,8 +146,8 @@ test("uses provider thread identity across runtime resume while isolating forked
   assert.deepEqual(resumedChanges.fileChanges.files, [
     { path: "src/demo.ts", additions: 1, deletions: 1 },
   ]);
-  assert.throws(
-    () => store.getTurnFileChanges(forkOwner, "turn-1", "runtime-fork"),
+  await assert.rejects(
+    store.getTurnFileChanges(forkOwner, "turn-1", "runtime-fork"),
     /Unknown turn artifact/,
   );
 });
@@ -151,11 +159,11 @@ ${unifiedDiff("src/b.ts", "before".repeat(20), "after".repeat(20))}`;
 
   await store.replaceTurnDiff("session-1", "turn-1", diff);
 
-  const changes = store.getTurnFileChanges("session-1", "turn-1");
+  const changes = await store.getTurnFileChanges("session-1", "turn-1");
   assert.equal(changes.truncated, true);
   assert.equal(changes.fileChanges.files.length, 2);
-  const first = store.getTurnFileDiff("session-1", "turn-1", "src/a.ts");
-  const second = store.getTurnFileDiff("session-1", "turn-1", "src/b.ts");
+  const first = await store.getTurnFileDiff("session-1", "turn-1", "src/a.ts");
+  const second = await store.getTurnFileDiff("session-1", "turn-1", "src/b.ts");
   assert.equal(first.truncated, true);
   assert.equal(second.truncated, true);
   assert.doesNotMatch(first.diff, /\uFFFD/);
@@ -186,8 +194,8 @@ test("reports a damaged frozen artifact instead of exposing a filesystem read er
   assert.ok(diffPath);
   rmSync(path.join(rootDir, diffPath), { force: true });
 
-  assert.throws(
-    () => store.getTurnFileDiff("session-1", "turn-1", "src/demo.ts"),
+  await assert.rejects(
+    store.getTurnFileDiff("session-1", "turn-1", "src/demo.ts"),
     /Turn artifact manifest is invalid/,
   );
 });
@@ -266,16 +274,16 @@ test("maintenance prunes expired artifacts and keeps the newest per-session snap
 
   await store.runMaintenance();
 
-  assert.throws(
-    () => store.getTurnFileChanges("session-1", "turn-old"),
+  await assert.rejects(
+    store.getTurnFileChanges("session-1", "turn-old"),
     /Unknown turn artifact/,
   );
   assert.deepEqual(
-    store.getTurnFileChanges("session-1", "turn-middle").fileChanges.files,
+    (await store.getTurnFileChanges("session-1", "turn-middle")).fileChanges.files,
     [{ path: "src/middle.ts", additions: 1, deletions: 1 }],
   );
   assert.deepEqual(
-    store.getTurnFileChanges("session-1", "turn-new").fileChanges.files,
+    (await store.getTurnFileChanges("session-1", "turn-new")).fileChanges.files,
     [{ path: "src/new.ts", additions: 1, deletions: 1 }],
   );
 });

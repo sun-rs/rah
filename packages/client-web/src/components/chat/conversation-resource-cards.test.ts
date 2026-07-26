@@ -7,16 +7,12 @@ function readSource(relativePath: string): string {
 }
 
 describe("conversation resource card contract", () => {
-  test("renders outputs as a direct deliverable list without a redundant header", () => {
-    const outputsSource = readSource("./ConversationOutputsCard.tsx");
+  test("keeps outputs in Inspector instead of duplicating them in the chat stream", () => {
+    const chatThreadSource = readSource("./ChatThread.tsx");
+    const conversationFeedSource = readSource("../../conversation-feed.ts");
 
-    assert.match(outputsSource, /const COLLAPSED_OUTPUT_LIMIT = 3/);
-    assert.doesNotMatch(outputsSource, /Outputs \(\$\{props\.outputs\.length\}\)/);
-    assert.match(outputsSource, /outputTypeLabel\(output\)/);
-    assert.match(outputsSource, /`Show \$\{overflowCount\} more`/);
-    assert.match(outputsSource, /min-h-11/);
-    assert.match(outputsSource, /h-8 w-8/);
-    assert.doesNotMatch(outputsSource, />\s*Open\s*</);
+    assert.doesNotMatch(chatThreadSource, /ConversationOutputsCard/);
+    assert.doesNotMatch(conversationFeedSource, /kind: "turn_outputs"/);
   });
 
   test("keeps changed files visible with turn totals and a bounded reveal batch", () => {
@@ -25,12 +21,69 @@ describe("conversation resource card contract", () => {
     assert.match(fileChangesSource, /const INITIAL_VISIBLE_FILE_COUNT = 3/);
     assert.match(fileChangesSource, /const FILE_REVEAL_BATCH = 50/);
     assert.match(fileChangesSource, /Changed \{fileCount\}/);
-    assert.match(fileChangesSource, /\+\{props\.fileChanges\.totalAdditions\}/);
-    assert.match(fileChangesSource, /-\{props\.fileChanges\.totalDeletions\}/);
-    assert.match(fileChangesSource, /FilePlus2/);
+    assert.match(fileChangesSource, /function ChangeCounts/);
+    assert.equal(
+      (
+        fileChangesSource.match(
+          /additions=\{props\.fileChanges\.totalAdditions\}/g,
+        ) ?? []
+      ).length,
+      1,
+    );
+    assert.equal(
+      (
+        fileChangesSource.match(
+          /deletions=\{props\.fileChanges\.totalDeletions\}/g,
+        ) ?? []
+      ).length,
+      1,
+    );
+    assert.match(fileChangesSource, /inline-flex shrink-0 items-center gap-1\.5/);
+    assert.doesNotMatch(fileChangesSource, /grid-cols/);
+    assert.doesNotMatch(fileChangesSource, /w-\[7\.5rem\]/);
+    assert.match(fileChangesSource, /tabular-nums/);
+    assert.match(fileChangesSource, /CodexChangedFilesIcon/);
     assert.match(fileChangesSource, /aria-expanded=\{expanded\}/);
     assert.match(fileChangesSource, /Collapse files/);
     assert.match(fileChangesSource, /min-h-11/);
-    assert.match(fileChangesSource, /min-h-9/);
+    assert.doesNotMatch(fileChangesSource, /min-h-14/);
+    assert.match(fileChangesSource, /min-h-8/);
+    assert.doesNotMatch(fileChangesSource, /divide-y/);
+    assert.match(fileChangesSource, /border-b border-\[var\(--turn-resource-border\)\]/);
+    assert.match(fileChangesSource, /border-\[var\(--turn-resource-border\)\]/);
+    assert.equal(
+      (
+        fileChangesSource.match(
+          /data-testid="conversation-turn-file-changes-footer"/g,
+        ) ?? []
+      ).length,
+      2,
+    );
+    assert.ok(
+      fileChangesSource.indexOf("Changed {fileCount}") <
+        fileChangesSource.indexOf(
+          "additions={props.fileChanges.totalAdditions}",
+        ),
+    );
+    assert.ok(
+      fileChangesSource.indexOf(
+        "additions={props.fileChanges.totalAdditions}",
+      ) < fileChangesSource.indexOf('aria-label="审查本轮变动"'),
+    );
+    assert.match(fileChangesSource, />\s*审查\s*</);
+    assert.match(
+      fileChangesSource,
+      /border border-\[var\(--app-border\)\] bg-transparent/,
+    );
+    assert.match(
+      fileChangesSource,
+      /hover:bg-\[var\(--app-subtle-bg\)\]/,
+    );
+    assert.match(
+      fileChangesSource,
+      /active:bg-\[var\(--app-border\)\]/,
+    );
+    assert.doesNotMatch(fileChangesSource, /ScanSearch/);
+    assert.doesNotMatch(fileChangesSource, /Review this turn/);
   });
 });

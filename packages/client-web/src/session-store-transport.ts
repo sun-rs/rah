@@ -4,7 +4,7 @@ import * as api from "./api";
 type SessionStoreTransportCallbacks = {
   getReplayFromSeq: () => number | undefined;
   isInitialLoaded: () => boolean;
-  onBatch: (batch: EventBatch) => void;
+  onBatch: (batch: EventBatch) => void | boolean;
   onError: (error: Error) => void;
   onOpen: () => void;
   onReplayGap: (batch: EventBatch) => void;
@@ -30,6 +30,7 @@ let initialReplayWaiter: InitialReplayWaiter | null = null;
 let reconnectTimer: number | null = null;
 let storedSessionsRefreshTimer: number | null = null;
 let pendingStoredSessionEvents: RahEvent[] = [];
+const MAX_PENDING_STORED_SESSION_EVENTS = 512;
 let reconnectAttempt = 0;
 
 function createAbortError(): Error {
@@ -125,7 +126,10 @@ function clearReconnectTimer() {
 }
 
 function scheduleStoredSessionsRefresh(events: RahEvent[]) {
-  pendingStoredSessionEvents = [...pendingStoredSessionEvents, ...events];
+  pendingStoredSessionEvents = [
+    ...pendingStoredSessionEvents,
+    ...events,
+  ].slice(-MAX_PENDING_STORED_SESSION_EVENTS);
   if (storedSessionsRefreshTimer !== null) {
     return;
   }
@@ -158,9 +162,12 @@ export function connectSessionStoreTransport(
       if (batch.replayGap) {
         nextCallbacks.onReplayGap(batch);
       } else {
-        nextCallbacks.onBatch(batch);
+        const accepted = nextCallbacks.onBatch(batch);
+        if (accepted === false && socket.readyState < WebSocket.CLOSING) {
+          socket.close(1013, "Client event backlog exceeded render budget");
+        }
       }
-      if (batch.initial) {
+      if (batch.initial && batch.replayComplete !== false) {
         initialReplayReadySocket = socket;
         settleInitialReplayWaiter(socket);
       }

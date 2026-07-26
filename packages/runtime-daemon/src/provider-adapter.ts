@@ -31,6 +31,7 @@ import type {
   StoredSessionArchiveBackend,
   StoredSessionRef,
   SteerQueuedInputRequest,
+  TurnFileDiffResponse,
   WorkspaceSnapshotResponse,
   ManagedSession,
   UpdateQueuedInputRequest,
@@ -38,6 +39,7 @@ import type {
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 import type { EventBus } from "./event-bus";
 import type { FrozenHistoryPageLoader } from "./history-snapshots";
+import type { ProcessOutputStore } from "./process-output-store";
 import type { PtyHub } from "./pty-hub";
 import type { SessionStore } from "./session-store";
 import type { TurnArtifactStore } from "./turn-artifact-store";
@@ -45,6 +47,7 @@ import type { WorkbenchStateStore } from "./workbench-state";
 
 export interface RuntimeServices {
   eventBus: EventBus;
+  processOutputs?: ProcessOutputStore;
   ptyHub: PtyHub;
   sessionStore: SessionStore;
   turnArtifacts?: TurnArtifactStore;
@@ -152,7 +155,7 @@ export interface ProviderWorkspaceInspectionAdapter {
   getWorkspaceSnapshot(
     sessionId: string,
     options?: { scopeRoot?: string },
-  ): WorkspaceSnapshotResponse;
+  ): WorkspaceSnapshotResponse | Promise<WorkspaceSnapshotResponse>;
   getGitStatus(
     sessionId: string,
     options?: { scopeRoot?: string; baseBranch?: string },
@@ -208,12 +211,25 @@ export interface ProviderStoredHistoryAdapter {
     sessionId: string,
     options: { providerTurnId: string },
   ): ConversationEvidencePage | undefined | Promise<ConversationEvidencePage | undefined>;
+  getSessionConversationTurnFileDiff?(
+    sessionId: string,
+    options: { providerTurnId: string; path: string },
+  ): TurnFileDiffResponse | undefined | Promise<TurnFileDiffResponse | undefined>;
+  getSessionConversationSourceRevision?(
+    sessionId: string,
+  ): string | undefined | Promise<string | undefined>;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
   getSessionConversationDirectory?(
     sessionId: string,
   ): ConversationTurnDirectoryResponse | Promise<ConversationTurnDirectoryResponse>;
+  /**
+   * Returns the adapter's already-hydrated catalog view.
+   *
+   * Provider storage discovery is owned by RuntimeEngine's background
+   * StoredSessionCatalog. Implementations must not scan provider storage from
+   * this synchronous request path.
+   */
   listStoredSessions?(): StoredSessionRef[];
-  refreshStoredSessionsCatalog?(): StoredSessionRef[];
   hydrateStoredSessionsCatalog?(records: readonly StoredSessionCatalogRecord[]): void;
   listStoredSessionWatchRoots?(): string[];
   archiveStoredSession?(

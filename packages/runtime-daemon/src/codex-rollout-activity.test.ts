@@ -10,6 +10,7 @@ import {
   createCodexAggregateTimelineIdentity,
   createCodexTimelineIdentity,
 } from "./codex-timeline-identity";
+import { resolveDeviceAttachment } from "./device-attachments";
 
 describe("translateCodexRolloutLine", () => {
   test("maps user messages and agent reasoning into persisted timeline activities", () => {
@@ -84,6 +85,65 @@ describe("translateCodexRolloutLine", () => {
         },
       },
     ]);
+  });
+
+  test("restores Codex Desktop history images without leaking its injected file envelope", async () => {
+    const pixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lz7c7wAAAABJRU5ErkJggg==";
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-07-24T10:00:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          id: "message-with-image",
+          content: [
+            {
+              type: "input_text",
+              text: `
+# Files mentioned by the user:
+
+## screenshot.png: /var/folders/example/T/screenshot.png
+
+## My request for Codex:
+What changed?
+`,
+            },
+            {
+              type: "input_text",
+              text: '<image name=[Image #1] path="/var/folders/example/T/screenshot.png">',
+            },
+            {
+              type: "input_image",
+              image_url: `data:image/png;base64,${pixelPng}`,
+            },
+            { type: "input_text", text: "</image>" },
+          ],
+        },
+      },
+      createCodexRolloutTranslationState(),
+    );
+    const timeline = activities.find(
+      (entry) => entry.activity.type === "timeline_item",
+    )?.activity;
+
+    assert.equal(timeline?.type, "timeline_item");
+    if (timeline?.type !== "timeline_item") {
+      return;
+    }
+    assert.equal(timeline.item.kind, "user_message");
+    if (timeline.item.kind !== "user_message") {
+      return;
+    }
+    assert.equal(timeline.item.text, "What changed?");
+    assert.equal(timeline.item.imageCount, 1);
+    assert.equal(timeline.item.attachments?.[0]?.name, "screenshot.png");
+    const resolved = await resolveDeviceAttachment(
+      timeline.item.attachments![0]!.id,
+    );
+    assert.equal(resolved.size, Buffer.from(pixelPng, "base64").byteLength);
+    assert.doesNotMatch(timeline.item.text, /Files mentioned|var\/folders|<image/);
   });
 
   test("attaches canonical timeline identity to rollout transcript items", () => {
@@ -765,6 +825,7 @@ describe("translateCodexRolloutLine", () => {
       assert.deepEqual(system.activity.item, {
         kind: "system",
         text: "Conversation interrupted before this tool completed.",
+        placement: "process",
       });
     }
   });

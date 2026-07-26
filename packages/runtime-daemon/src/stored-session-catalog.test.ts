@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { StoredSessionCatalog } from "./stored-session-catalog";
+import {
+  readStoredSessionCatalogTransfer,
+  StoredSessionCatalog,
+} from "./stored-session-catalog";
+import type { StoredSessionCatalogTransferRow } from "./stored-session-catalog-types";
 
 const ENV_KEYS = ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME", "RAH_HOME"] as const;
 
@@ -142,4 +146,60 @@ test("shutdown settles an in-flight worker and refuses later refreshes", async (
   await catalog.shutdown();
   await inFlight.catch(() => []);
   assert.deepEqual(await catalog.refresh(), []);
+});
+
+test("streams large catalog transfers without monopolizing the daemon event loop", async () => {
+  const recordCount = 12_000;
+  const transferPath = path.join(root, "large-catalog.jsonl");
+  const rows: string[] = [];
+  for (let index = 0; index < recordCount; index += 1) {
+    rows.push(
+      JSON.stringify({
+        kind: "record",
+        provider: "codex",
+        record: {
+          ref: {
+            provider: "codex",
+            providerSessionId: `session-${index}`,
+            title: `Catalog session ${index} ${"x".repeat(128)}`,
+          },
+          storagePath: path.join(root, "sessions", `${index}.jsonl`),
+        },
+      } satisfies StoredSessionCatalogTransferRow),
+    );
+  }
+  rows.push(
+    JSON.stringify({
+      kind: "provider",
+      provider: "codex",
+      complete: true,
+    } satisfies StoredSessionCatalogTransferRow),
+  );
+  const payload = `${rows.join("\n")}\n`;
+  writeFileSync(transferPath, payload);
+
+  let heartbeats = 0;
+  const heartbeat = setInterval(() => {
+    heartbeats += 1;
+  }, 1);
+  try {
+    const [result] = await readStoredSessionCatalogTransfer({
+      filePath: transferPath,
+      providers: ["codex"],
+      expectedRecordCount: recordCount,
+      expectedBytes: Buffer.byteLength(payload, "utf8"),
+    });
+    assert.equal(result?.complete, true);
+    assert.equal(result?.records?.length, recordCount);
+    assert.equal(
+      result?.records?.at(-1)?.ref.providerSessionId,
+      `session-${recordCount - 1}`,
+    );
+    assert.ok(
+      heartbeats > 0,
+      "catalog parsing should yield while the event-loop heartbeat is active",
+    );
+  } finally {
+    clearInterval(heartbeat);
+  }
 });

@@ -26,6 +26,7 @@ import { splitMarkdownBlocks } from "./markdown-blocks";
 import { resolveLocalFileLinkPath } from "./local-file-link";
 import { FileResourceIcon } from "./FileResourceIcon";
 import { LocalImageResource } from "./LocalImageResource";
+import { MermaidDiagram } from "./MermaidDiagram";
 import { codexShikiThemeForColorScheme } from "../../lib/codex-shiki-themes";
 
 function textFromNode(node: ReactNode): string {
@@ -114,6 +115,10 @@ function MarkdownPre({
   };
   const showHeader = language !== null && language !== "text" && language !== "plain";
 
+  if (language?.toLowerCase() === "mermaid") {
+    return <MermaidDiagram code={code.trimEnd()} />;
+  }
+
   return (
     <div className={`prose-chat-codeblock${showHeader ? "" : " prose-chat-codeblock-plain"}`}>
       {showHeader ? (
@@ -171,7 +176,11 @@ export function createMarkdownComponents(
           return (
             <span title={localFilePath} className="text-[var(--app-fg)]">
               <span className="prose-chat-local-file-content">
-                <FileResourceIcon path={localFilePath} className="shrink-0" />
+                <FileResourceIcon
+                  path={localFilePath}
+                  className="shrink-0"
+                  tone="inherit"
+                />
                 <span>{children}</span>
               </span>
             </span>
@@ -189,7 +198,11 @@ export function createMarkdownComponents(
             }}
           >
             <span className="prose-chat-local-file-content">
-              <FileResourceIcon path={localFilePath} className="shrink-0" />
+              <FileResourceIcon
+                path={localFilePath}
+                className="shrink-0"
+                tone="inherit"
+              />
               <span>{children}</span>
             </span>
           </button>
@@ -228,7 +241,11 @@ export function createMarkdownComponents(
             }}
           >
             <span className="prose-chat-local-file-content">
-              <FileResourceIcon path={localFilePath} className="shrink-0" />
+              <FileResourceIcon
+                path={localFilePath}
+                className="shrink-0"
+                tone="inherit"
+              />
               <code {...codeProps}>{children}</code>
             </span>
           </button>

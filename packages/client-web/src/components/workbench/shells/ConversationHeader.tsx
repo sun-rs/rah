@@ -1,14 +1,13 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import { Ellipsis, Menu, PanelRight, Square, X } from "lucide-react";
+import { Ellipsis, PanelRight, Square, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
-  HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
-  HEADER_EDGE_TOGGLE_ICON_SIZE,
   HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
   HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
 } from "../header-button-styles";
+import { MobileSidebarToggleButton } from "./MobileSidebarToggleButton";
 
 export function ConversationHeader(props: {
   title: ReactNode;
@@ -52,15 +51,10 @@ export function ConversationHeader(props: {
     >
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {showLeftSidebarControls ? (
-          <button
-            type="button"
-            className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} inline-flex md:hidden`}
-            onClick={props.onOpenLeft}
-            aria-label="Open sidebar"
-            title="Open sidebar"
-          >
-            <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
-          </button>
+          <MobileSidebarToggleButton
+            className="md:hidden"
+            onOpen={props.onOpenLeft}
+          />
         ) : null}
         {showLeftSidebarControls && !props.sidebarOpen ? (
           <span className="hidden h-8 w-8 shrink-0 md:block" aria-hidden="true" />

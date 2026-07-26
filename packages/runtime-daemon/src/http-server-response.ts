@@ -1,10 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { createGzip, constants as zlibConstants } from "node:zlib";
+import { boundedJsonByteLength } from "./bounded-json-size";
 import { applyCorsHeaders } from "./http-server-cors";
+import { streamJsonChunks } from "./json-response-stream";
 import { SessionInputQueueConflictError } from "./session-input-queue";
 
 export const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const MIN_GZIP_RESPONSE_BYTES = 16 * 1024;
+const STREAM_JSON_RESPONSE_BYTES = 64 * 1024;
 
 export type JsonHandler = (
   req: IncomingMessage,
@@ -196,28 +201,66 @@ export function writeJson(
   status: number,
   payload: unknown,
 ): void {
-  const body = Buffer.from(JSON.stringify(payload));
   applyCorsHeaders(req, res);
-  if (body.byteLength >= MIN_GZIP_RESPONSE_BYTES && requestAcceptsGzip(req)) {
+  const estimatedBytes = boundedJsonByteLength(
+    payload,
+    STREAM_JSON_RESPONSE_BYTES,
+  );
+  if (estimatedBytes <= STREAM_JSON_RESPONSE_BYTES) {
+    const body = Buffer.from(JSON.stringify(payload));
+    if (body.byteLength >= MIN_GZIP_RESPONSE_BYTES && requestAcceptsGzip(req)) {
+      res.writeHead(status, {
+        "content-type": "application/json; charset=utf-8",
+        "content-encoding": "gzip",
+        "cache-control": "no-store",
+        vary: "accept-encoding",
+      });
+      const gzip = createGzip({ level: zlibConstants.Z_BEST_SPEED });
+      gzip.once("error", () => res.destroy());
+      gzip.pipe(res);
+      gzip.end(body);
+      return;
+    }
+    res.writeHead(status, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": body.byteLength,
+      "cache-control": "no-store",
+      ...(body.byteLength >= MIN_GZIP_RESPONSE_BYTES
+        ? { vary: "accept-encoding" }
+        : {}),
+    });
+    res.end(body);
+    return;
+  }
+
+  const gzipAccepted = requestAcceptsGzip(req);
+  if (gzipAccepted) {
     res.writeHead(status, {
       "content-type": "application/json; charset=utf-8",
       "content-encoding": "gzip",
       "cache-control": "no-store",
       vary: "accept-encoding",
     });
-    const gzip = createGzip({ level: zlibConstants.Z_BEST_SPEED });
-    gzip.once("error", () => res.destroy());
-    gzip.pipe(res);
-    gzip.end(body);
-    return;
+  } else {
+    res.writeHead(status, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      vary: "accept-encoding",
+    });
   }
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": body.byteLength,
-    "cache-control": "no-store",
-    ...(body.byteLength >= MIN_GZIP_RESPONSE_BYTES ? { vary: "accept-encoding" } : {}),
+  const source = Readable.from(streamJsonChunks(payload));
+  const transfer = gzipAccepted
+    ? pipeline(
+        source,
+        createGzip({ level: zlibConstants.Z_BEST_SPEED }),
+        res,
+      )
+    : pipeline(source, res);
+  void transfer.catch(() => {
+    if (!res.destroyed) {
+      res.destroy();
+    }
   });
-  res.end(body);
 }
 
 function requestAcceptsGzip(req: IncomingMessage): boolean {

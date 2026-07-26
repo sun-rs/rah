@@ -28,6 +28,22 @@ test("renders structured image attachments before user text without the legacy i
   assert.ok(html.indexOf("Message attachments") < html.indexOf("What is shown here?"));
 });
 
+test("renders unavailable historical images as compact thumbnail placeholders", () => {
+  const html = renderToStaticMarkup(
+    createElement(UserMessage, {
+      content: "The original image is unavailable.",
+      imageCount: 2,
+    }),
+  );
+
+  assert.match(html, /aria-label="Message attachments"/);
+  assert.equal(
+    (html.match(/aria-label="Unavailable image attachment"/g) ?? []).length,
+    2,
+  );
+  assert.doesNotMatch(html, /Images x2|Files mentioned by the user|&lt;image/);
+});
+
 test("keeps short user messages fully visible without an expansion control", () => {
   const html = renderToStaticMarkup(
     createElement(UserMessage, {
@@ -50,6 +66,11 @@ test("collapses large user messages without truncating their source text", () =>
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, /Show more/);
   assert.match(html, /End marker/);
+  assert.match(html, /data-testid="user-message-collapse-fade"/);
+  assert.match(html, /bottom-0 h-7/);
+  assert.doesNotMatch(html, /bottom-0 h-12/);
+  assert.doesNotMatch(html, /mt-0\.5 inline-flex h-5/);
+  assert.doesNotMatch(html, /class="leading-none">\.\.\.</);
 });
 
 test("pre-collapses messages that exceed explicit line or character limits", () => {

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import type {
   GitBranchChangedFile,
@@ -17,6 +16,10 @@ import {
   resolveWorkspacePathAsync,
   tryResolveGitRootAsync,
 } from "./workspace-path-utils";
+import { runBackgroundCommand } from "./background-command";
+
+const MAX_GIT_STDOUT_BYTES = 64 * 1024 * 1024;
+const MAX_GIT_STDERR_BYTES = 4 * 1024 * 1024;
 
 type DiffStat = {
   added: number;
@@ -704,34 +707,16 @@ async function runGitCommand(
   args: string[],
   options?: { input?: string; acceptedExitCodes?: readonly number[] },
 ): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn("git", ["-C", cwd, ...args], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0 || (code !== null && options?.acceptedExitCodes?.includes(code))) {
-        resolve(stdout);
-        return;
-      }
-      reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} exited with code ${code}`));
-    });
-    if (options?.input !== undefined) {
-      child.stdin.end(options.input);
-      return;
-    }
-    child.stdin.end();
+  const result = await runBackgroundCommand({
+    command: "git",
+    args: ["-C", cwd, ...args],
+    label: `workspace git ${args[0] ?? "command"}`,
+    ...(options?.input !== undefined ? { input: options.input } : {}),
+    acceptedExitCodes: [0, ...(options?.acceptedExitCodes ?? [])],
+    maxStdoutBytes: MAX_GIT_STDOUT_BYTES,
+    maxStderrBytes: MAX_GIT_STDERR_BYTES,
   });
+  return result.stdout;
 }
 
 async function execGitApplyAsync(cwd: string, args: string[], patch: string): Promise<void> {

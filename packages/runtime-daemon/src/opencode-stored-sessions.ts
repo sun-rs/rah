@@ -42,6 +42,11 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import { runBackgroundCommand } from "./background-command";
+import {
+  HISTORY_WORKLOAD_PRIORITY,
+  sharedHistoryWorkloadScheduler,
+} from "./history-workload-governor";
 
 export interface OpenCodeStoredSessionRecord {
   ref: StoredSessionRef;
@@ -96,6 +101,9 @@ const HISTORY_SOURCE = {
 };
 
 const OPENCODE_HISTORY_META_CACHE_VERSION = 1;
+const MAX_OPENCODE_SQLITE_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_OPENCODE_SUMMARY_PART_CHARS = 16 * 1024;
+const MAX_OPENCODE_DETAIL_PART_CHARS = 256 * 1024;
 
 type OpenCodeSessionRow = {
   id: string;
@@ -327,6 +335,63 @@ export function findOpenCodeStoredSessionRecord(
   );
 }
 
+export async function findOpenCodeStoredSessionRecordAsync(
+  providerSessionId: string,
+  options: { dataDir?: string } = {},
+): Promise<OpenCodeStoredSessionRecord | null> {
+  const databasePath = resolveOpenCodeDatabasePath(options.dataDir);
+  const rows = await sqliteJsonAsync<OpenCodeSessionRow>(
+    databasePath,
+    `
+      select
+        s.id,
+        s.directory,
+        s.title,
+        s.time_created,
+        s.time_updated,
+        s.time_archived,
+        p.worktree as project_worktree,
+        coalesce(
+          (
+            select json_extract(pp.data, '$.text')
+            from part pp
+            join message mm on mm.id = pp.message_id
+            where pp.session_id = s.id
+              and json_extract(mm.data, '$.role') = 'assistant'
+              and json_extract(pp.data, '$.type') = 'text'
+              and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
+            order by pp.time_created asc, pp.id asc
+            limit 1
+          ),
+          (
+            select json_extract(pp.data, '$.text')
+            from part pp
+            join message mm on mm.id = pp.message_id
+            where pp.session_id = s.id
+              and json_extract(mm.data, '$.role') = 'user'
+              and json_extract(pp.data, '$.type') = 'text'
+              and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
+            order by pp.time_created asc, pp.id asc
+            limit 1
+          )
+        ) as preview,
+        null as message_count,
+        null as history_bytes
+      from session s
+      left join project p on p.id = s.project_id
+      where s.id = ${quoteSql(providerSessionId)}
+      limit 1
+    `,
+    { throwOnReadError: true },
+  );
+  // Session-size metadata is catalog-owned and is computed in the isolated
+  // catalog worker. Interactive lookup must not trigger a second aggregate
+  // scan of the provider database on the daemon event loop.
+  return buildStoredSessionRecord(rows[0], databasePath)[0] ?? null;
+}
+
 export function restoreOpenCodeStoredSession(record: OpenCodeStoredSessionRecord): void {
   sqliteExec(
     record.databasePath,
@@ -344,6 +409,36 @@ export function restoreOpenCodeStoredSession(record: OpenCodeStoredSessionRecord
       where id = ${quoteSql(record.ref.providerSessionId)}
       limit 1
     `,
+  )[0];
+  if (!verification || verification.time_archived !== null) {
+    throw new Error(
+      `OpenCode could not restore archived session ${record.ref.providerSessionId}.`,
+    );
+  }
+}
+
+export async function restoreOpenCodeStoredSessionAsync(
+  record: OpenCodeStoredSessionRecord,
+): Promise<void> {
+  await sqliteExecAsync(
+    record.databasePath,
+    `
+      update session
+      set time_archived = null
+      where id = ${quoteSql(record.ref.providerSessionId)}
+    `,
+  );
+  const verification = (
+    await sqliteJsonAsync<{ time_archived: number | null }>(
+      record.databasePath,
+      `
+        select time_archived
+        from session
+        where id = ${quoteSql(record.ref.providerSessionId)}
+        limit 1
+      `,
+      { throwOnReadError: true },
+    )
   )[0];
   if (!verification || verification.time_archived !== null) {
     throw new Error(
@@ -404,6 +499,52 @@ export function deleteOpenCodeStoredSession(record: OpenCodeStoredSessionRecord)
   }
 }
 
+export async function deleteOpenCodeStoredSessionAsync(
+  record: OpenCodeStoredSessionRecord,
+): Promise<void> {
+  const dataDir = path.dirname(record.databasePath);
+  if (path.basename(dataDir) !== "opencode") {
+    throw new Error(
+      `OpenCode session deletion requires the standard XDG database layout: ${record.databasePath}`,
+    );
+  }
+  const xdgDataHome = path.dirname(dataDir);
+  const binary = process.env.RAH_OPENCODE_BINARY?.trim() || "opencode";
+  const [command, ...prefixArgs] = providerBinaryArgv(binary);
+  if (!command) {
+    throw new Error("OpenCode session deletion requires a provider command.");
+  }
+  try {
+    await execOpenCodeProcessAsync(
+      command,
+      [...prefixArgs, "session", "delete", record.ref.providerSessionId],
+      {
+        maxBuffer: 8 * 1024 * 1024,
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: xdgDataHome,
+        },
+      },
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `OpenCode could not permanently delete session ${record.ref.providerSessionId}: ${detail}`,
+    );
+  }
+
+  const remaining = await sqliteJsonAsync<{ id: string }>(
+    record.databasePath,
+    `select id from session where id = ${quoteSql(record.ref.providerSessionId)} limit 1`,
+    { throwOnReadError: true },
+  );
+  if (remaining.length > 0) {
+    throw new Error(
+      `OpenCode reported success but session ${record.ref.providerSessionId} still exists.`,
+    );
+  }
+}
+
 export function loadOpenCodeStoredMessages(
   record: OpenCodeStoredSessionRecord,
   options: {
@@ -411,6 +552,8 @@ export function loadOpenCodeStoredMessages(
     beforeMessageId?: string;
     limit?: number;
     summary?: boolean;
+    maxPartTextChars?: number;
+    throwOnReadError?: boolean;
   } = {},
 ): OpenCodeMessageWithParts[] {
   const beforeMs = parseBeforeTimestamp(options.beforeTs);
@@ -429,6 +572,58 @@ export function loadOpenCodeStoredMessages(
   ).reverse();
   return loadOpenCodeMessagesForRows(record, rows, {
     summary: options.summary === true,
+  });
+}
+
+export async function loadOpenCodeStoredMessagesAsync(
+  record: OpenCodeStoredSessionRecord,
+  options: {
+    beforeTs?: string;
+    beforeMessageId?: string;
+    limit?: number;
+    summary?: boolean;
+    maxPartTextChars?: number;
+    throwOnReadError?: boolean;
+    workloadPriority?: number;
+  } = {},
+): Promise<OpenCodeMessageWithParts[]> {
+  const beforeMs = parseBeforeTimestamp(options.beforeTs);
+  const limit = Math.max(1, options.limit ?? 1000);
+  const rows = (
+    await sqliteJsonAsync<OpenCodeMessageRow>(
+      record.databasePath,
+      `
+        select id, session_id, time_created, time_updated,
+          json_remove(data, '$.summary') as data
+        from message
+        where session_id = ${quoteSql(record.ref.providerSessionId)}
+          ${openCodeMessageBoundarySql(beforeMs, options.beforeMessageId)}
+        order by time_created desc, id desc
+        limit ${limit}
+      `,
+      options.throwOnReadError !== undefined
+        ? {
+            throwOnReadError: options.throwOnReadError,
+            ...(options.workloadPriority !== undefined
+              ? { priority: options.workloadPriority }
+              : {}),
+          }
+        : options.workloadPriority !== undefined
+          ? { priority: options.workloadPriority }
+          : {},
+    )
+  ).reverse();
+  return await loadOpenCodeMessagesForRowsAsync(record, rows, {
+    summary: options.summary === true,
+    ...(options.maxPartTextChars !== undefined
+      ? { maxPartTextChars: options.maxPartTextChars }
+      : {}),
+    ...(options.throwOnReadError !== undefined
+      ? { throwOnReadError: options.throwOnReadError }
+      : {}),
+    ...(options.workloadPriority !== undefined
+      ? { workloadPriority: options.workloadPriority }
+      : {}),
   });
 }
 
@@ -501,15 +696,134 @@ function loadOpenCodeStoredTurnMessages(params: {
   };
 }
 
+async function loadOpenCodeStoredTurnMessagesAsync(params: {
+  record: OpenCodeStoredSessionRecord;
+  cursor?: string;
+  limit: number;
+  summary?: boolean;
+}): Promise<OpenCodeStoredTurnMessagesPage> {
+  const cursor = params.cursor ? decodeOpenCodeFrozenHistoryCursor(params.cursor) : undefined;
+  const beforeMs = parseBeforeTimestamp(cursor?.beforeTs);
+  const rootRows = await sqliteJsonAsync<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and json_extract(data, '$.role') = 'user'
+        ${openCodeMessageBoundarySql(beforeMs, cursor?.beforeMessageId)}
+      order by time_created desc, id desc
+      limit ${params.limit + 1}
+    `,
+    { throwOnReadError: true },
+  );
+  const selectedRoots = rootRows.slice(0, params.limit);
+  if (selectedRoots.length === 0) {
+    return { messages: [] };
+  }
+
+  const rootIds = selectedRoots.map((row) => quoteSql(row.id)).join(",");
+  const rows = await sqliteJsonAsync<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and (
+          id in (${rootIds})
+          or json_extract(data, '$.parentID') in (${rootIds})
+        )
+      order by time_created asc, id asc
+    `,
+    { throwOnReadError: true },
+  );
+  const hasOlder = rootRows.length > params.limit;
+  const earliestRoot = selectedRoots.at(-1);
+  const nextBeforeTs = hasOlder ? toIso(earliestRoot?.time_created) ?? undefined : undefined;
+  const nextCursor =
+    hasOlder && nextBeforeTs && earliestRoot
+      ? encodeOpenCodeFrozenHistoryCursor({
+          beforeTs: nextBeforeTs,
+          beforeMessageId: earliestRoot.id,
+        })
+      : undefined;
+  return {
+    messages: await loadOpenCodeMessagesForRowsAsync(params.record, rows, {
+      summary: params.summary === true,
+      maxPartTextChars: params.summary
+        ? MAX_OPENCODE_SUMMARY_PART_CHARS
+        : MAX_OPENCODE_DETAIL_PART_CHARS,
+      throwOnReadError: true,
+    }),
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextBeforeTs ? { nextBeforeTs } : {}),
+  };
+}
+
 function loadOpenCodeMessagesForRows(
   record: OpenCodeStoredSessionRecord,
   rows: readonly OpenCodeMessageRow[],
-  options: { summary?: boolean } = {},
+  options: {
+    summary?: boolean;
+    maxPartTextChars?: number;
+    throwOnReadError?: boolean;
+  } = {},
 ): OpenCodeMessageWithParts[] {
   if (rows.length === 0) {
     return [];
   }
+  const partRows = sqliteJson<OpenCodePartRow>(
+    record.databasePath,
+    openCodePartsQuery(record, rows, options),
+    options.throwOnReadError !== undefined
+      ? { throwOnReadError: options.throwOnReadError }
+      : {},
+  );
+  return assembleOpenCodeMessages(rows, partRows);
+}
+
+async function loadOpenCodeMessagesForRowsAsync(
+  record: OpenCodeStoredSessionRecord,
+  rows: readonly OpenCodeMessageRow[],
+  options: {
+    summary?: boolean;
+    maxPartTextChars?: number;
+    throwOnReadError?: boolean;
+    workloadPriority?: number;
+  } = {},
+): Promise<OpenCodeMessageWithParts[]> {
+  if (rows.length === 0) {
+    return [];
+  }
+  const partRows = await sqliteJsonAsync<OpenCodePartRow>(
+    record.databasePath,
+    openCodePartsQuery(record, rows, options),
+    options.throwOnReadError !== undefined
+      ? {
+          throwOnReadError: options.throwOnReadError,
+          ...(options.workloadPriority !== undefined
+            ? { priority: options.workloadPriority }
+            : {}),
+        }
+      : options.workloadPriority !== undefined
+        ? { priority: options.workloadPriority }
+        : {},
+  );
+  return assembleOpenCodeMessages(rows, partRows);
+}
+
+function openCodePartsQuery(
+  record: OpenCodeStoredSessionRecord,
+  rows: readonly OpenCodeMessageRow[],
+  options: { summary?: boolean; maxPartTextChars?: number },
+): string {
   const messageIds = rows.map((row) => quoteSql(row.id)).join(",");
+  const boundedTextChars =
+    options.maxPartTextChars !== undefined
+      ? Math.max(1, Math.floor(options.maxPartTextChars))
+      : undefined;
   const partDataSql = options.summary
     ? `
         case
@@ -534,10 +848,76 @@ function loadOpenCodeMessagesForRows(
             '$.state.metadata.preview',
             '$.state.metadata.todos'
           )
+          ${
+            boundedTextChars !== undefined
+              ? `
+          when json_extract(data, '$.type') in ('text', 'reasoning')
+            and length(json_extract(data, '$.text')) > ${boundedTextChars}
+          then json_set(
+            data,
+            '$.text',
+            substr(json_extract(data, '$.text'), 1, ${boundedTextChars})
+          )
+          when json_extract(data, '$.type') = 'tool'
+          then json_set(
+            data,
+            '$.state.output',
+            case
+              when typeof(json_extract(data, '$.state.output')) = 'text'
+              then substr(json_extract(data, '$.state.output'), 1, ${boundedTextChars})
+              else json_extract(data, '$.state.output')
+            end,
+            '$.state.metadata.output',
+            case
+              when typeof(json_extract(data, '$.state.metadata.output')) = 'text'
+              then substr(
+                json_extract(data, '$.state.metadata.output'),
+                1,
+                ${boundedTextChars}
+              )
+              else json_extract(data, '$.state.metadata.output')
+            end
+          )
+              `
+              : ""
+          }
           else data
         end
       `
-    : "data";
+    : boundedTextChars !== undefined
+      ? `
+        case
+          when json_extract(data, '$.type') in ('text', 'reasoning')
+            and length(json_extract(data, '$.text')) > ${boundedTextChars}
+          then json_set(
+            data,
+            '$.text',
+            substr(json_extract(data, '$.text'), 1, ${boundedTextChars})
+          )
+          when json_extract(data, '$.type') = 'tool'
+          then json_set(
+            data,
+            '$.state.output',
+            case
+              when typeof(json_extract(data, '$.state.output')) = 'text'
+              then substr(json_extract(data, '$.state.output'), 1, ${boundedTextChars})
+              else json_extract(data, '$.state.output')
+            end,
+            '$.state.metadata.output',
+            case
+              when typeof(json_extract(data, '$.state.metadata.output')) = 'text'
+              then substr(
+                json_extract(data, '$.state.metadata.output'),
+                1,
+                ${boundedTextChars}
+              )
+              else json_extract(data, '$.state.metadata.output')
+            end
+          )
+          else data
+        end
+      `
+      : "data";
   const partFilterSql = options.summary
     ? `
         and (
@@ -558,17 +938,20 @@ function loadOpenCodeMessagesForRows(
         )
       `
     : "";
-  const partRows = sqliteJson<OpenCodePartRow>(
-    record.databasePath,
-    `
-      select id, session_id, message_id, ${partDataSql} as data
-      from part
-      where session_id = ${quoteSql(record.ref.providerSessionId)}
-        and message_id in (${messageIds})
-        ${partFilterSql}
-      order by message_id asc, id asc
-    `,
-  );
+  return `
+    select id, session_id, message_id, ${partDataSql} as data
+    from part
+    where session_id = ${quoteSql(record.ref.providerSessionId)}
+      and message_id in (${messageIds})
+      ${partFilterSql}
+    order by message_id asc, id asc
+  `;
+}
+
+function assembleOpenCodeMessages(
+  rows: readonly OpenCodeMessageRow[],
+  partRows: readonly OpenCodePartRow[],
+): OpenCodeMessageWithParts[] {
   const partsByMessage = new Map<string, OpenCodePart[]>();
   for (const row of partRows) {
     const part = buildPart(row);
@@ -671,6 +1054,32 @@ export function getOpenCodeStoredSessionTurnHistoryPage(params: {
   };
 }
 
+export async function getOpenCodeStoredSessionTurnHistoryPageAsync(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+  cursor?: string;
+  limit?: number;
+  finalizeTrailingTurn?: boolean;
+}): Promise<ConversationEvidencePage> {
+  const page = await loadOpenCodeStoredTurnMessagesAsync({
+    record: params.record,
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+    limit: Math.max(1, Math.min(params.limit ?? 20, 100)),
+    summary: true,
+  });
+  return {
+    sessionId: params.sessionId,
+    events: materializeOpenCodeStoredMessages({
+      sessionId: params.sessionId,
+      record: params.record,
+      messages: page.messages,
+      finalizeTrailingTurn: params.finalizeTrailingTurn !== false,
+    }),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(page.nextBeforeTs ? { nextBeforeTs: page.nextBeforeTs } : {}),
+  };
+}
+
 export function getOpenCodeStoredSessionTurnDetail(params: {
   sessionId: string;
   record: OpenCodeStoredSessionRecord;
@@ -720,74 +1129,155 @@ export function getOpenCodeStoredSessionTurnDetail(params: {
   };
 }
 
+export async function getOpenCodeStoredSessionTurnDetailAsync(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+  providerTurnId: string;
+}): Promise<ConversationEvidencePage | undefined> {
+  const rootMessageId = openCodeRootMessageIdFromProviderTurnId(params.providerTurnId);
+  if (!rootMessageId) {
+    return undefined;
+  }
+  const rootRows = await sqliteJsonAsync<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and id = ${quoteSql(rootMessageId)}
+        and json_extract(data, '$.role') = 'user'
+      limit 1
+    `,
+    { throwOnReadError: true },
+  );
+  if (rootRows.length === 0) {
+    return undefined;
+  }
+  const rows = await sqliteJsonAsync<OpenCodeMessageRow>(
+    params.record.databasePath,
+    `
+      select id, session_id, time_created, time_updated,
+        json_remove(data, '$.summary') as data
+      from message
+      where session_id = ${quoteSql(params.record.ref.providerSessionId)}
+        and (
+          id = ${quoteSql(rootMessageId)}
+          or json_extract(data, '$.parentID') = ${quoteSql(rootMessageId)}
+        )
+      order by time_created asc, id asc
+    `,
+    { throwOnReadError: true },
+  );
+  return {
+    sessionId: params.sessionId,
+    events: materializeOpenCodeStoredMessages({
+      sessionId: params.sessionId,
+      record: params.record,
+      messages: await loadOpenCodeMessagesForRowsAsync(params.record, rows, {
+        maxPartTextChars: MAX_OPENCODE_DETAIL_PART_CHARS,
+        throwOnReadError: true,
+      }),
+      finalizeTrailingTurn: true,
+    }),
+  };
+}
+
 export function getOpenCodeStoredSessionTurnDirectory(params: {
   sessionId: string;
   record: OpenCodeStoredSessionRecord;
 }): ConversationTurnDirectoryResponse {
-  const providerSessionId = quoteSql(params.record.ref.providerSessionId);
   const rows = sqliteJson<OpenCodeTurnDirectoryRow>(
     params.record.databasePath,
-    `
-      with roots as (
-        select
-          m.id,
-          m.time_created,
-          (
-            select json_extract(p.data, '$.text')
-            from part p
-            where p.message_id = m.id
-              and json_extract(p.data, '$.type') = 'text'
-              and coalesce(json_extract(p.data, '$.synthetic'), 0) = 0
-              and coalesce(json_extract(p.data, '$.ignored'), 0) = 0
-            order by p.id asc
-            limit 1
-          ) as user_preview
-        from message m
-        where m.session_id = ${providerSessionId}
-          and json_extract(m.data, '$.role') = 'user'
-      ),
-      latest_assistant as (
-        select
-          r.id as root_id,
-          (
-            select a.id
-            from message a
-            where a.session_id = ${providerSessionId}
-              and json_extract(a.data, '$.role') = 'assistant'
-              and json_extract(a.data, '$.parentID') = r.id
-            order by a.time_created desc, a.id desc
-            limit 1
-          ) as assistant_id
-        from roots r
-      )
+    openCodeTurnDirectoryQuery(params.record),
+  );
+  return buildOpenCodeTurnDirectoryResponse(params, rows);
+}
+
+export async function getOpenCodeStoredSessionTurnDirectoryAsync(params: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+}): Promise<ConversationTurnDirectoryResponse> {
+  const rows = await sqliteJsonAsync<OpenCodeTurnDirectoryRow>(
+    params.record.databasePath,
+    openCodeTurnDirectoryQuery(params.record),
+    { throwOnReadError: true },
+  );
+  return buildOpenCodeTurnDirectoryResponse(params, rows);
+}
+
+function openCodeTurnDirectoryQuery(record: OpenCodeStoredSessionRecord): string {
+  const providerSessionId = quoteSql(record.ref.providerSessionId);
+  return `
+    with roots as (
       select
-        r.id,
-        r.time_created,
-        r.user_preview,
+        m.id,
+        m.time_created,
         (
-          select json_extract(p.data, '$.text')
+          select substr(json_extract(p.data, '$.text'), 1, 160)
           from part p
-          join message candidate on candidate.id = p.message_id
-          where candidate.session_id = ${providerSessionId}
-            and json_extract(candidate.data, '$.role') = 'assistant'
-            and json_extract(candidate.data, '$.parentID') = r.id
+          where p.message_id = m.id
             and json_extract(p.data, '$.type') = 'text'
             and coalesce(json_extract(p.data, '$.synthetic'), 0) = 0
             and coalesce(json_extract(p.data, '$.ignored'), 0) = 0
-          order by candidate.time_created desc, p.id desc
+          order by p.id asc
           limit 1
-        ) as assistant_preview,
-        a.time_created as assistant_created,
-        json_extract(a.data, '$.time.completed') as assistant_completed,
-        json_extract(a.data, '$.finish') as assistant_finish,
-        json_extract(a.data, '$.error.name') as assistant_error_name,
-        json_extract(a.data, '$.error.data.message') as assistant_error_message
+        ) as user_preview
+      from message m
+      where m.session_id = ${providerSessionId}
+        and json_extract(m.data, '$.role') = 'user'
+    ),
+    latest_assistant as (
+      select
+        r.id as root_id,
+        (
+          select a.id
+          from message a
+          where a.session_id = ${providerSessionId}
+            and json_extract(a.data, '$.role') = 'assistant'
+            and json_extract(a.data, '$.parentID') = r.id
+          order by a.time_created desc, a.id desc
+          limit 1
+        ) as assistant_id
       from roots r
-      left join latest_assistant la on la.root_id = r.id
-      left join message a on a.id = la.assistant_id
-      order by r.time_created asc, r.id asc
-    `,
-  ).filter((row) => {
+    )
+    select
+      r.id,
+      r.time_created,
+      r.user_preview,
+      (
+        select substr(json_extract(p.data, '$.text'), 1, 160)
+        from part p
+        join message candidate on candidate.id = p.message_id
+        where candidate.session_id = ${providerSessionId}
+          and json_extract(candidate.data, '$.role') = 'assistant'
+          and json_extract(candidate.data, '$.parentID') = r.id
+          and json_extract(p.data, '$.type') = 'text'
+          and coalesce(json_extract(p.data, '$.synthetic'), 0) = 0
+          and coalesce(json_extract(p.data, '$.ignored'), 0) = 0
+        order by candidate.time_created desc, p.id desc
+        limit 1
+      ) as assistant_preview,
+      a.time_created as assistant_created,
+      json_extract(a.data, '$.time.completed') as assistant_completed,
+      json_extract(a.data, '$.finish') as assistant_finish,
+      json_extract(a.data, '$.error.name') as assistant_error_name,
+      json_extract(a.data, '$.error.data.message') as assistant_error_message
+    from roots r
+    left join latest_assistant la on la.root_id = r.id
+    left join message a on a.id = la.assistant_id
+    order by r.time_created asc, r.id asc
+  `;
+}
+
+function buildOpenCodeTurnDirectoryResponse(
+  params: {
+    sessionId: string;
+    record: OpenCodeStoredSessionRecord;
+  },
+  sourceRows: readonly OpenCodeTurnDirectoryRow[],
+): ConversationTurnDirectoryResponse {
+  const rows = sourceRows.filter((row) => {
     const preview = row.user_preview?.trim();
     return Boolean(preview) && !isOpenCodeInternalInitiatorText(preview!);
   });
@@ -1267,6 +1757,77 @@ function sqliteJson<T>(
     }
     return [];
   }
+}
+
+async function sqliteJsonAsync<T>(
+  databasePath: string,
+  sql: string,
+  options: { throwOnReadError?: boolean; priority?: number } = {},
+): Promise<T[]> {
+  if (!existsSync(databasePath)) {
+    return [];
+  }
+  try {
+    const output = await execOpenCodeProcessAsync(
+      "sqlite3",
+      ["-json", databasePath, sql],
+      {
+        maxBuffer: MAX_OPENCODE_SQLITE_JSON_BYTES,
+        ...(options.priority !== undefined
+          ? { priority: options.priority }
+          : {}),
+      },
+    );
+    const trimmed = output.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const parsed = JSON.parse(trimmed) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch (error) {
+    if (options.throwOnReadError === true) {
+      throw new OpenCodeSqliteReadError(databasePath, error);
+    }
+    return [];
+  }
+}
+
+async function sqliteExecAsync(databasePath: string, sql: string): Promise<void> {
+  if (!existsSync(databasePath)) {
+    throw new Error(`OpenCode database not found: ${databasePath}`);
+  }
+  await execOpenCodeProcessAsync("sqlite3", [databasePath, sql], {
+    maxBuffer: 8 * 1024 * 1024,
+  });
+}
+
+async function execOpenCodeProcessAsync(
+  command: string,
+  args: readonly string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    maxBuffer: number;
+    priority?: number;
+  },
+): Promise<string> {
+  return await sharedHistoryWorkloadScheduler.schedule(
+    async (signal) => {
+      const result = await runBackgroundCommand({
+        command,
+        args,
+        label: `OpenCode history ${path.basename(command)}`,
+        signal,
+        ...(options.env ? { env: options.env } : {}),
+        maxStdoutBytes: options.maxBuffer,
+        maxStderrBytes: 512 * 1024,
+      });
+      return result.stdout;
+    },
+    {
+      priority:
+        options.priority ?? HISTORY_WORKLOAD_PRIORITY.interactive,
+    },
+  );
 }
 
 function sqliteExec(databasePath: string, sql: string): void {

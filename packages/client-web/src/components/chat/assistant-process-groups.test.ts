@@ -7,6 +7,7 @@ import type { FeedEntry } from "../../types";
 import { AssistantProcessGroup } from "./AssistantProcessGroup";
 import {
   buildProcessDetailRows,
+  defaultAssistantProcessGroupExpanded,
   formatAssistantProcessDuration,
 } from "./assistant-process-groups";
 import { ProcessActivityEntry, processActivityLabel } from "./ProcessActivityEntry";
@@ -66,6 +67,30 @@ function reasoning(
 }
 
 describe("assistant process groups", () => {
+  test("defaults active and interrupted work open while settled work stays folded", () => {
+    assert.equal(
+      defaultAssistantProcessGroupExpanded({
+        completed: false,
+        turnStatus: "in_progress",
+      }),
+      true,
+    );
+    assert.equal(
+      defaultAssistantProcessGroupExpanded({
+        completed: true,
+        turnStatus: "interrupted",
+      }),
+      true,
+    );
+    assert.equal(
+      defaultAssistantProcessGroupExpanded({
+        completed: true,
+        turnStatus: "completed",
+      }),
+      false,
+    );
+  });
+
   test("groups consecutive commands and treats a non-zero result as reviewable", () => {
     const rows = buildProcessDetailRows([
       command("command-1"),
@@ -134,6 +159,7 @@ describe("assistant process groups", () => {
           entries,
           completed: false,
           active: true,
+          hasFinalAnswer: false,
           startedAt: "2026-07-10T00:00:00.000Z",
           activities: [],
           turnStatus: "in_progress",
@@ -161,11 +187,13 @@ describe("assistant process groups", () => {
           entries: [],
           completed: true,
           active: false,
+          hasFinalAnswer: true,
           startedAt: "2026-07-10T00:00:00.000Z",
           completedAt: "2026-07-10T00:00:01.000Z",
           durationMs: 1_000,
           activities: [],
           turnStatus: "completed",
+          detailsAvailable: true,
         },
         expanded: false,
         onExpandedChange: () => undefined,
@@ -180,6 +208,7 @@ describe("assistant process groups", () => {
           entries: [command("command-1", "failed")],
           completed: true,
           active: false,
+          hasFinalAnswer: true,
           startedAt: "2026-07-10T00:00:00.000Z",
           completedAt: "2026-07-10T00:00:01.000Z",
           durationMs: 1_000,
@@ -208,6 +237,7 @@ describe("assistant process groups", () => {
           entries: [command("command-1", "failed")],
           completed: true,
           active: false,
+          hasFinalAnswer: true,
           startedAt: "2026-07-10T00:00:00.000Z",
           completedAt: "2026-07-10T00:00:01.000Z",
           durationMs: 1_000,
@@ -241,6 +271,202 @@ describe("assistant process groups", () => {
     assert.match(hydratedExpandedHtml, /Ran 1 command/);
     assert.match(hydratedExpandedHtml, /text-\[var\(--app-warning\)\]/);
     assert.match(hydratedCollapsedHtml, /lucide-chevron-right/);
+  });
+
+  test("keeps an empty settled Worked row non-interactive without opening blank space", () => {
+    const html = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-empty-settled",
+          entries: [
+            reasoning(
+              "transient-became-final",
+              "Drafting the direct answer",
+              "transient_status",
+            ),
+          ],
+          completed: true,
+          active: false,
+          hasFinalAnswer: true,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          completedAt: "2026-07-10T00:00:01.000Z",
+          durationMs: 1_000,
+          activities: [],
+          turnStatus: "completed",
+        },
+        // Exercise a stale expansion override left over from an earlier render.
+        expanded: true,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) => createElement("span", null, `raw:${entry.key}`),
+      }),
+    );
+
+    assert.match(html, /Worked 1s/);
+    assert.match(html, /aria-expanded="false"/);
+    assert.match(html, /disabled=""/);
+    assert.doesNotMatch(html, /lucide-chevron-(?:right|down)/);
+    assert.doesNotMatch(html, /space-y-2\.5 pb-3|mt-3/);
+    assert.doesNotMatch(html, /raw:transient-became-final|Work details unavailable/);
+    assert.equal(
+      (
+        html.match(
+          /data-testid="assistant-process-final-divider"/g,
+        ) ?? []
+      ).length,
+      1,
+    );
+  });
+
+  test("draws exactly one process-to-final divider across folded and expanded Worked states", () => {
+    const renderProcessGroup = (
+      hasFinalAnswer: boolean,
+      expanded: boolean,
+      turnStatus: "completed" | "interrupted",
+    ) =>
+      renderToStaticMarkup(
+        createElement(AssistantProcessGroup, {
+          group: {
+            kind: "assistant_process_group",
+            key: `process-${hasFinalAnswer ? "with" : "without"}-final`,
+            entries: [command("command-1")],
+            completed: true,
+            active: false,
+            hasFinalAnswer,
+            startedAt: "2026-07-10T00:00:00.000Z",
+            completedAt: "2026-07-10T00:00:01.000Z",
+            durationMs: 1_000,
+            activities: [],
+            turnStatus,
+          },
+          expanded,
+          onExpandedChange: () => undefined,
+          renderEntry: (entry) => createElement("span", null, `raw:${entry.key}`),
+        }),
+      );
+    const expandedWithoutFinalHtml = renderProcessGroup(
+      false,
+      true,
+      "interrupted",
+    );
+    const collapsedWithoutFinalHtml = renderProcessGroup(
+      false,
+      false,
+      "interrupted",
+    );
+    const expandedWithFinalHtml = renderProcessGroup(true, true, "completed");
+    const collapsedWithFinalHtml = renderProcessGroup(
+      true,
+      false,
+      "completed",
+    );
+
+    for (const html of [expandedWithoutFinalHtml, collapsedWithoutFinalHtml]) {
+      assert.doesNotMatch(
+        html,
+        /data-testid="assistant-process-final-divider"/,
+      );
+      assert.doesNotMatch(
+        html,
+        /border-b border-\[var\(--app-border\)\]/,
+      );
+    }
+    for (const html of [expandedWithFinalHtml, collapsedWithFinalHtml]) {
+      assert.equal(
+        (
+          html.match(
+            /data-testid="assistant-process-final-divider"/g,
+          ) ?? []
+        ).length,
+        1,
+      );
+      assert.equal(
+        (
+          html.match(
+            /border-b border-\[var\(--app-border\)\]/g,
+          ) ?? []
+        ).length,
+        1,
+      );
+    }
+    assert.match(expandedWithFinalHtml, /space-y-2\.5 pb-3/);
+    assert.doesNotMatch(collapsedWithFinalHtml, /space-y-2\.5 pb-3/);
+    assert.doesNotMatch(collapsedWithFinalHtml, /mt-3/);
+  });
+
+  test("does not draw a final divider while work is still active", () => {
+    const activeHtml = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-active",
+          entries: [command("command-1")],
+          completed: false,
+          active: true,
+          hasFinalAnswer: false,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          activities: [],
+          turnStatus: "in_progress",
+        },
+        expanded: true,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) => createElement("span", null, `raw:${entry.key}`),
+      }),
+    );
+
+    assert.doesNotMatch(
+      activeHtml,
+      /data-testid="assistant-process-final-divider"/,
+    );
+  });
+
+  test("renders an interruption notice below the interrupted disclosure header", () => {
+    const notice: FeedEntry = {
+      key: "interruption-notice",
+      kind: "timeline",
+      item: {
+        kind: "system",
+        text: "Conversation interrupted before this tool completed.",
+        placement: "process",
+      },
+      ts: "2026-07-10T00:00:01.000Z",
+      turnId: "turn-1",
+    };
+    const html = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-interrupted-notice",
+          entries: [notice],
+          completed: true,
+          active: false,
+          hasFinalAnswer: false,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          completedAt: "2026-07-10T00:00:01.000Z",
+          durationMs: 1_000,
+          activities: [],
+          turnStatus: "interrupted",
+        },
+        expanded: true,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) =>
+          createElement(
+            "span",
+            null,
+            entry.kind === "timeline" && "text" in entry.item
+              ? entry.item.text
+              : entry.key,
+          ),
+      }),
+    );
+
+    const headerIndex = html.indexOf("Interrupted after 1s");
+    const noticeIndex = html.indexOf(
+      "Conversation interrupted before this tool completed.",
+    );
+    assert.notEqual(headerIndex, -1);
+    assert.notEqual(noticeIndex, -1);
+    assert.equal(headerIndex < noticeIndex, true);
   });
 
   test("groups consecutive reasoning summaries into one visible text row", () => {
@@ -309,6 +535,7 @@ describe("assistant process groups", () => {
           entries,
           completed: false,
           active: true,
+          hasFinalAnswer: false,
           startedAt: "2026-07-10T00:00:00.000Z",
           activities: [],
           turnStatus: "in_progress",
@@ -331,6 +558,7 @@ describe("assistant process groups", () => {
           entries,
           completed: true,
           active: false,
+          hasFinalAnswer: true,
           startedAt: "2026-07-10T00:00:00.000Z",
           completedAt: "2026-07-10T00:00:04.000Z",
           activities: [],
@@ -348,11 +576,15 @@ describe("assistant process groups", () => {
     );
 
     assert.match(activeHtml, /Estimating lazy loading scope/);
+    assert.doesNotMatch(
+      activeHtml,
+      /border-b border-\[var\(--app-border\)\]/,
+    );
     assert.doesNotMatch(settledHtml, /Estimating lazy loading scope/);
     assert.match(settledHtml, /The stable boundary is the complete conversation pane/);
     assert.match(
       settledHtml,
-      /border-b border-\[var\(--app-border\)\] pb-3/,
+      /border-b border-\[var\(--app-border\)\]/,
     );
   });
 

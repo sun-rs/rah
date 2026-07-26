@@ -456,6 +456,12 @@ export function translateCodexRolloutWindowToHistoryEvents(args: {
     // turns and therefore their Sources/Outputs before page selection runs.
     eventBus: new EventBus({
       maxEvents: Math.max(2_000, args.lines.length * 8 + 32),
+      // This temporary bus is scoped to one already byte-bounded history
+      // window. Its live replay default (8 MiB) is intentionally too small for
+      // a turn containing a legitimate multi-megabyte tool result and could
+      // evict the user message at the start of that same turn. Keep an explicit
+      // finite ceiling while allowing the requested turn to remain coherent.
+      maxRetainedBytes: 64 * 1024 * 1024,
     }),
     ptyHub: new PtyHub(),
     sessionStore: new SessionStore(),

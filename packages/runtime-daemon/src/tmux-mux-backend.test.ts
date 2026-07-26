@@ -5,6 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   createShortTmuxSessionName,
   createTmuxSessionNameForRahSession,
+  createTmuxPaneShellCommand,
+  nextTmuxSubscriptionPollInterval,
   TmuxCommandError,
   TmuxMuxBackend,
 } from "./tmux-mux-backend";
@@ -65,6 +67,59 @@ test("derives stable tmux session names from RAH session ids", () => {
     createTmuxSessionNameForRahSession("019e0aaa-1111-7222-8333-abcdef123457") ===
       name,
     false,
+  );
+});
+
+test("tmux pane commands lower the whole provider process tree priority", () => {
+  const request = {
+    sessionName: "rah-test",
+    cwd: "/tmp",
+    command: "/bin/zsh",
+    args: ["-lc", "printf '%s' \"$VALUE\""],
+    env: { VALUE: "provider payload" },
+  };
+  const background = createTmuxPaneShellCommand(request, 10, "linux");
+  assert.equal(
+    background,
+    "VALUE='provider payload' exec nice -n 10 '/bin/zsh' '-lc' 'printf '\\''%s'\\'' \"$VALUE\"'",
+  );
+  assert.equal(
+    createTmuxPaneShellCommand(request, 0, "linux"),
+    "VALUE='provider payload' exec '/bin/zsh' '-lc' 'printf '\\''%s'\\'' \"$VALUE\"'",
+  );
+  assert.equal(
+    createTmuxPaneShellCommand(request, 10, "darwin"),
+    "VALUE='provider payload' exec /usr/sbin/taskpolicy -b nice -n 10 '/bin/zsh' '-lc' 'printf '\\''%s'\\'' \"$VALUE\"'",
+  );
+});
+
+test("tmux pane subscriptions poll quickly on change and back off while idle", () => {
+  assert.equal(
+    nextTmuxSubscriptionPollInterval({
+      currentMs: 800,
+      changed: true,
+      minMs: 100,
+      maxMs: 1_000,
+    }),
+    100,
+  );
+  assert.equal(
+    nextTmuxSubscriptionPollInterval({
+      currentMs: 100,
+      changed: false,
+      minMs: 100,
+      maxMs: 1_000,
+    }),
+    200,
+  );
+  assert.equal(
+    nextTmuxSubscriptionPollInterval({
+      currentMs: 800,
+      changed: false,
+      minMs: 100,
+      maxMs: 1_000,
+    }),
+    1_000,
   );
 });
 

@@ -84,6 +84,17 @@
     --app-muted: #71717a;
     --app-link: #18181b;
     --app-resource-link: #1473e6;
+    --file-icon-blue: #1a85d4;
+    --file-icon-cyan: #1ca1c7;
+    --file-icon-gray: #84848a;
+    --file-icon-green: #199f43;
+    --file-icon-indigo: #693acf;
+    --file-icon-orange: #d47628;
+    --file-icon-pink: #d32a61;
+    --file-icon-purple: #a631be;
+    --file-icon-red: #d52c36;
+    --file-icon-teal: #17a5af;
+    --file-icon-yellow: #d5a910;
     --app-border: #e4e4e7;
     --app-subtle-bg: #f4f4f5;
     --app-sidebar-bg: #f8f8f9;
@@ -107,8 +118,10 @@
     --terminal-selection: rgba(24, 24, 27, 0.16);
 
     /* User bubble */
-    --user-bubble-bg: #f4f4f5;
+    --user-bubble-bg: #f7f7f8;
     --user-bubble-fg: #1a1c1f;
+    --user-bubble-border: #e8e8ea;
+    --turn-resource-border: rgba(24, 24, 27, 0.1);
 
     /* Diff */
     --diff-header-bg: #f4f4f4;
@@ -165,6 +178,17 @@
     --app-muted: #a1a1aa;
     --app-link: #e4e4e7;
     --app-resource-link: #69a9ff;
+    --file-icon-blue: #69b1ff;
+    --file-icon-cyan: #68cdf2;
+    --file-icon-gray: #adadb1;
+    --file-icon-green: #5ecc71;
+    --file-icon-indigo: #9d6afb;
+    --file-icon-orange: #ffa359;
+    --file-icon-pink: #ff678d;
+    --file-icon-purple: #d568ea;
+    --file-icon-red: #ff6762;
+    --file-icon-teal: #64d1db;
+    --file-icon-yellow: #ffd452;
     --app-border: #27272a;
     --app-subtle-bg: #18181b;
     --app-sidebar-bg: #111113;
@@ -184,8 +208,10 @@
     --terminal-selection: rgba(250, 250, 250, 0.18);
 
     /* User bubble */
-    --user-bubble-bg: #27272a;
+    --user-bubble-bg: #202023;
     --user-bubble-fg: #fafafa;
+    --user-bubble-border: rgba(255, 255, 255, 0.11);
+    --turn-resource-border: rgba(255, 255, 255, 0.12);
 
     /* Diff */
     --diff-header-bg: rgba(255, 255, 255, 0.055);

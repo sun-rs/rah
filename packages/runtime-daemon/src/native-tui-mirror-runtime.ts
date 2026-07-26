@@ -1,4 +1,5 @@
 import type { NativeTuiPromptState, RahEvent } from "@rah/runtime-protocol";
+import { performance } from "node:perf_hooks";
 
 import { EventBus } from "./event-bus";
 import {
@@ -14,6 +15,7 @@ import {
 } from "./native-tui-mirror-guard";
 import {
   nativeTuiMirrorIntervalMs,
+  nativeTuiMirrorMaxIntervalMs,
   nativeTuiMirrorWarnAfterMs,
 } from "./native-tui-runtime-config";
 import {
@@ -23,11 +25,19 @@ import {
 } from "./native-tui-session-state";
 import { nextPromptStateFromActivity } from "./native-tui-prompt-state";
 import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
+import type {
+  NativeTuiMirrorUpdate,
+  NativeTuiProviderActivityEnvelope,
+} from "./native-tui-provider-runtime-types";
 import {
   applyProviderActivity,
   type ProviderActivity,
   type ProviderActivityMeta,
 } from "./provider-activity";
+import {
+  BoundedTaskScheduler,
+  TaskSchedulerOverloadedError,
+} from "./bounded-task-scheduler";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 
@@ -40,7 +50,15 @@ type NativeTuiMirrorRuntimeDeps = {
   getSession: (sessionId: string) => NativeTuiSessionState | undefined;
   updatePromptState: (sessionId: string, promptState: NativeTuiPromptState) => void;
   confirmQueuedInputHandoff: (sessionId: string, clientMessageId: string) => void;
+  scheduler?: BoundedTaskScheduler;
+  mirrorIntervalMs?: number;
+  mirrorMaxIntervalMs?: number;
 };
+
+type MirrorPollOutcome = "active" | "idle" | "backoff";
+
+const MAX_MIRROR_ACTIVITIES_PER_SLICE = 32;
+const MAX_MIRROR_ACTIVITY_SLICE_MS = 4;
 
 function isTurnEndingActivity(activity: ProviderActivity): activity is Extract<
   ProviderActivity,
@@ -54,49 +72,232 @@ function isTurnEndingActivity(activity: ProviderActivity): activity is Extract<
 }
 
 export class NativeTuiMirrorRuntime {
-  constructor(private readonly deps: NativeTuiMirrorRuntimeDeps) {}
+  private readonly scheduler: BoundedTaskScheduler;
+  private readonly ownsScheduler: boolean;
+  private readonly mirrorIntervalMs: number;
+  private readonly mirrorMaxIntervalMs: number;
+  private closed = false;
+
+  constructor(private readonly deps: NativeTuiMirrorRuntimeDeps) {
+    this.scheduler =
+      deps.scheduler ??
+      // Mirror ingestion is latency-sensitive but not parallel work. A single
+      // process-wide lane prevents two large provider batches from parsing on
+      // the daemon event loop at once while adaptive polling keeps active
+      // sessions responsive.
+      new BoundedTaskScheduler({ maxConcurrency: 1, maxQueued: 64 });
+    this.ownsScheduler = deps.scheduler === undefined;
+    this.mirrorIntervalMs = Math.max(
+      1,
+      Math.floor(deps.mirrorIntervalMs ?? nativeTuiMirrorIntervalMs()),
+    );
+    this.mirrorMaxIntervalMs = Math.max(
+      this.mirrorIntervalMs,
+      Math.floor(deps.mirrorMaxIntervalMs ?? nativeTuiMirrorMaxIntervalMs()),
+    );
+  }
 
   startSessionMirror(sessionId: string): void {
     const native = this.deps.getSession(sessionId);
     if (!native || !this.deps.nativeTuiMirrors.supports(native.provider)) {
       return;
     }
-    const timer = setInterval(() => {
-      this.mirrorSession(sessionId);
-    }, nativeTuiMirrorIntervalMs());
-    timer.unref?.();
-    native.mirrorTimer = timer;
-    this.mirrorSession(sessionId);
+    native.mirrorPollingEnabled = true;
+    native.mirrorPollIntervalMs = this.mirrorIntervalMs;
+    this.requestMirrorSession(sessionId, true);
   }
 
   mirrorSession(sessionId: string): void {
+    this.requestMirrorSession(sessionId, true);
+  }
+
+  private requestMirrorSession(sessionId: string, resetCadence: boolean): void {
+    if (this.closed) {
+      return;
+    }
     const native = this.deps.getSession(sessionId);
     if (!native || !native.providerSessionId) {
       return;
     }
-    const update = this.deps.nativeTuiMirrors.updateMirror(
-      nativeTuiProviderRuntimeSession(native),
-      native.providerMirror,
-    );
-    if (update.mirror) {
-      native.providerMirror = update.mirror;
+    if (resetCadence) {
+      native.mirrorPollIntervalMs = this.mirrorIntervalMs;
+      if (native.mirrorTimer) {
+        clearTimeout(native.mirrorTimer);
+        delete native.mirrorTimer;
+      }
     }
-    switch (update.status) {
-      case "unbound":
-      case "unsupported":
+    if (native.mirrorInFlight) {
+      native.mirrorRerunRequested = true;
+      return;
+    }
+    native.mirrorInFlight = true;
+    const providerSessionId = native.providerSessionId;
+    void this.runMirrorSession(native, providerSessionId);
+  }
+
+  private async runMirrorSession(
+    native: NativeTuiSessionState,
+    providerSessionId: string,
+  ): Promise<void> {
+    let update: NativeTuiMirrorUpdate | undefined;
+    let overloaded = false;
+    let pollOutcome: MirrorPollOutcome = "backoff";
+    try {
+      update = await this.scheduler.schedule(() =>
+        this.deps.nativeTuiMirrors.updateMirror(
+          nativeTuiProviderRuntimeSession(native),
+          native.providerMirror,
+        ),
+      );
+    } catch (error) {
+      if (error instanceof TaskSchedulerOverloadedError) {
+        overloaded = true;
+      } else {
+        update = {
+          status: "failed",
+          ...(native.providerMirror ? { mirror: native.providerMirror } : {}),
+          phase: "mirror_tick",
+          error,
+        };
+      }
+    }
+    const current = this.deps.getSession(native.sessionId);
+    if (current !== native) {
+      native.mirrorInFlight = false;
+      delete native.mirrorRerunRequested;
+      return;
+    }
+    if (current.providerSessionId !== providerSessionId) {
+      native.mirrorInFlight = false;
+      delete native.mirrorRerunRequested;
+      setImmediate(() => {
+        this.requestMirrorSession(native.sessionId, true);
+      }).unref?.();
+      return;
+    }
+    try {
+      if (overloaded || !update) {
+        // Admission control is deliberate backpressure, not a provider
+        // failure. The session's regular timer will retry without accumulating
+        // another queued mirror job.
         return;
-      case "missing":
-        this.warnIfMirrorSourceIsMissing(native);
+      }
+      if (update.mirror) {
+        native.providerMirror = update.mirror;
+      }
+      switch (update.status) {
+        case "unbound":
+        case "unsupported":
+          pollOutcome = "idle";
+          break;
+        case "missing":
+          this.warnIfMirrorSourceIsMissing(native);
+          break;
+        case "failed":
+          this.warnIfMirrorFailed(native, update.error, update.phase);
+          break;
+        case "ok":
+          this.resolveMirrorDiagnostic(native);
+          await this.applyProviderActivitiesInSlices(
+            native,
+            providerSessionId,
+            update.items,
+          );
+          this.resolveMirrorFailureDiagnostic(native);
+          pollOutcome =
+            update.items.length > 0 ||
+            update.hasMore === true ||
+            native.promptState === "agent_busy"
+              ? "active"
+              : "idle";
+          if (update.hasMore) {
+            native.mirrorRerunRequested = true;
+          }
+          break;
+      }
+    } finally {
+      native.mirrorInFlight = false;
+      if (native.mirrorRerunRequested) {
+        delete native.mirrorRerunRequested;
+        setImmediate(() => {
+          this.requestMirrorSession(native.sessionId, false);
+        }).unref?.();
+      } else {
+        this.scheduleNextMirror(native, pollOutcome);
+      }
+    }
+  }
+
+  private scheduleNextMirror(
+    native: NativeTuiSessionState,
+    outcome: MirrorPollOutcome,
+  ): void {
+    if (
+      this.closed ||
+      native.mirrorPollingEnabled !== true ||
+      this.deps.getSession(native.sessionId) !== native
+    ) {
+      return;
+    }
+    const currentIntervalMs = Math.max(
+      this.mirrorIntervalMs,
+      native.mirrorPollIntervalMs ?? this.mirrorIntervalMs,
+    );
+    const nextIntervalMs =
+      outcome === "active"
+        ? this.mirrorIntervalMs
+        : Math.min(this.mirrorMaxIntervalMs, currentIntervalMs * 2);
+    native.mirrorPollIntervalMs = nextIntervalMs;
+    const timer = setTimeout(() => {
+      const current = this.deps.getSession(native.sessionId);
+      if (current !== native) {
         return;
-      case "failed":
-        this.warnIfMirrorFailed(native, update.error, update.phase);
-        return;
-      case "ok":
-        this.resolveMirrorDiagnostic(native);
-        for (const item of update.items) {
-          this.applyProviderActivity(native, item.meta, item.activity);
+      }
+      delete native.mirrorTimer;
+      this.requestMirrorSession(native.sessionId, false);
+    }, nextIntervalMs);
+    timer.unref?.();
+    native.mirrorTimer = timer;
+  }
+
+  shutdown(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    if (this.ownsScheduler) {
+      this.scheduler.shutdown();
+    }
+  }
+
+  private async applyProviderActivitiesInSlices(
+    native: NativeTuiSessionState,
+    providerSessionId: string,
+    items: readonly NativeTuiProviderActivityEnvelope[],
+  ): Promise<void> {
+    let index = 0;
+    while (index < items.length) {
+      const startedAt = performance.now();
+      let applied = 0;
+      while (
+        index < items.length &&
+        applied < MAX_MIRROR_ACTIVITIES_PER_SLICE &&
+        performance.now() - startedAt < MAX_MIRROR_ACTIVITY_SLICE_MS
+      ) {
+        const current = this.deps.getSession(native.sessionId);
+        if (
+          current !== native ||
+          current.providerSessionId !== providerSessionId
+        ) {
+          return;
         }
-        this.resolveMirrorFailureDiagnostic(native);
+        const item = items[index++]!;
+        this.applyProviderActivity(native, item.meta, item.activity);
+        applied += 1;
+      }
+      if (index < items.length) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
     }
   }
 

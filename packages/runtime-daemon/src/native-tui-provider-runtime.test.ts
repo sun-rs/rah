@@ -37,9 +37,9 @@ describe("NativeTuiProviderRuntime", () => {
     assert.equal(runtime.canProbeBinding("claude"), true);
   });
 
-  test("does not try to mirror before the provider session is bound", () => {
+  test("does not try to mirror before the provider session is bound", async () => {
     const runtime = new DefaultNativeTuiMirrorProvider();
-    const update = runtime.updateMirror({
+    const update = await runtime.updateMirror({
       sessionId: "rah-session",
       provider: "codex",
       cwd: "/tmp/rah-native",
@@ -268,7 +268,18 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(claudeStoredHistoryAdapterSource, /getConversationEvidencePage/);
     assert.match(openCodeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(openCodeStoredHistoryAdapterSource, /listStoredSessions/);
-    assert.match(openCodeStoredHistoryAdapterSource, /getConversationEvidencePage/);
+    assert.match(
+      openCodeStoredHistoryAdapterSource,
+      /getConversationSummaryEvidencePage/,
+    );
+    assert.doesNotMatch(
+      openCodeStoredHistoryAdapterSource,
+      /getConversationEvidencePage/,
+    );
+    assert.doesNotMatch(
+      openCodeStoredHistoryAdapterSource,
+      /createFrozenHistoryPageLoader/,
+    );
     assert.doesNotMatch(openCodeStructuredAdapterSource, /listStoredSessions/);
     assert.doesNotMatch(openCodeStructuredAdapterSource, /getConversationEvidencePage/);
     assert.doesNotMatch(openCodeStructuredAdapterSource, /removeStoredSession/);

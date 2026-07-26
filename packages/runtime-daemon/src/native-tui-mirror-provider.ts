@@ -1,5 +1,6 @@
 import type { ProviderKind } from "@rah/runtime-protocol";
 import { createDefaultNativeTuiMirrorHandlers } from "./native-tui-provider-handlers";
+import type { NativeTuiHistoryCatalog } from "./native-tui-history-catalog";
 import type {
   NativeTuiMirrorHandler,
   NativeTuiMirrorUpdate,
@@ -13,7 +14,7 @@ export interface NativeTuiMirrorProvider {
   updateMirror(
     session: NativeTuiProviderRuntimeSession,
     mirror: NativeTuiProviderMirror | undefined,
-  ): NativeTuiMirrorUpdate;
+  ): Promise<NativeTuiMirrorUpdate>;
 }
 
 export class DefaultNativeTuiMirrorProvider implements NativeTuiMirrorProvider {
@@ -29,10 +30,10 @@ export class DefaultNativeTuiMirrorProvider implements NativeTuiMirrorProvider {
     return this.handlers.has(provider);
   }
 
-  updateMirror(
+  async updateMirror(
     session: NativeTuiProviderRuntimeSession,
     mirror: NativeTuiProviderMirror | undefined,
-  ): NativeTuiMirrorUpdate {
+  ): Promise<NativeTuiMirrorUpdate> {
     if (!session.providerSessionId) {
       return { status: "unbound", ...(mirror ? { mirror } : {}) };
     }
@@ -47,13 +48,17 @@ export class DefaultNativeTuiMirrorProvider implements NativeTuiMirrorProvider {
       return { status: "unsupported", ...(mirror ? { mirror } : {}) };
     }
     try {
-      return handler.updateMirror(session, mirror);
+      return await handler.updateMirror(session, mirror);
     } catch (error) {
       return { status: "failed", ...(mirror ? { mirror } : {}), phase: "mirror_tick", error };
     }
   }
 }
 
-export function createDefaultNativeTuiMirrorProvider(): NativeTuiMirrorProvider {
-  return new DefaultNativeTuiMirrorProvider();
+export function createDefaultNativeTuiMirrorProvider(
+  historyCatalog?: NativeTuiHistoryCatalog,
+): NativeTuiMirrorProvider {
+  return new DefaultNativeTuiMirrorProvider(
+    createDefaultNativeTuiMirrorHandlers(historyCatalog),
+  );
 }

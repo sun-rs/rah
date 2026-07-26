@@ -137,6 +137,63 @@ test("resident conversation store emits bounded item deltas and preserves trimme
   store.close();
 });
 
+test("resident conversation projection is isolated from high-volume data-plane events", () => {
+  const eventBus = new EventBus();
+  const store = new ConversationProjectionStore(eventBus);
+  eventBus.publish({
+    sessionId: "session-noisy",
+    turnId: "turn-1",
+    type: "turn.started",
+    source,
+    payload: {},
+  });
+  const before = store.snapshot("session-noisy");
+  let lastDataPlaneSeq = 0;
+  for (let index = 0; index < 10_000; index += 1) {
+    const output = eventBus.publish({
+      sessionId: "session-noisy",
+      turnId: "turn-1",
+      type: "process.output.appended",
+      source,
+      payload: {
+        output: {
+          itemId: "command-1",
+          stream: "combined",
+          sequence: index + 1,
+          offsetBytes: index,
+          data: "x",
+          totalBytes: index + 1,
+        },
+      },
+    });
+    lastDataPlaneSeq = output.seq;
+  }
+
+  assert.deepEqual(store.snapshot("session-noisy"), before);
+  assert.equal(store.deltaForSourceSeq(lastDataPlaneSeq), undefined);
+
+  const semantic = eventBus.publish({
+    sessionId: "session-noisy",
+    turnId: "turn-1",
+    type: "timeline.item.added",
+    source,
+    payload: {
+      item: {
+        kind: "assistant_message",
+        text: "still responsive",
+        messageId: "message-1",
+        phase: "commentary",
+      },
+    },
+  });
+  assert.equal(
+    store.deltaForSourceSeq(semantic.seq)?.upsertTurns[0]?.upsertItems.length,
+    1,
+  );
+  assert.equal(store.snapshot("session-noisy").liveRevision, 2);
+  store.close();
+});
+
 test("resident conversation store preserves turn file changes through lifecycle deltas", () => {
   const eventBus = new EventBus();
   const store = new ConversationProjectionStore(eventBus);

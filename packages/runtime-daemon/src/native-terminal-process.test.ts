@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -22,10 +22,13 @@ async function waitUntilProcessGone(pid: number, timeoutMs = 2_000): Promise<voi
 test("close escalates when a native TUI ignores the first signal", async () => {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-terminal-"));
   const scriptPath = path.join(tmpDir, "ignore-term.js");
+  const readyPath = path.join(tmpDir, "ready");
   writeFileSync(
     scriptPath,
     [
+      'const fs = require("node:fs");',
       'process.on("SIGTERM", () => {});',
+      `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
       "setInterval(() => {}, 1000);",
     ].join("\n"),
   );
@@ -41,7 +44,13 @@ test("close escalates when a native TUI ignores the first signal", async () => {
     },
   });
 
-  await delay(100);
+  const started = Date.now();
+  while (!existsSync(readyPath)) {
+    if (Date.now() - started >= 2_000) {
+      throw new Error("Native terminal did not become ready");
+    }
+    await delay(25);
+  }
   await terminal.close("SIGTERM");
 
   assert.equal(exitSignal, "SIGKILL");

@@ -2,12 +2,13 @@ import type {
   ConversationItemProjection,
   ConversationTurnProjection,
 } from "@rah/runtime-protocol";
+import { boundedJsonByteLength } from "./bounded-json-size";
 
 const SUMMARY_ITEM_BUDGET_BYTES = 64 * 1024;
 const RECENT_PROCESS_ITEM_LIMIT = 24;
 
 function serializedBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
+  return boundedJsonByteLength(value, SUMMARY_ITEM_BUDGET_BYTES);
 }
 
 function isRequiredSummaryItem(

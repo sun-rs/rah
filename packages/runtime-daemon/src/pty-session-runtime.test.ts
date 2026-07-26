@@ -59,10 +59,48 @@ test("starts, controls, and closes a daemon-owned PTY session", async () => {
   assert.equal(runtime.resize("pty-test", 100, 32), true);
 
   assert.equal(await runtime.close("pty-test"), true);
-  await waitFor(() => exitArgs !== undefined);
+  // close() is a delivery barrier: the host exit frame and all preceding
+  // terminal output have been consumed before it resolves.
+  assert.notEqual(exitArgs, undefined);
   assert.equal(runtime.has("pty-test"), false);
   assert.equal(runtime.write("pty-test", "after close"), false);
   assert.equal(runtime.resize("pty-test", 80, 24), false);
+});
+
+test("drains a backpressured terminal tail before close resolves", async () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-pty-drain-"));
+  const scriptPath = path.join(tmpDir, "drain-on-close.js");
+  writeFileSync(
+    scriptPath,
+    [
+      "const fs = require('node:fs');",
+      "console.log('rah-drain-ready');",
+      "process.on('SIGHUP', () => {",
+      "  fs.writeSync(1, 'x'.repeat(384 * 1024) + 'RAH_DRAIN_TAIL');",
+      "  process.exit(0);",
+      "});",
+      "process.stdin.resume();",
+    ].join("\n"),
+  );
+
+  const runtime = new PtySessionRuntime();
+  const output: string[] = [];
+  let exited = false;
+  await runtime.start({
+    id: "pty-drain-test",
+    cwd: tmpDir,
+    command: process.execPath,
+    args: [scriptPath],
+    onData: (_id, data) => output.push(data),
+    onExit: () => {
+      exited = true;
+    },
+  });
+
+  await waitFor(() => output.join("").includes("rah-drain-ready"));
+  assert.equal(await runtime.close("pty-drain-test"), true);
+  assert.equal(exited, true);
+  assert.match(output.join(""), /RAH_DRAIN_TAIL/);
 });
 
 test("preserves UTF-8 output split across PTY chunks", async () => {
@@ -162,4 +200,38 @@ test("normalizes daemon-owned PTY terminal environment", async () => {
   });
 
   await runtime.close("pty-env-test");
+});
+
+test("runs daemon-owned PTY commands at background priority", async () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-pty-priority-"));
+  const scriptPath = path.join(tmpDir, "priority.js");
+  writeFileSync(
+    scriptPath,
+    [
+      "const os = require('node:os');",
+      "console.log('RAH_PRIORITY:' + os.getPriority(0));",
+      "process.stdin.resume();",
+    ].join("\n"),
+  );
+
+  const runtime = new PtySessionRuntime();
+  const output: string[] = [];
+  await runtime.start({
+    id: "pty-priority-test",
+    cwd: tmpDir,
+    command: process.execPath,
+    args: [scriptPath],
+    env: {
+      RAH_BACKGROUND_PROCESS_NICE: "12",
+    },
+    onData: (_id, data) => output.push(data),
+    onExit: () => undefined,
+  });
+
+  await waitFor(() => output.join("").includes("RAH_PRIORITY:"));
+  const match = /RAH_PRIORITY:(\d+)/.exec(output.join(""));
+  assert.ok(match);
+  assert.ok(Number(match[1]) >= 12);
+
+  await runtime.close("pty-priority-test");
 });

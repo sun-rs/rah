@@ -200,6 +200,85 @@ test("Conversation feed uses explicit process/final roles and canonical detail i
   );
 });
 
+test("Conversation preserves historical feed and display row identities while the active turn advances", () => {
+  const historicalTurn = turn("turn-history", [
+    timelineItem("user-history", "turn-history", "user", "question"),
+    timelineItem("process-history", "turn-history", "process", "working"),
+    timelineItem("final-history", "turn-history", "final", "done"),
+  ]);
+  const activeTurn = {
+    ...turn("turn-active", [
+      {
+        ...timelineItem("process-active", "turn-active", "process", "step one"),
+        status: "running" as const,
+      },
+    ]),
+    status: "in_progress" as const,
+  };
+
+  const initialFeed = conversationTurnsToFeed([historicalTurn, activeTurn]);
+  const initialRows = conversationDisplayRows(
+    [historicalTurn, activeTurn],
+    initialFeed,
+  );
+  const advancedActiveTurn = {
+    ...activeTurn,
+    items: [
+      {
+        ...activeTurn.items[0]!,
+        content: {
+          kind: "timeline" as const,
+          item: {
+            kind: "assistant_message" as const,
+            text: "step two",
+          },
+        },
+        revision: 2,
+      },
+    ],
+    revision: 2,
+  };
+  const advancedFeed = conversationTurnsToFeed([
+    historicalTurn,
+    advancedActiveTurn,
+  ]);
+  const advancedRows = conversationDisplayRows(
+    [historicalTurn, advancedActiveTurn],
+    advancedFeed,
+  );
+
+  const historicalFeedKeys = [
+    "conversation:user-history",
+    "conversation:process-history",
+    "conversation:final-history",
+  ];
+  for (const key of historicalFeedKeys) {
+    assert.strictEqual(
+      advancedFeed.find((entry) => entry.key === key),
+      initialFeed.find((entry) => entry.key === key),
+      `historical feed entry ${key} should retain object identity`,
+    );
+  }
+  const historicalRowKeys = [
+    "conversation:user-history",
+    "conversation-process:turn-history",
+    "conversation:final-history",
+    "conversation-copy-action:turn-history",
+  ];
+  for (const key of historicalRowKeys) {
+    assert.strictEqual(
+      advancedRows.find((row) => row.key === key),
+      initialRows.find((row) => row.key === key),
+      `historical display row ${key} should retain object identity`,
+    );
+  }
+  assert.notStrictEqual(
+    advancedFeed.find((entry) => entry.key === "conversation:process-active"),
+    initialFeed.find((entry) => entry.key === "conversation:process-active"),
+    "the advancing turn must still publish its new entry",
+  );
+});
+
 test("Conversation renders a local pending user turn immediately and hands off by client id", () => {
   const clientMessageId = "client-message:new-session";
   const optimisticUser: FeedEntry = {
@@ -268,6 +347,91 @@ test("Conversation does not re-render an optimistic key after the live store res
     1,
   );
   assert.equal(feed.some((entry) => entry.key === resolvedOptimistic.key), false);
+});
+
+test("Conversation keeps a resolved local user in its interrupted turn until history takes over", () => {
+  const clientMessageId = "client-message-interrupted";
+  const interruptedTurn: ConversationTurnProjection = {
+    ...turn(
+      "turn-interrupted-handoff",
+      [
+        timelineItem(
+          "process-interrupted-handoff",
+          "turn-interrupted-handoff",
+          "process",
+          "working",
+        ),
+      ],
+      "provider-turn-interrupted-handoff",
+    ),
+    status: "interrupted",
+    startedAt: "2026-07-10T00:00:01.000Z",
+    completedAt: "2026-07-10T00:00:05.000Z",
+  };
+  const resolvedLocalUser: FeedEntry = {
+    key: `optimistic:user:${clientMessageId}`,
+    kind: "timeline",
+    item: {
+      kind: "user_message",
+      text: "the question that was interrupted",
+      clientMessageId,
+    },
+    ts: "2026-07-10T00:00:02.000Z",
+    turnId: "provider-turn-interrupted-handoff",
+    canonicalItemId: "user-interrupted-handoff",
+    canonicalTurnId: "turn-interrupted-handoff",
+    providerTurnId: "provider-turn-interrupted-handoff",
+  };
+
+  const handoffFeed = conversationTurnsToFeed(
+    [interruptedTurn],
+    [resolvedLocalUser],
+  );
+  assert.equal(
+    handoffFeed.some((entry) => entry.key === resolvedLocalUser.key),
+    true,
+  );
+  assert.deepEqual(
+    conversationDisplayRows([interruptedTurn], handoffFeed).map((row) => row.key),
+    [
+      resolvedLocalUser.key,
+      "conversation-process:turn-interrupted-handoff",
+    ],
+  );
+
+  const canonicalUser = timelineItem(
+    "user-interrupted-handoff",
+    "turn-interrupted-handoff",
+    "user",
+    "the question that was interrupted",
+  );
+  if (
+    canonicalUser.content.kind !== "timeline" ||
+    canonicalUser.content.item.kind !== "user_message"
+  ) {
+    assert.fail("expected a user timeline item");
+  }
+  canonicalUser.content.item.clientMessageId = clientMessageId;
+  const canonicalTurn = {
+    ...interruptedTurn,
+    items: [canonicalUser, ...interruptedTurn.items],
+  };
+  const canonicalFeed = conversationTurnsToFeed(
+    [canonicalTurn],
+    [resolvedLocalUser],
+  );
+
+  assert.equal(
+    canonicalFeed.some((entry) => entry.key === resolvedLocalUser.key),
+    false,
+  );
+  assert.deepEqual(
+    conversationDisplayRows([canonicalTurn], canonicalFeed).map((row) => row.key),
+    [
+      "conversation:user-interrupted-handoff",
+      "conversation-process:turn-interrupted-handoff",
+    ],
+  );
 });
 
 test("Conversation leaves queued optimistic questions after the active turn", () => {
@@ -351,6 +515,7 @@ test("Conversation renders interrupted lifecycle when process entries are hidden
     assert.equal(process.entries.length, 0);
     assert.equal(process.turnStatus, "interrupted");
     assert.equal(process.completed, true);
+    assert.equal(process.hasFinalAnswer, false);
   }
 });
 
@@ -385,6 +550,7 @@ test("Conversation display uses canonical turn lifecycle instead of feed inferen
     "feed_entry",
     "assistant_process_group",
     "feed_entry",
+    "turn_copy_action",
   ]);
   const process = rows[1];
   assert.equal(process?.kind, "assistant_process_group");
@@ -396,6 +562,7 @@ test("Conversation display uses canonical turn lifecycle instead of feed inferen
     assert.equal(process.turnStatus, "completed");
     assert.equal(process.completed, true);
     assert.equal(process.active, false);
+    assert.equal(process.hasFinalAnswer, true);
     assert.equal(process.durationMs, 12_345);
     assert.equal(process.activities[0]?.issueCount, 1);
   }
@@ -404,7 +571,7 @@ test("Conversation display uses canonical turn lifecycle instead of feed inferen
   ]);
 });
 
-test("Conversation places canonical outputs directly after the final answer", () => {
+test("Conversation keeps canonical outputs in the resource index instead of duplicating them in chat", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-output", [
       timelineItem("user-output", "turn-output", "user", "question"),
@@ -431,12 +598,8 @@ test("Conversation places canonical outputs directly after the final answer", ()
   assert.deepEqual(rows.map((row) => row.kind), [
     "feed_entry",
     "feed_entry",
-    "turn_outputs",
+    "turn_copy_action",
   ]);
-  assert.equal(rows[2]?.kind, "turn_outputs");
-  if (rows[2]?.kind === "turn_outputs") {
-    assert.equal(rows[2].outputs[0]?.path, "/workspace/report.md");
-  }
 });
 
 test("Conversation places authoritative file changes after the owning final answer", () => {
@@ -474,15 +637,20 @@ test("Conversation places authoritative file changes after the owning final answ
   assert.deepEqual(rows.map((row) => row.kind), [
     "feed_entry",
     "feed_entry",
-    "turn_outputs",
     "turn_file_changes",
+    "turn_copy_action",
   ]);
-  const fileChanges = rows[3];
+  const fileChanges = rows[2];
   assert.equal(fileChanges?.kind, "turn_file_changes");
   if (fileChanges?.kind === "turn_file_changes") {
-    assert.equal(fileChanges.turnId, "turn-changes");
+    assert.equal(fileChanges.turnId, "provider-turn-changes");
     assert.equal(fileChanges.fileChanges.files.length, 2);
     assert.equal(fileChanges.fileChanges.totalAdditions, 20);
+  }
+  const copyAction = rows[3];
+  assert.equal(copyAction?.kind, "turn_copy_action");
+  if (copyAction?.kind === "turn_copy_action") {
+    assert.equal(copyAction.content, "done");
   }
 });
 
@@ -507,7 +675,7 @@ test("Conversation does not expose an in-progress turn diff as a completed file 
   assert.equal(rows.some((row) => row.kind === "turn_file_changes"), false);
 });
 
-test("Conversation exposes final outputs without prematurely exposing an in-progress turn diff", () => {
+test("Conversation keeps in-progress outputs in the resource index and hides an unfinished diff", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-live-final", [
       timelineItem("user-live-final", "turn-live-final", "user", "question"),
@@ -540,7 +708,7 @@ test("Conversation exposes final outputs without prematurely exposing an in-prog
   assert.deepEqual(rows.map((row) => row.kind), [
     "feed_entry",
     "feed_entry",
-    "turn_outputs",
+    "turn_copy_action",
   ]);
 });
 
@@ -562,6 +730,7 @@ test("Conversation settles work as soon as the native final answer arrives", () 
     assert.equal(process.turnStatus, "in_progress");
     assert.equal(process.completed, true);
     assert.equal(process.active, false);
+    assert.equal(process.hasFinalAnswer, true);
   }
   assert.deepEqual([...conversationFinalAssistantKeys([projectedTurn])], [
     "conversation:final-live",
@@ -584,6 +753,7 @@ test("Conversation keeps active work visible even when completed tools are hidde
   assert.equal(process?.kind, "assistant_process_group");
   if (process?.kind === "assistant_process_group") {
     assert.equal(process.active, true);
+    assert.equal(process.hasFinalAnswer, false);
     assert.deepEqual(process.entries.map((entry) => entry.key), [
       "conversation:search-live",
     ]);
@@ -615,7 +785,7 @@ test("Conversation keeps settled Worked details available when completed tools a
   }
 });
 
-test("Conversation restores a lazy Worked row from native summary lifecycle timing", () => {
+test("Conversation keeps a timing-only summary Worked row non-expandable", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-summary", [
       timelineItem("user-summary", "turn-summary", "user", "question"),
@@ -634,16 +804,114 @@ test("Conversation restores a lazy Worked row from native summary lifecycle timi
     "feed_entry",
     "assistant_process_group",
     "feed_entry",
+    "turn_copy_action",
   ]);
   const process = rows[1];
   assert.equal(process?.kind, "assistant_process_group");
   if (process?.kind === "assistant_process_group") {
     assert.equal(process.turnId, "turn-summary");
-    assert.equal(process.detailsAvailable, true);
+    assert.equal(process.detailsAvailable, undefined);
     assert.equal(process.completed, true);
     assert.equal(process.active, false);
     assert.deepEqual(process.entries, []);
     assert.equal(process.durationMs, 60_000);
+  }
+});
+
+test("Conversation exposes lazy Worked detail only when a summary has process evidence", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-summary-activity", [
+      timelineItem(
+        "user-summary-activity",
+        "turn-summary-activity",
+        "user",
+        "question",
+      ),
+      timelineItem(
+        "final-summary-activity",
+        "turn-summary-activity",
+        "final",
+        "answer",
+      ),
+    ]),
+    itemsView: "summary",
+    finalAnswerItemId: "final-summary-activity",
+    durationMs: 60_000,
+    activities: [
+      {
+        kind: "command",
+        totalCount: 1,
+        runningCount: 0,
+        interruptedCount: 0,
+        failureCount: 0,
+        issueCount: 0,
+      },
+    ],
+  };
+  const rows = conversationDisplayRows(
+    [projectedTurn],
+    conversationTurnsToFeed([projectedTurn]),
+  );
+  const process = rows[1];
+
+  assert.equal(process?.kind, "assistant_process_group");
+  if (process?.kind === "assistant_process_group") {
+    assert.equal(process.detailsAvailable, true);
+    assert.deepEqual(process.entries, []);
+    assert.equal(process.activities[0]?.totalCount, 1);
+  }
+});
+
+test("Conversation honors indexed Worked detail availability without hydrating empty summaries", () => {
+  const emptyTurn: ConversationTurnProjection = {
+    ...turn("turn-indexed-empty", [
+      timelineItem("user-indexed-empty", "turn-indexed-empty", "user", "question"),
+      timelineItem("final-indexed-empty", "turn-indexed-empty", "final", "answer"),
+    ]),
+    itemsView: "summary",
+    finalAnswerItemId: "final-indexed-empty",
+    durationMs: 1_000,
+    processDetailsAvailable: false,
+  };
+  const populatedTurn: ConversationTurnProjection = {
+    ...turn("turn-indexed-populated", [
+      timelineItem(
+        "user-indexed-populated",
+        "turn-indexed-populated",
+        "user",
+        "question",
+      ),
+      timelineItem(
+        "final-indexed-populated",
+        "turn-indexed-populated",
+        "final",
+        "answer",
+      ),
+    ]),
+    itemsView: "summary",
+    finalAnswerItemId: "final-indexed-populated",
+    durationMs: 2_000,
+    processDetailsAvailable: true,
+  };
+  const rows = conversationDisplayRows(
+    [emptyTurn, populatedTurn],
+    conversationTurnsToFeed([emptyTurn, populatedTurn]),
+  );
+  const groups = rows.filter(
+    (row) => row.kind === "assistant_process_group",
+  );
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0]?.kind, "assistant_process_group");
+  assert.equal(groups[1]?.kind, "assistant_process_group");
+  if (
+    groups[0]?.kind === "assistant_process_group" &&
+    groups[1]?.kind === "assistant_process_group"
+  ) {
+    assert.equal(groups[0].turnId, "turn-indexed-empty");
+    assert.equal(groups[0].detailsAvailable, undefined);
+    assert.equal(groups[1].turnId, "turn-indexed-populated");
+    assert.equal(groups[1].detailsAvailable, true);
   }
 });
 
@@ -717,6 +985,47 @@ test("Conversation foreground refresh promotes a stale working reply to the serv
     ],
   );
   assert.deepEqual(testHarness.requests, [{}, {}]);
+});
+
+test("Conversation refresh does not erase already rendered items from an incomplete working snapshot", async () => {
+  const user = timelineItem("user-working", "turn-working", "user", "question");
+  const reasoning = timelineItem(
+    "reasoning-working",
+    "turn-working",
+    "process",
+    "reasoning already visible",
+  );
+  const firstSnapshot: ConversationTurnProjection = {
+    ...turn("turn-working", [user, reasoning]),
+    status: "in_progress",
+    itemsView: "summary",
+  };
+  const laterProcess = observationItem("command-working", "turn-working", false);
+  const temporarilyIncompleteSnapshot: ConversationTurnProjection = {
+    ...turn("turn-working", [laterProcess]),
+    // A provider-owned rollout can look settled during the quiet interval
+    // between two writes even though the external turn is still running.
+    status: "interrupted",
+    itemsView: "summary",
+    revision: 2,
+  };
+  const testHarness = harness([
+    page([firstSnapshot], undefined, 1),
+    page([temporarilyIncompleteSnapshot], undefined, 1),
+    page([temporarilyIncompleteSnapshot], undefined, 1),
+  ]);
+
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+
+  const refreshed = testHarness.state().projections.get("session-1")?.conversation?.turns[0];
+  assert.equal(refreshed?.itemsView, "summary");
+  assert.equal(refreshed?.status, "interrupted");
+  assert.deepEqual(
+    refreshed?.items.map((item) => item.id),
+    ["user-working", "reasoning-working", "command-working"],
+  );
 });
 
 test("Conversation replacement refresh owns loading state and ignores the aborted late response", async () => {
@@ -1066,6 +1375,87 @@ test("Conversation turn detail hydrates process items without replacing the visi
         : null
       : null,
     "answer refreshed",
+  );
+});
+
+test("Conversation keeps hydrated user image attachments across a summary refresh", async () => {
+  const summaryUser = {
+    ...timelineItem("user", "turn-1", "user", "question"),
+    providerItemId: "item:0",
+  };
+  if (
+    summaryUser.content.kind !== "timeline" ||
+    summaryUser.content.item.kind !== "user_message"
+  ) {
+    assert.fail("expected a user timeline item");
+  }
+  summaryUser.content.item.imageCount = 1;
+  const final = timelineItem("final", "turn-1", "final", "answer");
+  const summaryTurn: ConversationTurnProjection = {
+    ...turn("turn-1", [summaryUser, final]),
+    itemsView: "summary",
+    finalAnswerItemId: "final",
+  };
+  const testHarness = harness([page([summaryTurn]), page([summaryTurn])]);
+  await ensureConversationLoadedCommand(testHarness.deps, "session-1");
+
+  const detailedUser: ConversationItemProjection = {
+    ...summaryUser,
+    id: "detailed-user",
+    content: {
+      kind: "timeline",
+      item: {
+        ...summaryUser.content.item,
+        attachments: [
+          {
+            id: "history-image-1",
+            kind: "image",
+            name: "screenshot.png",
+            mediaType: "image/png",
+            size: 128,
+          },
+        ],
+      },
+    },
+    revision: 2,
+  };
+  assert.equal(
+    await loadConversationTurnDetailCommand(
+      {
+        ...testHarness.deps,
+        readTurnDetail: async () => ({
+          sessionId: "session-1",
+          turnId: "turn-1",
+          turn: {
+            ...summaryTurn,
+            items: [detailedUser, final],
+            itemsView: "full",
+            revision: 2,
+          },
+        }),
+      },
+      "session-1",
+      "turn-1",
+    ),
+    true,
+  );
+
+  assert.equal(await refreshConversationCommand(testHarness.deps, "session-1"), true);
+  const refreshedUser =
+    testHarness.state().projections.get("session-1")?.conversation?.turns[0]?.items[0];
+  assert.equal(
+    refreshedUser?.content.kind === "timeline" &&
+      refreshedUser.content.item.kind === "user_message"
+      ? refreshedUser.content.item.attachments?.[0]?.id
+      : null,
+    "history-image-1",
+  );
+  assert.equal(
+    refreshedUser?.content.kind === "timeline" &&
+      refreshedUser.content.item.kind === "user_message"
+      ? refreshedUser.content.item.imageCount
+      : null,
+    1,
   );
 });
 

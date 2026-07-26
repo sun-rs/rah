@@ -11,6 +11,7 @@ import {
 import type { FeedEntry } from "../../types";
 import type {
   ConversationTurnProjection,
+  ConversationTurnFileChangesProjection,
   PermissionResponseRequest,
   ProviderKind,
   ConversationItemDetailKind,
@@ -31,11 +32,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
+import { AssistantTurnCopyAction } from "./AssistantTurnCopyAction";
 import { AssistantProcessGroup } from "./AssistantProcessGroup";
 import { AssistantTurnHeader } from "./AssistantTurnHeader";
 import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
 import { TaskSummaryDock } from "./TaskSummaryDock";
-import { ConversationOutputsCard } from "./ConversationOutputsCard";
 import { ConversationFileChangesCard } from "./ConversationFileChangesCard";
 import { ReviewDialog } from "../../inspector/ReviewDialog";
 import type { ReviewScope } from "../../inspector/ReviewSurface";
@@ -49,6 +50,7 @@ import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
 import {
+  defaultAssistantProcessGroupExpanded,
   type ChatDisplayRow,
 } from "./assistant-process-groups";
 import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
@@ -80,6 +82,10 @@ import {
   conversationDisplayRows,
   conversationFinalAssistantKeys,
 } from "../../conversation-feed";
+import {
+  advanceBottomFollowSettle,
+  createBottomFollowSettleState,
+} from "./bottom-follow-settling";
 
 const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
@@ -88,6 +94,8 @@ const VIEWPORT_RESIZE_EPSILON_PX = 4;
 const BOTTOM_RESIZE_SETTLE_FRAMES = 2;
 const BOTTOM_FOREGROUND_SETTLE_FRAMES = 4;
 const BOTTOM_USER_JUMP_SETTLE_FRAMES = 8;
+const NO_COPYABLE_ASSISTANT_KEYS: ReadonlySet<string> = new Set();
+const PROCESS_TO_FINAL_ROW_GAP_PX = 10;
 
 function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -104,15 +112,15 @@ function chatDisplayRowGapPx(
 ): number {
   const nextRow = rows[index + 1];
   if (row.kind === "assistant_process_group" && nextRow?.kind === "feed_entry") {
-    return 14;
+    return PROCESS_TO_FINAL_ROW_GAP_PX;
   }
   if (
     row.kind === "feed_entry" &&
-    (nextRow?.kind === "turn_outputs" || nextRow?.kind === "turn_file_changes")
+    nextRow?.kind === "turn_file_changes"
   ) {
     return 10;
   }
-  if (row.kind === "turn_outputs" && nextRow?.kind === "turn_file_changes") {
+  if (nextRow?.kind === "turn_copy_action") {
     return 8;
   }
   return VIRTUAL_FEED_ROW_GAP_PX;
@@ -120,13 +128,13 @@ function chatDisplayRowGapPx(
 
 function estimateChatDisplayRowHeight(row: ChatDisplayRow): number {
   if (row.kind === "assistant_process_group") {
-    return row.completed ? 44 : 180;
-  }
-  if (row.kind === "turn_outputs") {
-    return 54 + Math.min(row.outputs.length, 4) * 58;
+    return defaultAssistantProcessGroupExpanded(row) ? 180 : 33;
   }
   if (row.kind === "turn_file_changes") {
     return 50;
+  }
+  if (row.kind === "turn_copy_action") {
+    return 28;
   }
   return estimateFeedEntryHeight(row.entry);
 }
@@ -191,6 +199,7 @@ function renderTimelineItem(item: TimelineItem, options: {
   entryKey?: string;
   canCopyAssistant?: boolean;
   onOpenLocalFile?: (path: string) => void;
+  onLoadDetail?: () => Promise<void> | void;
 } = {}) {
   switch (item.kind) {
     case "user_message":
@@ -201,13 +210,13 @@ function renderTimelineItem(item: TimelineItem, options: {
           attachments={item.attachments}
           entryKey={options.entryKey}
           onOpenLocalFile={options.onOpenLocalFile}
+          onLoadDetail={options.onLoadDetail}
         />
       );
     case "assistant_message":
       return (
         <AssistantMessage
           content={item.text}
-          copyable={options.canCopyAssistant ?? false}
           variant={
             item.phase === "final_answer" || options.canCopyAssistant
               ? "final"
@@ -351,6 +360,9 @@ function renderEntry(
   onLoadConversationItemDetail:
     | ((kind: ConversationItemDetailKind, itemId: string) => Promise<void> | void)
     | undefined,
+  onLoadConversationTurnDetail:
+    | ((turnId: string) => Promise<void> | void)
+    | undefined,
   copyableAssistantKeys: ReadonlySet<string>,
 ) {
   switch (entry.kind) {
@@ -359,6 +371,14 @@ function renderEntry(
         entryKey: entry.key,
         canCopyAssistant: copyableAssistantKeys.has(entry.key),
         ...(onOpenLocalFile ? { onOpenLocalFile } : {}),
+        ...(entry.item.kind === "user_message" &&
+        (entry.canonicalTurnId || entry.turnId) &&
+        onLoadConversationTurnDetail
+          ? {
+              onLoadDetail: () =>
+                onLoadConversationTurnDetail(entry.canonicalTurnId ?? entry.turnId!),
+            }
+          : {}),
       });
     case "tool_call":
       return (
@@ -543,6 +563,7 @@ export const ChatThread = memo(function ChatThread(props: {
   });
   const consumePendingAutoLatestReplyScrollRef = useRef<() => boolean>(() => true);
   const autoNavigatedLatestReplyKeysRef = useRef(new Set<string>());
+  const autoLoadedInterruptedTurnIdsRef = useRef(new Set<string>());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0, contentTopOffset: 0 });
@@ -553,6 +574,8 @@ export const ChatThread = memo(function ChatThread(props: {
   const [loadingProcessTurnIds, setLoadingProcessTurnIds] = useState(
     () => new Set<string>(),
   );
+  const loadingProcessTurnIdsRef = useRef(loadingProcessTurnIds);
+  loadingProcessTurnIdsRef.current = loadingProcessTurnIds;
   const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
   const projectedFeed = props.feed;
@@ -585,6 +608,46 @@ export const ChatThread = memo(function ChatThread(props: {
     () => latestCurrentPlan(props.conversationTurns),
     [props.conversationTurns],
   );
+  const openTurnReview = useCallback(
+    (turnId: string, fileChanges: ConversationTurnFileChangesProjection) => {
+      setReviewScope({
+        kind: "turn",
+        sessionId: props.sessionId,
+        turnId,
+        workspaceRoot: "",
+        files: fileChanges.files,
+        totalAdditions: fileChanges.totalAdditions,
+        totalDeletions: fileChanges.totalDeletions,
+        truncated: false,
+      });
+    },
+    [props.sessionId],
+  );
+  const currentPlanTurnId =
+    currentPlan?.turn.providerTurnId ?? currentPlan?.turn.id ?? null;
+  const currentPlanFileChanges = currentPlan?.turn.fileChanges;
+  useEffect(() => {
+    if (!currentPlanTurnId || !currentPlanFileChanges) {
+      return;
+    }
+    setReviewScope((current) => {
+      if (
+        current?.kind !== "turn" ||
+        current.turnId !== currentPlanTurnId ||
+        (current.files === currentPlanFileChanges.files &&
+          current.totalAdditions === currentPlanFileChanges.totalAdditions &&
+          current.totalDeletions === currentPlanFileChanges.totalDeletions)
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        files: currentPlanFileChanges.files,
+        totalAdditions: currentPlanFileChanges.totalAdditions,
+        totalDeletions: currentPlanFileChanges.totalDeletions,
+      };
+    });
+  }, [currentPlanFileChanges, currentPlanTurnId]);
   const entries = useMemo(
     () => withoutInlinePlans(visibleEntriesWithPlans),
     [visibleEntriesWithPlans],
@@ -596,6 +659,25 @@ export const ChatThread = memo(function ChatThread(props: {
   const copyableAssistantKeys = useMemo(
     () => conversationFinalAssistantKeys(props.conversationTurns),
     [props.conversationTurns],
+  );
+  const renderProcessEntry = useCallback(
+    (entry: FeedEntry) =>
+      renderEntry(
+        entry,
+        props.canRespondToPermission,
+        props.onPermissionRespond,
+        props.onOpenLocalFile,
+        props.onLoadConversationItemDetail,
+        props.onLoadConversationTurnDetail,
+        NO_COPYABLE_ASSISTANT_KEYS,
+      ),
+    [
+      props.canRespondToPermission,
+      props.onLoadConversationItemDetail,
+      props.onLoadConversationTurnDetail,
+      props.onOpenLocalFile,
+      props.onPermissionRespond,
+    ],
   );
   const assistantTurnHeaders = useMemo(
     () => buildAssistantTurnHeaders(entries, copyableAssistantKeys),
@@ -613,6 +695,43 @@ export const ChatThread = memo(function ChatThread(props: {
     () => conversationDisplayRows(props.conversationTurns, entries, activeEntries),
     [activeEntries, entries, props.conversationTurns],
   );
+  useEffect(() => {
+    autoLoadedInterruptedTurnIdsRef.current.clear();
+  }, [props.sessionId]);
+  useEffect(() => {
+    if (!props.onLoadConversationTurnDetail) {
+      return;
+    }
+    for (const row of displayRows) {
+      if (
+        row.kind !== "assistant_process_group" ||
+        row.turnStatus !== "interrupted" ||
+        !row.detailsAvailable ||
+        !row.turnId ||
+        !(
+          processGroupExpansionOverrides.get(row.key) ??
+          defaultAssistantProcessGroupExpanded(row)
+        ) ||
+        autoLoadedInterruptedTurnIdsRef.current.has(row.turnId)
+      ) {
+        continue;
+      }
+      const turnId = row.turnId;
+      autoLoadedInterruptedTurnIdsRef.current.add(turnId);
+      setLoadingProcessTurnIds((current) => new Set(current).add(turnId));
+      void Promise.resolve(props.onLoadConversationTurnDetail(turnId)).finally(() => {
+        setLoadingProcessTurnIds((current) => {
+          const next = new Set(current);
+          next.delete(turnId);
+          return next;
+        });
+      });
+    }
+  }, [
+    displayRows,
+    processGroupExpansionOverrides,
+    props.onLoadConversationTurnDetail,
+  ]);
   const virtualLayout = useMemo(
     () =>
       buildVirtualFeedLayout(
@@ -744,16 +863,23 @@ export const ChatThread = memo(function ChatThread(props: {
   const scrollToBottomNow = useCallback(() => {
     const node = containerRef.current;
     if (!node) {
-      return;
+      return null;
     }
-    node.scrollTop = node.scrollHeight;
+    const targetScrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+    const moved = Math.abs(node.scrollTop - targetScrollTop) >= 0.5;
+    if (moved) {
+      node.scrollTop = targetScrollTop;
+    }
     lastScrollTopRef.current = node.scrollTop;
     stickToBottomRef.current = true;
     userDetachedFromBottomRef.current = false;
     returnToBottomOnVisibleRef.current = true;
     pendingVisibleBottomRestoreRef.current = false;
     setShowScrollToBottom(false);
-    syncViewport();
+    if (moved) {
+      syncViewport();
+    }
+    return { extent: targetScrollTop, moved };
   }, [syncViewport]);
 
   const scheduleScrollToBottom = useCallback(() => {
@@ -767,23 +893,24 @@ export const ChatThread = memo(function ChatThread(props: {
   }, [scrollToBottomNow]);
 
   const settleScrollToBottomOverFrames = useCallback((frames: number) => {
-    scrollToBottomNow();
     if (bottomFollowRafRef.current !== null) {
       cancelAnimationFrame(bottomFollowRafRef.current);
       bottomFollowRafRef.current = null;
     }
-    let remainingFrames = Math.max(0, frames);
+    let settleState = createBottomFollowSettleState(frames);
     const runSettlePass = () => {
       bottomFollowRafRef.current = null;
-      scrollToBottomNow();
-      remainingFrames -= 1;
-      if (remainingFrames > 0) {
+      const sample = scrollToBottomNow();
+      if (!sample) {
+        return;
+      }
+      const advanced = advanceBottomFollowSettle(settleState, sample);
+      settleState = advanced.state;
+      if (advanced.shouldContinue) {
         bottomFollowRafRef.current = requestAnimationFrame(runSettlePass);
       }
     };
-    if (remainingFrames > 0) {
-      bottomFollowRafRef.current = requestAnimationFrame(runSettlePass);
-    }
+    runSettlePass();
   }, [scrollToBottomNow]);
 
   const settleScrollToBottomAfterResize = useCallback(() => {
@@ -823,6 +950,44 @@ export const ChatThread = memo(function ChatThread(props: {
       };
     },
     [detachBottomFollowing],
+  );
+
+  const handleProcessGroupExpandedChange = useCallback(
+    (
+      group: Extract<ChatDisplayRow, { kind: "assistant_process_group" }>,
+      expanded: boolean,
+      anchor: HTMLElement,
+    ) => {
+      captureProcessDisclosureAnchor(anchor);
+      setProcessGroupExpansionOverrides((current) => {
+        const next = new Map(current);
+        next.set(group.key, expanded);
+        return next;
+      });
+      const loadTurnDetail = props.onLoadConversationTurnDetail;
+      if (
+        !expanded ||
+        !group.detailsAvailable ||
+        !group.turnId ||
+        !loadTurnDetail ||
+        loadingProcessTurnIdsRef.current.has(group.turnId)
+      ) {
+        return;
+      }
+      const turnId = group.turnId;
+      const loading = new Set(loadingProcessTurnIdsRef.current).add(turnId);
+      loadingProcessTurnIdsRef.current = loading;
+      setLoadingProcessTurnIds(loading);
+      void Promise.resolve(loadTurnDetail(turnId)).finally(() => {
+        setLoadingProcessTurnIds((current) => {
+          const next = new Set(current);
+          next.delete(turnId);
+          loadingProcessTurnIdsRef.current = next;
+          return next;
+        });
+      });
+    },
+    [captureProcessDisclosureAnchor, props.onLoadConversationTurnDetail],
   );
 
   const restoreBottomAfterForeground = useCallback(() => {
@@ -1759,76 +1924,22 @@ export const ChatThread = memo(function ChatThread(props: {
                       row.turnId && loadingProcessTurnIds.has(row.turnId)
                     )}
                     expanded={
-                      row.completed
-                        ? processGroupExpansionOverrides.get(row.key) ?? false
-                        : true
+                      processGroupExpansionOverrides.get(row.key) ??
+                      defaultAssistantProcessGroupExpanded(row)
                     }
-                    onExpandedChange={(expanded, anchor) => {
-                      captureProcessDisclosureAnchor(anchor);
-                      setProcessGroupExpansionOverrides((current) => {
-                        const next = new Map(current);
-                        next.set(row.key, expanded);
-                        return next;
-                      });
-                      if (
-                        expanded &&
-                        row.detailsAvailable &&
-                        row.turnId &&
-                        props.onLoadConversationTurnDetail &&
-                        !loadingProcessTurnIds.has(row.turnId)
-                      ) {
-                        const turnId = row.turnId;
-                        setLoadingProcessTurnIds((current) => new Set(current).add(turnId));
-                        void Promise.resolve(props.onLoadConversationTurnDetail(turnId)).finally(
-                          () => {
-                            setLoadingProcessTurnIds((current) => {
-                              const next = new Set(current);
-                              next.delete(turnId);
-                              return next;
-                            });
-                          },
-                        );
-                      }
-                    }}
+                    onExpandedChange={handleProcessGroupExpandedChange}
                     {...(props.onLoadConversationItemDetail
                       ? { onLoadConversationItemDetail: props.onLoadConversationItemDetail }
                       : {})}
                     {...(props.onOpenLocalFile
                       ? { onOpenLocalFile: props.onOpenLocalFile }
                       : {})}
-                    renderEntry={(entry) =>
-                      renderEntry(
-                        entry,
-                        props.canRespondToPermission,
-                        props.onPermissionRespond,
-                        props.onOpenLocalFile,
-                        props.onLoadConversationItemDetail,
-                        copyableAssistantKeys,
-                      )
-                    }
-                  />
-                ) : row.kind === "turn_outputs" ? (
-                  <ConversationOutputsCard
-                    outputs={row.outputs}
-                    {...(props.onOpenLocalFile
-                      ? { onOpenLocalFile: props.onOpenLocalFile }
-                      : {})}
+                    renderEntry={renderProcessEntry}
                   />
                 ) : row.kind === "turn_file_changes" ? (
                   <ConversationFileChangesCard
                     fileChanges={row.fileChanges}
-                    onReview={() =>
-                      setReviewScope({
-                        kind: "turn",
-                        sessionId: props.sessionId,
-                        turnId: row.turnId,
-                        workspaceRoot: "",
-                        files: row.fileChanges.files,
-                        totalAdditions: row.fileChanges.totalAdditions,
-                        totalDeletions: row.fileChanges.totalDeletions,
-                        truncated: false,
-                      })
-                    }
+                    onReview={() => openTurnReview(row.turnId, row.fileChanges)}
                     {...(props.onOpenTurnFileChange
                       ? {
                           onOpenFile: (path: string) =>
@@ -1836,6 +1947,8 @@ export const ChatThread = memo(function ChatThread(props: {
                         }
                       : {})}
                   />
+                ) : row.kind === "turn_copy_action" ? (
+                  <AssistantTurnCopyAction content={row.content} />
                 ) : (
                   renderEntry(
                     row.entry,
@@ -1843,6 +1956,7 @@ export const ChatThread = memo(function ChatThread(props: {
                     props.onPermissionRespond,
                     props.onOpenLocalFile,
                     props.onLoadConversationItemDetail,
+                    props.onLoadConversationTurnDetail,
                     copyableAssistantKeys,
                   )
                 )}
@@ -1900,6 +2014,12 @@ export const ChatThread = memo(function ChatThread(props: {
         <TaskSummaryDock
           key={currentPlan.key}
           plan={currentPlan}
+          {...(currentPlanTurnId && currentPlanFileChanges?.files.length
+            ? {
+                onReviewChanges: () =>
+                  openTurnReview(currentPlanTurnId, currentPlanFileChanges),
+              }
+            : {})}
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
         />
       ) : null}

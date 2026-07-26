@@ -25,7 +25,7 @@ const GAP = "gap-1.5 md:gap-2";
 const ROUNDED = "rounded-xl";
 
 /* ── Base textarea ── */
-const TEXTAREA_BASE = `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-6 placeholder:text-[var(--app-hint)] placeholder:opacity-60 focus:outline-none`;
+const TEXTAREA_BASE = `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base font-normal leading-6 placeholder:text-[var(--app-hint)] placeholder:opacity-60 focus:outline-none`;
 
 export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {
@@ -59,7 +59,7 @@ export const COMPOSER_LAYOUT = {
     "absolute inset-0 rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
 
   textareaClassName: `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] max-h-[280px]`,
-  textareaContentClassName: `px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] text-base leading-6`,
+  textareaContentClassName: `px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] text-base font-normal leading-6`,
 } as const;
 
 export const EMPTY_STATE_COMPOSER_LAYOUT = {
@@ -67,7 +67,7 @@ export const EMPTY_STATE_COMPOSER_LAYOUT = {
 
   /* Landing textarea — generous bottom padding so the inline controls never overlap typed text */
   textareaClassName: `${TEXTAREA_BASE} rounded-2xl px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 min-h-[7.5rem] md:min-h-[8rem] max-h-[50vh]`,
-  textareaContentClassName: `px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 text-base leading-6 min-h-[7.5rem] md:min-h-[8rem]`,
+  textareaContentClassName: `px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 text-base font-normal leading-6 min-h-[7.5rem] md:min-h-[8rem]`,
 
   /* Controls row — anchored to the bottom edge of the textarea card */
   controlsRowClassName:

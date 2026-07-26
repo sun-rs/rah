@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import {
   mkdir,
   readFile,
@@ -53,6 +52,19 @@ type StoredArtifactRecord = {
   bytes: number;
 };
 
+type PendingTurnDiffRevision = {
+  unifiedDiff: string;
+  promise: Promise<ConversationTurnFileChangesProjection>;
+  resolve: (value: ConversationTurnFileChangesProjection) => void;
+  reject: (error: unknown) => void;
+};
+
+type PendingTurnDiffWrite = {
+  current: PendingTurnDiffRevision | undefined;
+  next: PendingTurnDiffRevision | undefined;
+  drainPromise: Promise<void>;
+};
+
 export type TurnArtifactStoreOptions = {
   rootDir?: string;
   maxFileBytes?: number;
@@ -90,14 +102,30 @@ function utf8Prefix(value: string, maxBytes: number): {
   truncated: boolean;
   bytes: number;
 } {
-  const buffer = Buffer.from(value, "utf8");
-  if (buffer.byteLength <= maxBytes) {
-    return { value, truncated: false, bytes: buffer.byteLength };
+  const totalBytes = Buffer.byteLength(value, "utf8");
+  if (totalBytes <= maxBytes) {
+    return { value, truncated: false, bytes: totalBytes };
   }
-  const prefix = buffer
-    .subarray(0, Math.max(0, maxBytes))
-    .toString("utf8")
-    .replace(/\uFFFD+$/, "");
+
+  // Do not materialize the entire diff as a second Buffer merely to retain a
+  // bounded prefix. The candidate is capped by the byte budget in UTF-16 code
+  // units, then binary searched to a valid UTF-8 boundary.
+  const candidate = value.slice(0, Math.max(0, maxBytes));
+  let low = 0;
+  let high = candidate.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(candidate.slice(0, middle), "utf8") <= maxBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  let prefix = candidate.slice(0, low);
+  const trailing = prefix.charCodeAt(prefix.length - 1);
+  if (trailing >= 0xd800 && trailing <= 0xdbff) {
+    prefix = prefix.slice(0, -1);
+  }
   return {
     value: prefix,
     truncated: true,
@@ -161,10 +189,7 @@ export class TurnArtifactStore {
   private readonly maintenanceIntervalMs: number;
   private readonly staleFileGraceMs: number;
   private readonly now: () => number;
-  private readonly pendingWrites = new Map<
-    string,
-    Promise<ConversationTurnFileChangesProjection>
-  >();
+  private readonly pendingWrites = new Map<string, PendingTurnDiffWrite>();
   private readonly activeTurnDirs = new Set<string>();
   private maintenancePromise: Promise<void> | undefined;
   private lastMaintenanceAt: number;
@@ -199,28 +224,42 @@ export class TurnArtifactStore {
     unifiedDiff: string,
   ): Promise<ConversationTurnFileChangesProjection> {
     const key = `${ownerId}\0${turnId}`;
-    const previous = this.pendingWrites.get(key);
-    const write = previous
-      ? previous
-          .catch(() => undefined)
-          .then(() => this.persistTurnDiff(ownerId, turnId, unifiedDiff))
-      : this.persistTurnDiff(ownerId, turnId, unifiedDiff);
-    this.pendingWrites.set(key, write);
-    const clear = () => {
-      if (this.pendingWrites.get(key) === write) {
-        this.pendingWrites.delete(key);
+    const pending = this.pendingWrites.get(key);
+    if (pending) {
+      if (pending.next) {
+        // turn/diff/updated is a cumulative authoritative snapshot. Replacing
+        // the queued revision is lossless and prevents stale snapshots from
+        // building an unbounded Promise/write chain behind slow storage.
+        pending.next.unifiedDiff = unifiedDiff;
+        return pending.next.promise;
       }
-    };
-    void write.then(clear, clear);
-    return write;
+      const next = this.createPendingRevision(unifiedDiff);
+      pending.next = next;
+      return next.promise;
+    }
+
+    const current = this.createPendingRevision(unifiedDiff);
+    const state = {
+      current,
+      next: undefined,
+      drainPromise: Promise.resolve(),
+    } satisfies PendingTurnDiffWrite;
+    this.pendingWrites.set(key, state);
+    state.drainPromise = this.drainPendingTurnDiff(
+      key,
+      ownerId,
+      turnId,
+      state,
+    );
+    return current.promise;
   }
 
-  getTurnFileChanges(
+  async getTurnFileChanges(
     ownerId: string,
     turnId: string,
     responseSessionId = ownerId,
-  ): TurnFileChangesResponse {
-    const artifact = this.requireArtifact(ownerId, turnId);
+  ): Promise<TurnFileChangesResponse> {
+    const artifact = await this.requireArtifact(ownerId, turnId);
     return {
       sessionId: responseSessionId,
       turnId,
@@ -230,13 +269,27 @@ export class TurnArtifactStore {
     };
   }
 
-  getTurnFileDiff(
+  async findTurnFileChanges(
+    ownerId: string,
+    turnId: string,
+    responseSessionId = ownerId,
+  ): Promise<TurnFileChangesResponse | undefined> {
+    try {
+      return await this.getTurnFileChanges(ownerId, turnId, responseSessionId);
+    } catch {
+      // History projection is best-effort: a missing, expired, or damaged
+      // artifact must not make the entire conversation page unavailable.
+      return undefined;
+    }
+  }
+
+  async getTurnFileDiff(
     ownerId: string,
     turnId: string,
     filePath: string,
     responseSessionId = ownerId,
-  ): TurnFileDiffResponse {
-    const artifact = this.requireArtifact(ownerId, turnId);
+  ): Promise<TurnFileDiffResponse> {
+    const artifact = await this.requireArtifact(ownerId, turnId);
     const file = artifact.files.find((candidate) => candidate.path === filePath);
     if (!file) {
       throw new Error(`Unknown turn file ${filePath}.`);
@@ -246,7 +299,10 @@ export class TurnArtifactStore {
     }
     let diff: string;
     try {
-      diff = readFileSync(path.join(this.turnDir(ownerId, turnId), file.diffFile), "utf8");
+      diff = await readFile(
+        path.join(this.turnDir(ownerId, turnId), file.diffFile),
+        "utf8",
+      );
     } catch {
       throw new Error("Turn artifact manifest is invalid.");
     }
@@ -317,8 +373,7 @@ export class TurnArtifactStore {
           await writeFile(diffPath, storedDiff.value, { encoding: "utf8", mode: 0o600 });
           writtenFiles.push(diffPath);
           remainingBytes = Math.max(0, remainingBytes - storedDiff.bytes);
-          const truncated =
-            storedDiff.truncated || Buffer.byteLength(file.diff, "utf8") > allowedBytes;
+          const truncated = storedDiff.truncated;
           turnTruncated ||= truncated;
           files.push({ path: file.path, diffFile, truncated });
         }
@@ -363,11 +418,14 @@ export class TurnArtifactStore {
     return summary;
   }
 
-  private requireArtifact(ownerId: string, turnId: string): StoredTurnArtifact {
+  private async requireArtifact(
+    ownerId: string,
+    turnId: string,
+  ): Promise<StoredTurnArtifact> {
     const manifestPath = path.join(this.turnDir(ownerId, turnId), "manifest.json");
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      parsed = JSON.parse(await readFile(manifestPath, "utf8"));
     } catch {
       throw new Error(`Unknown turn artifact ${turnId}.`);
     }
@@ -388,7 +446,51 @@ export class TurnArtifactStore {
 
   private async waitForPendingWrites(): Promise<void> {
     while (this.pendingWrites.size > 0) {
-      await Promise.allSettled([...this.pendingWrites.values()]);
+      await Promise.allSettled(
+        [...this.pendingWrites.values()].map((pending) => pending.drainPromise),
+      );
+    }
+  }
+
+  private createPendingRevision(unifiedDiff: string): PendingTurnDiffRevision {
+    let resolve: PendingTurnDiffRevision["resolve"] = () => {};
+    let reject: PendingTurnDiffRevision["reject"] = () => {};
+    const promise = new Promise<ConversationTurnFileChangesProjection>(
+      (resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      },
+    );
+    return { unifiedDiff, promise, resolve, reject };
+  }
+
+  private async drainPendingTurnDiff(
+    key: string,
+    ownerId: string,
+    turnId: string,
+    state: PendingTurnDiffWrite,
+  ): Promise<void> {
+    try {
+      while (state.current) {
+        const revision = state.current;
+        try {
+          revision.resolve(
+            await this.persistTurnDiff(
+              ownerId,
+              turnId,
+              revision.unifiedDiff,
+            ),
+          );
+        } catch (error) {
+          revision.reject(error);
+        }
+        state.current = state.next;
+        state.next = undefined;
+      }
+    } finally {
+      if (this.pendingWrites.get(key) === state) {
+        this.pendingWrites.delete(key);
+      }
     }
   }
 

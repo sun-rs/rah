@@ -482,3 +482,46 @@ test("assistant timeline messages accept only canonical message phases", () => {
     true,
   );
 });
+
+test("system timeline messages accept only canonical placement scopes", () => {
+  const baseEvent = {
+    id: "evt-system-presentation",
+    seq: 1,
+    ts: "2026-07-10T00:00:00.000Z",
+    sessionId: "session-1",
+    type: "timeline.item.added" as const,
+    source: {
+      provider: "codex" as const,
+      channel: "structured_persisted" as const,
+      authority: "authoritative" as const,
+    },
+  };
+  const valid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: {
+        kind: "system",
+        text: "Conversation interrupted before this tool completed.",
+        placement: "process",
+      },
+    },
+  });
+  assert.equal(valid.some((issue) => issue.severity === "error"), false);
+
+  const invalid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: {
+        kind: "system",
+        text: "Conversation interrupted before this tool completed.",
+        placement: "before_header",
+      },
+    },
+  } as never);
+  assert.equal(
+    invalid.some(
+      (issue) => issue.code === "timeline.system.placement.invalid",
+    ),
+    true,
+  );
+});

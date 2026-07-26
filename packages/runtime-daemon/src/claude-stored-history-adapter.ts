@@ -4,6 +4,7 @@ import type {
   ConversationEvidencePage,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import { stat } from "node:fs/promises";
 import type {
   ProviderAdapter,
   ProviderShutdownAdapter,
@@ -14,13 +15,11 @@ import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types"
 import {
   createClaudeStoredSessionFrozenHistoryPageLoader,
   type ClaudeStoredSessionRecord,
-  discoverClaudeStoredSessions,
-  findClaudeStoredSessionRecord,
   getClaudeStoredSessionHistoryPage,
   resolveClaudeStoredSessionWatchRoots,
   resumeClaudeStoredSession,
-  waitForClaudeStoredSessionRecord,
 } from "./claude-session-files";
+import { ClaudeHistoryPageStore } from "./claude-history-page-store";
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
@@ -38,6 +37,7 @@ export class ClaudeStoredHistoryAdapter
   private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly archiveStore = new ClaudeSessionArchiveStore();
+  private readonly historyPages = new ClaudeHistoryPageStore();
 
   constructor(private readonly services: RuntimeServices) {}
 
@@ -49,21 +49,11 @@ export class ClaudeStoredHistoryAdapter
       preferStoredReplay: true,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
-    let record = findClaudeStoredSessionRecord(request.providerSessionId, request.cwd);
+    const record = this.storedSessionIndex.get(request.providerSessionId);
     if (!record) {
-      record = await waitForClaudeStoredSessionRecord(
-        request.cwd
-          ? {
-              providerSessionId: request.providerSessionId,
-              cwd: request.cwd,
-            }
-          : {
-              providerSessionId: request.providerSessionId,
-            },
+      throw new Error(
+        `Claude session ${request.providerSessionId} is not present in the hydrated history catalog.`,
       );
-    }
-    if (!record) {
-      throw new Error(`Unknown Claude session ${request.providerSessionId}.`);
     }
     try {
       const replayRecord = record;
@@ -89,14 +79,7 @@ export class ClaudeStoredHistoryAdapter
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): ConversationEvidencePage {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return { sessionId, events: [] };
-    }
-    const record = findClaudeStoredSessionRecord(
-      state.session.providerSessionId,
-      state.session.cwd,
-    );
+    const record = this.indexedRecordForRuntimeSession(sessionId);
     if (!record) {
       return { sessionId, events: [] };
     }
@@ -108,15 +91,44 @@ export class ClaudeStoredHistoryAdapter
     });
   }
 
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
+  async getConversationSummaryEvidencePage(
+    sessionId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<ConversationEvidencePage> {
+    const record = this.indexedRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return {
+        sessionId,
+        events: [],
+        detailMode: "summary",
+        approximateBytes: 0,
+      };
+    }
+    return this.historyPages.getSummaryPage({
+      sessionId,
+      record,
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+      limit: Math.max(1, Math.min(options.limit ?? 20, 100)),
+    });
+  }
+
+  async getSessionConversationSourceRevision(
+    sessionId: string,
+  ): Promise<string | undefined> {
+    const record = this.indexedRecordForRuntimeSession(sessionId);
+    if (!record) {
       return undefined;
     }
-    const record = findClaudeStoredSessionRecord(
-      state.session.providerSessionId,
-      state.session.cwd,
-    );
+    try {
+      const source = await stat(record.filePath);
+      return `${Math.trunc(source.mtimeMs)}:${source.size}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  createFrozenHistoryPageLoader(sessionId: string) {
+    const record = this.indexedRecordForRuntimeSession(sessionId);
     if (!record) {
       return undefined;
     }
@@ -127,15 +139,7 @@ export class ClaudeStoredHistoryAdapter
   }
 
   listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
     return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
   }
 
   hydrateStoredSessionsCatalog(records: readonly StoredSessionCatalogRecord[]): void {
@@ -154,9 +158,7 @@ export class ClaudeStoredHistoryAdapter
   }
 
   async archiveStoredSession(session: StoredSessionRef): Promise<"rah_snapshot"> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    const record = this.storedSessionIndex.get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Claude history file for ${session.providerSessionId}.`);
     }
@@ -166,8 +168,15 @@ export class ClaudeStoredHistoryAdapter
   }
 
   async restoreStoredSession(session: StoredSessionRef): Promise<void> {
-    await this.archiveStore.restore(session.providerSessionId);
-    this.refreshStoredSessionIndex();
+    const archived = this.archiveStore.find(session.providerSessionId);
+    const restoredPath = await this.archiveStore.restore(session.providerSessionId);
+    const restoredRef = archived?.snapshot ?? session;
+    const { libraryState: _libraryState, ...ref } = restoredRef;
+    void _libraryState;
+    this.storedSessionIndex.set(session.providerSessionId, {
+      ref,
+      filePath: restoredPath,
+    });
   }
 
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
@@ -175,9 +184,7 @@ export class ClaudeStoredHistoryAdapter
       this.storedSessionIndex.delete(session.providerSessionId);
       return;
     }
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    const record = this.storedSessionIndex.get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Claude history file for ${session.providerSessionId}.`);
     }
@@ -186,13 +193,25 @@ export class ClaudeStoredHistoryAdapter
   }
 
   async shutdown(): Promise<void> {
-    await this.archiveStore.flush();
+    await Promise.all([
+      this.archiveStore.flush(),
+      this.historyPages.shutdown(),
+    ]);
   }
 
-  private refreshStoredSessionIndex(): Map<string, ClaudeStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverClaudeStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
-    );
-    return this.storedSessionIndex;
+  /**
+   * All adapter reads are index-only. Catalog discovery runs in the background
+   * catalog child process; a missing row remains a miss on the daemon event
+   * loop instead of becoming a synchronous ~/.claude traversal.
+   */
+  private indexedRecordForRuntimeSession(
+    sessionId: string,
+  ): ClaudeStoredSessionRecord | undefined {
+    const state = this.services.sessionStore.getSession(sessionId);
+    const providerSessionId = state?.session.providerSessionId;
+    if (!providerSessionId) {
+      return undefined;
+    }
+    return this.storedSessionIndex.get(providerSessionId);
   }
 }

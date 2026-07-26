@@ -37,15 +37,15 @@ test("stores attachment bytes under the daemon home and resolves an opaque id", 
   assert.equal(attachment.mediaType, "image/png");
   assert.equal(attachment.size, 11);
 
-  const resolved = resolveDeviceAttachment(attachment.id);
+  const resolved = await resolveDeviceAttachment(attachment.id);
   assert.equal(readFileSync(resolved.path, "utf8"), "image-bytes");
   assert.equal(path.dirname(path.dirname(resolved.path)), path.join(rahHome, "attachments"));
   assert.equal(resolved.name, "photo.png");
 });
 
 test("rejects missing, malformed, oversized, and tampered attachments", async () => {
-  assert.throws(
-    () => resolveDeviceAttachment("../../outside"),
+  await assert.rejects(
+    resolveDeviceAttachment("../../outside"),
     /Unknown attachment/,
   );
   await assert.rejects(
@@ -62,8 +62,11 @@ test("rejects missing, malformed, oversized, and tampered attachments", async ()
     name: "notes.txt",
     mediaType: "text/plain",
   });
-  const resolved = resolveDeviceAttachment(attachment.id);
+  const resolved = await resolveDeviceAttachment(attachment.id);
   writeFileSync(resolved.path, "changed", "utf8");
   chmodSync(resolved.path, 0o600);
-  assert.throws(() => resolveDeviceAttachment(attachment.id), /Unknown attachment/);
+  await assert.rejects(
+    resolveDeviceAttachment(attachment.id),
+    /Unknown attachment/,
+  );
 });

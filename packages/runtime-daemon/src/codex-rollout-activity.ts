@@ -20,6 +20,10 @@ import {
 } from "./codex-timeline-identity";
 import { parsePersistedUserMessageContent } from "./session-input-attachments";
 import {
+  cacheProviderHistoryImageParts,
+  isProviderHistoryPathAttachmentId,
+} from "./provider-history-attachments";
+import {
   normalizeCouncilMcpToolCall,
   projectCouncilMcpToolCall,
   type NormalizedCouncilMcpToolCall,
@@ -1474,6 +1478,7 @@ function interruptedPendingToolActivities(
           item: {
             kind: "system",
             text: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+            placement: "process",
           },
         },
         "derived",
@@ -1859,25 +1864,28 @@ function translateCodexRolloutLineUnscoped(
       if (rawText === null && nativeImageCount === 0) {
         return [];
       }
-      if (rawText === null) {
-        const identity = createHistoryTimelineIdentity(state, {
-          itemKind: "user_message",
-          ...(typeof payload.id === "string" ? { providerMessageId: payload.id } : {}),
-        });
-        return [
-          persistedActivity(
-            record,
-            {
-              type: "timeline_item",
-              item: { kind: "user_message", text: "", imageCount: nativeImageCount },
-              ...timelineIdentityProps(identity),
-            },
-            "authoritative",
-          ),
-        ];
-      }
-      const persistedContent = parsePersistedUserMessageContent(rawText);
-      const imageCount = Math.max(nativeImageCount, persistedContent.imageCount);
+      const persistedContent = parsePersistedUserMessageContent(rawText ?? "");
+      const nativeAttachments = cacheProviderHistoryImageParts(
+        payload.content,
+        persistedContent.mentionedFiles.map((file) => file.name),
+      );
+      const attachments = [
+        ...new Map(
+          [
+            ...persistedContent.attachments.filter(
+              (attachment) =>
+                nativeAttachments.length === 0 ||
+                !isProviderHistoryPathAttachmentId(attachment.id),
+            ),
+            ...nativeAttachments,
+          ].map((attachment) => [attachment.id, attachment]),
+        ).values(),
+      ];
+      const imageCount = Math.max(
+        nativeImageCount,
+        persistedContent.imageCount,
+        attachments.filter((attachment) => attachment.kind === "image").length,
+      );
       const goalObjective = extractCodexGoalObjective(persistedContent.text);
       if (goalObjective) {
         return translateCodexGoalContextNotification(record, state, goalObjective);
@@ -1899,7 +1907,7 @@ function translateCodexRolloutLineUnscoped(
       });
       rememberTimelineTextIdentity(state, identity);
       return [
-        ...(messageId
+        ...(messageId && text
           ? [
               persistedActivity(
                 record,
@@ -1924,8 +1932,8 @@ function translateCodexRolloutLineUnscoped(
               kind: "user_message",
               text,
               ...(imageCount > 0 ? { imageCount } : {}),
-              ...(persistedContent.attachments.length > 0
-                ? { attachments: persistedContent.attachments }
+              ...(attachments.length > 0
+                ? { attachments }
                 : {}),
             },
             ...timelineIdentityProps(identity),

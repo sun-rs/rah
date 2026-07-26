@@ -266,4 +266,88 @@ describe("PtyHub", () => {
     const replay = replayFrames.find((frame) => frame.type === "pty.replay");
     assert.deepEqual(replay?.chunks, ["snapshot"]);
   });
+
+  test("bounds every live output frame and late-subscriber replay frame", () => {
+    const hub = new PtyHub({
+      maxReplayChunks: 20,
+      maxReplayBytes: 100,
+      maxOutputFrameBytes: 4,
+      maxReplayFrameBytes: 6,
+      maxAppendBytes: 20,
+    });
+    const liveFrames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      liveFrames.push(frame);
+    }, false);
+
+    hub.appendOutput("terminal-1", "abcdefghij");
+
+    const outputFrames = liveFrames.filter((frame) => frame.type === "pty.output");
+    assert.deepEqual(outputFrames.map((frame) => frame.data), ["abcd", "efgh", "ij"]);
+    assert.deepEqual(outputFrames.map((frame) => frame.seq), [0, 1, 2]);
+    assert.equal(
+      outputFrames.every((frame) => Buffer.byteLength(frame.data, "utf8") <= 4),
+      true,
+    );
+
+    const replayFrames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      replayFrames.push(frame);
+    });
+    const replay = replayFrames.find((frame) => frame.type === "pty.replay");
+    assert.deepEqual(replay?.chunks, ["efgh", "ij"]);
+    assert.equal(replay?.baseSeq, 1);
+    assert.equal(replay?.nextSeq, 3);
+    assert.equal(replay?.droppedBeforeSeq, 1);
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(replay), "utf8") < 1_000,
+      "bounded replay should remain a small websocket frame",
+    );
+  });
+
+  test("caps pathological single appends while preserving a valid UTF-8 tail", () => {
+    const hub = new PtyHub({
+      maxReplayBytes: 100,
+      maxOutputFrameBytes: 4,
+      maxReplayFrameBytes: 12,
+      maxAppendBytes: 7,
+    });
+    const frames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      frames.push(frame);
+    }, false);
+
+    hub.appendOutput("terminal-1", `prefix-${"界".repeat(10)}`);
+
+    const output = frames
+      .filter((frame) => frame.type === "pty.output")
+      .map((frame) => frame.data)
+      .join("");
+    assert.equal(output.includes("\uFFFD"), false);
+    assert.ok(Buffer.byteLength(output, "utf8") <= 7);
+    assert.equal(output.endsWith("界界"), true);
+  });
+
+  test("splits replace snapshots without repeatedly clearing the terminal", () => {
+    const hub = new PtyHub({
+      maxReplayBytes: 100,
+      maxOutputFrameBytes: 4,
+      maxReplayFrameBytes: 12,
+      maxAppendBytes: 20,
+    });
+    const frames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      frames.push(frame);
+    }, false);
+
+    hub.appendOutput("terminal-1", "screen-now", { replaceReplay: true });
+
+    const outputFrames = frames.filter((frame) => frame.type === "pty.output");
+    assert.deepEqual(outputFrames.map((frame) => frame.data), ["scre", "en-n", "ow"]);
+    assert.deepEqual(outputFrames.map((frame) => frame.replace === true), [
+      true,
+      false,
+      false,
+    ]);
+  });
 });

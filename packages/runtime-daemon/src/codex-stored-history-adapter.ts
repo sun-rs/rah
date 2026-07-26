@@ -3,14 +3,13 @@ import type {
   ResumeSessionResponse,
   ConversationEvidencePage,
   ConversationTurnDirectoryResponse,
+  RahEvent,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
-import { statSync } from "node:fs";
-import { canFinalizeCodexStoredHistory } from "./codex-history-liveness";
+import { stat } from "node:fs/promises";
+import { CodexHistoryLivenessTracker } from "./codex-history-liveness";
 import {
   createCodexStoredSessionFrozenHistoryPageLoader,
-  discoverCodexStoredSessions,
-  findCodexStoredSessionRecord,
   getCodexStoredSessionHistoryPage,
   resolveCodexStoredSessionWatchRoots,
   resumeCodexStoredSession,
@@ -32,6 +31,7 @@ import { CodexTurnDirectoryStore } from "./codex-turn-directory";
 import { CodexTurnPageCache } from "./codex-turn-page-cache";
 import {
   readCodexConversationItemDetail,
+  readCodexConversationTurnFileDiff,
   readCodexConversationTurnDetail,
 } from "./codex-turn-history";
 import { createCodexAppServerClient } from "./codex-app-server-client";
@@ -44,6 +44,7 @@ import {
   type CodexAppServerTurnsPage,
   reconcileCodexTrailingTurnLiveness,
 } from "./codex-app-server-turns-page";
+import { approximateJsonByteLength } from "./bounded-json-size";
 
 function isUnsupportedExperimentalListError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -70,8 +71,10 @@ export class CodexStoredHistoryAdapter
 
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
+  private readonly providerSessionIdsByRuntimeSession = new Map<string, string>();
   private readonly turnDirectories = new CodexTurnDirectoryStore();
   private readonly turnPages = new CodexTurnPageCache();
+  private readonly historyLiveness = new CodexHistoryLivenessTracker();
   private turnsListSupport: "unknown" | "available" | "unavailable" = "unknown";
   private itemsListSupport: "unknown" | "available" | "unavailable" = "unknown";
   private itemsListProbePromise:
@@ -94,15 +97,12 @@ export class CodexStoredHistoryAdapter
       preferStoredReplay: true,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
-    const record =
-      this.storedSessionIndex.get(request.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
-      findCodexStoredSessionRecord(request.providerSessionId);
+    const record = this.storedSessionIndex.get(request.providerSessionId);
     if (!record) {
       throw new Error(`Unknown Codex session ${request.providerSessionId}.`);
     }
     try {
-      return finalizeStoredReplayResume({
+      const resumed = finalizeStoredReplayResume({
         services: this.services,
         provider: "codex",
         providerSessionId: request.providerSessionId,
@@ -114,6 +114,11 @@ export class CodexStoredHistoryAdapter
               : { services: this.services, record },
           ),
       });
+      this.providerSessionIdsByRuntimeSession.set(
+        resumed.session.session.id,
+        request.providerSessionId,
+      );
+      return resumed;
     } catch (error) {
       preparedResume.rollback();
       throw error;
@@ -131,7 +136,7 @@ export class CodexStoredHistoryAdapter
     return getCodexStoredSessionHistoryPage({
       sessionId,
       record,
-      finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
+      finalizeUnterminatedTools: this.peekCanFinalizeStoredHistory(record),
       ...options,
     });
   }
@@ -145,14 +150,14 @@ export class CodexStoredHistoryAdapter
       return undefined;
     }
     const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
-    const sourceSettled = this.canFinalizeStoredHistory(record);
+    const sourceSettled = await this.resolveCanFinalizeStoredHistory(record);
     const indexedThreshold = Math.max(
       0,
       this.options.indexedSummaryThresholdBytes ?? DEFAULT_INDEXED_SUMMARY_THRESHOLD_BYTES,
     );
     const useIndexedSummary =
       this.turnsListSupport === "unavailable" ||
-      statSync(record.rolloutPath).size >= indexedThreshold;
+      (await stat(record.rolloutPath)).size >= indexedThreshold;
     if (useIndexedSummary) {
       return this.materializeIndexedSummaryPage(sessionId, record, {
         ...(options.cursor ? { cursor: options.cursor } : {}),
@@ -191,11 +196,21 @@ export class CodexStoredHistoryAdapter
           });
         },
       });
-      return materializeCodexAppServerTurnsPage({
-        sessionId,
-        providerSessionId: record.ref.providerSessionId,
-        page,
-      });
+      return await this.appendIndexedTurnFileChanges(
+        record,
+        materializeCodexAppServerTurnsPage({
+          sessionId,
+          providerSessionId: record.ref.providerSessionId,
+          page,
+        }),
+        page.data.flatMap((turn) => {
+          if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+            return [];
+          }
+          const id = (turn as Record<string, unknown>).id;
+          return typeof id === "string" ? [id] : [];
+        }),
+      );
     } catch (error) {
       if (isUnsupportedExperimentalListError(error)) {
         this.turnsListSupport = "unavailable";
@@ -226,11 +241,21 @@ export class CodexStoredHistoryAdapter
     options: { cursor?: string; limit: number; sourceSettled: boolean },
   ): Promise<ConversationEvidencePage> {
     const page = await this.turnDirectories.getSummaryPage(record, options);
-    return materializeCodexAppServerTurnsPage({
-      sessionId,
-      providerSessionId: record.ref.providerSessionId,
-      page,
-    });
+    return await this.appendIndexedTurnFileChanges(
+      record,
+      materializeCodexAppServerTurnsPage({
+        sessionId,
+        providerSessionId: record.ref.providerSessionId,
+        page,
+      }),
+      page.data.flatMap((turn) => {
+        if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+          return [];
+        }
+        const id = (turn as Record<string, unknown>).id;
+        return typeof id === "string" ? [id] : [];
+      }),
+    );
   }
 
   async getSessionConversationItemDetail(
@@ -289,23 +314,123 @@ export class CodexStoredHistoryAdapter
     }
     const nativeItems = await this.listNativeTurnItems(record, options.providerTurnId);
     if (nativeItems !== undefined) {
-      return materializeCodexAppServerTurnItems({
-        sessionId,
-        providerSessionId: record.ref.providerSessionId,
-        providerTurnId: options.providerTurnId,
-        items: nativeItems,
-      });
+      return await this.appendIndexedTurnFileChanges(
+        record,
+        materializeCodexAppServerTurnItems({
+          sessionId,
+          providerSessionId: record.ref.providerSessionId,
+          providerTurnId: options.providerTurnId,
+          items: nativeItems,
+        }),
+        [options.providerTurnId],
+      );
     }
     const range = await this.turnDirectories.getTurnRange(record, options.providerTurnId);
     if (!range) {
       return undefined;
     }
-    return await readCodexConversationTurnDetail({
+    return await this.appendIndexedTurnFileChanges(
+      record,
+      await readCodexConversationTurnDetail({
+        sessionId,
+        turnId: options.providerTurnId,
+        record,
+        range,
+      }),
+      [options.providerTurnId],
+    );
+  }
+
+  async getSessionConversationTurnFileDiff(
+    sessionId: string,
+    options: { providerTurnId: string; path: string },
+  ) {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const range = await this.turnDirectories.getTurnRange(
+      record,
+      options.providerTurnId,
+    );
+    if (!range) {
+      return undefined;
+    }
+    return await readCodexConversationTurnFileDiff({
       sessionId,
       turnId: options.providerTurnId,
+      path: options.path,
       record,
       range,
     });
+  }
+
+  async getSessionConversationSourceRevision(
+    sessionId: string,
+  ): Promise<string | undefined> {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    try {
+      const source = await stat(record.rolloutPath);
+      return `${Math.trunc(source.mtimeMs)}:${source.size}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async appendIndexedTurnFileChanges(
+    record: CodexStoredSessionRecord,
+    page: ConversationEvidencePage,
+    providerTurnIds: readonly string[],
+  ): Promise<ConversationEvidencePage> {
+    const summaries = await this.turnDirectories.getFileChangesByTurnIds(
+      record,
+      providerTurnIds,
+    );
+    if (summaries.size === 0) {
+      return page;
+    }
+    let nextSeq = page.events.reduce(
+      (maximum, event) => Math.max(maximum, event.seq),
+      0,
+    );
+    const events = [...page.events];
+    for (const providerTurnId of providerTurnIds) {
+      const fileChanges = summaries.get(providerTurnId);
+      if (!fileChanges) {
+        continue;
+      }
+      const turnEvents = page.events.filter(
+        (event) => event.turnId === providerTurnId,
+      );
+      const timestamp =
+        [...turnEvents].reverse().find((event) => event.type === "turn.completed")
+          ?.ts ??
+        turnEvents.at(-1)?.ts ??
+        "1970-01-01T00:00:00.000Z";
+      events.push({
+        id: `codex-turn-file-changes:${record.ref.providerSessionId}:${providerTurnId}`,
+        seq: ++nextSeq,
+        ts: timestamp,
+        sessionId: page.sessionId,
+        turnId: providerTurnId,
+        type: "turn.file_changes.updated",
+        source: {
+          provider: "codex",
+          channel: "structured_persisted",
+          authority: "authoritative",
+        },
+        payload: { fileChanges },
+      } satisfies RahEvent);
+    }
+    const response: ConversationEvidencePage = {
+      ...page,
+      events,
+    };
+    response.approximateBytes = approximateJsonByteLength(response);
+    return response;
   }
 
   createFrozenHistoryPageLoader(sessionId: string) {
@@ -316,7 +441,7 @@ export class CodexStoredHistoryAdapter
     return createCodexStoredSessionFrozenHistoryPageLoader({
       sessionId,
       record,
-      finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
+      finalizeUnterminatedTools: this.peekCanFinalizeStoredHistory(record),
     });
   }
 
@@ -335,15 +460,7 @@ export class CodexStoredHistoryAdapter
   }
 
   listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
     return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
   }
 
   hydrateStoredSessionsCatalog(records: readonly StoredSessionCatalogRecord[]): void {
@@ -366,9 +483,7 @@ export class CodexStoredHistoryAdapter
   }
 
   async archiveStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    const record = this.storedSessionIndex.get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
     }
@@ -389,7 +504,7 @@ export class CodexStoredHistoryAdapter
       throw error;
     }
     this.turnDirectories.clear(session.providerSessionId);
-    this.turnPages.clear(session.providerSessionId);
+    await this.turnPages.clear(session.providerSessionId);
     this.storedSessionIndex.set(session.providerSessionId, {
       ...record,
       archived: true,
@@ -405,9 +520,7 @@ export class CodexStoredHistoryAdapter
   }
 
   async restoreStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    const record = this.storedSessionIndex.get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
     }
@@ -446,19 +559,24 @@ export class CodexStoredHistoryAdapter
   }
 
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
+    const record = this.storedSessionIndex.get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
     }
     await movePathToTrash(record.rolloutPath);
     this.turnDirectories.clear(session.providerSessionId);
-    this.turnPages.clear(session.providerSessionId);
+    await this.turnPages.clear(session.providerSessionId);
     this.storedSessionIndex.delete(session.providerSessionId);
+    for (const [runtimeSessionId, providerSessionId] of this.providerSessionIdsByRuntimeSession) {
+      if (providerSessionId === session.providerSessionId) {
+        this.providerSessionIdsByRuntimeSession.delete(runtimeSessionId);
+      }
+    }
   }
 
   async shutdown(): Promise<void> {
+    this.providerSessionIdsByRuntimeSession.clear();
+    this.historyLiveness.shutdown();
     await this.resetPagingClient();
     await this.turnDirectories.shutdown();
   }
@@ -608,21 +726,35 @@ export class CodexStoredHistoryAdapter
 
   private findRecordForRuntimeSession(sessionId: string): CodexStoredSessionRecord | undefined {
     const state = this.services.sessionStore.getSession(sessionId);
-    const providerSessionId = state?.session.providerSessionId;
+    const providerSessionId =
+      state?.session.providerSessionId ??
+      this.providerSessionIdsByRuntimeSession.get(sessionId);
     if (!providerSessionId) {
       return undefined;
     }
-    return (
-      this.storedSessionIndex.get(providerSessionId) ??
-      this.refreshStoredSessionIndex().get(providerSessionId) ??
-      findCodexStoredSessionRecord(providerSessionId)
-    );
+    this.providerSessionIdsByRuntimeSession.set(sessionId, providerSessionId);
+    // Conversation reads are latency-sensitive daemon request paths. Provider
+    // discovery can traverse years of rollout files, so cache misses must stay
+    // misses here. RuntimeEngine owns asynchronous catalog reconciliation and
+    // hydrates this index before retrying explicit lifecycle operations.
+    return this.storedSessionIndex.get(providerSessionId);
   }
 
-  private canFinalizeStoredHistory(record: CodexStoredSessionRecord): boolean {
-    return canFinalizeCodexStoredHistory({
+  private peekCanFinalizeStoredHistory(record: CodexStoredSessionRecord): boolean {
+    return this.historyLiveness.peekOrRefresh({
       rolloutPath: record.rolloutPath,
       hasRahManagedWriter: this.hasRahManagedCodexWriter(record.ref.providerSessionId),
+    });
+  }
+
+  private resolveCanFinalizeStoredHistory(
+    record: CodexStoredSessionRecord,
+  ): Promise<boolean> {
+    return this.historyLiveness.resolve({
+      rolloutPath: record.rolloutPath,
+      hasRahManagedWriter: this.hasRahManagedCodexWriter(
+        record.ref.providerSessionId,
+      ),
     });
   }
 
@@ -639,12 +771,5 @@ export class CodexStoredHistoryAdapter
       managed.session.capabilities.queuedInput ||
       managed.session.capabilities.actions.stop
     );
-  }
-
-  private refreshStoredSessionIndex(): Map<string, CodexStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverCodexStoredSessions().map((record) => [record.ref.providerSessionId, record]),
-    );
-    return this.storedSessionIndex;
   }
 }

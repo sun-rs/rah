@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { PanelRight, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
@@ -15,6 +15,9 @@ export function Sheet(props: {
   headerRight?: ReactNode;
   headerLayout?: "spread" | "inline";
   closePlacement?: "start" | "end";
+  closeIcon?: ReactNode;
+  closeLabel?: string;
+  initialFocus?: "close" | "content";
   hideHeader?: boolean;
   modal?: boolean;
   floatingClose?: "panel" | "x";
@@ -24,15 +27,17 @@ export function Sheet(props: {
   fullScreen?: boolean;
 }) {
   const closePlacement = props.closePlacement ?? "end";
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const closeLabel = props.closeLabel ?? "Close";
   const closeButton = (
     <Dialog.Close asChild>
       <button
         type="button"
         className={HEADER_EDGE_TOGGLE_BUTTON_CLASS}
-        aria-label="Close"
-        title="Close"
+        aria-label={closeLabel}
+        title={closeLabel}
       >
-        <X size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+        {props.closeIcon ?? <X size={HEADER_EDGE_TOGGLE_ICON_SIZE} />}
       </button>
     </Dialog.Close>
   );
@@ -42,6 +47,16 @@ export function Sheet(props: {
       <Dialog.Portal>
         <Dialog.Overlay className={`fixed inset-0 bg-black/40 z-50 ${props.viewportClassName ?? ""}`} />
         <Dialog.Content
+          ref={contentRef}
+          tabIndex={props.initialFocus === "content" ? -1 : undefined}
+          onOpenAutoFocus={
+            props.initialFocus === "content"
+              ? (event) => {
+                  event.preventDefault();
+                  contentRef.current?.focus({ preventScroll: true });
+                }
+              : undefined
+          }
           className={`fixed z-50 shadow-xl outline-none pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
             props.fullScreen
               ? `inset-0 h-[100dvh] w-screen max-w-none border-0 ${

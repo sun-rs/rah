@@ -1,4 +1,4 @@
-import React, { useState, type ReactNode } from "react";
+import React, { memo, useMemo, useState, type ReactNode } from "react";
 import type {
   ConversationActivityBatchSummary,
   ConversationActivityKind,
@@ -119,10 +119,14 @@ function activityBatchLabel(
   }
 }
 
-export function AssistantProcessGroup(props: {
+export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: {
   group: AssistantProcessGroupModel;
   expanded: boolean;
-  onExpandedChange: (expanded: boolean, anchor: HTMLElement) => void;
+  onExpandedChange: (
+    group: AssistantProcessGroupModel,
+    expanded: boolean,
+    anchor: HTMLElement,
+  ) => void;
   detailLoading?: boolean;
   onLoadConversationItemDetail?: (
     kind: ConversationItemDetailKind,
@@ -131,9 +135,13 @@ export function AssistantProcessGroup(props: {
   onOpenLocalFile?: (path: string) => void;
   renderEntry: (entry: FeedEntry) => ReactNode;
 }) {
-  const detailRows = buildProcessDetailRows(props.group.entries, {
-    includeTransientStatus: !props.group.completed,
-  });
+  const detailRows = useMemo(
+    () =>
+      buildProcessDetailRows(props.group.entries, {
+        includeTransientStatus: !props.group.completed,
+      }),
+    [props.group.completed, props.group.entries],
+  );
   const duration = formatAssistantProcessDuration(props.group.durationMs);
   const label =
     props.group.turnStatus === "failed"
@@ -151,10 +159,16 @@ export function AssistantProcessGroup(props: {
           : props.group.active
             ? "Working"
             : "Work interrupted";
-  const canCollapse =
+  const processSettled =
     props.group.completed ||
     props.group.turnStatus === "interrupted" ||
     props.group.turnStatus === "failed";
+  const hasProcessDetails =
+    detailRows.length > 0 ||
+    props.group.detailsAvailable === true ||
+    props.detailLoading === true;
+  const canCollapse = processSettled && hasProcessDetails;
+  const showDetails = props.expanded && hasProcessDetails;
 
   return (
     <section className="min-w-0" data-testid="assistant-process-group">
@@ -163,12 +177,16 @@ export function AssistantProcessGroup(props: {
         className={`group flex min-h-8 w-full items-center gap-2 py-1 text-left text-xs font-medium text-[var(--app-hint)] outline-none transition-colors focus-visible:text-[var(--app-fg)] ${
           canCollapse ? "hover:text-[var(--app-fg)]" : "cursor-default"
         }`}
-        aria-expanded={props.expanded}
+        aria-expanded={showDetails}
         disabled={!canCollapse}
         data-testid="assistant-process-group-toggle"
         onClick={(event) => {
           if (canCollapse) {
-            props.onExpandedChange(!props.expanded, event.currentTarget);
+            props.onExpandedChange(
+              props.group,
+              !showDetails,
+              event.currentTarget,
+            );
           }
         }}
       >
@@ -179,11 +197,20 @@ export function AssistantProcessGroup(props: {
         ) : null}
         <span className="min-w-0 truncate group-focus-visible:underline group-focus-visible:underline-offset-4">{label}</span>
         {canCollapse ? (
-          props.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+          showDetails ? <ChevronDown size={14} /> : <ChevronRight size={14} />
         ) : null}
       </button>
-      {props.expanded ? (
-        <div className="mt-3 space-y-2.5 border-b border-[var(--app-border)] pb-3">
+      {showDetails ? (
+        <div
+          {...(props.group.hasFinalAnswer
+            ? { "data-testid": "assistant-process-final-divider" }
+            : {})}
+          className={`mt-3 space-y-2.5 pb-3 ${
+            props.group.hasFinalAnswer
+              ? "border-b border-[var(--app-border)]"
+              : ""
+          }`}
+        >
           {props.detailLoading ? (
             <div className="flex min-h-8 items-center gap-2 text-xs text-[var(--app-hint)]">
               <LoaderCircle size={13} className="animate-spin" />
@@ -216,7 +243,13 @@ export function AssistantProcessGroup(props: {
             ),
           )}
         </div>
+      ) : props.group.hasFinalAnswer ? (
+        <div
+          className="border-b border-[var(--app-border)]"
+          data-testid="assistant-process-final-divider"
+          aria-hidden="true"
+        />
       ) : null}
     </section>
   );
-}
+});

@@ -25,6 +25,7 @@ import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 export type SessionsResponse = ListSessionsResponse;
 
 const PROVISIONAL_USER_ECHO_WINDOW_MS = 5_000;
+const MAX_LIVE_PROCESS_OUTPUT_CHARS = 256 * 1024;
 
 export type FeedEntry =
   | {
@@ -1144,6 +1145,124 @@ function withMergedToolDetail(toolCall: ToolCall, detail: ToolCallDetail | undef
   };
 }
 
+function processOutputDetail(
+  detail: ToolCallDetail | undefined,
+  label: string,
+  text: string,
+  mode: "append" | "replace",
+): ToolCallDetail {
+  const artifacts = [...(detail?.artifacts ?? [])];
+  const index = artifacts.findIndex(
+    (artifact) => artifact.kind === "text" && artifact.label === label,
+  );
+  const current =
+    index >= 0 && artifacts[index]?.kind === "text"
+      ? artifacts[index]
+      : undefined;
+  const nextText =
+    mode === "replace"
+      ? text
+      : `${current?.text ?? ""}${text}`.slice(-MAX_LIVE_PROCESS_OUTPUT_CHARS);
+  const artifact: ToolCallArtifact = { kind: "text", label, text: nextText };
+  if (index >= 0) {
+    artifacts[index] = artifact;
+  } else {
+    artifacts.push(artifact);
+  }
+  return { artifacts };
+}
+
+function applyProcessOutputEvent(
+  feed: FeedEntry[],
+  event: Extract<
+    RahEvent,
+    { type: "process.output.appended" } | { type: "process.output.snapshot" }
+  >,
+): FeedEntry[] {
+  const output = event.payload.output;
+  const label = output.stream === "combined" ? "stdout" : output.stream;
+  const text =
+    event.type === "process.output.appended"
+      ? event.payload.output.data
+      : event.payload.output.tail;
+  const mode = event.type === "process.output.appended" ? "append" : "replace";
+  let matched = false;
+  const next = feed.map((entry): FeedEntry => {
+    if (entry.kind === "tool_call" && entry.toolCall.id === output.itemId) {
+      matched = true;
+      return {
+        ...entry,
+        toolCall: {
+          ...entry.toolCall,
+          detail: processOutputDetail(entry.toolCall.detail, label, text, mode),
+          ...(event.type === "process.output.snapshot"
+            ? {
+                ...(event.payload.output.detailAvailable !== undefined
+                  ? { detailAvailable: event.payload.output.detailAvailable }
+                  : {}),
+                detailSizeBytes: event.payload.output.totalBytes,
+              }
+            : {}),
+        },
+        ts: event.ts,
+      };
+    }
+    if (
+      entry.kind === "observation" &&
+      entry.observation.subject?.providerCallId === output.itemId
+    ) {
+      matched = true;
+      return {
+        ...entry,
+        observation: {
+          ...entry.observation,
+          detail: processOutputDetail(entry.observation.detail, label, text, mode),
+          ...(event.type === "process.output.snapshot"
+            ? {
+                ...(event.payload.output.detailAvailable !== undefined
+                  ? { detailAvailable: event.payload.output.detailAvailable }
+                  : {}),
+                detailSizeBytes: event.payload.output.totalBytes,
+              }
+            : {}),
+        },
+        ts: event.ts,
+      };
+    }
+    return entry;
+  });
+  if (matched) {
+    return next;
+  }
+  return [
+    ...feed,
+    createToolCallEntry(
+      {
+        key: `tool:${output.itemId}`,
+        kind: "tool_call",
+        toolCall: {
+          id: output.itemId,
+          family: "shell",
+          providerToolName: "process_output",
+          title: "Command output",
+          detail: processOutputDetail(undefined, label, text, "replace"),
+          ...(event.type === "process.output.snapshot"
+            ? {
+                ...(event.payload.output.detailAvailable !== undefined
+                  ? { detailAvailable: event.payload.output.detailAvailable }
+                  : {}),
+                detailSizeBytes: event.payload.output.totalBytes,
+              }
+            : {}),
+        },
+        status: event.type === "process.output.snapshot" ? "completed" : "running",
+        ts: event.ts,
+      },
+      event.turnId,
+    ),
+  ];
+}
+
 function applyToolCallEvent(
   feed: FeedEntry[],
   event: Extract<
@@ -2205,6 +2324,10 @@ export function applyEventToProjection(
     case "observation.failed":
       nextFeed = applyObservationEvent(nextFeed, event);
       break;
+    case "process.output.appended":
+    case "process.output.snapshot":
+      nextFeed = applyProcessOutputEvent(nextFeed, event);
+      break;
     case "permission.requested":
     case "permission.resolved":
       nextFeed = applyPermissionEvent(nextFeed, event, resolvedPermissionRequestIds);
@@ -2250,7 +2373,10 @@ export function applyEventToProjection(
   return {
     summary: nextSummary,
     feed: nextFeed,
-    events: [...current.events.slice(-199), event],
+    events:
+      event.type === "process.output.appended"
+        ? current.events
+        : [...current.events.slice(-199), event],
     lastSeq: event.seq,
     ...(nextRuntimeStatus !== undefined ? { currentRuntimeStatus: nextRuntimeStatus } : {}),
     ...(current.conversation !== undefined

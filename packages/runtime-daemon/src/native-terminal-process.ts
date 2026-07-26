@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runBackgroundCommand } from "./background-command";
+import {
+  applyBackgroundProcessPriority,
+  backgroundProcessLaunch,
+} from "./background-process-priority";
 
 export interface NativeTerminalStartOptions {
   cwd: string;
@@ -20,7 +21,8 @@ export class NativeTerminalProcess {
 
   constructor(options: NativeTerminalStartOptions) {
     this.closeTimeoutMs = options.closeTimeoutMs ?? 2_000;
-    this.child = spawn(options.command, options.args ?? [], {
+    const launch = backgroundProcessLaunch(options.command, options.args ?? []);
+    this.child = spawn(launch.command, launch.args, {
       cwd: options.cwd,
       env: {
         ...process.env,
@@ -29,6 +31,11 @@ export class NativeTerminalProcess {
       stdio: "inherit",
       shell: false,
     });
+    applyBackgroundProcessPriority(
+      this.child.pid,
+      "native terminal",
+      launch.priority,
+    );
 
     this.child.on("exit", (exitCode, signal) => {
       options.onExit({
@@ -44,8 +51,13 @@ export class NativeTerminalProcess {
       return [];
     }
     try {
-      const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid="], {
-        maxBuffer: 1024 * 1024,
+      const { stdout } = await runBackgroundCommand({
+        command: "ps",
+        args: ["-axo", "pid=,ppid="],
+        label: "native terminal process tree",
+        timeoutMs: 1_000,
+        maxStdoutBytes: 1024 * 1024,
+        maxStderrBytes: 64 * 1024,
       });
       const childrenByParent = new Map<number, number[]>();
       for (const line of stdout.split("\n")) {

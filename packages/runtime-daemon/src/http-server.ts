@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -8,6 +7,7 @@ import { RuntimeEngine } from "./runtime-engine";
 import { createPostRoutes, handleHttpRequest } from "./http-server-routes";
 import { attachWebSocketHandlers } from "./http-server-websocket";
 import { DeviceAuthManager } from "./device-auth";
+import { runBackgroundCommand } from "./background-command";
 
 export interface RahDaemon {
   host: string;
@@ -27,36 +27,44 @@ function readRootPackageVersion(rootDir: string): string | undefined {
   }
 }
 
-function readSourceRevision(rootDir: string): string | undefined {
+async function readSourceState(
+  rootDir: string,
+): Promise<{ sourceRevision?: string; sourceDirty?: boolean }> {
   try {
-    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+    const result = await runBackgroundCommand({
+      command: "git",
+      args: ["status", "--porcelain=v2", "--branch"],
       cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-function readSourceDirty(rootDir: string): boolean | undefined {
-  try {
-    const output = execFileSync("git", ["status", "--porcelain"], {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      label: "RAH source identity",
+      timeoutMs: 3_000,
+      maxStdoutBytes: 2 * 1024 * 1024,
+      maxStderrBytes: 128 * 1024,
     });
-    return output.trim().length > 0;
+    const lines = result.stdout.split(/\r?\n/);
+    const oid = lines
+      .find((line) => line.startsWith("# branch.oid "))
+      ?.slice("# branch.oid ".length)
+      .trim();
+    const sourceRevision =
+      oid && oid !== "(initial)" ? oid.slice(0, 7) : undefined;
+    const sourceDirty = lines.some(
+      (line) => line.length > 0 && !line.startsWith("# "),
+    );
+    return {
+      ...(sourceRevision ? { sourceRevision } : {}),
+      sourceDirty,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
-function createRuntimeIdentity(port: number): RuntimeIdentityResponse {
+async function createRuntimeIdentity(
+  port: number,
+): Promise<RuntimeIdentityResponse> {
   const rootDir = process.cwd();
   const version = readRootPackageVersion(rootDir);
-  const sourceRevision = readSourceRevision(rootDir);
-  const sourceDirty = readSourceDirty(rootDir);
+  const { sourceRevision, sourceDirty } = await readSourceState(rootDir);
   return {
     name: "rah",
     runtimeId: randomUUID(),
@@ -96,7 +104,7 @@ export async function startRahDaemon(options?: {
   });
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
-  runtimeIdentity = createRuntimeIdentity(actualPort);
+  runtimeIdentity = await createRuntimeIdentity(actualPort);
 
   return {
     host,
