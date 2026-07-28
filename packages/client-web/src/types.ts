@@ -131,6 +131,7 @@ export interface ConversationSyncState {
   pendingDeltas: ConversationProjectionDelta[];
   needsRefresh: boolean;
   approximateBytes: number | null;
+  sourceRevision: string | null;
   loadedAt: string | null;
   lastError: string | null;
 }
@@ -146,6 +147,7 @@ export function initialConversationSyncState(): ConversationSyncState {
     pendingDeltas: [],
     needsRefresh: false,
     approximateBytes: null,
+    sourceRevision: null,
     loadedAt: null,
     lastError: null,
   };

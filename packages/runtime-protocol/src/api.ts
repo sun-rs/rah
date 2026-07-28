@@ -637,6 +637,8 @@ export type ConversationEvidenceDetailMode = "full" | "summary" | "chat";
 export interface ConversationEvidencePage {
   sessionId: string;
   events: RahEvent[];
+  /** Provider source revision represented by this evidence page. */
+  sourceRevision?: string;
   /**
    * Provider-turn keyed detail availability carried alongside lightweight
    * evidence. This avoids hydrating a turn merely to discover that its Worked

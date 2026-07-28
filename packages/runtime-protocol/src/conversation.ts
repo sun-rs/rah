@@ -176,6 +176,13 @@ export interface ConversationProjection {
 export interface ConversationTurnsPageResponse extends ConversationProjection {
   nextCursor?: string;
   approximateBytes?: number;
+  /**
+   * Exact provider-owned source revision represented by this page.
+   * Read-only clients use it as their freshness baseline so the first
+   * lightweight revision probe does not cancel and duplicate the initial
+   * history request.
+   */
+  sourceRevision?: string;
   /** Monotonic revision for live deltas; history cache expansion does not advance it. */
   liveRevision?: number;
 }

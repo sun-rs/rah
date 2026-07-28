@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import {
   appendFileSync,
+  closeSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  writeSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -244,6 +248,7 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
       limit: 2,
       sourceSettled: true,
     });
+    assert.match(summaryPage.sourceRevision ?? "", /^\d+:\d+$/);
     const summaryEvidence = materializeCodexAppServerTurnsPage({
       sessionId: "rah-session-1",
       providerSessionId: record.ref.providerSessionId,
@@ -253,6 +258,27 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
       "turn-2": false,
       "turn-1": true,
     });
+    assert.deepEqual(
+      (
+        summaryPage.data.find(
+          (turn) => (turn as { id?: string }).id === "turn-1",
+        ) as {
+          fileChanges?: {
+            files: Array<{ path: string; additions: number; deletions: number }>;
+            totalAdditions: number;
+            totalDeletions: number;
+          };
+        }
+      ).fileChanges,
+      {
+        files: [
+          { path: "docs/report.md", additions: 2, deletions: 0 },
+          { path: "src/main.ts", additions: 2, deletions: 1 },
+        ],
+        totalAdditions: 4,
+        totalDeletions: 1,
+      },
+    );
     const summaryUser = summaryEvidence.events.find(
       (event) =>
         event.type === "timeline.item.added" &&
@@ -505,6 +531,26 @@ test("Codex turn directory bounds navigation previews independently from turn de
     };
     assert.equal(turn.items[0]?.content?.[0]?.text, `user-${"u".repeat(300)}`);
     assert.equal(turn.items[1]?.text, `assistant-${"a".repeat(500)}`);
+    const summaryCacheName = readdirSync(cacheDir).find((name) =>
+      name.endsWith(".summaries.json"),
+    );
+    assert.ok(summaryCacheName);
+    const summaryCachePath = path.join(cacheDir, summaryCacheName);
+    const summaryCache = readFileSync(summaryCachePath, "utf8");
+    assert.equal(summaryCache.includes(`user-${"u".repeat(300)}`), true);
+    assert.equal(summaryCache.includes(`assistant-${"a".repeat(500)}`), true);
+    const summaryCacheMtime = statSync(summaryCachePath).mtimeMs;
+    const repeated = await store.getSummaryPage(recordFor(rolloutPath), {
+      limit: 1,
+      sourceSettled: false,
+    });
+    assert.equal(
+      (repeated.data[0] as {
+        items: Array<{ content?: Array<{ text?: string }> }>;
+      }).items[0]?.content?.[0]?.text,
+      `user-${"u".repeat(300)}`,
+    );
+    assert.equal(statSync(summaryCachePath).mtimeMs, summaryCacheMtime);
   } finally {
     await store.shutdown();
     if (previousRahHome === undefined) {
@@ -563,6 +609,100 @@ test("Codex indexed summary pages keep official cursor boundaries stable across 
       ["turn-1"],
     );
     assert.equal(older.nextCursor, null);
+  } finally {
+    await store.shutdown();
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Codex active turn summaries resume from the cached byte boundary", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-turn-summary-incremental-"));
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_HOME = path.join(tempDir, "rah-home");
+  const rolloutPath = path.join(tempDir, "rollout.jsonl");
+  const userLine = userMessage(
+    "2026-07-10T00:00:00.001Z",
+    "Original active-turn question",
+  );
+  const initialContent = `${[
+    taskStarted("2026-07-10T00:00:00.000Z", "turn-active"),
+    userLine,
+    agentMessage(
+      "2026-07-10T00:00:00.500Z",
+      "Initial active answer",
+      "commentary",
+    ),
+  ].join("\n")}\n`;
+  writeFileSync(rolloutPath, initialContent);
+  const store = new CodexTurnDirectoryStore();
+  try {
+    const record = recordFor(rolloutPath, "codex-active-summary");
+    const first = await store.getSummaryPage(record, {
+      limit: 1,
+      sourceSettled: false,
+    });
+    const firstTurn = first.data[0] as {
+      items: Array<{ content?: Array<{ text?: string }>; text?: string }>;
+    };
+    assert.equal(
+      firstTurn.items[0]?.content?.[0]?.text,
+      "Original active-turn question",
+    );
+    assert.equal(firstTurn.items[1]?.text, "Initial active answer");
+
+    // The directory owns the immutable prefix. Corrupting that prefix after
+    // it has been summarized proves a growing turn is resumed from the cached
+    // byte boundary instead of being rescanned from its beginning.
+    const userByteOffset = Buffer.byteLength(
+      initialContent.slice(0, initialContent.indexOf(userLine)),
+      "utf8",
+    );
+    const userByteLength = Buffer.byteLength(userLine, "utf8");
+    const descriptor = openSync(rolloutPath, "r+");
+    try {
+      writeSync(
+        descriptor,
+        Buffer.alloc(userByteLength, 0x20),
+        0,
+        userByteLength,
+        userByteOffset,
+      );
+    } finally {
+      closeSync(descriptor);
+    }
+    appendFileSync(
+      rolloutPath,
+      `${[
+        agentMessage(
+          "2026-07-10T00:00:01.000Z",
+          "Final active answer",
+          "final_answer",
+        ),
+        line("2026-07-10T00:00:01.001Z", "event_msg", {
+          type: "task_complete",
+          turn_id: "turn-active",
+          last_agent_message: "Final active answer",
+        }),
+      ].join("\n")}\n`,
+    );
+
+    const updated = await store.getSummaryPage(record, {
+      limit: 1,
+      sourceSettled: false,
+    });
+    const updatedTurn = updated.data[0] as {
+      items: Array<{ content?: Array<{ text?: string }>; text?: string }>;
+    };
+    assert.equal(
+      updatedTurn.items[0]?.content?.[0]?.text,
+      "Original active-turn question",
+    );
+    assert.equal(updatedTurn.items[1]?.text, "Final active answer");
   } finally {
     await store.shutdown();
     if (previousRahHome === undefined) {

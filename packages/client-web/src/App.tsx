@@ -1210,6 +1210,9 @@ export function App() {
               return;
             }
             followedSessionIds.add(sessionId);
+            if (projection.conversation?.phase === "loading") {
+              return;
+            }
             if (Date.now() < sourceRevisionProbeUnavailableUntilRef.current) {
               await refreshLegacySource(sessionId);
               return;
@@ -1227,7 +1230,9 @@ export function App() {
                 return;
               }
               const previous =
-                visibleConversationSourceRevisionRef.current.get(sessionId);
+                visibleConversationSourceRevisionRef.current.get(sessionId) ??
+                projection.conversation?.sourceRevision ??
+                undefined;
               visibleConversationSourceRevisionRef.current.set(
                 sessionId,
                 response.sourceRevision,

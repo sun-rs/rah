@@ -186,7 +186,11 @@ function buildGlobalRecentSessions(args: {
     if (args.hiddenSessionKeys.has(key)) {
       return;
     }
-    if (session.source === "previous_running" && !args.availableProviderSessionKeys.has(key)) {
+    // Remembered rows are presentation cache, never provider identity
+    // authority. A complete provider catalog may remove a task (or newly
+    // classify a rollout as non-task), so every remembered candidate must
+    // still be backed by either the current catalog or a real live runtime.
+    if (!args.availableProviderSessionKeys.has(key)) {
       return;
     }
     const existing = recentByKey.get(key);
@@ -244,10 +248,23 @@ export function buildSessionsResponse(args: {
   storedSessionsMode?: StoredSessionsResponseMode;
   excludedProviderSessionKeys?: ReadonlySet<string>;
 }): ListSessionsResponse {
+  const discoveredProviderSessionKeys = new Set(
+    args.discoveredStoredSessions.map(sessionProviderKey),
+  );
   const userFacingLiveStates = args.liveStates.filter(
     (state) =>
       !isInternalNativeTuiProbeSession(state.session) &&
       state.session.origin?.kind !== "council" &&
+      !(
+        state.session.runtime?.kind === "stored_history" &&
+        state.session.providerSessionId &&
+        !discoveredProviderSessionKeys.has(
+          sessionProviderKey({
+            provider: state.session.provider,
+            providerSessionId: state.session.providerSessionId,
+          }),
+        )
+      ) &&
       (!state.session.providerSessionId ||
         !args.excludedProviderSessionKeys?.has(sessionProviderKey({
           provider: state.session.provider,
@@ -314,10 +331,7 @@ export function buildSessionsResponse(args: {
     if (hiddenSessionKeys.has(key)) {
       continue;
     }
-    if (
-      remembered.source === "previous_running" &&
-      !availableProviderSessionKeys.has(key)
-    ) {
+    if (!availableProviderSessionKeys.has(key)) {
       continue;
     }
     storedSessions.set(key, remembered);

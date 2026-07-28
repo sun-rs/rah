@@ -3,6 +3,7 @@ import type {
   ResumeSessionResponse,
   ConversationEvidencePage,
   ConversationTurnDirectoryResponse,
+  ConversationTurnFileChangesProjection,
   RahEvent,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -150,7 +151,12 @@ export class CodexStoredHistoryAdapter
       return undefined;
     }
     const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
-    const sourceSettled = await this.resolveCanFinalizeStoredHistory(record);
+    // Process inspection is advisory metadata, not a prerequisite for showing
+    // history. Use the latest cached answer and refresh it off the request
+    // path; waiting for lsof/ps here adds visible latency to every session
+    // selection while changing only whether an unterminated trailing turn is
+    // labelled in-progress or interrupted.
+    const sourceSettled = this.peekCanFinalizeStoredHistory(record);
     const indexedThreshold = Math.max(
       0,
       this.options.indexedSummaryThresholdBytes ?? DEFAULT_INDEXED_SUMMARY_THRESHOLD_BYTES,
@@ -241,20 +247,14 @@ export class CodexStoredHistoryAdapter
     options: { cursor?: string; limit: number; sourceSettled: boolean },
   ): Promise<ConversationEvidencePage> {
     const page = await this.turnDirectories.getSummaryPage(record, options);
-    return await this.appendIndexedTurnFileChanges(
+    return this.appendProvidedTurnFileChanges(
       record,
       materializeCodexAppServerTurnsPage({
         sessionId,
         providerSessionId: record.ref.providerSessionId,
         page,
       }),
-      page.data.flatMap((turn) => {
-        if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
-          return [];
-        }
-        const id = (turn as Record<string, unknown>).id;
-        return typeof id === "string" ? [id] : [];
-      }),
+      page.data,
     );
   }
 
@@ -389,6 +389,46 @@ export class CodexStoredHistoryAdapter
       record,
       providerTurnIds,
     );
+    return this.appendTurnFileChanges(record, page, providerTurnIds, summaries);
+  }
+
+  private appendProvidedTurnFileChanges(
+    record: CodexStoredSessionRecord,
+    page: ConversationEvidencePage,
+    turns: readonly unknown[],
+  ): ConversationEvidencePage {
+    const providerTurnIds: string[] = [];
+    const summaries =
+      new Map<string, ConversationTurnFileChangesProjection>();
+    for (const turn of turns) {
+      if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+        continue;
+      }
+      const turnRecord = turn as Record<string, unknown>;
+      const id = turnRecord.id;
+      if (typeof id !== "string") {
+        continue;
+      }
+      providerTurnIds.push(id);
+      if (
+        turnRecord.fileChanges &&
+        typeof turnRecord.fileChanges === "object"
+      ) {
+        summaries.set(
+          id,
+          turnRecord.fileChanges as ConversationTurnFileChangesProjection,
+        );
+      }
+    }
+    return this.appendTurnFileChanges(record, page, providerTurnIds, summaries);
+  }
+
+  private appendTurnFileChanges(
+    record: CodexStoredSessionRecord,
+    page: ConversationEvidencePage,
+    providerTurnIds: readonly string[],
+    summaries: ReadonlyMap<string, ConversationTurnFileChangesProjection>,
+  ): ConversationEvidencePage {
     if (summaries.size === 0) {
       return page;
     }

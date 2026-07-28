@@ -142,6 +142,7 @@ import {
 import { StoredSessionMonitor } from "./stored-session-monitor";
 import { StoredSessionCatalog } from "./stored-session-catalog";
 import { reconcileStoredSessionCatalogRecords } from "./stored-session-catalog-reconciliation";
+import { CODEX_STORED_SESSION_CACHE_VERSION } from "./codex-stored-sessions";
 import { StoredSessionLibraryStore } from "./stored-session-library";
 import type {
   StoredSessionCatalogProvider,
@@ -577,7 +578,9 @@ export class RuntimeEngine {
       const cachedRecords = storedSnapshot.length > 0
         ? storedSnapshot
         : [
-            ...loadStoredSessionCatalogCache("codex"),
+            ...loadStoredSessionCatalogCache("codex", {
+              entryVersion: CODEX_STORED_SESSION_CACHE_VERSION,
+            }),
             ...loadStoredSessionCatalogCache("claude"),
           ];
       this.replaceStoredSessionCatalogRecords(cachedRecords);
@@ -2564,6 +2567,9 @@ export class RuntimeEngine {
     const response: ConversationTurnsPageResponse = {
       ...responseProjection,
       liveRevision,
+      ...(historyPage.sourceRevision
+        ? { sourceRevision: historyPage.sourceRevision }
+        : {}),
       // A native page owns its cursor boundary. A live turn may be appended on
       // top of that page, so trimming it again could create a pagination gap.
       turns: summarizeConversationTurnsForTransport(pageTurns),

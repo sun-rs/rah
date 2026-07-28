@@ -13,6 +13,7 @@ export interface CodexAppServerTurnsPage {
   data: unknown[];
   nextCursor?: string | null;
   backwardsCursor?: string | null;
+  sourceRevision?: string;
 }
 
 export interface CodexAppServerItemsPage {
@@ -147,6 +148,9 @@ export function materializeCodexAppServerTurnsPage(args: {
     sessionId: args.sessionId,
     events,
     detailMode: "summary",
+    ...(args.page.sourceRevision
+      ? { sourceRevision: args.page.sourceRevision }
+      : {}),
     ...(Object.keys(turnProcessDetailsAvailable).length > 0
       ? { turnProcessDetailsAvailable }
       : {}),

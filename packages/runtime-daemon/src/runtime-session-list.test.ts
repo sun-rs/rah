@@ -8,6 +8,7 @@ import {
   buildSessionsResponse,
   sameStoredSessionRefs,
 } from "./runtime-session-list";
+import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 import type { StoredSessionState } from "./session-store";
 import { primeCanonicalDirectoryKeys } from "./workbench-directory-utils";
 
@@ -236,6 +237,31 @@ describe("buildSessionsResponse", () => {
           entry.title === "History title",
       ),
     );
+  });
+
+  test("treats the provider catalog as authority over remembered and replay-only rows", () => {
+    const staleRef = storedRef("no-longer-a-task");
+    const staleReplay = storedSessionState("no-longer-a-task");
+    staleReplay.session.runtime = runtimeDescriptorForStoredHistory();
+
+    const response = buildSessionsResponse({
+      liveStates: [staleReplay],
+      discoveredStoredSessions: [],
+      remembered: {
+        rememberedSessions: [staleRef],
+        rememberedRecentSessions: [staleRef],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+      storedSessionsMode: "all",
+    });
+
+    assert.deepEqual(response.sessions, []);
+    assert.deepEqual(response.storedSessions, []);
+    assert.deepEqual(response.recentSessions, []);
   });
 
   test("uses user title overrides for running sessions even when provider history is stale", () => {

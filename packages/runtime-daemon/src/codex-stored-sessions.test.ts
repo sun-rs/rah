@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +76,7 @@ describe("codex stored session discovery", () => {
     cwd: string;
     timestamp: string;
     text: string;
+    originator?: string;
   }): string {
     const dir = path.join(tmpHome, args.rootName, "2026", "06", "02");
     mkdirSync(dir, { recursive: true });
@@ -87,6 +96,7 @@ describe("codex stored session discovery", () => {
             timestamp: args.timestamp,
             cwd: args.cwd,
             source: "cli",
+            ...(args.originator ? { originator: args.originator } : {}),
           },
         }),
         JSON.stringify({
@@ -171,7 +181,7 @@ describe("codex stored session discovery", () => {
     assert.equal(records[0]?.ref.preview, "Active copy");
   });
 
-  test("keeps fork rollout ownership on the first session_meta and invalidates stale cache identity", () => {
+  test("keeps user-visible fork ownership on the first session_meta and invalidates stale cache identity", () => {
     const parentId = "019e2222-cccc-7ddd-8eee-ffff00001111";
     const childId = "019f3333-dddd-7eee-8fff-000011112222";
     const parentCwd = path.join(tmpHome, "parent-workspace");
@@ -200,7 +210,9 @@ describe("codex stored session discovery", () => {
             id: childId,
             timestamp: "2026-07-10T00:00:00.000Z",
             cwd: childCwd,
-            source: { subAgent: { thread_spawn: { parent_thread_id: parentId } } },
+            parent_thread_id: parentId,
+            forked_from_id: parentId,
+            source: "vscode",
           },
         }),
         // Fork rollouts can embed the parent's copied transcript, including its
@@ -266,6 +278,165 @@ describe("codex stored session discovery", () => {
       records.find((record) => record.ref.providerSessionId === parentId)?.rolloutPath,
       parentPath,
     );
+  });
+
+  test("excludes internal subagent rollouts and prunes their stale metadata cache entries", () => {
+    const parentId = "019e2222-eeee-7fff-8aaa-bbbbccccdddd";
+    const childId = "019f3333-ffff-7000-8bbb-ccccddddeeee";
+    const cwd = path.join(tmpHome, "workspace");
+    const parentPath = writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId: parentId,
+      cwd,
+      timestamp: "2026-06-01T00:00:00.000Z",
+      text: "visible parent question",
+    });
+    const childDir = path.join(tmpHome, "sessions", "2026", "07", "10");
+    mkdirSync(childDir, { recursive: true });
+    const childPath = path.join(
+      childDir,
+      `rollout-2026-07-10T00-00-00-${childId}.jsonl`,
+    );
+    writeFileSync(
+      childPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-07-10T00:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            session_id: parentId,
+            id: childId,
+            parent_thread_id: parentId,
+            forked_from_id: parentId,
+            timestamp: "2026-07-10T00:00:00.000Z",
+            cwd,
+            thread_source: "subagent",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: parentId,
+                  agent_path: "/root/audit",
+                },
+              },
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-07-10T00:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "internal audit prompt" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const childStats = statSync(childPath);
+    const cacheDir = path.join(process.env.RAH_HOME!, "stored-session-cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(cacheDir, "codex.json"),
+      JSON.stringify({
+        entries: {
+          [childPath]: {
+            ref: {
+              provider: "codex",
+              providerSessionId: childId,
+              cwd,
+              rootDir: cwd,
+              title: "stale visible subagent",
+              preview: "stale visible subagent",
+              source: "provider_history",
+            },
+            size: childStats.size,
+            mtimeMs: childStats.mtimeMs,
+            version: 2,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const scan = scanCodexStoredSessionCatalog();
+    assert.equal(scan.complete, true);
+    const records = scan.records;
+    assert.deepEqual(
+      records.map((record) => record.ref.providerSessionId),
+      [parentId],
+    );
+    assert.equal(records[0]?.rolloutPath, parentPath);
+
+    const persistedCache = JSON.parse(
+      readFileSync(path.join(cacheDir, "codex.json"), "utf8"),
+    ) as { entries?: Record<string, unknown> };
+    assert.equal(persistedCache.entries?.[childPath], undefined);
+    assert.ok(persistedCache.entries?.[parentPath]);
+  });
+
+  test("keeps ChatGPT work chats out of the Codex task catalog and prunes stale cache rows", () => {
+    const taskId = "019f4444-aaaa-7000-8bbb-ccccddddeeee";
+    const chatId = "019f5555-bbbb-7000-8ccc-ddddeeeeffff";
+    const taskCwd = path.join(tmpHome, "task-workspace");
+    const chatCwd = path.join(tmpHome, "generated-chat-workspace");
+    const taskPath = writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId: taskId,
+      cwd: taskCwd,
+      timestamp: "2026-07-28T00:00:00.000Z",
+      text: "visible Codex task",
+      originator: "Codex Desktop",
+    });
+    const chatPath = writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId: chatId,
+      cwd: chatCwd,
+      timestamp: "2026-07-28T00:01:00.000Z",
+      text: "ordinary ChatGPT conversation",
+      originator: "codex_work_desktop",
+    });
+
+    const chatStats = statSync(chatPath);
+    const cacheDir = path.join(process.env.RAH_HOME!, "stored-session-cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(cacheDir, "codex.json"),
+      JSON.stringify({
+        entries: {
+          [chatPath]: {
+            ref: {
+              provider: "codex",
+              providerSessionId: chatId,
+              cwd: chatCwd,
+              rootDir: chatCwd,
+              title: "stale ChatGPT row",
+              preview: "stale ChatGPT row",
+              source: "provider_history",
+            },
+            size: chatStats.size,
+            mtimeMs: chatStats.mtimeMs,
+            version: 3,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const scan = scanCodexStoredSessionCatalog();
+    assert.equal(scan.complete, true);
+    assert.deepEqual(
+      scan.records.map((record) => record.ref.providerSessionId),
+      [taskId],
+    );
+    assert.equal(scan.records[0]?.rolloutPath, taskPath);
+
+    const persistedCache = JSON.parse(
+      readFileSync(path.join(cacheDir, "codex.json"), "utf8"),
+    ) as { entries?: Record<string, unknown> };
+    assert.equal(persistedCache.entries?.[chatPath], undefined);
+    assert.ok(persistedCache.entries?.[taskPath]);
   });
 });
 

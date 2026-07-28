@@ -939,6 +939,26 @@ test("Conversation store pages older turns, refreshes newer turns, and preserves
   assert.deepEqual(testHarness.requests, [{}, { cursor: "older-cursor" }, {}]);
 });
 
+test("Conversation stores the provider revision represented by its history page", async () => {
+  const response = page([
+    turn("turn-revision", [
+      timelineItem("final-revision", "turn-revision", "final", "answer"),
+    ]),
+  ]);
+  response.sourceRevision = "123456:789";
+  const testHarness = harness([response]);
+
+  assert.equal(
+    await ensureConversationLoadedCommand(testHarness.deps, "session-1"),
+    true,
+  );
+  assert.equal(
+    testHarness.state().projections.get("session-1")?.conversation
+      ?.sourceRevision,
+    "123456:789",
+  );
+});
+
 test("Conversation foreground refresh promotes a stale working reply to the server final state", async () => {
   const staleReply = timelineItem("assistant-reply", "turn-reconnect", "process", "answer");
   staleReply.status = "running";

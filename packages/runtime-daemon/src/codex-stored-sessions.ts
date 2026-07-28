@@ -31,7 +31,7 @@ import {
 
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
-const CODEX_STORED_SESSION_CACHE_VERSION = 2;
+export const CODEX_STORED_SESSION_CACHE_VERSION = 4;
 
 export type CodexStoredSessionCatalogScan = {
   records: CodexStoredSessionRecord[];
@@ -41,6 +41,14 @@ export type CodexStoredSessionCatalogScan = {
 type CodexCatalogScanState = {
   complete: boolean;
 };
+
+type CodexStoredSessionParseResult =
+  | { kind: "record"; record: CodexStoredSessionRecord }
+  | {
+      kind: "ignored";
+      reason: "chatgpt_work_chat" | "internal_subagent";
+    }
+  | { kind: "invalid" };
 
 function resolveCodexBaseHome(): string {
   return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
@@ -119,6 +127,38 @@ function isCodexBootstrapUserMessage(text: string): boolean {
   );
 }
 
+function isCodexSubagentSource(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.toLowerCase().includes("subagent");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.keys(value).some((key) =>
+    key.toLowerCase().includes("subagent"),
+  );
+}
+
+function isCodexInternalSubagentSession(payload: Record<string, unknown>): boolean {
+  return (
+    isCodexSubagentSource(payload.thread_source) ||
+    isCodexSubagentSource(payload.source)
+  );
+}
+
+function isChatGptWorkConversation(payload: Record<string, unknown>): boolean {
+  // Codex Desktop persists its Codex tasks and its ordinary ChatGPT "work"
+  // conversations under the same ~/.codex/sessions tree. The provider-owned
+  // session_meta originator is the stable surface boundary: Codex tasks use
+  // "Codex Desktop" (or a CLI originator), while ordinary ChatGPT work chats
+  // use "codex_work_desktop". Directory names, titles and session_index.jsonl
+  // are shared by both surfaces and therefore cannot be visibility authority.
+  return (
+    typeof payload.originator === "string" &&
+    payload.originator.trim().toLowerCase() === "codex_work_desktop"
+  );
+}
+
 function listRolloutFiles(
   root: string,
   options?: {
@@ -161,7 +201,7 @@ function listRolloutFiles(
   return files.sort((left, right) => right.localeCompare(left));
 }
 
-function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | null {
+function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResult {
   const head = readHeadLines(filePath);
   let sessionId: string | null = null;
   let cwd: string | undefined;
@@ -192,6 +232,21 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
           : null;
       if (!payload || typeof payload.id !== "string" || !payload.id.trim()) {
         continue;
+      }
+      // Codex persists internal multi-agent workers as independent rollout
+      // files so their execution can be recovered and inspected from the
+      // parent task. They are not user-owned tasks and Codex Desktop does not
+      // publish them in its task library. Keep the rollout on disk, but stop
+      // it at the provider catalog boundary so every RAH surface shares the
+      // same visible-session identity model.
+      if (isCodexInternalSubagentSession(payload)) {
+        return { kind: "ignored", reason: "internal_subagent" };
+      }
+      // ChatGPT work conversations are user-owned chats, but they are not
+      // Codex tasks. Codex Desktop keeps them out of the task library even
+      // though their rollout files and title index live beside task history.
+      if (isChatGptWorkConversation(payload)) {
+        return { kind: "ignored", reason: "chatgpt_work_chat" };
       }
       sessionId = payload.id;
       if (typeof payload.cwd === "string") {
@@ -237,28 +292,31 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
     }
   }
   if (!sessionId) {
-    return null;
+    return { kind: "invalid" };
   }
 
   const stat = statSync(filePath);
   const archived = isCodexStoredSessionArchivedPath(filePath);
   const preview = firstUserMessage ? truncateText(firstUserMessage) : path.basename(filePath);
   return {
-    ref: {
-      provider: "codex",
-      providerSessionId: sessionId,
-      ...(cwd ? { cwd } : {}),
-      ...(cwd ? { rootDir: cwd } : {}),
-      title: truncateText(preview, 72),
-      preview,
-      ...(createdAt ? { createdAt } : {}),
-      updatedAt: stat.mtime.toISOString(),
-      ...(archived ? { providerState: { archived: true } } : {}),
-      source: "provider_history",
-      removalDisposition: "trash",
+    kind: "record",
+    record: {
+      ref: {
+        provider: "codex",
+        providerSessionId: sessionId,
+        ...(cwd ? { cwd } : {}),
+        ...(cwd ? { rootDir: cwd } : {}),
+        title: truncateText(preview, 72),
+        preview,
+        ...(createdAt ? { createdAt } : {}),
+        updatedAt: stat.mtime.toISOString(),
+        ...(archived ? { providerState: { archived: true } } : {}),
+        source: "provider_history",
+        removalDisposition: "trash",
+      },
+      rolloutPath: filePath,
+      archived,
     },
-    rolloutPath: filePath,
-    archived,
   };
 }
 
@@ -364,7 +422,11 @@ function discoverCodexStoredSessionsImpl(
         version: CODEX_STORED_SESSION_CACHE_VERSION,
       });
       if (cachedRef && !shouldInvalidateCachedCodexTitle(cachedRef, file)) {
-        const createdAtRecord = !cachedRef.createdAt ? parseStoredSessionRecord(file) : null;
+        const createdAtResult = !cachedRef.createdAt
+          ? parseStoredSessionRecord(file)
+          : null;
+        const createdAtRecord =
+          createdAtResult?.kind === "record" ? createdAtResult.record : null;
         const renamedTitle = renamedTitles.get(cachedRef.providerSessionId);
         const baseRef =
           renamedTitle && renamedTitle !== cachedRef.title
@@ -402,8 +464,11 @@ function discoverCodexStoredSessionsImpl(
         });
         continue;
       }
-      const parsed = parseStoredSessionRecord(file);
-      if (!parsed) {
+      const parsedResult = parseStoredSessionRecord(file);
+      if (parsedResult.kind === "ignored") {
+        continue;
+      }
+      if (parsedResult.kind === "invalid") {
         if (scanState) {
           // A provider file may be in the middle of an atomic rewrite, and
           // the metadata cache may itself have been rebuilt or removed.
@@ -412,6 +477,7 @@ function discoverCodexStoredSessionsImpl(
         }
         continue;
       }
+      const parsed = parsedResult.record;
       const renamedTitle = renamedTitles.get(parsed.ref.providerSessionId);
       if (renamedTitle) {
         parsed.ref = {

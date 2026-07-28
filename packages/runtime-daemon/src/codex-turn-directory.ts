@@ -50,6 +50,15 @@ function directoryCachePath(providerSessionId: string): string {
   );
 }
 
+function summaryCachePath(providerSessionId: string): string {
+  return path.join(
+    resolveRahRuntimeHome(),
+    "turn-directory",
+    "codex",
+    `${cacheKey(providerSessionId)}.summaries.json`,
+  );
+}
+
 function sourceRevision(snapshot: CodexTurnDirectorySnapshot): string {
   return createHash("sha256")
     .update(
@@ -159,7 +168,6 @@ export class CodexTurnDirectoryStore {
     record: CodexStoredSessionRecord,
     options: { cursor?: string; limit: number; sourceSettled: boolean },
   ): Promise<CodexAppServerTurnsPage> {
-    await this.getSnapshot(record);
     const anchor = options.cursor ? parseTurnCursor(options.cursor) : undefined;
     const summaryPage = await this.hydrateSummaryPage(
       record,
@@ -214,11 +222,13 @@ export class CodexTurnDirectoryStore {
         startedAt: isoToEpochSeconds(item.startedAt),
         completedAt: item.completedAt ? isoToEpochSeconds(item.completedAt) : null,
         durationMs: item.durationMs ?? null,
+        ...(item.fileChanges ? { fileChanges: item.fileChanges } : {}),
       };
     });
     const oldest = selected.at(-1);
     return {
       data,
+      sourceRevision: summaryPage.sourceRevision,
       ...(oldest && summaryPage.hasOlder
         ? { nextCursor: createTurnCursor(oldest.id, false) }
         : { nextCursor: null }),
@@ -369,8 +379,10 @@ export class CodexTurnDirectoryStore {
     return runBackgroundIpcTask<
       {
         kind: "codex-turn-summary-page";
+        providerSessionId: string;
         rolloutPath: string;
         cachePath: string;
+        summaryCachePath: string;
         workspaceRoot: string;
         cursor?: { turnId: string; includeAnchor: boolean };
         limit: number;
@@ -380,14 +392,16 @@ export class CodexTurnDirectoryStore {
     >({
       script: new URL("./codex-turn-directory-worker.ts", import.meta.url),
       request: {
-          kind: "codex-turn-summary-page",
-          rolloutPath: record.rolloutPath,
-          cachePath: directoryCachePath(record.ref.providerSessionId),
-          workspaceRoot: codexStoredSessionWorkspaceRoot(record) ?? "",
-          ...(cursor ? { cursor } : {}),
-          limit,
-          textBudgetBytes: SUMMARY_PAGE_TEXT_BUDGET_BYTES,
-        },
+        kind: "codex-turn-summary-page",
+        providerSessionId: record.ref.providerSessionId,
+        rolloutPath: record.rolloutPath,
+        cachePath: directoryCachePath(record.ref.providerSessionId),
+        summaryCachePath: summaryCachePath(record.ref.providerSessionId),
+        workspaceRoot: codexStoredSessionWorkspaceRoot(record) ?? "",
+        ...(cursor ? { cursor } : {}),
+        limit,
+        textBudgetBytes: SUMMARY_PAGE_TEXT_BUDGET_BYTES,
+      },
       label: "Codex turn summary worker",
       signal,
       timeoutMs: 30_000,

@@ -15,6 +15,9 @@ const ASSISTANT_PREVIEW_TEXT_LIMIT = 144;
 const SUMMARY_TEXT_LIMIT = 256 * 1024;
 const DEFAULT_SUMMARY_PAGE_TEXT_BUDGET = 4 * 1024 * 1024;
 const DIRECTORY_TRANSPORT_ITEM_LIMIT = 4_096;
+const SUMMARY_CACHE_VERSION = 1;
+const SUMMARY_CACHE_ITEM_LIMIT = 256;
+const SUMMARY_CACHE_TEXT_BUDGET = 16 * 1024 * 1024;
 
 export type CodexIndexedTurn = ConversationTurnDirectoryItem & {
   startOffset: number;
@@ -68,8 +71,10 @@ type DirectoryWorkerRequest = {
 
 type SummaryWorkerRequest = {
   kind: "codex-turn-summary-page";
+  providerSessionId: string;
   rolloutPath: string;
   cachePath: string;
+  summaryCachePath: string;
   workspaceRoot: string;
   cursor?: {
     turnId: string;
@@ -77,6 +82,30 @@ type SummaryWorkerRequest = {
   };
   limit: number;
   textBudgetBytes?: number;
+};
+
+type CachedCodexTurnSummary = {
+  id: string;
+  startOffset: number;
+  endOffset: number;
+  userPreview: string;
+  assistantPreview?: string;
+  userText?: string;
+  userItemId?: string;
+  userImageCount?: number;
+  assistantText?: string;
+  assistantItemId?: string;
+  assistantPhase?: "commentary" | "final_answer";
+};
+
+type CodexTurnSummaryCache = {
+  version: number;
+  rolloutPath: string;
+  source: {
+    dev: number;
+    ino: number;
+  };
+  items: CachedCodexTurnSummary[];
 };
 
 type LookupWorkerRequest = {
@@ -94,6 +123,7 @@ type WorkerRequest =
 export type CodexTurnSummaryPageWorkerResult = {
   items: CodexIndexedTurn[];
   hasOlder: boolean;
+  sourceRevision: string;
 };
 
 export type CodexTurnDirectoryWorkerResponse =
@@ -756,6 +786,203 @@ function compactIndexedTurn(
   };
 }
 
+function cachedSummaryMatchesTurn(
+  cached: CachedCodexTurnSummary,
+  turn: CodexIndexedTurn,
+): boolean {
+  return (
+    cached.id === turn.id &&
+    cached.startOffset === turn.startOffset &&
+    cached.endOffset === turn.endOffset &&
+    cached.userPreview === turn.userPreview &&
+    cached.assistantPreview === turn.assistantPreview
+  );
+}
+
+function cachedSummaryCanResumeTurn(
+  cached: CachedCodexTurnSummary,
+  turn: CodexIndexedTurn,
+): boolean {
+  return (
+    cached.id === turn.id &&
+    cached.startOffset === turn.startOffset &&
+    cached.endOffset >= turn.startOffset &&
+    cached.endOffset < turn.endOffset &&
+    cached.userPreview === turn.userPreview
+  );
+}
+
+function summaryDetailFromTurn(
+  turn: CodexIndexedTurn,
+  detail: CodexIndexedTurn,
+): CachedCodexTurnSummary {
+  return {
+    id: turn.id,
+    startOffset: turn.startOffset,
+    endOffset: turn.endOffset,
+    userPreview: turn.userPreview,
+    ...(turn.assistantPreview !== undefined
+      ? { assistantPreview: turn.assistantPreview }
+      : {}),
+    ...(detail.userText !== undefined ? { userText: detail.userText } : {}),
+    ...(detail.userItemId !== undefined ? { userItemId: detail.userItemId } : {}),
+    ...(detail.userImageCount !== undefined
+      ? { userImageCount: detail.userImageCount }
+      : {}),
+    ...(detail.assistantText !== undefined
+      ? { assistantText: detail.assistantText }
+      : {}),
+    ...(detail.assistantItemId !== undefined
+      ? { assistantItemId: detail.assistantItemId }
+      : {}),
+    ...(detail.assistantPhase !== undefined
+      ? { assistantPhase: detail.assistantPhase }
+      : {}),
+  };
+}
+
+function mergeSummaryDetail(
+  turn: CodexIndexedTurn,
+  detail: CachedCodexTurnSummary,
+): CodexIndexedTurn {
+  return {
+    ...compactIndexedTurn(turn, true),
+    ...(detail.userText !== undefined ? { userText: detail.userText } : {}),
+    ...(detail.userItemId !== undefined ? { userItemId: detail.userItemId } : {}),
+    ...(detail.userImageCount !== undefined
+      ? { userImageCount: detail.userImageCount }
+      : {}),
+    ...(detail.assistantText !== undefined
+      ? { assistantText: detail.assistantText }
+      : {}),
+    ...(detail.assistantItemId !== undefined
+      ? { assistantItemId: detail.assistantItemId }
+      : {}),
+    ...(detail.assistantPhase !== undefined
+      ? { assistantPhase: detail.assistantPhase }
+      : {}),
+  };
+}
+
+async function resumeCachedTurnSummary(args: {
+  cached: CachedCodexTurnSummary;
+  turn: CodexIndexedTurn;
+  rolloutPath: string;
+  workspaceRoot: string;
+}): Promise<CachedCodexTurnSummary> {
+  const seed = mergeSummaryDetail(
+    {
+      ...args.turn,
+      endOffset: args.cached.endOffset,
+    },
+    args.cached,
+  );
+  const incremental = [seed];
+  await scanAppendedLines({
+    rolloutPath: args.rolloutPath,
+    startOffset: args.cached.endOffset,
+    endOffset: args.turn.endOffset,
+    items: incremental,
+    workspaceRoot: args.workspaceRoot,
+    captureSummaryText: true,
+    selectHead: shouldParseSummaryLine,
+  });
+  const updated =
+    incremental.find((candidate) => candidate.id === args.turn.id) ??
+    incremental.at(-1) ??
+    seed;
+  return summaryDetailFromTurn(args.turn, updated);
+}
+
+function applySummaryTextBudget(
+  items: CodexIndexedTurn[],
+  budgetBytes: number,
+): CodexIndexedTurn[] {
+  let remaining = Math.max(0, budgetBytes);
+  return items.map((item) => {
+    const bounded = { ...item };
+    for (const field of ["userText", "assistantText"] as const) {
+      const text = bounded[field];
+      if (!text) {
+        continue;
+      }
+      const bytes = Buffer.byteLength(text, "utf8");
+      if (bytes <= remaining) {
+        remaining -= bytes;
+      } else {
+        delete bounded[field];
+      }
+    }
+    return bounded;
+  });
+}
+
+async function readSummaryCache(
+  cachePath: string,
+  snapshot: CodexTurnDirectorySnapshot,
+): Promise<CodexTurnSummaryCache | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(cachePath, "utf8"),
+    ) as CodexTurnSummaryCache;
+    if (
+      parsed.version !== SUMMARY_CACHE_VERSION ||
+      parsed.rolloutPath !== snapshot.rolloutPath ||
+      parsed.source?.dev !== snapshot.source.dev ||
+      parsed.source?.ino !== snapshot.source.ino ||
+      !Array.isArray(parsed.items)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeSummaryCache(
+  cachePath: string,
+  snapshot: CodexTurnDirectorySnapshot,
+  detailsById: ReadonlyMap<string, CachedCodexTurnSummary>,
+): Promise<void> {
+  const retained: CachedCodexTurnSummary[] = [];
+  let remainingBytes = SUMMARY_CACHE_TEXT_BUDGET;
+  for (
+    let index = snapshot.items.length - 1;
+    index >= 0 && retained.length < SUMMARY_CACHE_ITEM_LIMIT;
+    index -= 1
+  ) {
+    const turn = snapshot.items[index];
+    if (!turn?.userPreview) {
+      continue;
+    }
+    const detail = detailsById.get(turn.id);
+    if (!detail || !cachedSummaryMatchesTurn(detail, turn)) {
+      continue;
+    }
+    const bytes = Buffer.byteLength(JSON.stringify(detail), "utf8");
+    if (bytes > remainingBytes) {
+      continue;
+    }
+    remainingBytes -= bytes;
+    retained.push(detail);
+  }
+  retained.reverse();
+  const cache: CodexTurnSummaryCache = {
+    version: SUMMARY_CACHE_VERSION,
+    rolloutPath: snapshot.rolloutPath,
+    source: {
+      dev: snapshot.source.dev,
+      ino: snapshot.source.ino,
+    },
+    items: retained,
+  };
+  await mkdir(path.dirname(cachePath), { recursive: true });
+  const temporaryPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporaryPath, JSON.stringify(cache), { mode: 0o600 });
+  await rename(temporaryPath, cachePath);
+}
+
 function transportSnapshot(
   snapshot: CodexTurnDirectorySnapshot,
 ): CodexTurnDirectorySnapshot {
@@ -775,10 +1002,16 @@ function transportSnapshot(
 async function hydrateCodexTurnSummaryPage(
   request: SummaryWorkerRequest,
 ): Promise<CodexTurnSummaryPageWorkerResult> {
-  const snapshot = await readCache(request.cachePath);
-  if (!snapshot) {
-    throw new Error("Codex turn directory cache is unavailable.");
-  }
+  // A summary page, its turn boundaries, and its per-turn changes must come
+  // from one provider-file revision. Refresh the append-only directory in this
+  // same isolated process instead of serially spawning a scan worker, summary
+  // worker, and file-change lookup worker on the request path.
+  const snapshot = await scanCodexTurnDirectory({
+    providerSessionId: request.providerSessionId,
+    rolloutPath: request.rolloutPath,
+    workspaceRoot: request.workspaceRoot,
+    cachePath: request.cachePath,
+  });
   const indexedTurns = snapshot.items.filter((item) => item.userPreview);
   let startIndex = indexedTurns.length - 1;
   if (request.cursor) {
@@ -794,41 +1027,77 @@ async function hydrateCodexTurnSummaryPage(
   const selected = indexedTurns
     .slice(Math.max(0, startIndex - limit + 1), startIndex + 1)
     .reverse();
-  const hydrated = await hydrateCodexTurnSummaries({
-    rolloutPath: request.rolloutPath,
-    workspaceRoot: request.workspaceRoot,
-    turns: selected.map((item) => ({
-      id: item.id,
-      startOffset: item.startOffset,
-      endOffset: item.endOffset,
-    })),
-    ...(request.textBudgetBytes !== undefined
-      ? { textBudgetBytes: request.textBudgetBytes }
-      : {}),
-  });
-  const hydratedById = new Map(hydrated.map((item) => [item.id, item]));
-  const items = selected.map((item) => {
-    const detail = hydratedById.get(item.id);
-    return {
-      ...compactIndexedTurn(item),
-      ...(detail?.userText !== undefined ? { userText: detail.userText } : {}),
-      ...(detail?.userItemId !== undefined
-        ? { userItemId: detail.userItemId }
-        : {}),
-      ...(detail?.userImageCount !== undefined
-        ? { userImageCount: detail.userImageCount }
-        : {}),
-      ...(detail?.assistantText !== undefined
-        ? { assistantText: detail.assistantText }
-        : {}),
-      ...(detail?.assistantItemId !== undefined
-        ? { assistantItemId: detail.assistantItemId }
-        : {}),
-      ...(detail?.assistantPhase !== undefined
-        ? { assistantPhase: detail.assistantPhase }
-        : {}),
-    };
-  });
+  const cached = await readSummaryCache(request.summaryCachePath, snapshot);
+  const detailsById = new Map<string, CachedCodexTurnSummary>();
+  const resumableById = new Map<string, CachedCodexTurnSummary>();
+  for (const detail of cached?.items ?? []) {
+    const turn = snapshot.items.find((item) => item.id === detail.id);
+    if (!turn) {
+      continue;
+    }
+    if (cachedSummaryMatchesTurn(detail, turn)) {
+      detailsById.set(detail.id, detail);
+    } else if (cachedSummaryCanResumeTurn(detail, turn)) {
+      resumableById.set(detail.id, detail);
+    }
+  }
+  let cacheChanged = false;
+  for (const item of selected) {
+    const resumable = resumableById.get(item.id);
+    if (!resumable || detailsById.has(item.id)) {
+      continue;
+    }
+    detailsById.set(
+      item.id,
+      await resumeCachedTurnSummary({
+        cached: resumable,
+        turn: item,
+        rolloutPath: request.rolloutPath,
+        workspaceRoot: request.workspaceRoot,
+      }),
+    );
+    cacheChanged = true;
+  }
+  const missing = selected.filter((item) => !detailsById.has(item.id));
+  if (missing.length > 0) {
+    const hydrated = await hydrateCodexTurnSummaries({
+      rolloutPath: request.rolloutPath,
+      workspaceRoot: request.workspaceRoot,
+      turns: missing.map((item) => ({
+        id: item.id,
+        startOffset: item.startOffset,
+        endOffset: item.endOffset,
+      })),
+      // The persistent cache is deliberately larger than one transport page.
+      // The response budget is applied below, after useful historical text
+      // has been retained for later opens and daemon restarts.
+      textBudgetBytes: SUMMARY_CACHE_TEXT_BUDGET,
+    });
+    const hydratedById = new Map(hydrated.map((item) => [item.id, item]));
+    for (const item of missing) {
+      const detail = hydratedById.get(item.id);
+      if (detail) {
+        detailsById.set(item.id, summaryDetailFromTurn(item, detail));
+      }
+    }
+    cacheChanged = true;
+  }
+  if (cacheChanged) {
+    await writeSummaryCache(
+      request.summaryCachePath,
+      snapshot,
+      detailsById,
+    );
+  }
+  const items = applySummaryTextBudget(
+    selected.map((item) => {
+      const detail = detailsById.get(item.id);
+      return detail
+        ? mergeSummaryDetail(item, detail)
+        : compactIndexedTurn(item, true);
+    }),
+    request.textBudgetBytes ?? DEFAULT_SUMMARY_PAGE_TEXT_BUDGET,
+  );
   const oldest = selected.at(-1);
   const oldestIndex = oldest
     ? indexedTurns.findIndex((item) => item.id === oldest.id)
@@ -836,6 +1105,10 @@ async function hydrateCodexTurnSummaryPage(
   return {
     items,
     hasOlder: oldestIndex > 0,
+    // scannedBytes is the actual boundary represented by the returned page.
+    // If the live rollout grew during the scan, this deliberately differs
+    // from the next stat-based probe and schedules one incremental catch-up.
+    sourceRevision: `${Math.trunc(snapshot.source.mtimeMs)}:${snapshot.scannedBytes}`,
   };
 }
 

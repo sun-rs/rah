@@ -280,7 +280,7 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
-  test("loading workbench state sanitizes old internal bootstrap previews", async () => {
+  test("loading workbench state does not revive old bootstrap rows without provider backing", async () => {
     const daemonDir = path.join(tmpRoot, "runtime-daemon");
     mkdirSync(daemonDir, { recursive: true });
     writeFileSync(
@@ -332,8 +332,7 @@ describe("WorkbenchStateStore", () => {
       (entry) => entry.provider === "codex" && entry.providerSessionId === "thread-sanitize-1",
     );
 
-    assert.equal(stored?.title, "thread-sanitize-1");
-    assert.equal(stored?.preview, "thread-sanitize-1");
+    assert.equal(stored, undefined);
     assert.equal(recent, undefined);
 
     await engine.shutdown();

@@ -30,7 +30,7 @@ type StoredSessionMetadataCacheFile = {
 };
 
 type StoredSessionCatalogSnapshotFile = {
-  version: 1;
+  version: 2;
   records: readonly StoredSessionCatalogRecord[];
 };
 
@@ -68,7 +68,7 @@ export function loadStoredSessionCatalogSnapshot(): StoredSessionCatalogRecord[]
     const parsed = JSON.parse(
       readFileSync(catalogSnapshotPath(), "utf8"),
     ) as StoredSessionCatalogSnapshotFile;
-    if (parsed.version !== 1 || !Array.isArray(parsed.records)) {
+    if (parsed.version !== 2 || !Array.isArray(parsed.records)) {
       return [];
     }
     return parsed.records.filter(isStoredSessionCatalogRecord);
@@ -87,7 +87,7 @@ export async function writeStoredSessionCatalogSnapshot(
     await pipeline(
       Readable.from(
         streamJsonChunks({
-          version: 1,
+          version: 2,
           records,
         } satisfies StoredSessionCatalogSnapshotFile),
       ),
@@ -119,15 +119,26 @@ export function loadStoredSessionMetadataCache(
 
 export function loadStoredSessionCatalogCache(
   provider: Extract<ProviderKind, "codex" | "claude">,
+  options?: { entryVersion?: number },
 ): StoredSessionCatalogRecord[] {
-  return [...loadStoredSessionMetadataCache(provider).entries()].map(
-    ([storagePath, entry]) => ({
-      ref: entry.ref,
-      storagePath,
-      ...(provider === "codex"
-        ? { archived: entry.ref.providerState?.archived === true }
-        : {}),
-    }),
+  return [...loadStoredSessionMetadataCache(provider).entries()].flatMap(
+    ([storagePath, entry]) => {
+      if (
+        options?.entryVersion !== undefined &&
+        entry.version !== options.entryVersion
+      ) {
+        return [];
+      }
+      return [
+        {
+          ref: entry.ref,
+          storagePath,
+          ...(provider === "codex"
+            ? { archived: entry.ref.providerState?.archived === true }
+            : {}),
+        },
+      ];
+    },
   );
 }
 

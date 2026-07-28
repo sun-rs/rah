@@ -745,6 +745,9 @@ async function performLoadTurns(
             mode === "older"
               ? (value.approximateBytes ?? 0) + (response.approximateBytes ?? 0)
               : Math.max(value.approximateBytes ?? 0, response.approximateBytes ?? 0),
+          sourceRevision:
+            response.sourceRevision ??
+            (mode === "older" ? value.sourceRevision : null),
           loadedAt: new Date().toISOString(),
           lastError: null,
         };
