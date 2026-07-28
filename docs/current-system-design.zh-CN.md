@@ -165,7 +165,7 @@ HTTP 数据面有明确边界：static serving 只能读取构建产物目录；
 
 Tailwind 的 `sm/md` 都映射到 700px，`lg` 映射到 900px。组件如果需要语义判断必须消费 `ResponsiveTier` 或共享常量，不能再新增 520/768/1024 等私有 `matchMedia` 阈值。设置页和启动状态页使用连续、无悬浮大卡片的工作台布局；卡片只留给真正的重复数据项、弹窗和独立工具。
 
-桌面左侧栏使用固定 header、纵向全局导航、独立 workspace/session 滚动区和底部 Settings 动作。新设备默认宽度为 272px，用户已经调整过的持久化宽度继续优先，不能在升级时覆盖。workspace/session 行使用紧凑字号、28px 行高和稳定缩进。每个已添加 workspace 显示其全部未归档根 Session：running 行显示 phase，stopped 行保留安静的静态样式；两者按 `{provider, providerSessionId}` 去重。用户置顶的 running Session/Council 进入 Workspaces 上方独立的 `Pinned` 区，并从原 workspace 列表移除；取消置顶后回到所属 workspace，不能同时显示两份。置顶顺序按用户操作持久化，Session 与 Council 清单尚未完成首次加载时不得把已保存项误删。桌面只存在一个固定在屏幕左上角的 edge toggle；侧栏展开、折叠时该按钮的坐标、尺寸和图标都不能变化，页面标题只预留等尺寸占位，不能再渲染第二个按钮。侧栏只在用户没有拖拽 resize 时执行 150ms 宽度过渡，拖拽期间必须关闭 transition，避免大量 session DOM 持续滞后重排。侧栏使用独立的语义背景、单像素内描边和极浅右侧阴影，不通过加深整块灰色来制造边界。`compact` 环境使用 Sheet 容器，但内部复用同一套纵向全局导航、Pinned、Workspaces 与底部 Settings 结构，不能退回顶部横排快捷图标或维护第二套导航状态。
+桌面左侧栏使用固定 header、纵向全局导航、独立 workspace/session 滚动区和底部 Settings 动作。新设备默认宽度为 272px，用户已经调整过的持久化宽度继续优先，不能在升级时覆盖。workspace/session 行使用紧凑字号、28px 行高和稳定缩进。每个已添加 workspace 显示其全部未归档根 Session：running 行显示 phase，stopped 行保留安静的静态样式；两者按 `{provider, providerSessionId}` 去重。Provider 当前 catalog 是 Session 身份、存在性与可见性的唯一权威；workbench snapshot、remembered recent、metadata cache 和 stored-history replay runtime 都只是展示/启动缓存，不能在 catalog 与真实 live runtime 都不包含某个 identity 时把旧 row 重新带回 Sidebar。完整 provider scan 会清理已移除或已过滤 row；不完整 scan 保留该 provider 的 last-good rows。用户置顶的 running Session/Council 进入 Workspaces 上方独立的 `Pinned` 区，并从原 workspace 列表移除；取消置顶后回到所属 workspace，不能同时显示两份。置顶顺序按用户操作持久化，Session 与 Council 清单尚未完成首次加载时不得把已保存项误删。桌面只存在一个固定在屏幕左上角的 edge toggle；侧栏展开、折叠时该按钮的坐标、尺寸和图标都不能变化，页面标题只预留等尺寸占位，不能再渲染第二个按钮。侧栏只在用户没有拖拽 resize 时执行 150ms 宽度过渡，拖拽期间必须关闭 transition，避免大量 session DOM 持续滞后重排。侧栏使用独立的语义背景、单像素内描边和极浅右侧阴影，不通过加深整块灰色来制造边界。`compact` 环境使用 Sheet 容器，但内部复用同一套纵向全局导航、Pinned、Workspaces 与底部 Settings 结构，不能退回顶部横排快捷图标或维护第二套导航状态。
 
 Session 启动画面必须把 provider identity 与 progress 分开：provider 图标保持静态且不叠加右下角 spinner，进度动画和 `Starting / Resuming / Opening` 状态同行显示。这样 provider 图标在启动前后保持同一语义，也不会出现两个边框相互遮挡。
 
@@ -433,6 +433,8 @@ JSONL、rollout 或 SQLite。
 后端 `HistorySnapshotStore` 只冻结 provider evidence 边界，再由 projector 生成 canonical page：
 
 - 首屏冻结 provider 历史 revision。
+- 首屏 response 携带它实际扫描完成的 provider `sourceRevision`；客户端在 `phase=loading` 时不得
+  启动 revision probe，避免取消并重复请求同一份超大历史。
 - 后续 cursor 只能在同一个 frozen snapshot 内翻页。
 - Resume 保留已展示 turns，并以 resident live projection 覆盖重叠 turn 的 lifecycle。
 - Resume 不重新请求已经显示的 history page；live attach 与 resident projection 只补充新的 revision/delta。
@@ -479,6 +481,12 @@ Conversation 正文。生产 daemon 的目录发现必须遵循：
    provider 正常更新。
 4. Stop 成功后先由 runtime 立即发布 stopped session upsert，再由目录进程校准磁盘事实。
 5. 删除/归档前读取权威目录；删除成功同步更新内存 revision 和原子快照。
+6. 当前 provider catalog 是身份权威；remembered/workbench/per-file cache 只能补充 metadata，
+   不能独立证明 Session 仍存在或仍属于当前产品表面。
+7. Codex 必须从首个 `session_meta.payload` 排除 `originator=codex_work_desktop` 的普通 ChatGPT
+   Work 对话和明确标记为 subagent 的内部 rollout；物理文件与标题索引不能替代该边界。
+8. catalog snapshot 与 provider metadata cache 具有 visibility contract version。完整扫描清理旧
+   row；不完整扫描保留 last-good，不能因一次中断扫描让 Sidebar 数量抖动。
 
 因此 Recent 的“快”不以牺牲一致性为代价，All 的“准”也不能成为启动、Resume 或 Chat 首屏的
 串行依赖。
@@ -672,6 +680,10 @@ npm run test:smoke:native-browser-webkit
 - Stop/Close 是否能关闭对应 running 执行体。
 - Detach / reload / hide canvas 是否不会关闭真实 TUI。
 - 历史打开是否先显示 tail，并能上滚到第一条用户消息。
+- Codex Sidebar 是否只包含用户可见 Task，不包含 ChatGPT Work 对话、内部 subagent rollout 或
+  remembered/cache 复活的旧 row；reload/focus 后数量、身份和顺序是否稳定。
+- 超大且仍在增长的 rollout 首屏是否只发一个 history request；`sourceRevision` probe 是否等待
+  `phase=loading` 完成并从响应 byte boundary 增量追赶。
 - Chat mirror 是否来自 provider 原厂 history/db 文件，Markdown 换行、列表、代码块是否保留且不重复。
 - interrupted/aborted turn 是否不会留下永久 Running tool。
 - Enhanced controls 是否保持 optional；native TUI 不应暴露假的 RAH-managed plan/access/model 控制。

@@ -1,6 +1,6 @@
 # Conversation 历史浏览与分页边界
 
-复核日期：2026-07-15
+复核日期：2026-07-28
 
 ## 1. 唯一读取模型
 
@@ -28,6 +28,10 @@ GET /api/sessions/:sessionId/conversation/turns?limit=20
 - 请求期间保留 shell，不白屏、不跳 New。
 - 新建 live session 可使用 `liveOnly=true`，不触发 provider 历史扫描。
 - summary page 不携带大工具输出。
+- 首屏响应携带它实际覆盖的 provider `sourceRevision`；客户端必须先把该 revision 作为 freshness
+  baseline 写入 projection，不能在 `phase=loading` 时启动 revision probe。
+- rollout 在首屏扫描期间继续增长时，响应 revision 只覆盖已经扫描完成的 byte boundary；下一次 probe
+  只触发从该 boundary 开始的增量追赶，不能取消并重发仍在进行的首屏请求。
 - 出错时显示 Retry，不切换原始 events renderer。
 
 ## 3. 向上分页
@@ -113,11 +117,29 @@ Resume 不清空已展示的 history：
 
 这些证据只在 daemon 内转换为 `ConversationEvidencePage`，随后进入 projector。浏览器不可直接读取。
 
+Codex Desktop 把多种产品表面写在同一个 `~/.codex/sessions` 树中，文件存在并不等于它是一个
+Codex Task。RAH 在读取首个 `session_meta.payload` 时执行产品边界过滤：
+
+- `originator=codex_work_desktop` 是普通 ChatGPT Work 对话，不进入 Codex Task catalog；
+- `thread_source` 或 `source` 明确包含 `subagent` 的 rollout 是父任务内部执行记录，不作为独立
+  用户 Session；
+- 普通 Codex Task、用户显式 Fork 等可见根会话继续保留；
+- 过滤只改变 RAH 的 task catalog，不删除或改写 provider rollout。
+
+目录名、文件名、标题、`session_index.jsonl` 与旧 RAH cache 都不能替代上述 provider metadata
+成为产品表面判断依据。
+
 ## 9. 性能边界
 
 - stored-session catalog 与 Conversation 正文是两条数据面。daemon 启动只读取
   `~/.rah/runtime-daemon/stored-session-cache/catalog.json` 的原子快照来构建有界 Recent，
   不在主事件循环扫描 Codex JSONL、Claude transcript 或 OpenCode SQLite。
+- Provider catalog 是 Session 身份与可见性的唯一权威。Workbench snapshot、remembered recent、
+  per-file metadata cache 和 replay-only runtime 都只是展示/启动缓存；当前 catalog 与真实 live
+  runtime 都不再包含某个 `{provider, providerSessionId}` 时，这些缓存不得把它重新带回 Sidebar。
+- catalog snapshot 与 provider metadata cache 都带可见性协议版本。过滤规则或身份语义升级时，
+  daemon 必须拒绝旧版本缓存；一次完整 provider scan 会删除已忽略、已移除或已重新分类的 cache
+  row。扫描不完整时则保留该 provider 的 last-good rows，不能把暂时读取失败误判成删除。
 - 启动后的权威校准、5 分钟周期校准和 All catalog 请求都在隔离子进程中执行；单个 provider
   失败只保留该 provider 的 last-good 快照，不阻断另外两个 provider，也不阻塞 Chat/WS。
 - Stop 成功是当前 runtime 已知事实：session 必须立即以 stopped/provider-history 记录进入 Recent，
@@ -132,8 +154,12 @@ Resume 不清空已展示的 history：
 - tool output 只按需读取。
 - Codex 官方 `thread/turns/list` page 使用内存 LRU 和原子写入的持久化 cache；同一 rollout revision、cursor、limit 与 summary 模式必须复用同一 page，不重复扫描大 JSONL。
 - Codex page cache identity 包含 rollout 的 `dev`、`ino`、`size`、`mtime`。文件替换或增长会自然进入新 revision，旧 revision 只服务已经冻结的浏览 snapshot，不能污染新页。
-- Codex turn directory 在 worker thread 中增量扫描并持久化 byte-range 索引；大 rollout 的正文分页和
-  指定 turn hydration 只读取对应范围，不能回退到主事件循环全文件扫描。
+- Codex 首个 summary page 在同一个隔离 worker 中完成 directory 尾部增量扫描、所选 turn summary
+  hydration 与本轮 file-change 聚合，返回同一 byte boundary 的 `sourceRevision`。请求路径不能串行
+  启动 scan worker、summary worker、file-change worker，也不能等待 `lsof/ps` 活跃性探测。
+- Codex turn directory 持久化 byte-range 索引；summary cache 额外保存最近有界 turns 的 user/final
+  文本与已扫描 offsets。大 rollout 的重复打开、daemon 重启和仍在增长的最后一个 turn 都从已缓存
+  boundary 继续，正文分页和指定 turn hydration 只读取对应范围，不能回退到主事件循环全文件扫描。
 - OpenCode live catch-up 只串行请求官方 local-server message API 的最近 8 条 message，每秒最多一次；
   Resume 用最近 16 条只建立 identity/revision baseline，不回放已经展示的 history。请求可取消，revision
   ledger 上限为 64。live path 不允许每 750ms 同步扫描 SQLite 全历史。
@@ -170,6 +196,17 @@ python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages
 - 当前机器没有等量级 Claude 历史样本；Claude 的 New/History/Resume/Stop 与连续追问已做真实浏览器
   验证，但不能据此声称超大 Claude JSONL 已达到同一数据量基线。
 
+2026-07-28 对当前真实 Codex 工作集再次验证：
+
+- `rah_develop` rollout 约 4.19GB；daemon 重启后的首次增量追赶约 2.7s，summary cache 建立后
+  重复 API 打开约 0.38–0.61s，真实浏览器切回可见内容约 0.8s。
+- `solars_new` rollout 约 223MB；真实浏览器首次可见历史约 1.2s，后续 API page 约
+  0.10–0.54s。
+- 连续 3 次页面 reload，Sidebar DOM 在约 142–264ms 内稳定为同一组 3 个 active task；没有
+  ChatGPT Work 对话、内部 subagent rollout 或重复中文 Solars 行重新出现。
+
+这些数字是同机回归证据，不是对任意磁盘、机器或持续增长速率的 SLA。
+
 ## 11. 回归检查
 
 - 连续相同用户文本仍是两个 turns。
@@ -180,3 +217,8 @@ python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages
 - Resume 不重复下载已展示历史。
 - PWA 不请求完整目录。
 - 新建首条用户消息立即由 optimistic item 显示，canonical user 到达后原位接管。
+- Codex Task catalog 不包含 `codex_work_desktop` 对话与内部 subagent rollout；刷新、focus 与重复
+  catalog scan 后身份、数量和顺序保持稳定。
+- 完整 catalog scan 会清理旧 visibility contract 的 snapshot/cache；不完整 scan 保留 last-good。
+- 首屏处于 `loading` 时不发 source-revision probe；首屏完成后第一次 probe 不取消、重复或清空
+  已显示 history。

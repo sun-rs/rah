@@ -221,6 +221,16 @@ require stopped
 ## 7. Catalog 与同步
 
 - catalog worker 只扫描 metadata，不加载完整 transcript；
+- provider 当前完整 catalog 是 `{provider, providerSessionId}` 身份、存在性和可见性的唯一权威；
+  workbench snapshot、remembered sessions/recent、metadata cache 与 stored-history replay runtime
+  只能加速启动或展示，不能独立创造一条 Session；
+- 同一 provider identity 出现多个物理文件时只投影一个 canonical row；普通 catalog 与 archive
+  同时命中时按 provider library fact 选择 placement，不能在 Sidebar 显示两份；
+- provider 完整扫描会删除旧快照中已移除或被产品边界过滤的 row；扫描不完整或 provider 失败时
+  保留该 provider 的 last-good rows，避免瞬时 I/O 错误导致列表消失；
+- Codex catalog 读取 `session_meta.payload` 区分产品表面：排除
+  `originator=codex_work_desktop` 的普通 ChatGPT Work 对话与 `source/thread_source` 明确标记的
+  internal subagent rollout；这些 provider 文件仍保留在原位置；
 - `all` 模式返回 Archived 与普通 Session，由 `libraryState` 区分；
 - `recent` 默认排除 Archived，避免归档项重新进入 Recent；
 - discovery delta 必须把 `libraryState` 纳入 equality key；
@@ -258,6 +268,10 @@ require stopped
 - stopped archive/restore 在一个 discovery revision 中完成；
 - archive 失败后仍在普通列表；
 - Delete 同时清理 registry 和 catalog。
+- remembered/workbench/cache 中存在、但完整 provider catalog 与 live runtime 都不存在的 identity
+  不会进入 response；
+- Codex ChatGPT Work、internal subagent 与同 identity 的重复物理 rollout 不会进入普通/归档列表；
+- 完整扫描清理 stale cache，不完整扫描保留 last-good provider rows。
 
 ### Web
 
@@ -279,7 +293,7 @@ require stopped
 
 每一步都必须保持旧客户端可启动，并在进入下一步前通过定向测试和全量 typecheck。
 
-## 11. 当前落地状态（2026-07-21）
+## 11. 当前落地状态（2026-07-28）
 
 已完成：
 
@@ -292,6 +306,12 @@ require stopped
 - running Session 的 daemon 内 `close -> archive` 操作，失败时回退为 `stopped + workspace`；
 - Recent 排除 Archived，Chats 增加 Archived tab、Restore、单条与筛选批量 Remove；
 - 左侧 workspace 合并 running/stopped 非归档根 Session，并按 provider identity 去重；
+- Sidebar 与 Chats 统一消费 provider-authoritative catalog；旧 remembered/workbench/cache 不再复活
+  已删除、已过滤或已重新分类的 identity；
+- Codex catalog 已隔离普通 ChatGPT Work 对话与 internal subagent rollout，并通过版本化 snapshot /
+  metadata cache 迁移清理旧可见行；
+- 完整/不完整 provider scan 已分别实现 prune 与 last-good preservation，刷新和 focus 不再改变
+  Session 数量或排序；
 - Codex/Claude 的 system Trash 与 OpenCode permanent delete 在 UI 文案中显式区分。
 
 后续增强不阻塞当前 archive 主链路：

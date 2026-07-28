@@ -1,6 +1,6 @@
 # Provider Scope: Codex + Claude + OpenCode
 
-日期：2026-05-18
+复核日期：2026-07-28
 
 RAH 当前 live 主线：
 
@@ -22,6 +22,19 @@ Kimi CLI 对当前 RAH 的投入产出不成立：
 - 同时追踪过多 CLI 的官方版本变化，会显著增加重复输出、状态竞态、权限语义漂移和移动端真实测试负担。
 
 因此 RAH 不再追求“每家 CLI 都完整 Web 化”。长期维护面收敛为：Codex 和 Claude 负责主力原生订阅体验，OpenCode 负责 API-key 多模型入口。
+
+## Codex Desktop 产品表面边界
+
+Codex Desktop 的 Codex Task、普通 ChatGPT Work 对话和内部 subagent rollout 可能共用
+`~/.codex/sessions` 物理目录。RAH 的 Codex provider scope 只包含用户可见的 Codex Task：
+
+- `session_meta.payload.originator=codex_work_desktop` 的记录属于普通 ChatGPT Work 对话；
+- `session_meta.payload.source` 或 `thread_source` 明确包含 `subagent` 的记录属于父任务内部执行；
+- 两者都不进入 RAH Sidebar、Chats、Recent、All 或 Archived；
+- RAH 只做 catalog 过滤，不移动、修改或删除这些 provider-owned 文件。
+
+文件路径、标题索引和历史 RAH cache 不是产品表面权威。可见 Session 必须由当前 provider catalog
+确认，并按 `{provider, providerSessionId}` 投影成唯一 row。
 
 ## OpenCode 模型与 Variant 边界
 
