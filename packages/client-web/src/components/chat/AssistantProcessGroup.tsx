@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import type {
   ConversationActivityBatchSummary,
   ConversationActivityKind,

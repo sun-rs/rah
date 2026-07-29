@@ -2,7 +2,6 @@ import {
   createWriteStream,
   mkdirSync,
   readFileSync,
-  renameSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -16,6 +15,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ProviderKind, StoredSessionRef } from "@rah/runtime-protocol";
 import { streamJsonChunks } from "./json-response-stream";
+import { canonicalizeStoredSessionCatalogRecords } from "./stored-session-catalog-reconciliation";
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 
 type StoredSessionMetadataCacheEntry = {
@@ -59,7 +59,8 @@ function isStoredSessionCatalogRecord(value: unknown): value is StoredSessionCat
     (record.ref.provider === "codex" ||
       record.ref.provider === "claude" ||
       record.ref.provider === "opencode") &&
-    typeof record.ref.providerSessionId === "string"
+    typeof record.ref.providerSessionId === "string" &&
+    record.ref.providerSessionId.trim().length > 0
   );
 }
 
@@ -71,7 +72,9 @@ export function loadStoredSessionCatalogSnapshot(): StoredSessionCatalogRecord[]
     if (parsed.version !== 2 || !Array.isArray(parsed.records)) {
       return [];
     }
-    return parsed.records.filter(isStoredSessionCatalogRecord);
+    return canonicalizeStoredSessionCatalogRecords(
+      parsed.records.filter(isStoredSessionCatalogRecord),
+    );
   } catch {
     return [];
   }
@@ -88,7 +91,7 @@ export async function writeStoredSessionCatalogSnapshot(
       Readable.from(
         streamJsonChunks({
           version: 2,
-          records,
+          records: canonicalizeStoredSessionCatalogRecords(records),
         } satisfies StoredSessionCatalogSnapshotFile),
       ),
       createWriteStream(temporaryPath, {

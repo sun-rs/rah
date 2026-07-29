@@ -28,7 +28,6 @@ import { isLabModeEnabled } from "./lab-mode";
 import { type PendingSessionTransition } from "./session-transition-contract";
 import {
   adoptExistingProjectionForProviderSession as adoptExistingProjectionForProviderSessionImpl,
-  applyEventBatchToProjection,
   applyEventsToProjectionMap as applyEventsToProjectionMapImpl,
   applySessionsResponse as applySessionsResponseImpl,
   computeUnreadSessionIds as computeUnreadSessionIdsImpl,
@@ -1758,7 +1757,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  setSessionModel: async (sessionId, modelId, reasoningId, optionValues) => {
+  setSessionModel: async (sessionId, modelId, _reasoningId, optionValues) => {
     try {
       const summary = await api.setSessionModel(sessionId, {
         modelId,

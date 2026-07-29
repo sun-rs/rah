@@ -8,7 +8,7 @@ import {
   ChevronRight,
   LoaderCircle,
 } from "lucide-react";
-import React, { useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { FeedEntry } from "../../types";
 import { entryActivityDescriptor } from "./assistant-process-groups";
 import { ConversationActivityActionIcon } from "./conversation-activity-display";
@@ -96,7 +96,7 @@ function entryArtifacts(entry: FeedEntry): ToolCallArtifact[] {
   return [];
 }
 
-function entryDetailState(entry: FeedEntry, descriptor: ConversationActivityDescriptor | null) {
+function entryDetailState(entry: FeedEntry) {
   if (entry.kind === "tool_call") {
     return {
       available: entry.toolCall.detailAvailable === true,
@@ -383,7 +383,7 @@ export function ProcessActivityEntry(props: {
   const [detailLoading, setDetailLoading] = useState(false);
   const descriptor = descriptorForEntry(props.entry);
   const artifacts = entryArtifacts(props.entry);
-  const detailState = entryDetailState(props.entry, descriptor);
+  const detailState = entryDetailState(props.entry);
   const status = statusForEntry(props.entry);
   const error =
     props.entry.kind === "tool_call" || props.entry.kind === "observation"

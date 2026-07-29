@@ -1,6 +1,6 @@
-# History Quality Plan
+# History Quality Boundary
 
-日期：2026-05-08
+复核日期：2026-07-29
 
 本文件记录当前 provider-native 主线下的历史浏览质量边界。当前历史浏览覆盖 Codex、Claude、OpenCode；其它模型家族通过 OpenCode/API provider 承载。
 

@@ -943,15 +943,6 @@ function appendDeltaIfNew(
   return true;
 }
 
-function consumeDelta(store: Map<string, string[]>, key: string): string | undefined {
-  const existing = store.get(key);
-  if (!existing || existing.length === 0) {
-    return undefined;
-  }
-  store.delete(key);
-  return existing.join("");
-}
-
 function appendProcessOutputIfNew(
   store: Map<string, BoundedProcessOutputAccumulator>,
   lastDeltaByKey: Map<string, string>,

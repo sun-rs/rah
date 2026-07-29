@@ -5,7 +5,6 @@ import type {
   ConversationTurnDetailResponse,
   ConversationTurnDelta,
   ConversationTurnProjection,
-  ConversationTurnsPageResponse,
 } from "@rah/runtime-protocol";
 import { summarizeConversationActivities } from "@rah/runtime-protocol";
 import * as api from "./api";

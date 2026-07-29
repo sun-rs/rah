@@ -487,9 +487,18 @@ Conversation 正文。生产 daemon 的目录发现必须遵循：
    Work 对话和明确标记为 subagent 的内部 rollout；物理文件与标题索引不能替代该边界。
 8. catalog snapshot 与 provider metadata cache 具有 visibility contract version。完整扫描清理旧
    row；不完整扫描保留 last-good，不能因一次中断扫描让 Sidebar 数量抖动。
+9. 扫描结果、启动快照和持久化快照在进入 Session 投影前都必须按
+   `{provider, providerSessionId}` 规范化：空 identity 直接拒绝，同一快照内 active/archive
+   短暂并存时保留 active，其他重复项按最新 provider 时间和稳定 storage path 决定。完整扫描的
+   规范化结果仍是权威集合；不完整扫描只原位 upsert，不重排或删除未观察到的 last-good row。
 
 因此 Recent 的“快”不以牺牲一致性为代价，All 的“准”也不能成为启动、Resume 或 Chat 首屏的
 串行依赖。
+
+用户选中 Session 后的读取顺序同样固定为 `Chat -> Changes/Files -> Outputs/Sources`。后两阶段
+在 Chat 可读后按顺序启动但并发完成，Inspector tab 只消费共享缓存。前端最多保留 40 条不含正文
+的本地阶段计时，并发布 `rah:session-view-performance` 供回归诊断；这些诊断不持久化、不上传，
+也不进入 RAH 会话协议。
 
 Stop 的前端收口也遵循同一边界：close API 成功即应用权威 stopped summary、关闭 Closing 层并允许继续操作；随后 workbench/catalog refresh 只做 fire-and-forget metadata 校准，不能延长用户等待时间。
 

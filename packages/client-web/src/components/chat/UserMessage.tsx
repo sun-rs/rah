@@ -7,7 +7,7 @@ import {
   File,
   Image as ImageIcon,
 } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { readAttachment } from "../../api";
 import { copyTextToClipboard } from "../../clipboard";
 import { DATA_IMAGE_URL_PATTERN } from "../../composer-image-attachments";

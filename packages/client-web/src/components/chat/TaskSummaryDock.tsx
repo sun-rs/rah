@@ -1,4 +1,4 @@
-import React, { useId, useState } from "react";
+import { useId, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Circle, ListChecks, LoaderCircle } from "lucide-react";
 import { usePwaDisplayMode } from "../../hooks/usePwaDisplayMode";
 import { MarkdownRenderer } from "./MarkdownRenderer";

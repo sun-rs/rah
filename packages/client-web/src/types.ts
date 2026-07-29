@@ -439,19 +439,6 @@ function createOperationEntry(
   };
 }
 
-function createRuntimeStatusEntry(
-  entry: Omit<Extract<FeedEntry, { kind: "runtime_status" }>, "turnId">,
-  turnId?: string,
-): Extract<FeedEntry, { kind: "runtime_status" }> {
-  if (turnId === undefined) {
-    return entry;
-  }
-  return {
-    ...entry,
-    turnId,
-  };
-}
-
 function createNotificationEntry(
   entry: Omit<Extract<FeedEntry, { kind: "notification" }>, "turnId">,
   turnId?: string,

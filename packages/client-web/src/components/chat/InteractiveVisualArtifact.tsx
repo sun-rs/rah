@@ -1,6 +1,6 @@
 import type { TimelineVisualArtifact } from "@rah/runtime-protocol";
 import { AlertCircle, LoaderCircle } from "lucide-react";
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { readSessionConversationVisualArtifactDocument } from "../../api";
 import { useTheme } from "../../hooks/useTheme";
 

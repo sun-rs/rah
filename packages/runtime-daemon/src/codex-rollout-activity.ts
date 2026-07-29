@@ -470,7 +470,6 @@ function stripCodexContextualFragments(text: string): string {
 
 function shouldSkipDuplicateTimelineText(
   state: CodexRolloutTranslationState,
-  record: Record<string, unknown>,
   kind: "user_message" | "assistant_message" | "reasoning",
   text: string,
 ): boolean {
@@ -1160,23 +1159,6 @@ function completeObservation(
   };
 }
 
-function runningTerminalObservation(
-  observation: WorkbenchObservation,
-  sessionId: number,
-  output?: string,
-): WorkbenchObservation {
-  const artifacts = [...(observation.detail?.artifacts ?? [])];
-  if (output) {
-    artifacts.push({ kind: "text", label: "output", text: output });
-  }
-  return {
-    ...observation,
-    status: "running",
-    summary: `Process running with session ID ${sessionId}.`,
-    detail: { artifacts },
-  };
-}
-
 function completedRunningTerminalObservation(
   observation: WorkbenchObservation,
   sessionId: number,
@@ -1708,7 +1690,7 @@ function translateCodexRolloutLineUnscoped(
     }
     if (payload.type === "agent_reasoning" && typeof payload.text === "string") {
       const text = sanitizeCodexReasoningText(payload.text);
-      if (!text || shouldSkipDuplicateTimelineText(state, record, "reasoning", text)) {
+      if (!text || shouldSkipDuplicateTimelineText(state, "reasoning", text)) {
         return [];
       }
       const identity = createHistoryTimelineIdentity(state, {
@@ -1742,7 +1724,6 @@ function translateCodexRolloutLineUnscoped(
       const phase = assistantMessagePhase(payload);
       if (shouldSkipDuplicateTimelineText(
         state,
-        record,
         "assistant_message",
         codexAssistantContentSignature(parsed),
       )) {
@@ -1913,7 +1894,7 @@ function translateCodexRolloutLineUnscoped(
       if (!text && imageCount === 0) {
         return [];
       }
-      if (text && shouldSkipDuplicateTimelineText(state, record, "user_message", text)) {
+      if (text && shouldSkipDuplicateTimelineText(state, "user_message", text)) {
         return [];
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
@@ -1973,7 +1954,6 @@ function translateCodexRolloutLineUnscoped(
       const phase = assistantMessagePhase(payload);
       if (shouldSkipDuplicateTimelineText(
         state,
-        record,
         "assistant_message",
         codexAssistantContentSignature(parsed),
       )) {

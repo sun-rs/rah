@@ -1,5 +1,4 @@
 import {
-  default as React,
   isValidElement,
   memo,
   useEffect,

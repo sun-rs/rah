@@ -26,6 +26,7 @@ import {
   type ConversationResourceIndex,
 } from "./inspector/conversation-resource-index";
 import {
+  loadCachedSessionInspectorPrimary,
   normalizeInspectorGitStatus,
   readCachedSessionInspectorPrimary,
   subscribeSessionInspectorPrimary,
@@ -241,6 +242,25 @@ export function InspectorPane(props: {
     setGitStatusLoading(true);
     setGitStatusError(null);
     try {
+      const defaultSessionComparison =
+        sessionId &&
+        (!baseBranch ||
+          (gitStatus?.comparisonMode === "uncommitted" &&
+            baseBranch === (gitStatus.branch ?? gitStatus.baseBranch)));
+      if (defaultSessionComparison) {
+        const snapshot = await loadCachedSessionInspectorPrimary({
+          sessionId,
+          workspaceRoot,
+          refresh: true,
+        });
+        if (gitStatusRequestRef.current !== requestId) {
+          return;
+        }
+        setGitStatus(snapshot.gitStatus);
+        setSelectedBaseBranch(snapshot.gitStatus?.baseBranch);
+        setGitStatusError(snapshot.gitStatusError);
+        return;
+      }
       const response = sessionId
         ? await readGitStatus(sessionId, {
             ...(workspaceRoot ? { scopeRoot: workspaceRoot } : {}),

@@ -52,6 +52,7 @@ describe("PtyHub", () => {
     assert.equal(replay?.nextSeq, 3);
     assert.equal(replay?.droppedBeforeSeq, 1);
     assert.deepEqual(replay?.chunks, ["b", "c"]);
+    unsubscribe();
   });
 
   test("bounds replay by bytes and keeps the newest oversized chunk", () => {

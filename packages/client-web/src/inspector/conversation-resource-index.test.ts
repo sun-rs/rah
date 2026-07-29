@@ -9,7 +9,6 @@ import {
 import {
   invalidateCachedConversationResourceIndex,
   loadCachedConversationResourceIndex,
-  loadConversationResourceIndex,
   readCachedConversationResourceIndex,
   resetConversationResourceIndexCacheForTests,
   subscribeConversationResourceIndex,
@@ -63,35 +62,15 @@ function response(
   };
 }
 
-test("loads one detached daemon index as the only session resource authority", async () => {
-  const requests: Array<{ sessionId: string; refresh?: boolean }> = [];
-  const result = await loadConversationResourceIndex({
-    sessionId: "session-1",
-    refresh: true,
-    dependencies: {
-      readIndex: async (sessionId, options) => {
-        requests.push({ sessionId, ...(options?.refresh ? { refresh: true } : {}) });
-        return response("revision-1", {
-          outputs: [output("history-output")],
-          sources: [source("history-source")],
-        });
-      },
-    },
-  });
-
-  assert.deepEqual(requests, [{ sessionId: "session-1", refresh: true }]);
-  assert.deepEqual(result.outputs.map((entry) => entry.id), ["history-output"]);
-  assert.deepEqual(result.sources.map((entry) => entry.id), ["history-source"]);
-});
-
 test("rejects a legacy unversioned resource-index response", async () => {
+  resetConversationResourceIndexCacheForTests();
   const legacyResponse = {
     ...response("legacy-revision"),
   } as Partial<ConversationResourceIndexResponse>;
   delete legacyResponse.protocolVersion;
 
   await assert.rejects(
-    loadConversationResourceIndex({
+    loadCachedConversationResourceIndex({
       sessionId: "session-1",
       dependencies: {
         readIndex: async () =>
@@ -100,6 +79,7 @@ test("rejects a legacy unversioned resource-index response", async () => {
     }),
     /incompatible Outputs\/Sources index protocol/,
   );
+  resetConversationResourceIndexCacheForTests();
 });
 
 test("shares one request and reuses a freshly validated client cache", async () => {
@@ -161,6 +141,59 @@ test("manual invalidation forces a new daemon request", async () => {
 
   assert.deepEqual(requests, [{}, { refresh: true }]);
   assert.deepEqual(refreshed.outputs.map((entry) => entry.id), ["output-2"]);
+  resetConversationResourceIndexCacheForTests();
+});
+
+test("manual invalidation preserves the last stable index until refresh commits", async () => {
+  resetConversationResourceIndexCacheForTests();
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let requestCount = 0;
+  const dependencies = {
+    readIndex: async () => {
+      requestCount += 1;
+      if (requestCount === 2) {
+        await refreshGate;
+      }
+      return response(`revision-${requestCount}`, {
+        outputs: [output(`output-${requestCount}`)],
+      });
+    },
+  };
+  await loadCachedConversationResourceIndex({
+    sessionId: "stable-refresh-session",
+    dependencies,
+  });
+  const observedIds: string[][] = [];
+  const unsubscribe = subscribeConversationResourceIndex(
+    "stable-refresh-session",
+    (snapshot) => {
+      if (snapshot) {
+        observedIds.push(snapshot.index.outputs.map((entry) => entry.id));
+      }
+    },
+  );
+
+  invalidateCachedConversationResourceIndex("stable-refresh-session");
+  const refreshing = loadCachedConversationResourceIndex({
+    sessionId: "stable-refresh-session",
+    dependencies,
+  });
+  await Promise.resolve();
+  assert.deepEqual(
+    readCachedConversationResourceIndex(
+      "stable-refresh-session",
+    )?.index.outputs.map((entry) => entry.id),
+    ["output-1"],
+  );
+  assert.equal(observedIds.some((ids) => ids.length === 0), false);
+
+  releaseRefresh();
+  await refreshing;
+  assert.deepEqual(observedIds.at(-1), ["output-2"]);
+  unsubscribe();
   resetConversationResourceIndexCacheForTests();
 });
 
@@ -269,25 +302,22 @@ test("follows progressive daemon work without publishing unstable resource snaps
   resetConversationResourceIndexCacheForTests();
 });
 
-test("restarts a shared request cancelled by a previous selected view", async () => {
+test("a cancelled view stops waiting without cancelling the shared request", async () => {
   resetConversationResourceIndexCacheForTests();
   const firstController = new AbortController();
   let requestCount = 0;
+  let releaseIndex!: () => void;
+  const indexGate = new Promise<void>((resolve) => {
+    releaseIndex = resolve;
+  });
   const dependencies = {
     readIndex: async (
       _sessionId: string,
       options?: { signal?: AbortSignal },
     ) => {
       requestCount += 1;
-      if (requestCount === 1) {
-        return new Promise<ConversationResourceIndexResponse>((_resolve, reject) => {
-          options?.signal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("cancelled", "AbortError")),
-            { once: true },
-          );
-        });
-      }
+      assert.equal(options?.signal?.aborted, false);
+      await indexGate;
       return response("revision-reselected", {
         outputs: [output("reselected-output")],
       });
@@ -305,9 +335,10 @@ test("restarts a shared request cancelled by a previous selected view", async ()
 
   firstController.abort();
   await assert.rejects(cancelled, { name: "AbortError" });
+  releaseIndex();
   const result = await reselected;
 
-  assert.equal(requestCount, 2);
+  assert.equal(requestCount, 1);
   assert.deepEqual(result.outputs.map((entry) => entry.id), [
     "reselected-output",
   ]);

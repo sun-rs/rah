@@ -12,6 +12,7 @@ import test from "node:test";
 import type {
   ConversationItemProjection,
   ConversationOutputProjection,
+  ConversationResourceIndexResponse,
   ConversationSourceProjection,
   ConversationTurnProjection,
   ConversationTurnsPageResponse,
@@ -597,6 +598,7 @@ test("restores a stable index after daemon restart without rescanning history", 
       readTurnDetail: async () => undefined,
     });
     assert.equal(initial.stable, true);
+    await firstStore.flushPersistence();
 
     let historyReads = 0;
     const restartedStore = new ConversationResourceIndexStore({
@@ -652,6 +654,7 @@ test("restored turn fingerprints make an appended history incremental", async ()
         }),
       }),
     });
+    await initialStore.flushPersistence();
 
     const second = turn("second", {
       startedAt: "2026-07-23T00:00:00.000Z",
@@ -708,6 +711,7 @@ test("persists a replacement only after its full index commits", async () => {
         ]),
       readTurnDetail: async () => undefined,
     });
+    await writer.flushPersistence();
 
     let releaseDetail!: () => void;
     const detailGate = new Promise<void>((resolve) => {
@@ -760,6 +764,7 @@ test("persists a replacement only after its full index commits", async () => {
       await new Promise((resolve) => setImmediate(resolve));
       completed = await writer.load(revisionTwoOptions);
     }
+    await writer.flushPersistence();
 
     const restartedReader = new ConversationResourceIndexStore({
       persistenceRoot,
@@ -776,6 +781,89 @@ test("persists a replacement only after its full index commits", async () => {
       persistedAfterCommit.outputs.map((entry) => entry.id),
       ["new-output"],
     );
+  } finally {
+    await rm(persistenceRoot, { recursive: true, force: true });
+  }
+});
+
+test("coalesces superseded background persistence for the same session", async () => {
+  const persistenceRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rah-resource-index-coalesce-"),
+  );
+  try {
+    const writer = new ConversationResourceIndexStore({
+      persistenceRoot,
+    });
+    const writerInternals = writer as unknown as {
+      persistStableEntry: (
+        sessionId: string,
+        entry: {
+          sourceRevision: string;
+          response: ConversationResourceIndexResponse;
+          turns: ReadonlyMap<string, unknown>;
+        },
+      ) => Promise<void>;
+    };
+    const originalPersist = writerInternals.persistStableEntry.bind(writer);
+    const persistedRevisions: string[] = [];
+    let releaseFirstPersist!: () => void;
+    const firstPersistGate = new Promise<void>((resolve) => {
+      releaseFirstPersist = resolve;
+    });
+    writerInternals.persistStableEntry = async (sessionId, entry) => {
+      persistedRevisions.push(entry.sourceRevision);
+      if (persistedRevisions.length === 1) {
+        await firstPersistGate;
+      }
+      await originalPersist(sessionId, entry);
+    };
+
+    const loadRevision = async (revision: string) => {
+      const options = {
+        sessionId: "coalesced-session",
+        sourceRevision: revision,
+        progressive: true,
+        readTurns: async () =>
+          page([
+            turn(revision, {
+              view: "full" as const,
+              outputs: [output(revision)],
+            }),
+          ]),
+        readTurnDetail: async () => undefined,
+      };
+      let result = await writer.load(options);
+      while (result.indexing) {
+        await new Promise((resolve) => setImmediate(resolve));
+        result = await writer.load(options);
+      }
+      return result;
+    };
+
+    await loadRevision("revision-1");
+    while (persistedRevisions.length === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await loadRevision("revision-2");
+    await loadRevision("revision-3");
+    releaseFirstPersist();
+    await writer.flushPersistence();
+
+    assert.deepEqual(persistedRevisions, ["revision-1", "revision-3"]);
+    const restartedReader = new ConversationResourceIndexStore({
+      persistenceRoot,
+    });
+    const restored = await restartedReader.load({
+      sessionId: "coalesced-session",
+      sourceRevision: "revision-3",
+      readTurns: async () => {
+        throw new Error("the newest coalesced snapshot should be restored");
+      },
+      readTurnDetail: async () => undefined,
+    });
+    assert.deepEqual(restored.outputs.map((entry) => entry.id), [
+      "revision-3",
+    ]);
   } finally {
     await rm(persistenceRoot, { recursive: true, force: true });
   }
@@ -801,6 +889,7 @@ test("rejects an incompatible persisted protocol instead of publishing legacy da
         ]),
       readTurnDetail: async () => undefined,
     });
+    await initialStore.flushPersistence();
     const [cacheName] = await readdir(persistenceRoot);
     assert.ok(cacheName);
     const cachePath = path.join(persistenceRoot, cacheName);
@@ -858,6 +947,7 @@ test("rejects a persisted envelope whose committed snapshot revision does not ma
         ]),
       readTurnDetail: async () => undefined,
     });
+    await initialStore.flushPersistence();
     const [cacheName] = await readdir(persistenceRoot);
     assert.ok(cacheName);
     const cachePath = path.join(persistenceRoot, cacheName);

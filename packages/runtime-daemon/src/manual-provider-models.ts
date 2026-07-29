@@ -86,7 +86,7 @@ function normalizeId(value: unknown, field: string): string {
   return trimmed;
 }
 
-function normalizeManualModelId(provider: ProviderKind, value: unknown): string {
+function normalizeManualModelId(value: unknown): string {
   const id = normalizeId(value, "model id");
   return id;
 }
@@ -185,7 +185,7 @@ function sanitizeStoredModel(value: ManualProviderModel): ManualProviderModel | 
   try {
     const provider = value.provider;
     requireCoreProvider(provider);
-    const id = normalizeManualModelId(provider, value.id);
+    const id = normalizeManualModelId(value.id);
     const optionIds = normalizeOptionIds(provider, value.optionIds ?? []);
     return {
       provider,
@@ -307,7 +307,7 @@ export class ManualProviderModelStore {
   async add(provider: ProviderKind, request: AddManualProviderModelRequest): Promise<ManualProviderModel> {
     requireCoreProvider(provider);
     this.loadIfNeeded();
-    const id = normalizeManualModelId(provider, request.id);
+    const id = normalizeManualModelId(request.id);
     const optionIds = normalizeOptionIds(provider, request.optionIds ?? []);
     if (this.models.some((model) => model.provider === provider && model.id === id)) {
       throw new Error(`Bad Request: manual model '${id}' already exists for ${provider}.`);

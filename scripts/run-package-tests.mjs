@@ -40,6 +40,23 @@ async function collectTests(root) {
   return files;
 }
 
+async function findNearestTsconfig(filePath) {
+  let directory = path.dirname(filePath);
+  const filesystemRoot = path.parse(directory).root;
+  while (directory !== filesystemRoot) {
+    const candidate = path.join(directory, "tsconfig.json");
+    try {
+      if ((await stat(candidate)).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // This package does not own a tsconfig; continue toward the repository root.
+    }
+    directory = path.dirname(directory);
+  }
+  return undefined;
+}
+
 const testFiles = (await Promise.all(roots.map(collectTests))).flat().sort();
 if (testFiles.length === 0) {
   throw new Error(`No tests found under: ${roots.join(", ")}`);
@@ -54,12 +71,19 @@ if (!Number.isInteger(parsedConcurrency) || parsedConcurrency < 1) {
 
 async function runTestFile(testFile) {
   const relativeTestFile = path.relative(process.cwd(), testFile);
+  const tsconfigPath = await findNearestTsconfig(testFile);
   console.log(`\n[test-file] ${relativeTestFile}`);
   await new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
       ["--import", "tsx", "--test", "--test-force-exit", testFile],
-      { stdio: "inherit" },
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          ...(tsconfigPath ? { TSX_TSCONFIG_PATH: tsconfigPath } : {}),
+        },
+      },
     );
     child.once("error", reject);
     child.once("exit", (code, signal) => {

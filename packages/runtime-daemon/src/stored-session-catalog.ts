@@ -56,7 +56,8 @@ function isCatalogRecord(
     typeof record.ref === "object" &&
     !Array.isArray(record.ref) &&
     record.ref.provider === provider &&
-    typeof record.ref.providerSessionId === "string"
+    typeof record.ref.providerSessionId === "string" &&
+    record.ref.providerSessionId.trim().length > 0
   );
 }
 

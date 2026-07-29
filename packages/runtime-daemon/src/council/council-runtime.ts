@@ -24,7 +24,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { isNativeLocalServerProvider } from "@rah/runtime-protocol";
 import { fileURLToPath } from "node:url";
-import type { ProviderMcpServerSpec, StartSessionMcpOptions } from "../provider-mcp-server-spec";
+import type { StartSessionMcpOptions } from "../provider-mcp-server-spec";
 import type { EventBus } from "../event-bus";
 import { CouncilStore } from "./council-store";
 import {
@@ -38,7 +38,6 @@ import { isClientVisibleCouncilMessage } from "./council-message-visibility";
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT = 100;
 const CLAUDE_COUNCIL_MCP_READY_TIMEOUT_MS = 30_000;
-type CouncilProvider = CouncilSnapshot["agents"][number]["provider"];
 type CouncilBootstrapPromptWriteResult = "sent" | "queued" | "skipped";
 
 export type CouncilRuntimeOptions = {

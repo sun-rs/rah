@@ -877,17 +877,6 @@ export class CodexStoredHistoryAdapter
     });
   }
 
-  private resolveCanFinalizeStoredHistory(
-    record: CodexStoredSessionRecord,
-  ): Promise<boolean> {
-    return this.historyLiveness.resolve({
-      rolloutPath: record.rolloutPath,
-      hasRahManagedWriter: this.hasRahManagedCodexWriter(
-        record.ref.providerSessionId,
-      ),
-    });
-  }
-
   private hasRahManagedCodexWriter(providerSessionId: string): boolean {
     const managed = this.services.sessionStore.findManagedByProviderSession(
       "codex",

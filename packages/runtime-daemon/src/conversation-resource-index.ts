@@ -53,6 +53,12 @@ type CacheEntry = {
   turns: Map<string, CachedTurnResources>;
 };
 
+type StableCacheEntry = {
+  sourceRevision: string;
+  response: ConversationResourceIndexResponse;
+  turns: ReadonlyMap<string, CachedTurnResources>;
+};
+
 type PersistedResourceIndex = {
   version: typeof PERSISTED_INDEX_VERSION;
   sessionId: string;
@@ -545,6 +551,8 @@ export class ConversationResourceIndexStore {
   private readonly maxDiskBytes: number;
   private readonly maxDiskEntries: number;
   private readonly maxPersistedEntryBytes: number;
+  private readonly pendingPersistence = new Map<string, StableCacheEntry>();
+  private persistenceDrain?: Promise<void>;
   private prunePromise?: Promise<void>;
 
   constructor(
@@ -631,14 +639,18 @@ export class ConversationResourceIndexStore {
       previousTurns: activeEntry.turns,
     })
       .then(async (result) => {
-        await this.persistStableEntry(options.sessionId, {
+        const stableEntry = {
           sourceRevision: options.sourceRevision,
           response: result.response,
           turns: result.turns,
-        });
+        };
         activeEntry.sourceRevision = options.sourceRevision;
         activeEntry.response = result.response;
         activeEntry.turns = result.turns;
+        this.schedulePersistStableEntry(
+          options.sessionId,
+          stableEntry,
+        );
         return result.response;
       })
       .catch((error) => {
@@ -696,6 +708,20 @@ export class ConversationResourceIndexStore {
   clear(): void {
     this.cache.clear();
     this.restorePromises.clear();
+  }
+
+  /**
+   * Waits for best-effort cache persistence. Runtime reads never use this as a
+   * response barrier; it exists for graceful shutdown and deterministic tests.
+   */
+  async flushPersistence(): Promise<void> {
+    while (this.pendingPersistence.size > 0 || this.persistenceDrain) {
+      this.ensurePersistenceDrain();
+      const drain = this.persistenceDrain;
+      if (drain) {
+        await drain;
+      }
+    }
   }
 
   private async getOrCreateEntry(sessionId: string): Promise<CacheEntry> {
@@ -768,11 +794,7 @@ export class ConversationResourceIndexStore {
 
   private async persistStableEntry(
     sessionId: string,
-    entry: {
-      sourceRevision: string;
-      response: ConversationResourceIndexResponse;
-      turns: ReadonlyMap<string, CachedTurnResources>;
-    },
+    entry: StableCacheEntry,
   ): Promise<void> {
     const cachePath = this.cachePath(sessionId);
     if (!cachePath) return;
@@ -813,6 +835,46 @@ export class ConversationResourceIndexStore {
       }
       // Persistence is an acceleration layer. The completed in-memory index
       // remains authoritative when the cache directory is unavailable.
+    }
+  }
+
+  private schedulePersistStableEntry(
+    sessionId: string,
+    entry: StableCacheEntry,
+  ): void {
+    // A provider-owned live session can advance several source revisions while
+    // the disk is still writing an older full index. Only the newest stable
+    // snapshot per session is useful after restart, so superseded writes are
+    // coalesced instead of growing an unbounded serialization queue.
+    this.pendingPersistence.set(sessionId, entry);
+    this.ensurePersistenceDrain();
+  }
+
+  private ensurePersistenceDrain(): void {
+    if (this.persistenceDrain || this.pendingPersistence.size === 0) return;
+    const drain = this.drainPendingPersistence();
+    this.persistenceDrain = drain.finally(() => {
+      if (this.persistenceDrain) {
+        delete this.persistenceDrain;
+      }
+      // A new snapshot may have arrived after the drain's final map check.
+      this.ensurePersistenceDrain();
+    });
+  }
+
+  private async drainPendingPersistence(): Promise<void> {
+    // Keep serialization and filesystem work outside the response microtask.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    while (this.pendingPersistence.size > 0) {
+      const next = this.pendingPersistence.entries().next().value as
+        | [string, StableCacheEntry]
+        | undefined;
+      if (!next) return;
+      const [sessionId, entry] = next;
+      this.pendingPersistence.delete(sessionId);
+      await this.persistStableEntry(sessionId, entry);
     }
   }
 

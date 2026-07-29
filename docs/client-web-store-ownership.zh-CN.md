@@ -1,6 +1,6 @@
 # client-web store ownership
 
-复核日期：2026-07-15
+复核日期：2026-07-29
 
 ## 原则
 
@@ -81,6 +81,44 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 - client/connection id。
 - initial load one-shot gate。
 - 最近历史选择恢复。
+
+## Selected Session 与 Inspector 预加载
+
+用户选中 Session 后，`session-view-preload.ts` 统一拥有浏览热路径的启动顺序：
+
+1. 先 hydrate Chat 最近历史，让正文尽快可读。
+2. Chat 可用后，先启动 Changes/Files，再启动 Outputs/Sources。
+3. 后两项保持启动优先级，但不能互相形成完成屏障；大型 Git worktree 不能阻塞历史资源索引，
+   反过来也一样。
+
+Inspector tab 只是缓存消费者。打开 Changes、Files、Outputs 或 Sources 不得临时创建另一条扫描，
+也不得让计数从零逐项增长。默认未提交 Changes 的手动刷新继续复用同一 primary cache；只有用户
+明确选择其他 comparison branch 时才发起该分支专属请求。
+
+缓存与 React view 的生命周期必须分离：
+
+- cache entry 拥有底层 `AbortController` 和共享 Promise；
+- view 的 `AbortSignal` 只表示该 view 不再等待，不能取消其他 view 正在复用的 cache fill；
+- cache LRU 淘汰或测试 reset 才能取消底层请求；
+- Session A → B → A 的快速切换必须能够加入 A 原有请求，不能继承第一次 A view 的 abort；
+- refresh 失败保留 last-good Changes/Files/Outputs/Sources，只更新 error/warning；
+- invalidate 标记下一次强制校验，不先清空已经可见的稳定内容。
+
+这套规则由 `session-inspector-primary-cache.ts`、`conversation-resource-index.ts` 与
+`shared-cache-request.ts` 共同实现。不得在具体 pane 内复制一套请求状态。
+
+`session-view-performance.ts` 在同一入口记录有界的本地诊断：
+
+- 每次选择只记录 Session ID、workspace root、三个阶段的开始/完成时间、结果和缓存可用性；
+- 不记录 Conversation 正文、文件内容、命令、附件或 Provider 原始事件；
+- 最多保留最近 40 次，不写 `localStorage`、不发网络、不进入 canonical event history；
+- 每次状态变化发布 `rah:session-view-performance` 浏览器事件，供真实浏览器回归和开发者工具
+  读取；它不是用户 UI 状态，也不能反向驱动预加载；
+- `aborted` 只结束本次 view 等待。共享 cache fill 继续服从 cache owner，迟到完成不能改写另一
+  次 Session 选择的 trace。
+
+这条观测用于回答“慢在 Chat、Git/Files 还是 Outputs/Sources”，不能为了缩短数字而改变正确的
+加载顺序或提前传输低概率内容。
 
 ## Model catalog 边界
 

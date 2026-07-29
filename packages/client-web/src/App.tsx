@@ -13,7 +13,7 @@ import {
 } from "react";
 import { Eraser, MessageCircleMore, Plus, RotateCcw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionQueuedInput, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionQueuedInput, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
 import type { SessionProjection } from "./types";
@@ -490,7 +490,6 @@ export function App() {
     forkSession,
     startScenario,
     activateHistorySession,
-    attachSession,
     closeSession,
     renameSession,
     setSessionMode,
@@ -555,7 +554,6 @@ export function App() {
       forkSession: state.forkSession,
       startScenario: state.startScenario,
       activateHistorySession: state.activateHistorySession,
-      attachSession: state.attachSession,
       closeSession: state.closeSession,
       renameSession: state.renameSession,
       setSessionMode: state.setSessionMode,
@@ -632,7 +630,6 @@ export function App() {
   );
   const {
     councils,
-    councilsLoaded,
     selectedCouncilId,
     setSelectedCouncilId,
     unreadCouncilIds,
@@ -728,7 +725,6 @@ export function App() {
     setMobileCanvasLayout,
     setCanvasPaneTargets,
     setCanvasMaximizedPaneId,
-    setCanvasPendingSessionActions,
     setCanvasPaneRightPanelOpen,
     toggleCanvasPaneRightPanel,
     markCanvasResumePending,

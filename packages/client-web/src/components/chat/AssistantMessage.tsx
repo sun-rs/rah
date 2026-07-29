@@ -1,5 +1,4 @@
 import type { TimelineAssistantContentPart } from "@rah/runtime-protocol";
-import React from "react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { InteractiveVisualArtifact } from "./InteractiveVisualArtifact";
 

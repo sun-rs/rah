@@ -38,8 +38,9 @@ test("preloads Chat, then launches Changes/Files before Outputs/Sources without 
 
   assert.deepEqual(calls, ["chat"]);
   chat.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   assert.deepEqual(calls, ["chat", "changes-files", "outputs-sources"]);
   resources.resolve();
   await Promise.resolve();
@@ -92,4 +93,49 @@ test("attempts lower-priority stages after a non-cancellation stage failure", as
   });
 
   assert.deepEqual(calls, ["chat", "changes-files", "outputs-sources"]);
+});
+
+test("rapid selection replacement cannot start stale lower-priority work", async () => {
+  const staleChat = deferred();
+  const staleController = new AbortController();
+  const calls: string[] = [];
+  const stale = runSessionViewPreloadStages({
+    signal: staleController.signal,
+    dependencies: {
+      hydrateConversation: () => {
+        calls.push("a:chat");
+        return staleChat.promise;
+      },
+      loadChangesAndFiles: async () => {
+        calls.push("a:changes-files");
+      },
+      loadOutputsAndSources: async () => {
+        calls.push("a:outputs-sources");
+      },
+    },
+  });
+
+  await runSessionViewPreloadStages({
+    dependencies: {
+      hydrateConversation: async () => {
+        calls.push("b:chat");
+      },
+      loadChangesAndFiles: async () => {
+        calls.push("b:changes-files");
+      },
+      loadOutputsAndSources: async () => {
+        calls.push("b:outputs-sources");
+      },
+    },
+  });
+
+  staleController.abort();
+  staleChat.resolve();
+  await assert.rejects(stale, { name: "AbortError" });
+  assert.deepEqual(calls, [
+    "a:chat",
+    "b:chat",
+    "b:changes-files",
+    "b:outputs-sources",
+  ]);
 });

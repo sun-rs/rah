@@ -9,7 +9,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import React from "react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export function ComposerInputQueue(props: {

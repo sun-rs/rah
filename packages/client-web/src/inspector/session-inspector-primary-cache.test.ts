@@ -97,25 +97,65 @@ test("keeps partial stage failures isolated instead of blocking resource preload
   resetSessionInspectorPrimaryCacheForTests();
 });
 
-test("restarts a shared stage cancelled by a previous selected view", async () => {
+test("refresh failures preserve the last good Changes and Files snapshot", async () => {
+  resetSessionInspectorPrimaryCacheForTests();
+  let failRefresh = false;
+  const dependencies = {
+    readGitStatus: async () => {
+      if (failRefresh) {
+        throw new Error("git refresh unavailable");
+      }
+      return status();
+    },
+    listDirectory: async () => {
+      if (failRefresh) {
+        throw new Error("directory refresh unavailable");
+      }
+      return {
+        path: "/workspace",
+        entries: [{ name: "src", type: "directory" as const }],
+      };
+    },
+  };
+  await loadCachedSessionInspectorPrimary({
+    sessionId: "stable-session",
+    workspaceRoot: "/workspace",
+    dependencies,
+  });
+  failRefresh = true;
+
+  const refreshed = await loadCachedSessionInspectorPrimary({
+    sessionId: "stable-session",
+    workspaceRoot: "/workspace",
+    refresh: true,
+    dependencies,
+  });
+
+  assert.equal(refreshed.gitStatus?.branch, "main");
+  assert.deepEqual(refreshed.rootEntries, [
+    { name: "src", type: "directory" },
+  ]);
+  assert.equal(refreshed.gitStatusError, "git refresh unavailable");
+  assert.equal(refreshed.directoryError, "directory refresh unavailable");
+  resetSessionInspectorPrimaryCacheForTests();
+});
+
+test("a cancelled view stops waiting without cancelling the shared stage", async () => {
   resetSessionInspectorPrimaryCacheForTests();
   const firstController = new AbortController();
   let gitRequests = 0;
+  let releaseGit!: () => void;
+  const gitGate = new Promise<void>((resolve) => {
+    releaseGit = resolve;
+  });
   const dependencies = {
     readGitStatus: async (
       _sessionId: string,
       options: { signal?: AbortSignal },
     ) => {
       gitRequests += 1;
-      if (gitRequests === 1) {
-        return new Promise<GitStatusResponse>((_resolve, reject) => {
-          options.signal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("cancelled", "AbortError")),
-            { once: true },
-          );
-        });
-      }
+      assert.equal(options.signal?.aborted, false);
+      await gitGate;
       return status();
     },
     listDirectory: async () => ({
@@ -137,9 +177,10 @@ test("restarts a shared stage cancelled by a previous selected view", async () =
 
   firstController.abort();
   await assert.rejects(cancelled, { name: "AbortError" });
+  releaseGit();
   const result = await reselected;
 
-  assert.equal(gitRequests, 2);
+  assert.equal(gitRequests, 1);
   assert.equal(result.gitStatus?.branch, "main");
   resetSessionInspectorPrimaryCacheForTests();
 });

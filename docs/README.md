@@ -7,9 +7,10 @@
 - [当前系统设计总览](./current-system-design.zh-CN.md)
 - [项目总览](./project-overview.zh-CN.md)
 - [Conversation 架构](./conversation-architecture.zh-CN.md)
-- [Conversation 架构收口审计](./conversation-architecture-audit.zh-CN.md)
 - [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
+- [TUI Surface 生命周期](./tui-surface-lifecycle.zh-CN.md)
+- [Session Library 与 Archive](./session-library-archive-refactor.zh-CN.md)
 - [RAH 1.0 里程碑说明](./1.0-notes.zh-CN.md)
 - [Claude Tmux Native Mode 边界](./claude-tmux-native-mode.zh-CN.md)
 - [Council Listening Control 边界](./council-listening-control.zh-CN.md)
@@ -35,7 +36,7 @@
 ## 3. 历史、状态与质量
 
 - [Codex 历史 liveness 与 pending tool 收口边界](./codex-history-liveness.zh-CN.md)
-- [History Quality Plan](./history-quality-plan.zh-CN.md)
+- [History Quality Boundary](./history-quality-boundary.zh-CN.md)
 - [Client Web Store Ownership](./client-web-store-ownership.zh-CN.md)
 - [Workbench Boundary](./workbench-boundary.md)
 
@@ -45,6 +46,7 @@
 - [UI 回归清单](./ui-regression-checklist.zh-CN.md)
 - [Provider Regression Testing](./provider-regression-testing.zh-CN.md)
 - [Native TUI Real CLI QA](./native-tui-real-cli-qa.zh-CN.md)
+- [Session Control Capability Smoke](./session-control-capability-smoke.zh-CN.md)
 - [Production Regression E2E Suite](./production-regression-e2e-suite.zh-CN.md)
 
 ## 维护规则

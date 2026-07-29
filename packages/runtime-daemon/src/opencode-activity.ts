@@ -1310,21 +1310,6 @@ function stepIndexForStartPart(
   return next;
 }
 
-function stepIndexForFinishPart(
-  state: OpenCodeActivityState,
-  partId: string,
-  turnId: string,
-): number {
-  const existing = state.stepIndexByPartId.get(partId);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const next = (state.nextStepIndexByTurnId.get(turnId) ?? 0) + 1;
-  state.nextStepIndexByTurnId.set(turnId, next);
-  state.stepIndexByPartId.set(partId, next);
-  return next;
-}
-
 function toolTitle(tool: string, state: Record<string, unknown>): string {
   if (typeof state.title === "string" && state.title) {
     return state.title;

@@ -100,3 +100,42 @@ test("catalog startup ignores snapshots and metadata from an older visibility co
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("catalog snapshot load and persistence enforce one canonical row per identity", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-catalog-canonical-"));
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_HOME = tempDir;
+  try {
+    await writeStoredSessionCatalogSnapshot([
+      {
+        ...record("duplicate"),
+        storagePath: "/archive/duplicate.jsonl",
+        archived: true,
+      },
+      {
+        ...record("duplicate"),
+        storagePath: "/history/duplicate.jsonl",
+        archived: false,
+      },
+      record(" "),
+    ]);
+
+    const loaded = loadStoredSessionCatalogSnapshot();
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0]?.storagePath, "/history/duplicate.jsonl");
+    const persisted = JSON.parse(
+      readFileSync(
+        path.join(tempDir, "stored-session-cache", "catalog.json"),
+        "utf8",
+      ),
+    ) as { records: StoredSessionCatalogRecord[] };
+    assert.equal(persisted.records.length, 1);
+  } finally {
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});

@@ -4,6 +4,7 @@ import {
   readGitStatus,
   type DirectoryListingResponse,
 } from "../api";
+import { waitForSharedRequest } from "../shared-cache-request";
 import type { DirectoryEntry, InspectorGitStatus } from "./shared";
 
 export type SessionInspectorPrimarySnapshot = {
@@ -28,6 +29,7 @@ type SessionInspectorPrimaryDependencies = {
 type SessionInspectorPrimaryCacheEntry = {
   snapshot: SessionInspectorPrimarySnapshot;
   validatedAt: number;
+  controller?: AbortController;
   promise?: Promise<SessionInspectorPrimarySnapshot>;
 };
 
@@ -51,13 +53,6 @@ function cacheKey(sessionId: string, workspaceRoot: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && error.name === "AbortError")
-  );
 }
 
 function sortDirectoryEntries(entries: readonly DirectoryEntry[]): DirectoryEntry[] {
@@ -92,6 +87,7 @@ function trimCache(): void {
   while (primaryCache.size > PRIMARY_CACHE_LIMIT) {
     const oldestKey = primaryCache.keys().next().value as string | undefined;
     if (!oldestKey) return;
+    primaryCache.get(oldestKey)?.controller?.abort();
     primaryCache.delete(oldestKey);
   }
 }
@@ -148,6 +144,9 @@ export function subscribeSessionInspectorPrimary(
 }
 
 export function resetSessionInspectorPrimaryCacheForTests(): void {
+  for (const entry of primaryCache.values()) {
+    entry.controller?.abort();
+  }
   primaryCache.clear();
   primaryListeners.clear();
 }
@@ -194,34 +193,36 @@ export async function loadCachedSessionInspectorPrimary(args: {
   if (!entry.promise) {
     const activeEntry = entry;
     const dependencies = args.dependencies ?? defaultDependencies;
+    const controller = new AbortController();
+    activeEntry.controller = controller;
     activeEntry.snapshot = { ...activeEntry.snapshot, complete: false };
     notify(key, activeEntry.snapshot);
 
     const request = Promise.allSettled([
       dependencies.readGitStatus(args.sessionId, {
         scopeRoot: args.workspaceRoot,
-        ...(args.signal ? { signal: args.signal } : {}),
+        signal: controller.signal,
       }),
       dependencies.listDirectory(
         args.workspaceRoot,
-        args.signal ? { signal: args.signal } : undefined,
+        { signal: controller.signal },
       ),
     ])
       .then(([gitResult, directoryResult]) => {
-        if (args.signal?.aborted) {
-          throw args.signal.reason instanceof Error
-            ? args.signal.reason
+        if (controller.signal.aborted) {
+          throw controller.signal.reason instanceof Error
+            ? controller.signal.reason
             : new DOMException("The operation was aborted.", "AbortError");
         }
         activeEntry.snapshot = {
           gitStatus:
             gitResult.status === "fulfilled"
               ? normalizeInspectorGitStatus(gitResult.value)
-              : null,
+              : activeEntry.snapshot.gitStatus,
           rootEntries:
             directoryResult.status === "fulfilled"
               ? sortDirectoryEntries(directoryResult.value.entries)
-              : [],
+              : activeEntry.snapshot.rootEntries,
           gitStatusError:
             gitResult.status === "rejected" ? errorMessage(gitResult.reason) : null,
           directoryError:
@@ -235,7 +236,10 @@ export async function loadCachedSessionInspectorPrimary(args: {
         return activeEntry.snapshot;
       })
       .finally(() => {
-        delete activeEntry.promise;
+        if (activeEntry.promise === request) {
+          delete activeEntry.promise;
+          delete activeEntry.controller;
+        }
       });
     activeEntry.promise = request;
   }
@@ -244,15 +248,5 @@ export async function loadCachedSessionInspectorPrimary(args: {
   if (!pending) {
     return entry.snapshot;
   }
-  try {
-    return await pending;
-  } catch (error) {
-    // A new view can reuse this key while the previous view's cancelled
-    // request is still settling. Retry only for that shared-abort race; real
-    // failures and cancellation of the current view remain authoritative.
-    if (isAbortError(error) && !args.signal?.aborted) {
-      return loadCachedSessionInspectorPrimary(args);
-    }
-    throw error;
-  }
+  return waitForSharedRequest(pending, args.signal);
 }

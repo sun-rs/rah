@@ -78,29 +78,6 @@ async function requestJson(args: {
   };
 }
 
-async function waitForWebSocketOpenOrClose(url: string): Promise<"open" | "closed"> {
-  const socket = new WebSocket(url);
-  return await new Promise<"open" | "closed">((resolve) => {
-    const timer = setTimeout(() => {
-      socket.close();
-      resolve("closed");
-    }, 1_000);
-    socket.once("open", () => {
-      clearTimeout(timer);
-      socket.close();
-      resolve("open");
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      resolve("closed");
-    });
-    socket.once("close", () => {
-      clearTimeout(timer);
-      resolve("closed");
-    });
-  });
-}
-
 async function openWebSocket(url: string): Promise<WebSocket> {
   const socket = new WebSocket(url);
   return await new Promise<WebSocket>((resolve, reject) => {

@@ -96,7 +96,7 @@ describe("codex history liveness", () => {
   });
 
   test("finalizes only when there is no managed writer, no active external writer, and the file is stable", () => {
-    const rolloutPath = writeRolloutWithMtime(1_000);
+    writeRolloutWithMtime(1_000);
 
     assert.equal(
       canFinalizeCodexStoredHistory({
@@ -141,7 +141,7 @@ describe("codex history liveness", () => {
   });
 
   test("allows stable idle Codex TUI writers but blocks writers with active child processes", () => {
-    const rolloutPath = writeRolloutWithMtime(1_000);
+    writeRolloutWithMtime(1_000);
     const lsofOutput = "p12345\nccodex-aarch64-apple-darwin\nf8\naw\n";
 
     assert.equal(

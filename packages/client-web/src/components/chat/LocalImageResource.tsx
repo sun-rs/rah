@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Image as ImageIcon, LoaderCircle } from "lucide-react";
 import { readHostFile } from "../../api";
 import { useNearViewport } from "./useNearViewport";

@@ -20,7 +20,7 @@ export function deriveWorkbenchNoticeState(args: {
   nativeTuiDiagnostics?: readonly NativeTuiDiagnostic[];
   error: string | null;
 }): WorkbenchNoticeState {
-  const { selectedSummary, selectedProjection, nativeTuiDiagnostics = [], error } = args;
+  const { selectedSummary, nativeTuiDiagnostics = [], error } = args;
 
   const sideRelationship = selectedSummary?.session.relationship;
   const sideLifecycleMessage =

@@ -433,7 +433,7 @@ export function InspectorChangeTree(props: {
     expandablePaths.length > 0 &&
     expandablePaths.every((path) => effectiveExpandedPaths.has(path));
   const toggle = (path: string) => {
-    setExpandedPaths((current) => {
+    setExpandedPaths(() => {
       const next = new Set(effectiveExpandedPaths);
       if (next.has(path)) next.delete(path);
       else next.add(path);

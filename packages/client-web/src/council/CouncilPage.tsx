@@ -4,7 +4,6 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
-  CheckCircle2,
   CirclePause,
   Info,
   ListTree,
@@ -98,7 +97,6 @@ import {
 import {
   CouncilsBrowser,
   defaultRunningCouncilId,
-  isCouncilHistory,
   reconcileCouncilSelection,
 } from "./CouncilsBrowser";
 import type { CouncilStateUpdater } from "./useCouncilController";

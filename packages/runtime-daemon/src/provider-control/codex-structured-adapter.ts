@@ -1206,7 +1206,7 @@ export class CodexAdapter implements ProviderAdapter {
     this.rehydratedSessionIds.delete(sessionId);
   }
 
-  interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
+  interruptSession(sessionId: string, _request: InterruptSessionRequest): SessionSummary {
     const live = this.liveSessions.get(sessionId);
     if (live) {
       const state = this.services.sessionStore.getSession(sessionId);

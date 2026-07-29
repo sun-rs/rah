@@ -35,7 +35,6 @@ import { opencodeLaunchSpec, probeProviderDiagnostic } from "../provider-diagnos
 import {
   buildOpenCodeFallbackModelCatalog,
   normalizeOpenCodeOptionValues,
-  normalizeOpenCodeReasoningId,
   OpenCodeModelCatalogCache,
   resolveOpenCodeRuntimeCapabilityState,
 } from "../opencode-model-catalog";

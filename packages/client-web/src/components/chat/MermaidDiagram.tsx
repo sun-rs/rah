@@ -4,7 +4,6 @@ import {
   Maximize2,
   Minimize2,
 } from "lucide-react";
-import React from "react";
 import { useEffect, useId, useState } from "react";
 import { copyTextToClipboard } from "../../clipboard";
 import { useTheme } from "../../hooks/useTheme";

@@ -2981,6 +2981,9 @@ export class RuntimeEngine {
     );
     await runShutdownStep("turn artifact flush", () => this.turnArtifacts.flush());
     await runShutdownStep("process output flush", () => this.processOutputs.flush());
+    await runShutdownStep("conversation resource index flush", () =>
+      this.conversationResourceIndexes.flushPersistence(),
+    );
     await runShutdownStep("native local-server cleanup", async () => {
       const closedNativeServerPids = await cleanupRahNativeServerOrphans({
         includeCurrentDaemon: true,
@@ -3296,14 +3299,19 @@ export class RuntimeEngine {
   private replaceStoredSessionCatalogRecords(
     records: readonly StoredSessionCatalogRecord[],
   ): void {
+    const canonicalRecords = reconcileStoredSessionCatalogRecords({
+      current: [],
+      incoming: records,
+      complete: true,
+    });
     this.storedSessionCatalogRecords.clear();
     for (const provider of ["codex", "claude", "opencode"] as const) {
       this.storedSessionCatalogRecords.set(
         provider,
-        records.filter((record) => record.ref.provider === provider),
+        canonicalRecords.filter((record) => record.ref.provider === provider),
       );
     }
-    this.nativeTuiHistoryCatalog.replace(records);
+    this.nativeTuiHistoryCatalog.replace(canonicalRecords);
   }
 
   private persistStoredSessionCatalogRecords(): void {

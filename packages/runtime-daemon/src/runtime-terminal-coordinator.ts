@@ -119,7 +119,6 @@ type TuiMuxSessionState = {
   dumpTimer?: ReturnType<typeof setTimeout>;
   dumpInFlight?: boolean;
   dumpPending?: boolean;
-  dumpAllowWebSizingClientFallback?: boolean;
   actionQueue?: Promise<void>;
 };
 
@@ -297,7 +296,7 @@ export function nativeTuiInterruptDataForProvider(provider: ProviderKind): strin
   return provider === "opencode" ? "\u001b\u001b" : "\u001b";
 }
 
-function nativeTuiSubmitDataForProvider(provider: ProviderKind): string {
+function nativeTuiSubmitData(): string {
   return "\r";
 }
 
@@ -479,24 +478,16 @@ export class RuntimeTerminalCoordinator {
     return this.nativeTuiSessionIds.has(sessionId);
   }
 
-  private muxRuntimeForKind(kind: TuiMuxBackendKind): MuxRuntime {
-    return this.tmuxMux;
-  }
-
   private currentMuxRuntimeForSession(session: ManagedSession): MuxRuntime | null {
     const kind = session.mux?.backend;
     if (kind !== "tmux") {
       return null;
     }
-    return this.muxRuntimeForKind(kind);
+    return this.tmuxMux;
   }
 
-  private muxSessionNameForRahSession(sessionId: string, kind: TuiMuxBackendKind): string {
+  private muxSessionNameForRahSession(sessionId: string): string {
     return createTmuxSessionNameForRahSession(sessionId);
-  }
-
-  private muxSocketDirForKind(kind: TuiMuxBackendKind): string | undefined {
-    return undefined;
   }
 
   async restoreTuiMuxSession(session: ManagedSession): Promise<boolean> {
@@ -635,7 +626,7 @@ export class RuntimeTerminalCoordinator {
     await Promise.all(
       [...bySessionName.values()].map(async (entry) => {
         try {
-          const muxRuntime = this.muxRuntimeForKind("tmux");
+          const muxRuntime = this.tmuxMux;
           const panes = await muxRuntime.listPanes(entry.sessionName);
           entry.panes = panes.map((pane) => ({
             paneId: pane.paneId,
@@ -672,7 +663,7 @@ export class RuntimeTerminalCoordinator {
     if (managed) {
       throw new Error("This TUI mux session is managed by a running RAH session. Close the running session instead.");
     }
-    await this.removeMuxSession(trimmedSessionName, "tmux").catch((error) => {
+    await this.removeMuxSession(trimmedSessionName).catch((error) => {
       if (!isMuxSessionMissingError(error)) {
         throw error;
       }
@@ -704,7 +695,7 @@ export class RuntimeTerminalCoordinator {
       currentPid: this.tmuxMux.ownerPid,
       isOwnerAlive: isProcessAlive,
     })) {
-      await this.removeMuxSession(session.sessionName, "tmux").then(
+      await this.removeMuxSession(session.sessionName).then(
         () => {
           closed.push(session.sessionName);
         },
@@ -719,11 +710,8 @@ export class RuntimeTerminalCoordinator {
     return closed;
   }
 
-  private async removeMuxSession(
-    sessionName: string,
-    backend: TuiMuxBackendKind = "tmux",
-  ): Promise<void> {
-    const muxRuntime = this.muxRuntimeForKind(backend);
+  private async removeMuxSession(sessionName: string): Promise<void> {
+    const muxRuntime = this.tmuxMux;
     await muxRuntime.killSession(sessionName).catch((error) => {
       if (isMuxSessionMissingError(error)) {
         return;
@@ -985,7 +973,7 @@ export class RuntimeTerminalCoordinator {
         await this.writeTuiMuxText(tmux, text);
         for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
           await new Promise((resolve) => setTimeout(resolve, NATIVE_TUI_SUBMIT_DELAY_MS));
-          await this.writeTuiMuxInput(tmux, nativeTuiSubmitDataForProvider(native.provider));
+          await this.writeTuiMuxInput(tmux, nativeTuiSubmitData());
         }
         if (native.provider === "claude") {
           // tmux confirms that bytes entered its pane queue, not that Claude
@@ -1010,7 +998,7 @@ export class RuntimeTerminalCoordinator {
       const submitOnce = (submitIndex: number) => {
         const current = this.nativeTuiSessions.get(native.sessionId);
         if (current === native) {
-          current.process.write(nativeTuiSubmitDataForProvider(current.provider));
+          current.process.write(nativeTuiSubmitData());
         }
         if (submitIndex + 1 < submitCount) {
           const nextTimer = setTimeout(
@@ -1881,7 +1869,6 @@ export class RuntimeTerminalCoordinator {
       throw error;
     }
 
-    const native = this.nativeTuiSessions.get(sessionId);
     const readyState = this.deps.sessionStore.getSession(sessionId);
     if (readyState?.session.runtimeState === "failed") {
       return { session: toSessionSummary(readyState) };
@@ -1904,8 +1891,8 @@ export class RuntimeTerminalCoordinator {
     const startupTimestampMs = Date.now();
     const initialPromptState = initialTuiMuxPromptState(launch.provider);
     const muxBackendKind = this.preferredTuiMuxBackendKind;
-    const muxRuntime = this.muxRuntimeForKind(muxBackendKind);
-    const muxSessionName = this.muxSessionNameForRahSession(sessionId, muxBackendKind);
+    const muxRuntime = this.tmuxMux;
+    const muxSessionName = this.muxSessionNameForRahSession(sessionId);
     const muxPatch = {
       backend: muxBackendKind,
       sessionName: muxSessionName,
@@ -1986,9 +1973,9 @@ export class RuntimeTerminalCoordinator {
       this.deps.ptyHub.removeSession(sessionId);
       this.deps.sessionStore.removeSession(sessionId);
       if (tmux) {
-        await this.removeMuxSession(tmux.muxSessionName, tmux.muxBackendKind).catch(() => undefined);
+        await this.removeMuxSession(tmux.muxSessionName).catch(() => undefined);
       } else {
-        await this.removeMuxSession(muxSessionName, muxBackendKind).catch(() => undefined);
+        await this.removeMuxSession(muxSessionName).catch(() => undefined);
       }
       throw error;
     }
@@ -2102,7 +2089,7 @@ export class RuntimeTerminalCoordinator {
           // tmux subscribe viewports can briefly use a stale mirror size when
           // ownership moves between terminal and Web. Use the frame only as a
           // repaint signal; dump-screen gives xterm the canonical pane snapshot.
-          this.scheduleTuiMuxScreenDump(tmux, { allowWebSizingClientFallback: true });
+          this.scheduleTuiMuxScreenDump(tmux);
           return;
         }
         this.deps.ptyHub.appendOutput(tmux.sessionId, text, { replaceReplay: true });
@@ -2120,17 +2107,11 @@ export class RuntimeTerminalCoordinator {
     void this.dumpTuiMuxScreen(tmux);
   }
 
-  private scheduleTuiMuxScreenDump(
-    tmux: TuiMuxSessionState,
-    options: { allowWebSizingClientFallback?: boolean } = {},
-  ): void {
+  private scheduleTuiMuxScreenDump(tmux: TuiMuxSessionState): void {
     if (!this.isCurrentTuiMuxSession(tmux)) {
       return;
     }
     tmux.dumpPending = true;
-    if (options.allowWebSizingClientFallback === true) {
-      tmux.dumpAllowWebSizingClientFallback = true;
-    }
     if (tmux.dumpTimer || tmux.dumpInFlight) {
       return;
     }
@@ -2151,28 +2132,18 @@ export class RuntimeTerminalCoordinator {
     }
     tmux.dumpPending = false;
     tmux.dumpInFlight = true;
-    const allowWebSizingClientFallback = tmux.dumpAllowWebSizingClientFallback === true;
-    delete tmux.dumpAllowWebSizingClientFallback;
     try {
-      await this.dumpTuiMuxScreen(tmux, { allowWebSizingClientFallback });
+      await this.dumpTuiMuxScreen(tmux);
     } finally {
       tmux.dumpInFlight = false;
       if (tmux.dumpPending && this.isCurrentTuiMuxSession(tmux)) {
         tmux.dumpPending = false;
-        const pendingAllowWebSizingClientFallback =
-          tmux.dumpAllowWebSizingClientFallback === true;
-        delete tmux.dumpAllowWebSizingClientFallback;
-        this.scheduleTuiMuxScreenDump(tmux, {
-          allowWebSizingClientFallback: pendingAllowWebSizingClientFallback,
-        });
+        this.scheduleTuiMuxScreenDump(tmux);
       }
     }
   }
 
-  private async dumpTuiMuxScreen(
-    tmux: TuiMuxSessionState,
-    options: { allowWebSizingClientFallback?: boolean } = {},
-  ): Promise<void> {
+  private async dumpTuiMuxScreen(tmux: TuiMuxSessionState): Promise<void> {
     const dumped = await tmux.muxRuntime
       .dumpScreen(tmux.muxSessionName, tmux.paneId, { ansi: true })
       .catch((error) => {
@@ -2264,9 +2235,7 @@ export class RuntimeTerminalCoordinator {
     action: () => Promise<T>,
   ): Promise<T> {
     const previousAction = tmux.actionQueue ?? Promise.resolve();
-    const queuedAction = previousAction.catch(() => undefined).then(() =>
-      this.withTuiMuxActionSurfaceNow(tmux, action),
-    );
+    const queuedAction = previousAction.catch(() => undefined).then(action);
     const actionTail = queuedAction.then(
       () => undefined,
       () => undefined,
@@ -2278,16 +2247,6 @@ export class RuntimeTerminalCoordinator {
       }
     });
     return queuedAction;
-  }
-
-  private async withTuiMuxActionSurfaceNow<T>(
-    tmux: TuiMuxSessionState,
-    action: () => Promise<T>,
-  ): Promise<T> {
-    // Chat and control actions target the tmux pane directly. They do not need
-    // a sizing client, so they cannot steal redraw ownership from a visible
-    // Web TUI surface.
-    return await action();
   }
 
   private handleTuiMuxInputFailure(tmux: TuiMuxSessionState, error: unknown): void {
@@ -2432,7 +2391,7 @@ export class RuntimeTerminalCoordinator {
           : {}),
       });
     }
-    await this.removeMuxSession(tmux.muxSessionName, tmux.muxBackendKind).catch(() => undefined);
+    await this.removeMuxSession(tmux.muxSessionName).catch(() => undefined);
   }
 
   private async closeTuiMuxSession(tmux: TuiMuxSessionState): Promise<void> {
@@ -2456,7 +2415,7 @@ export class RuntimeTerminalCoordinator {
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    await this.removeMuxSession(tmux.muxSessionName, tmux.muxBackendKind).catch((error) => {
+    await this.removeMuxSession(tmux.muxSessionName).catch((error) => {
       if (isMuxSessionMissingError(error)) {
         return;
       }

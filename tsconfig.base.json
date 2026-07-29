@@ -15,6 +15,8 @@
     "sourceMap": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noEmitOnError": true

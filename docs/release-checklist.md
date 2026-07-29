@@ -24,7 +24,9 @@ If any of these fail, stop the release.
 `test:ci` recursively discovers all protocol/Web/runtime test files and runs each file in an isolated
 Node test process, then builds the production Web client and runs `npm audit --omit=dev`. Auth and
 Council tests are therefore included through the runtime/Web discovery rather than maintained as a
-second hand-written list.
+second hand-written list. It also runs `npm run check:repo-hygiene`, which rejects tracked build/test
+artifacts, editor/OS junk, and broken local Markdown links. Ignored `test-results/` remains available
+for intentional smoke/QA evidence and is not treated as accidental local junk.
 
 ## 2. Provider Smoke Policy
 

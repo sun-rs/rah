@@ -2,7 +2,7 @@
 
 状态：正式架构，canonical-only
 
-复核日期：2026-07-12
+复核日期：2026-07-29
 
 ## 1. 目标
 
@@ -170,6 +170,26 @@ provider 文件并产生同一种 canonical delta。前端不轮询原始历史�
 
 Codex 可使用增量 byte-range directory；其他 provider 通过 canonical page 构建同构目录。
 目录构建必须检测重复 cursor，不能无限循环。
+
+## 7.1 Inspector Resource Index
+
+Outputs/Sources 是 Conversation projection 的派生索引，不依赖 Session 是否由 RAH 启动。
+用户仅浏览由 Codex Desktop 或其他 surface 管理的历史 Session 时，daemon 仍从 provider
+持久历史按需构建同一索引。
+
+索引使用稳定快照协议：
+
+- 构建中的页只携带 `indexing`，不能逐项发布到 UI。
+- 一个 revision 完整构建后原子发布 `stable` snapshot，Outputs/Sources 计数和列表同时切换。
+- 新 revision 构建时继续提供 last-good stable snapshot；失败只附加 warning，不清空旧内容。
+- 相同 Session 的并发读取共享一次构建，增量 turn fingerprint 只重读发生变化的 turn。
+- 磁盘缓存只是重启后的加速层，不是 HTTP 响应完成屏障。
+- stable snapshot 先提交到内存并返回，再在后台落盘；同一 Session 等待落盘的多个 revision
+  只保留最新版本，避免完整 JSON 写入形成无界队列。
+- daemon 正常关闭时 flush 最新待写 snapshot；异常退出最多丢失缓存加速，不丢 provider 历史。
+
+浏览器只观察稳定 snapshot。切换 tab 不触发索引，选中 Session 后的统一预加载管线会在 Chat
+可读后启动它。
 
 ## 8. Renderer 边界
 

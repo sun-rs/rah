@@ -51,5 +51,4 @@ The Conversation projection answers: "What is the current canonical thread/turn/
 See:
 
 - [Conversation Architecture](./conversation-architecture.zh-CN.md)
-- [Conversation Gap Analysis](./conversation-architecture-audit.zh-CN.md)
 - [Codex App Server Protocol Map](./codex-app-server-protocol-map.zh-CN.md)

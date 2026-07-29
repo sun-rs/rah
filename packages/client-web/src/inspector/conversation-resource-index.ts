@@ -4,6 +4,7 @@ import {
   type ConversationResourceIndexResponse,
   type ConversationSourceProjection,
 } from "@rah/runtime-protocol";
+import { waitForSharedRequest } from "../shared-cache-request";
 
 export type ConversationResourceIndex = {
   outputs: ConversationOutputProjection[];
@@ -21,10 +22,10 @@ type ConversationResourceIndexCacheEntry = {
   index: ConversationResourceIndex;
   complete: boolean;
   validatedAt: number;
-  sourceRevision?: string;
   publishedSnapshotId?: string;
   warning?: string;
   error?: string;
+  controller?: AbortController;
   promise?: Promise<ConversationResourceIndex>;
 };
 
@@ -55,15 +56,9 @@ function trimResourceIndexCache(): void {
   while (resourceIndexCache.size > RESOURCE_INDEX_CACHE_LIMIT) {
     const oldestKey = resourceIndexCache.keys().next().value as string | undefined;
     if (!oldestKey) return;
+    resourceIndexCache.get(oldestKey)?.controller?.abort();
     resourceIndexCache.delete(oldestKey);
   }
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && error.name === "AbortError")
-  );
 }
 
 function assertSupportedResourceIndexResponse(
@@ -151,36 +146,21 @@ export function subscribeConversationResourceIndex(
 }
 
 export function resetConversationResourceIndexCacheForTests(): void {
+  for (const entry of resourceIndexCache.values()) {
+    entry.controller?.abort();
+  }
   resourceIndexCache.clear();
   forceRefreshSessionIds.clear();
   resourceIndexListeners.clear();
 }
 
 export function invalidateCachedConversationResourceIndex(sessionId: string): void {
-  resourceIndexCache.delete(sessionId);
   forceRefreshSessionIds.add(sessionId);
-  notifyResourceIndex(sessionId);
-}
-
-export async function loadConversationResourceIndex(args: {
-  sessionId: string;
-  signal?: AbortSignal;
-  refresh?: boolean;
-  onWarning?: (warning: string) => void;
-  dependencies: ResourceIndexDependencies;
-}): Promise<ConversationResourceIndex> {
-  const response = await args.dependencies.readIndex(args.sessionId, {
-    ...(args.refresh ? { refresh: true } : {}),
-    ...(args.signal ? { signal: args.signal } : {}),
-  });
-  assertSupportedResourceIndexResponse(response);
-  if (response.warning) {
-    args.onWarning?.(response.warning);
+  const entry = resourceIndexCache.get(sessionId);
+  if (entry) {
+    delete entry.error;
   }
-  return {
-    outputs: response.outputs,
-    sources: response.sources,
-  };
+  notifyResourceIndex(sessionId);
 }
 
 /**
@@ -207,17 +187,25 @@ export async function loadCachedConversationResourceIndex(args: {
     resourceIndexCache.set(args.sessionId, entry);
   }
   notifyResourceIndex(args.sessionId);
+  const refreshRequested = forceRefreshSessionIds.has(args.sessionId);
   if (
     !entry.promise &&
+    !refreshRequested &&
     entry.validatedAt > 0 &&
     Date.now() - entry.validatedAt < RESOURCE_INDEX_REVALIDATE_MS
   ) {
     if (entry.warning) args.onWarning?.(entry.warning);
     return entry.index;
   }
+  if (entry.promise && refreshRequested) {
+    await waitForSharedRequest(entry.promise, args.signal);
+    return loadCachedConversationResourceIndex(args);
+  }
   if (!entry.promise) {
     const activeEntry = entry;
     const refresh = forceRefreshSessionIds.delete(args.sessionId);
+    const controller = new AbortController();
+    activeEntry.controller = controller;
     const request = (async () => {
       let requestRefresh = refresh;
       let pollDelayMs = RESOURCE_INDEX_POLL_INITIAL_MS;
@@ -225,7 +213,7 @@ export async function loadCachedConversationResourceIndex(args: {
       for (;;) {
         const response = await args.dependencies.readIndex(args.sessionId, {
           ...(requestRefresh ? { refresh: true } : {}),
-          ...(args.signal ? { signal: args.signal } : {}),
+          signal: controller.signal,
         });
         assertSupportedResourceIndexResponse(response);
         requestRefresh = false;
@@ -244,7 +232,6 @@ export async function loadCachedConversationResourceIndex(args: {
           };
           activeEntry.complete = response.complete;
           activeEntry.validatedAt = Date.now();
-          activeEntry.sourceRevision = response.sourceRevision;
           activeEntry.publishedSnapshotId =
             `${response.sourceRevision}\u0000${response.generatedAt}`;
           if (response.warning) {
@@ -266,18 +253,21 @@ export async function loadCachedConversationResourceIndex(args: {
               )
             : RESOURCE_INDEX_POLL_INITIAL_MS;
         previousGeneratedAt = response.generatedAt;
-        await waitForResourceIndexPoll(pollDelayMs, args.signal);
+        await waitForResourceIndexPoll(pollDelayMs, controller.signal);
       }
     })()
       .catch((error) => {
-        if (!args.signal?.aborted) {
+        if (!controller.signal.aborted) {
           activeEntry.error = error instanceof Error ? error.message : String(error);
           notifyResourceIndex(args.sessionId);
         }
         throw error;
       })
       .finally(() => {
-        delete activeEntry.promise;
+        if (activeEntry.promise === request) {
+          delete activeEntry.promise;
+          delete activeEntry.controller;
+        }
       });
     activeEntry.promise = request;
   }
@@ -285,19 +275,7 @@ export async function loadCachedConversationResourceIndex(args: {
   if (!pending) {
     return entry.index;
   }
-  let pendingResult: ConversationResourceIndex;
-  try {
-    pendingResult = await pending;
-  } catch (error) {
-    // A fast A → B → A selection can join A's still-settling request after
-    // the first A view has cancelled it. The cache promise is cleared before
-    // this catch runs, so the current, still-selected caller can safely start
-    // a fresh request instead of silently losing the final preload stage.
-    if (isAbortError(error) && !args.signal?.aborted) {
-      return loadCachedConversationResourceIndex(args);
-    }
-    throw error;
-  }
+  const pendingResult = await waitForSharedRequest(pending, args.signal);
   entry.index = pendingResult;
   if (entry.warning) args.onWarning?.(entry.warning);
   return pendingResult;
