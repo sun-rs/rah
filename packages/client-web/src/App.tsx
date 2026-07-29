@@ -21,7 +21,10 @@ import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
 import { readErrorMessage } from "./session-store-bootstrap";
 import { deriveRuntimeCompatibilityDescriptor } from "./runtime-compatibility";
 import type { ProviderChoice } from "./components/ProviderSelector";
-import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
+import {
+  GlobalWorkbenchNoticeHost,
+  type GlobalWorkbenchNotice,
+} from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { StopSessionDialog } from "./components/workbench/dialogs/StopSessionDialog";
 import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessionDialog";
@@ -1660,10 +1663,27 @@ export function App() {
   const errorDescriptor = noticeState.errorDescriptor;
   const visibleRuntimeCompatibilityDescriptor =
     runtimeCompatibilityDismissed ? null : runtimeCompatibilityDescriptor;
-  const globalCalloutDescriptor =
-    errorDescriptor ?? visibleRuntimeCompatibilityDescriptor;
-  const showingRuntimeCompatibility =
-    !errorDescriptor && visibleRuntimeCompatibilityDescriptor !== null;
+  const globalWorkbenchNotices: GlobalWorkbenchNotice[] = [];
+  if (visibleRuntimeCompatibilityDescriptor) {
+    globalWorkbenchNotices.push({
+      id: "runtime-compatibility",
+      errorDescriptor: visibleRuntimeCompatibilityDescriptor,
+      selectedSummary: null,
+      onRefresh: () => void checkRuntimeCompatibility(),
+      onClaimControl: () => undefined,
+      onDismiss: () => setRuntimeCompatibilityDismissed(true),
+    });
+  }
+  if (errorDescriptor) {
+    globalWorkbenchNotices.push({
+      id: "workbench-error",
+      errorDescriptor,
+      selectedSummary: workbenchMode === "canvas" ? activeCanvasSummary : selectedSummary,
+      onRefresh: () => void refreshWorkbenchState(),
+      onClaimControl: (sessionId) => void claimControl(sessionId),
+      onDismiss: clearError,
+    });
+  }
   const isGenerating = selectedSummary
     ? isSessionGenerationActive(selectedSummary, selectedProjection?.currentRuntimeStatus)
     : false;
@@ -4033,24 +4053,9 @@ export function App() {
         </FilePreviewDialogErrorBoundary>
       ) : null}
 
-      <GlobalWorkbenchCallout
-        errorDescriptor={globalCalloutDescriptor}
-        selectedSummary={workbenchMode === "canvas" ? activeCanvasSummary : selectedSummary}
-        onRefresh={() => {
-          if (showingRuntimeCompatibility) {
-            void checkRuntimeCompatibility();
-            return;
-          }
-          void refreshWorkbenchState();
-        }}
-        onClaimControl={(sessionId) => void claimControl(sessionId)}
-        onDismiss={() => {
-          if (showingRuntimeCompatibility) {
-            setRuntimeCompatibilityDismissed(true);
-            return;
-          }
-          clearError();
-        }}
+      <GlobalWorkbenchNoticeHost
+        notices={globalWorkbenchNotices}
+        viewportTier={viewportTier}
       />
     </div>
   );
