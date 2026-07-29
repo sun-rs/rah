@@ -19,6 +19,7 @@ import { SessionSidebar } from "./SessionSidebar";
 import type { SessionProjection } from "./types";
 import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
 import { readErrorMessage } from "./session-store-bootstrap";
+import { deriveRuntimeCompatibilityDescriptor } from "./runtime-compatibility";
 import type { ProviderChoice } from "./components/ProviderSelector";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { StopSessionDialog } from "./components/workbench/dialogs/StopSessionDialog";
@@ -98,6 +99,7 @@ import { resolveStoredSessionRef } from "./session-store-session-lifecycle";
 import { isStoredSessionArchived } from "./session-history-grouping";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import type { InspectorOpenFileRequest } from "./inspector/shared";
+import { preloadSelectedSessionView } from "./session-view-preload";
 import {
   CANVAS_PANE_IDS,
   canvasPaneLabel,
@@ -612,6 +614,10 @@ export function App() {
       typeof window === "undefined" ? undefined : window.localStorage,
     ),
   );
+  const [runtimeCompatibilityDescriptor, setRuntimeCompatibilityDescriptor] =
+    useState<ReturnType<typeof deriveRuntimeCompatibilityDescriptor>>(null);
+  const [runtimeCompatibilityDismissed, setRuntimeCompatibilityDismissed] =
+    useState(false);
   useEffect(() => {
     rememberSessionSideLayouts(
       typeof window === "undefined" ? undefined : window.localStorage,
@@ -744,6 +750,28 @@ export function App() {
     initializeTheme();
     void init();
   }, [init]);
+
+  const checkRuntimeCompatibility = useCallback(async () => {
+    try {
+      const identity = await api.readRuntimeIdentity();
+      const descriptor = deriveRuntimeCompatibilityDescriptor(
+        __RAH_WEB_BUILD_ID__,
+        identity,
+      );
+      setRuntimeCompatibilityDescriptor(descriptor);
+      if (!descriptor) {
+        setRuntimeCompatibilityDismissed(false);
+      }
+    } catch {
+      // Authentication and transport recovery own their existing callouts.
+      // Compatibility is advisory and must not obscure those higher-priority
+      // states when the identity probe itself is unavailable.
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkRuntimeCompatibility();
+  }, [checkRuntimeCompatibility]);
 
   useEffect(() => {
     if (!isInitialLoaded) {
@@ -1634,6 +1662,12 @@ export function App() {
   });
   const interactionNotice = noticeState.interactionNotice;
   const errorDescriptor = noticeState.errorDescriptor;
+  const visibleRuntimeCompatibilityDescriptor =
+    runtimeCompatibilityDismissed ? null : runtimeCompatibilityDescriptor;
+  const globalCalloutDescriptor =
+    errorDescriptor ?? visibleRuntimeCompatibilityDescriptor;
+  const showingRuntimeCompatibility =
+    !errorDescriptor && visibleRuntimeCompatibilityDescriptor !== null;
   const isGenerating = selectedSummary
     ? isSessionGenerationActive(selectedSummary, selectedProjection?.currentRuntimeStatus)
     : false;
@@ -2156,6 +2190,29 @@ export function App() {
     : selectedCouncil?.workspace ?? selectedWorkspaceOnlyDir ?? availableWorkspaceDir ?? "";
   const terminalCwd = selectedInspectorWorkspaceDir || "~";
   const selectedTerminalSessionId = selectedSummary?.session.id ?? null;
+  useEffect(() => {
+    if (!selectedTerminalSessionId) {
+      return;
+    }
+    const sessionId = selectedTerminalSessionId;
+    const controller = new AbortController();
+    void preloadSelectedSessionView({
+      sessionId,
+      workspaceRoot: selectedInspectorWorkspaceDir,
+      signal: controller.signal,
+      ensureConversationLoaded,
+    }).catch(() => {
+      // The selected-session surface owns this best-effort preload. Individual
+      // Chat and Inspector surfaces retain their normal retry/error controls.
+    });
+    return () => {
+      controller.abort();
+    };
+  }, [
+    ensureConversationLoaded,
+    selectedInspectorWorkspaceDir,
+    selectedTerminalSessionId,
+  ]);
   const terminalOwner = useMemo(() => {
     if (selectedTerminalSessionId) {
       return { kind: "session" as const, id: selectedTerminalSessionId };
@@ -2294,7 +2351,6 @@ export function App() {
         <InspectorPane
           sessionId={selectedSummary?.session.id ?? null}
           workspaceRoot={selectedInspectorWorkspaceDir}
-          conversationTurns={selectedProjection?.conversation?.turns ?? []}
           openFileRequest={mainInspectorOpenRequest}
           onOpenTerminal={() => {
             setTerminalDialogMounted(true);
@@ -3274,7 +3330,6 @@ export function App() {
                               availableWorkspaceDir ||
                               ""
                             }
-                            conversationTurns={projection.conversation?.turns ?? []}
                             openFileRequest={
                               canvasInspectorOpenRequests[typedPaneId] ?? null
                             }
@@ -3983,11 +4038,23 @@ export function App() {
       ) : null}
 
       <GlobalWorkbenchCallout
-        errorDescriptor={errorDescriptor}
+        errorDescriptor={globalCalloutDescriptor}
         selectedSummary={workbenchMode === "canvas" ? activeCanvasSummary : selectedSummary}
-        onRefresh={() => void refreshWorkbenchState()}
+        onRefresh={() => {
+          if (showingRuntimeCompatibility) {
+            void checkRuntimeCompatibility();
+            return;
+          }
+          void refreshWorkbenchState();
+        }}
         onClaimControl={(sessionId) => void claimControl(sessionId)}
-        onDismiss={clearError}
+        onDismiss={() => {
+          if (showingRuntimeCompatibility) {
+            setRuntimeCompatibilityDismissed(true);
+            return;
+          }
+          clearError();
+        }}
       />
     </div>
   );

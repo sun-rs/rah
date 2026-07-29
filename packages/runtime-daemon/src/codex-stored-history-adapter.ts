@@ -7,7 +7,8 @@ import type {
   RahEvent,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
-import { stat } from "node:fs/promises";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import path from "node:path";
 import { CodexHistoryLivenessTracker } from "./codex-history-liveness";
 import {
   createCodexStoredSessionFrozenHistoryPageLoader,
@@ -18,6 +19,7 @@ import {
 } from "./codex-stored-sessions";
 import type {
   ProviderAdapter,
+  ProviderConversationVisualArtifact,
   ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   RuntimeServices,
@@ -46,6 +48,11 @@ import {
   reconcileCodexTrailingTurnLiveness,
 } from "./codex-app-server-turns-page";
 import { approximateJsonByteLength } from "./bounded-json-size";
+import { isSafeCodexVisualArtifactId } from "./codex-visual-artifacts";
+import {
+  resolveCodexVisualArtifactPath,
+  resolveCodexVisualArtifactRoot,
+} from "./codex-visual-artifact-path";
 
 function isUnsupportedExperimentalListError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -58,6 +65,33 @@ function isBrokenPagingTransport(error: unknown): boolean {
 }
 
 const DEFAULT_INDEXED_SUMMARY_THRESHOLD_BYTES = 64 * 1024 * 1024;
+const MAX_CODEX_VISUAL_ARTIFACT_BYTES = 2 * 1024 * 1024;
+
+async function containsSymbolicLinkBelowRoot(
+  rootPath: string,
+  candidatePath: string,
+): Promise<boolean> {
+  const relative = path.relative(
+    path.resolve(rootPath),
+    path.resolve(candidatePath),
+  );
+  if (
+    relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return true;
+  }
+  let current = rootPath;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    if ((await lstat(current)).isSymbolicLink()) {
+      return true;
+    }
+  }
+  return false;
+}
 
 type CodexStoredHistoryOptions = {
   indexedSummaryThresholdBytes?: number;
@@ -140,6 +174,62 @@ export class CodexStoredHistoryAdapter
       finalizeUnterminatedTools: this.peekCanFinalizeStoredHistory(record),
       ...options,
     });
+  }
+
+  async getSessionConversationVisualArtifact(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<ProviderConversationVisualArtifact | undefined> {
+    if (!isSafeCodexVisualArtifactId(artifactId)) {
+      return undefined;
+    }
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const artifactPath = resolveCodexVisualArtifactPath(record, artifactId);
+    const artifactRootPath = resolveCodexVisualArtifactRoot(record);
+    if (!artifactPath || !artifactRootPath) {
+      return undefined;
+    }
+    try {
+      if (
+        await containsSymbolicLinkBelowRoot(
+          artifactRootPath,
+          artifactPath,
+        )
+      ) {
+        return undefined;
+      }
+      const [artifactRoot, candidate] = await Promise.all([
+        realpath(artifactRootPath),
+        realpath(artifactPath),
+      ]);
+      const relative = path.relative(artifactRoot, candidate);
+      if (
+        relative === "" ||
+        relative.startsWith(`..${path.sep}`) ||
+        relative === ".." ||
+        path.isAbsolute(relative)
+      ) {
+        return undefined;
+      }
+      const metadata = await stat(candidate);
+      if (
+        !metadata.isFile() ||
+        metadata.size > MAX_CODEX_VISUAL_ARTIFACT_BYTES
+      ) {
+        return undefined;
+      }
+      return {
+        id: artifactId,
+        format: "interactive_html",
+        mimeType: "text/html",
+        fragment: await readFile(candidate, "utf8"),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   async getConversationSummaryEvidencePage(

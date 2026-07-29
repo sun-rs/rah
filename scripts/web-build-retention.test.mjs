@@ -2,10 +2,44 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertOptionalWebChunkIsLazy,
   collectManifestAssetFiles,
   retainedWebBuildGenerations,
   staleWebAssetFiles,
 } from "./web-build-retention.mjs";
+
+test("rejects optional engines that become eager entry dependencies", () => {
+  const lazyManifest = {
+    "index.html": {
+      file: "assets/index.js",
+      isEntry: true,
+      dynamicImports: ["_vendor-mermaid.js"],
+    },
+    "_vendor-mermaid.js": {
+      file: "assets/vendor-mermaid.js",
+      name: "vendor-mermaid",
+      isDynamicEntry: true,
+    },
+  };
+  assert.doesNotThrow(() =>
+    assertOptionalWebChunkIsLazy(lazyManifest, "vendor-mermaid"),
+  );
+  assert.throws(
+    () =>
+      assertOptionalWebChunkIsLazy(
+        {
+          ...lazyManifest,
+          "index.html": {
+            file: "assets/index.js",
+            isEntry: true,
+            imports: ["_vendor-mermaid.js"],
+          },
+        },
+        "vendor-mermaid",
+      ),
+    /became an eager dependency/,
+  );
+});
 
 test("collects every asset owned by a Vite generation", () => {
   const manifest = {

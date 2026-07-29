@@ -32,6 +32,8 @@ export function hasStoredHistoryCapability(
       .getSessionConversationTurnFileDiff === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationSourceRevision === "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
+      .getSessionConversationVisualArtifact === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionConversationDirectory ===
@@ -87,6 +89,12 @@ export function bindStoredHistoryCapability(
       ? {
           getSessionConversationSourceRevision:
             adapter.getSessionConversationSourceRevision.bind(adapter),
+        }
+      : {}),
+    ...(adapter.getSessionConversationVisualArtifact
+      ? {
+          getSessionConversationVisualArtifact:
+            adapter.getSessionConversationVisualArtifact.bind(adapter),
         }
       : {}),
     ...(adapter.createFrozenHistoryPageLoader

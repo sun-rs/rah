@@ -195,3 +195,41 @@ ACP 可以作为某个 provider 的传输/控制实现，例如 OpenCode ACP。�
 - 在 Web UI 中拼 provider-native CLI 参数。
 - 在 Web UI 中写 OpenCode permission ruleset。
 - 为某个 provider 特判首条消息发送方式。
+
+## 11. Provider 原生 Inline Visual 协议
+
+RAH 不通过 system prompt、用户问题改写或隐藏提示要求 agent 生成某种图表格式。可交互
+visual 必须来自 provider 已经写入实时事件或持久历史的显式协议；adapter 只负责识别自己
+provider 的确定性表示，并投影成统一的有序 assistant content：
+
+```ts
+type TimelineAssistantContentPart =
+  | { kind: "text"; text: string }
+  | {
+      kind: "visual";
+      artifact: {
+        id: string;
+        format: "interactive_html";
+        mimeType: "text/html";
+        label?: string;
+      };
+    };
+```
+
+边界规则：
+
+- Codex adapter 只解析官方持久协议
+  `::codex-inline-vis{file="<safe-name>.html"}`。指令必须独占一行、位于 Markdown fenced code
+  block 之外且语法完全匹配；不从代码示例、PNG、CSV、文件扩展名或自然语言猜测 visual。
+- 指令在 assistant content 中出现的位置必须保留；普通 `text` 字段继续提供搜索、复制和无
+  visual 客户端的纯文本视图，但不包含原始协议字样。
+- 流式消息在指令未闭合时必须暂存该尾部，不能让半截协议闪进 Chat；完成后原子发布 visual
+  content part。持久历史重放必须产生相同投影。
+- artifact id 对客户端不透明。只有对应 provider adapter 能从 provider-owned storage 解析
+  实际文件；客户端不能提交路径，daemon 也不能接受目录穿越、绝对路径、软链接、非普通文件
+  或超过协议上限的 fragment。
+- provider fragment 只能在隔离 iframe 中运行。RAH 使用 vendored Codex Visualize host
+  CSS/HTML、严格 CSP、`sandbox="allow-scripts"` 和只读 artifact endpoint；fragment 不进入
+  Inspector Outputs，因为它是 assistant 回复的内联内容，不是独立交付文件。
+- Claude/OpenCode 以后只有在各自暴露同等明确、可持久恢复的原生协议时才能映射到该 union；
+  不允许为了“统一体验”在公共层新增启发式扫描或提示注入。

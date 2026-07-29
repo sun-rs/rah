@@ -60,6 +60,7 @@ export function requestErrorStatus(error: unknown): number {
     message.startsWith("Unknown session ") ||
     message.startsWith("Unknown attachment ") ||
     message.startsWith("Unknown turn artifact ") ||
+    message.startsWith("Unknown conversation visual artifact ") ||
     message.startsWith("Unknown turn file ") ||
     message.startsWith("Unknown manual model ") ||
     message.startsWith("Unknown manual model option ")
@@ -289,4 +290,46 @@ export function writeText(
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+export function writeHtml(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  body: string,
+  options: { contentSecurityPolicy?: string } = {},
+): void {
+  applyCorsHeaders(req, res);
+  const payload = Buffer.from(body);
+  const headers = {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "private, no-store",
+    "content-security-policy":
+      options.contentSecurityPolicy ?? "default-src 'none'",
+    "cross-origin-resource-policy": "same-site",
+    "x-content-type-options": "nosniff",
+  };
+  if (
+    payload.byteLength >= MIN_GZIP_RESPONSE_BYTES &&
+    requestAcceptsGzip(req)
+  ) {
+    res.writeHead(status, {
+      ...headers,
+      "content-encoding": "gzip",
+      vary: "accept-encoding",
+    });
+    const gzip = createGzip({ level: zlibConstants.Z_BEST_SPEED });
+    gzip.once("error", () => res.destroy());
+    gzip.pipe(res);
+    gzip.end(payload);
+    return;
+  }
+  res.writeHead(status, {
+    ...headers,
+    "content-length": payload.byteLength,
+    ...(payload.byteLength >= MIN_GZIP_RESPONSE_BYTES
+      ? { vary: "accept-encoding" }
+      : {}),
+  });
+  res.end(payload);
 }

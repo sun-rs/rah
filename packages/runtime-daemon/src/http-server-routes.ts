@@ -20,6 +20,7 @@ import {
   readBinaryBody,
   readJsonBody,
   requestErrorStatus,
+  writeHtml,
   writeJson,
   writeText,
 } from "./http-server-response";
@@ -75,6 +76,10 @@ import {
   resolveDeviceAttachment,
   saveDeviceAttachment,
 } from "./device-attachments";
+import {
+  buildVisualArtifactDocument,
+  visualArtifactContentSecurityPolicy,
+} from "./visual-artifact-document";
 
 const MAX_QUERY_LIMIT = 500;
 
@@ -1262,6 +1267,40 @@ export async function handleHttpRequest(args: {
         await engine.getSessionConversationSourceRevision(
           conversationSourceRevisionMatch[1]!,
         ),
+      );
+      return;
+    }
+
+    const conversationVisualArtifactMatch =
+      /^\/api\/sessions\/([^/]+)\/conversation\/visual-artifacts\/([^/]+)$/.exec(
+        pathname,
+      );
+    if (req.method === "GET" && conversationVisualArtifactMatch) {
+      let artifactId: string;
+      try {
+        artifactId = decodeURIComponent(conversationVisualArtifactMatch[2]!);
+      } catch {
+        writeJson(req, res, 400, {
+          error: "Conversation visual artifact id is invalid.",
+        });
+        return;
+      }
+      const artifact = await engine.getSessionConversationVisualArtifact(
+        conversationVisualArtifactMatch[1]!,
+        artifactId,
+      );
+      const theme = url.searchParams.get("theme") === "dark" ? "dark" : "light";
+      writeHtml(
+        req,
+        res,
+        200,
+        buildVisualArtifactDocument({
+          fragment: artifact.fragment,
+          theme,
+        }),
+        {
+          contentSecurityPolicy: visualArtifactContentSecurityPolicy(),
+        },
       );
       return;
     }

@@ -2531,6 +2531,89 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
       }
+      if (item.content !== undefined) {
+        if (!Array.isArray(item.content)) {
+          addIssue(
+            sink,
+            "error",
+            "timeline.assistant_content.invalid",
+            "assistant content must be an array",
+            `${path}.content`,
+          );
+        } else {
+          for (const [index, part] of item.content.entries()) {
+            const partPath = `${path}.content[${index}]`;
+            if (!isRecord(part)) {
+              addIssue(
+                sink,
+                "error",
+                "timeline.assistant_content_part.invalid",
+                "assistant content part must be an object",
+                partPath,
+              );
+              continue;
+            }
+            if (part.kind === "text") {
+              if (typeof part.text !== "string") {
+                addIssue(
+                  sink,
+                  "error",
+                  "timeline.assistant_content_text.invalid",
+                  "assistant text content must contain text",
+                  `${partPath}.text`,
+                );
+              }
+              continue;
+            }
+            if (part.kind !== "visual" || !isRecord(part.artifact)) {
+              addIssue(
+                sink,
+                "error",
+                "timeline.assistant_content_kind.invalid",
+                "assistant content kind must be text or visual",
+                `${partPath}.kind`,
+              );
+              continue;
+            }
+            if (!isNonEmptyString(part.artifact.id)) {
+              addIssue(
+                sink,
+                "error",
+                "timeline.visual_artifact_id.invalid",
+                "visual artifact id must be non-empty",
+                `${partPath}.artifact.id`,
+              );
+            }
+            if (part.artifact.format !== "interactive_html") {
+              addIssue(
+                sink,
+                "error",
+                "timeline.visual_artifact_format.invalid",
+                "visual artifact format must be interactive_html",
+                `${partPath}.artifact.format`,
+              );
+            }
+            if (part.artifact.mimeType !== "text/html") {
+              addIssue(
+                sink,
+                "error",
+                "timeline.visual_artifact_mime.invalid",
+                "visual artifact mimeType must be text/html",
+                `${partPath}.artifact.mimeType`,
+              );
+            }
+            if (!isOptionalString(part.artifact.label)) {
+              addIssue(
+                sink,
+                "error",
+                "timeline.visual_artifact_label.invalid",
+                "visual artifact label must be a string",
+                `${partPath}.artifact.label`,
+              );
+            }
+          }
+        }
+      }
       break;
     case "reasoning":
       validateTimelineRuntimeModel(item.runtimeModel, sink, `${path}.runtimeModel`);

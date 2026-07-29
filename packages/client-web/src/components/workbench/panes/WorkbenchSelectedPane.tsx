@@ -61,6 +61,7 @@ import {
   type ConversationHeaderMetaItem,
 } from "../ConversationMetaBadge";
 import {
+  conversationHasExternalActivity,
   resolveConversationHeaderState,
 } from "../conversation-header-meta";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
@@ -381,6 +382,9 @@ export function WorkbenchSelectedPane(props: {
   const sessionHeaderState = resolveConversationHeaderState({
     status: sessionLifecycleStatus,
     phase: sessionPhase,
+    externalActivity:
+      sessionLifecycleStatus === "stopped" &&
+      conversationHasExternalActivity(conversation),
     ...(props.selectedSummary.session.relationship?.sideState
       ? { sideState: props.selectedSummary.session.relationship.sideState }
       : {}),

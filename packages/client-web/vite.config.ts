@@ -22,6 +22,13 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // Vite's preload helper is shared by every lazy route. Pin it to a
+          // tiny runtime chunk so Rollup cannot place that helper inside a
+          // large optional engine and accidentally make the engine an eager
+          // dependency of the application entry.
+          if (id.includes("vite/preload-helper")) {
+            return "runtime-preload";
+          }
           if (!id.includes("node_modules")) {
             return undefined;
           }
@@ -80,5 +87,8 @@ export default defineConfig({
   define: {
     __RAH_APP_VERSION__: JSON.stringify(packageJson.version ?? "0.0.0"),
     __RAH_WORKBENCH_VERSION__: JSON.stringify("1.0"),
+    // Production builds override this with an opaque generation identifier
+    // and publish the same value beside the assets for daemon startup.
+    __RAH_WEB_BUILD_ID__: JSON.stringify(""),
   },
 });

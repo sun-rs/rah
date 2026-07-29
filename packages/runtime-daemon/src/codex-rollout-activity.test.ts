@@ -1299,6 +1299,50 @@ What changed?
     });
   });
 
+  test("restores provider-native interactive visuals from persisted assistant history", () => {
+    const state = createCodexRolloutTranslationState();
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-07-29T08:00:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: [
+            "Here is the interactive result.",
+            '::codex-inline-vis{file="equity-curve.html"}',
+            "Hover the curve to inspect values.",
+          ].join("\n"),
+        },
+      },
+      state,
+    );
+
+    assert.equal(activities[0]?.activity.type, "timeline_item");
+    if (activities[0]?.activity.type !== "timeline_item") {
+      assert.fail("expected a persisted assistant timeline item");
+    }
+    assert.deepEqual(activities[0].activity.item, {
+      kind: "assistant_message",
+      text: [
+        "Here is the interactive result.",
+        "Hover the curve to inspect values.",
+      ].join("\n\n"),
+      content: [
+        { kind: "text", text: "Here is the interactive result." },
+        {
+          kind: "visual",
+          artifact: {
+            id: "equity-curve.html",
+            format: "interactive_html",
+            mimeType: "text/html",
+            label: "equity curve",
+          },
+        },
+        { kind: "text", text: "Hover the curve to inspect values." },
+      ],
+    });
+  });
+
   test("restores persisted context compactions as one aggregate Worked event per turn", () => {
     const state = createCodexRolloutTranslationState({
       providerSessionId: "session-compaction",

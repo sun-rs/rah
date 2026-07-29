@@ -15,3 +15,4 @@ declare module "mermaid/dist/mermaid.esm.min.mjs" {
 
 declare const __RAH_APP_VERSION__: string;
 declare const __RAH_WORKBENCH_VERSION__: string;
+declare const __RAH_WEB_BUILD_ID__: string;

@@ -1097,6 +1097,72 @@ describe("translateCodexAppServerNotification", () => {
     ]);
   });
 
+  test("withholds split visual directives while streaming and publishes the visual when complete", () => {
+    const state = createCodexAppServerTranslationState();
+    const first = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          turnId: "turn-visual",
+          itemId: "assistant-visual",
+          delta: 'Before\n::codex-inline-vis{file="equity',
+        },
+      },
+      state,
+    );
+    const second = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          turnId: "turn-visual",
+          itemId: "assistant-visual",
+          delta: '.html"}\nAfter',
+        },
+      },
+      state,
+    );
+
+    assert.equal(
+      JSON.stringify(first.map((item) => item.activity)).includes("codex-inline-vis"),
+      false,
+      "raw provider protocol must not enter the projected chat while incomplete",
+    );
+    assert.deepEqual(first.map((item) => item.activity.type), [
+      "message_part_delta",
+      "timeline_item",
+    ]);
+    assert.equal(
+      JSON.stringify(second.map((item) => item.activity)).includes("codex-inline-vis"),
+      false,
+      "completed provider protocol must remain hidden from projected chat text",
+    );
+    const timeline = second.find(
+      (item) => item.activity.type === "timeline_item_updated",
+    );
+    assert.equal(timeline?.activity.type, "timeline_item_updated");
+    if (timeline?.activity.type !== "timeline_item_updated") {
+      assert.fail("expected a completed visual timeline update");
+    }
+    assert.deepEqual(timeline.activity.item, {
+      kind: "assistant_message",
+      text: "Before\n\nAfter",
+      messageId: "assistant-visual",
+      content: [
+        { kind: "text", text: "Before" },
+        {
+          kind: "visual",
+          artifact: {
+            id: "equity.html",
+            format: "interactive_html",
+            mimeType: "text/html",
+            label: "equity",
+          },
+        },
+        { kind: "text", text: "After" },
+      ],
+    });
+  });
+
   test("preserves the app-server assistant message phase on completion", () => {
     const state = createCodexAppServerTranslationState();
     const completed = translateCodexAppServerNotification(

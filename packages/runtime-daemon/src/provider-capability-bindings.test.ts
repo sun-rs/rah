@@ -37,6 +37,14 @@ test("stored history capability preserves Conversation paging methods", async ()
     getSessionConversationSourceRevision() {
       return "1234:5678";
     },
+    getSessionConversationVisualArtifact(_sessionId, artifactId) {
+      return {
+        id: artifactId,
+        format: "interactive_html",
+        mimeType: "text/html",
+        fragment: "<svg></svg>",
+      };
+    },
   };
 
   assert.equal(hasStoredHistoryCapability(adapter), true);
@@ -69,6 +77,18 @@ test("stored history capability preserves Conversation paging methods", async ()
     await capability.getSessionConversationSourceRevision?.("session-1"),
     "1234:5678",
   );
+  assert.deepEqual(
+    await capability.getSessionConversationVisualArtifact?.(
+      "session-1",
+      "curve.html",
+    ),
+    {
+      id: "curve.html",
+      format: "interactive_html",
+      mimeType: "text/html",
+      fragment: "<svg></svg>",
+    },
+  );
 });
 
 test("turn file diff alone declares stored history capability", () => {
@@ -82,6 +102,22 @@ test("turn file diff alone declares stored history capability", () => {
         path: options.path,
         diff: "",
         truncated: false,
+      };
+    },
+  };
+  assert.equal(hasStoredHistoryCapability(adapter), true);
+});
+
+test("conversation visual artifact alone declares stored history capability", () => {
+  const adapter: ProviderAdapter & ProviderStoredHistoryAdapter = {
+    id: "history-visual-only",
+    providers: ["codex"],
+    getSessionConversationVisualArtifact(_sessionId, artifactId) {
+      return {
+        id: artifactId,
+        format: "interactive_html",
+        mimeType: "text/html",
+        fragment: "<svg></svg>",
       };
     },
   };

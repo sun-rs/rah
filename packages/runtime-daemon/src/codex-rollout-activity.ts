@@ -28,6 +28,11 @@ import {
   projectCouncilMcpToolCall,
   type NormalizedCouncilMcpToolCall,
 } from "./council/council-mcp-projection";
+import {
+  codexAssistantContentSignature,
+  parseCodexAssistantContent,
+  type ParsedCodexAssistantContent,
+} from "./codex-visual-artifacts";
 import type { ProviderActivity } from "./provider-activity";
 import { codexRuntimeModelFromTurnContext } from "./timeline-runtime-model";
 
@@ -492,7 +497,7 @@ function rememberTimelineTextIdentity(
 function upgradeDuplicateAssistantToFinal(
   state: CodexRolloutTranslationState,
   record: Record<string, unknown>,
-  text: string,
+  parsed: ParsedCodexAssistantContent,
   phase: AssistantMessagePhase | undefined,
 ): CodexTranslatedActivity[] {
   if (
@@ -510,7 +515,8 @@ function upgradeDuplicateAssistantToFinal(
         type: "timeline_item_updated",
         item: {
           kind: "assistant_message",
-          text,
+          text: parsed.text,
+          ...(parsed.content ? { content: parsed.content } : {}),
           phase: "final_answer",
           ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
         },
@@ -1722,16 +1728,25 @@ function translateCodexRolloutLineUnscoped(
       ];
     }
     if (payload.type === "agent_message") {
-      const text = extractAgentMessageText(payload.message);
-      if (!text) {
+      const rawText = extractAgentMessageText(payload.message);
+      if (!rawText) {
         if (typeof payload.message === "string" && payload.message.trim() === "") {
           return [];
         }
         return invalidRolloutActivity(record, "agent_message did not contain text");
       }
+      const parsed = parseCodexAssistantContent(rawText);
+      if (!parsed.text && !parsed.content?.some((part) => part.kind === "visual")) {
+        return [];
+      }
       const phase = assistantMessagePhase(payload);
-      if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
-        return upgradeDuplicateAssistantToFinal(state, record, text, phase);
+      if (shouldSkipDuplicateTimelineText(
+        state,
+        record,
+        "assistant_message",
+        codexAssistantContentSignature(parsed),
+      )) {
+        return upgradeDuplicateAssistantToFinal(state, record, parsed, phase);
       }
       const identity = createHistoryTimelineIdentity(state, {
         itemKind: "assistant_message",
@@ -1744,7 +1759,8 @@ function translateCodexRolloutLineUnscoped(
             type: "timeline_item",
             item: {
               kind: "assistant_message",
-              text,
+              text: parsed.text,
+              ...(parsed.content ? { content: parsed.content } : {}),
               ...(phase ? { phase } : {}),
               ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
             },
@@ -1944,18 +1960,24 @@ function translateCodexRolloutLineUnscoped(
     }
     if (payload.role === "assistant") {
       const rawText = textFromContentItems(payload.content, "output_text");
-      const text = stripCodexContextualFragments(
+      const contextualText = stripCodexContextualFragments(
         rawText ?? "",
       );
-      if (!text) {
+      const parsed = parseCodexAssistantContent(contextualText);
+      if (!parsed.text && !parsed.content?.some((part) => part.kind === "visual")) {
         if (rawText !== null) {
           return [];
         }
         return invalidRolloutActivity(record, "assistant message did not contain output_text");
       }
       const phase = assistantMessagePhase(payload);
-      if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
-        return upgradeDuplicateAssistantToFinal(state, record, text, phase);
+      if (shouldSkipDuplicateTimelineText(
+        state,
+        record,
+        "assistant_message",
+        codexAssistantContentSignature(parsed),
+      )) {
+        return upgradeDuplicateAssistantToFinal(state, record, parsed, phase);
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
       const identity = createHistoryTimelineIdentity(state, {
@@ -1964,7 +1986,7 @@ function translateCodexRolloutLineUnscoped(
       });
       rememberTimelineTextIdentity(state, identity, phase);
       return [
-        ...(messageId
+        ...(messageId && parsed.text
           ? [
               persistedActivity(
                 record,
@@ -1974,7 +1996,7 @@ function translateCodexRolloutLineUnscoped(
                     messageId,
                     partId: messageId,
                     kind: "text",
-                    text,
+                    text: parsed.text,
                   },
                 },
                 "authoritative",
@@ -1987,7 +2009,8 @@ function translateCodexRolloutLineUnscoped(
             type: "timeline_item",
             item: {
               kind: "assistant_message",
-              text,
+              text: parsed.text,
+              ...(parsed.content ? { content: parsed.content } : {}),
               ...(phase ? { phase } : {}),
               ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
             },

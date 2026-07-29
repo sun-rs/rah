@@ -344,14 +344,39 @@ export interface ConversationTurnDetailResponse {
 }
 
 /**
+ * Bumped whenever the resource-index wire contract changes in a way that
+ * affects snapshot publication semantics. Clients must reject an absent or
+ * different version instead of treating a legacy progressive response as a
+ * committed snapshot.
+ */
+export const CONVERSATION_RESOURCE_INDEX_PROTOCOL_VERSION = 1;
+
+/**
  * Provider-neutral, detached resource index for Inspector. The daemon owns
- * history hydration so clients do not need one detail request per turn.
+ * history hydration and versioned persistence so clients do not need one
+ * detail request per turn. Responses expose only committed snapshots: a
+ * replacement revision is built privately and atomically replaces the prior
+ * stable snapshot after paging and detail hydration have both settled.
  */
 export interface ConversationResourceIndexResponse {
+  protocolVersion: typeof CONVERSATION_RESOURCE_INDEX_PROTOCOL_VERSION;
   sessionId: string;
   sourceRevision: string;
   outputs: ConversationOutputProjection[];
   sources: ConversationSourceProjection[];
+  /**
+   * True when Outputs/Sources are one coherent snapshot for `sourceRevision`.
+   * While a newer provider revision is being indexed, the daemon may return
+   * the last stable snapshot together with `indexing: true`; clients should
+   * keep rendering that snapshot until the replacement is committed.
+   */
+  stable?: boolean;
+  /**
+   * True while the daemon is hydrating provider history in the background.
+   * Clients should re-read until this becomes false/absent, but must not expose
+   * an unstable working index as a progressively changing resource list.
+   */
+  indexing?: boolean;
   complete: boolean;
   generatedAt: string;
   warning?: string;

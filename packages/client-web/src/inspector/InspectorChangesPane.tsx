@@ -186,17 +186,19 @@ export function InspectorChangesPane(props: {
         <div className="py-3 text-sm text-[var(--app-hint)]">No changed files match your filter.</div>
       ) : (
         <section>
-          <div className="px-1 py-1 text-xs font-semibold text-[var(--app-fg)]">
-            {isUncommitted
-              ? `Uncommitted changes (${matchingFiles.length})`
-              : comparisonMode === "merge_base"
-                ? `Since diverging from ${baselineBranch ?? "selected branch"} (${matchingFiles.length})`
-                : `Snapshot differences from ${baselineBranch ?? "selected branch"} (${matchingFiles.length})`}
-          </div>
           <InspectorChangeTree
+            key={`${props.workspaceRoot}:${baselineBranch ?? "HEAD"}:${comparisonMode ?? "uncommitted"}`}
             files={treeFiles}
             workspaceRoot={props.workspaceRoot}
             query={query}
+            defaultExpanded
+            heading={
+              isUncommitted
+              ? `Uncommitted changes (${matchingFiles.length})`
+              : comparisonMode === "merge_base"
+                ? `Since diverging from ${baselineBranch ?? "selected branch"} (${matchingFiles.length})`
+                : `Snapshot differences from ${baselineBranch ?? "selected branch"} (${matchingFiles.length})`
+            }
           />
         </section>
       )}

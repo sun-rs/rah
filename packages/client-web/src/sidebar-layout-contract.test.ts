@@ -379,6 +379,13 @@ describe("sidebar layout contract", () => {
     assert.match(changesSource, /HEAD · uncommitted changes/);
     assert.match(changesSource, /merge_base/);
     assert.match(changesSource, /Uncommitted changes/);
+    assert.match(changesSource, /defaultExpanded/);
+    assert.match(changesSource, /heading=/);
+    assert.match(changesSource, /key=\{`\$\{props\.workspaceRoot\}/);
+    assert.match(
+      readSource("./inspector/InspectorChangeTree.tsx"),
+      /Collapse all changes[\s\S]*Expand all changes/,
+    );
     assert.doesNotMatch(changesSource, /\["branch", "unstaged", "staged"\]/);
     assert.match(changesSource, /text-\[var\(--app-fg\)\]/);
     assert.match(inspectorSource, /onBaseBranchChange=\{\(baseBranch\) =>/);
@@ -386,22 +393,30 @@ describe("sidebar layout contract", () => {
     assert.match(turnChangesSource, /<InspectorChangeTree/);
   });
 
-  test("indexes Inspector resources in the background without hydrating Chat turns", () => {
+  test("preloads Inspector data after Chat without tab-triggered indexing", () => {
+    const appSource = readSource("./App.tsx");
     const inspectorSource = readSource("./InspectorPane.tsx");
     const indexSource = readSource("./inspector/conversation-resource-index.ts");
     const headerSource = readSource("./inspector/InspectorHeader.tsx");
     const resourcesSource = readSource("./inspector/InspectorResourcesPane.tsx");
+    const preloadSource = readSource("./session-view-preload.ts");
 
-    assert.match(inspectorSource, /loadCachedConversationResourceIndex/);
-    assert.match(inspectorSource, /\[props\.sessionId, resourceIndexRetryToken\]/);
+    assert.match(appSource, /preloadSelectedSessionView/);
+    assert.match(
+      preloadSource,
+      /hydrateConversation[\s\S]*loadChangesAndFiles[\s\S]*loadOutputsAndSources/,
+    );
+    assert.match(inspectorSource, /subscribeSessionInspectorPrimary/);
+    assert.match(inspectorSource, /subscribeConversationResourceIndex/);
+    assert.match(inspectorSource, /Historical indexing is owned by the selected-session preload pipeline/);
     assert.doesNotMatch(inspectorSource, /activeTab !== "outputs" && activeTab !== "sources"/);
     assert.doesNotMatch(inspectorSource, /onLoadConversationTurnDetail/);
     assert.match(indexSource, /dependencies\.readIndex\(args\.sessionId/);
     assert.doesNotMatch(indexSource, /readConversationTurnsPage/);
     assert.doesNotMatch(indexSource, /readConversationTurnDetail/);
     assert.match(indexSource, /daemon-owned provider-neutral resource-index request/);
-    assert.match(headerSource, /Outputs \(\{props\.outputCount\}\)/);
-    assert.match(headerSource, /Sources \(\{props\.sourceCount\}\)/);
+    assert.match(headerSource, /props\.outputCount === null/);
+    assert.match(headerSource, /props\.sourceCount === null/);
     assert.doesNotMatch(headerSource, /resourceIndexing/);
     assert.doesNotMatch(resourcesSource, /Indexing complete turn resources/);
     assert.doesNotMatch(resourcesSource, /role="status"/);
@@ -966,6 +981,9 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(appSource, /FilePreviewDialogLoadingFallback/);
     assert.match(appSource, /title="Inspector crashed"/);
     assert.match(boundarySource, /isLikelyStaleDynamicImportError/);
+    assert.match(boundarySource, /recoveryKey/);
+    assert.match(boundarySource, /this\.retry/);
+    assert.match(boundarySource, /\{staleChunkError \? "Reload" : "Retry"\}/);
 
     const apiSource = readSource("./api.ts");
     assert.match(apiSource, /function imagePreviewClientHint/);

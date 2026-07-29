@@ -185,6 +185,13 @@ export interface ProviderWorkspaceInspectionAdapter {
   ): SessionFileResponse | Promise<SessionFileResponse>;
 }
 
+export interface ProviderConversationVisualArtifact {
+  id: string;
+  format: "interactive_html";
+  mimeType: "text/html";
+  fragment: string;
+}
+
 export interface ProviderStoredHistoryAdapter {
   /**
    * Declares whether archive can be requested while a provider session is
@@ -218,6 +225,13 @@ export interface ProviderStoredHistoryAdapter {
   getSessionConversationSourceRevision?(
     sessionId: string,
   ): string | undefined | Promise<string | undefined>;
+  getSessionConversationVisualArtifact?(
+    sessionId: string,
+    artifactId: string,
+  ):
+    | ProviderConversationVisualArtifact
+    | undefined
+    | Promise<ProviderConversationVisualArtifact | undefined>;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
   getSessionConversationDirectory?(
     sessionId: string,

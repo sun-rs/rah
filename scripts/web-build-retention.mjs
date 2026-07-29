@@ -59,6 +59,47 @@ export function generationAssetFilesFromManifest(
   return [...generationAssets].sort();
 }
 
+export function assertOptionalWebChunkIsLazy(manifest, chunkName) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("Vite manifest is unavailable.");
+  }
+  const entries = Object.values(manifest).filter(
+    (chunk) =>
+      chunk &&
+      typeof chunk === "object" &&
+      !Array.isArray(chunk) &&
+      chunk.isEntry === true,
+  );
+  const optionalChunks = Object.entries(manifest).filter(
+    ([, chunk]) =>
+      chunk &&
+      typeof chunk === "object" &&
+      !Array.isArray(chunk) &&
+      chunk.name === chunkName,
+  );
+  if (optionalChunks.length === 0) {
+    throw new Error(`Optional web chunk ${chunkName} was not emitted.`);
+  }
+  const optionalKeys = new Set(optionalChunks.map(([key]) => key));
+  for (const entry of entries) {
+    const eagerOptionalImport = (entry.imports ?? []).find((key) =>
+      optionalKeys.has(key),
+    );
+    if (eagerOptionalImport) {
+      throw new Error(
+        `Optional web chunk ${chunkName} became an eager dependency of ${entry.file}.`,
+      );
+    }
+  }
+  if (
+    !optionalChunks.some(
+      ([, chunk]) => chunk.isDynamicEntry === true,
+    )
+  ) {
+    throw new Error(`Optional web chunk ${chunkName} is not a dynamic entry.`);
+  }
+}
+
 export function retainedWebBuildGenerations(
   generations,
   options = {},

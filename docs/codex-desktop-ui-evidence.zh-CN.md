@@ -233,9 +233,15 @@ RAH 应在 Conversation 中增加 provider-neutral 的资源层，而不是把�
   只读 source，以及没有成功产出证据的 final-answer Markdown 链接都不会被猜成 Output。final
   answer 明确嵌入的本地 Markdown 图片仍是窄补充路径，用于 shell 生成图片但 provider 未发
   artifact 的情况；远程图片和 data URL 不适用。resource projector 优先读取 provider-neutral
-  activity descriptor 的 kind/action/file targets/URLs，旧 `tool.family` 只作为兼容后备；历史
-  summary 若缺少这些资源证据，首次打开 Inspector 的 Outputs/Sources 时会对当前已载入 summaries
-  以最多 3 路并发按需补齐 turn detail，再由结构化 tool/observation 生成完整资源索引。
+  activity descriptor 的 kind/action/file targets/URLs，旧 `tool.family` 只作为兼容后备。选中
+  session 并完成 Chat hydration 后，daemon 会在后台预载完整的 detached resource index；最多
+  3 路 detail hydration 只写入内部工作副本。最后一个稳定快照和逐 turn fingerprint/resource
+  projection 使用带版本的磁盘协议持久化并原子替换，所以 daemon 重启可直接恢复、外部 provider
+  追加历史只补新增 turn/活动尾部，Inspector 也不会再观察到 Outputs/Sources 计数逐条递增或列表
+  重排。客户端不再把 Chat 已加载的局部 turn 资源并入 session Inspector；daemon 已提交快照是
+  唯一资源权威。wire response 必须携带显式资源索引协议版本；缺失版本或既非 `stable` 也非
+  `indexing` 的旧 daemon 响应必须被拒绝，不能因字段缺失而误判为稳定结果。旧版本或损坏磁盘
+  缓存只能触发冷重建，不能作为兼容结果继续发布。
 - 最终回答附近的 Outputs 直接展示交付物行，不再增加冗余的 `Outputs (N)` 标题；首屏最多展示
   3 项，超出后使用 `Show more / Show less` 有界展开。Changed files 使用独立的统计摘要行，
   显示本轮文件数和总增删行数，首屏同样展示 3 项并有界追加。普通源码改动继续只显示在独立的
@@ -250,6 +256,14 @@ RAH 应在 Conversation 中增加 provider-neutral 的资源层，而不是把�
   与 Outputs 不混用。
 - 最终回答 Markdown 采用 Desktop 证据对应的系统字体、14px 字号、1.5 行高、20px 块间距和
   24px 列表缩进；过程消息继续使用较弱的视觉层级，不与 final answer 混淆。
+- Codex 的交互可视化不是截图增强，也不是 Inspector Output。provider 在 thread-scoped
+  visualization 目录保存小于 2 MB 的 HTML fragment，并在 assistant 消息中以
+  `::codex-inline-vis{file="..."}` 指定其内联位置；Desktop 用统一 Visualize host 包装该
+  fragment，所以曲线可以响应 hover、crosshair 和局部状态变化。RAH 对齐的是这条原生协议：
+  不增加提示注入，不根据 PNG/CSV/Markdown 猜图，只在 Codex adapter 中解析确定性指令，
+  再通过 provider-neutral ordered content、只读 artifact resolver 和隔离 iframe 呈现。
+  RAH vendored 的 host CSS/HTML 与本机 Codex Visualize kit 保持字节一致；外层不再额外绘制
+  卡片边框，视觉边界由 fragment 和官方 host 自身决定。
 - Chat fenced code、Inspector 文件预览、Notebook code cell 与 Diff code token 使用同一套
   provider-neutral Shiki 主题入口。本机 Desktop 26.715.61943 的打包资源表明其默认代码主题是
   独立的 `Codex Light` / `Codex Dark`，不是 VS Code `light-plus` / `dark-plus`。RAH 不导入私有

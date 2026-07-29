@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import {
+  assertOptionalWebChunkIsLazy,
   generationAssetFilesFromManifest,
   retainedWebBuildGenerations,
   staleWebAssetFiles,
@@ -37,7 +38,9 @@ const stagingRoot = path.join(
   `.dist-staging-${process.pid}-${buildStartedAt}`,
 );
 const manifestRelativePath = path.join(".vite", "manifest.json");
+const webBuildMetadataRelativePath = ".rah-web-build.json";
 const BUILD_LOCK_STALE_MS = 30 * 60 * 1_000;
+const webBuildId = randomUUID();
 
 async function listRelativeFiles(root) {
   const files = [];
@@ -71,6 +74,19 @@ async function readJson(pathname, fallback) {
   } catch {
     return fallback;
   }
+}
+
+async function assetsContainText(root, relativeFiles, text) {
+  for (const relative of relativeFiles) {
+    if (!relative.endsWith(".js")) {
+      continue;
+    }
+    const source = await readFile(path.join(root, relative), "utf8");
+    if (source.includes(text)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function generationId(assets) {
@@ -177,6 +193,17 @@ async function publishStagedBuild(previousGeneration) {
   if (!stagedManifest || stagedAssetFiles.length === 0) {
     throw new Error("Vite build did not produce an asset manifest.");
   }
+  const stagedBuildMetadata = await readJson(
+    path.join(stagingRoot, webBuildMetadataRelativePath),
+    null,
+  );
+  if (stagedBuildMetadata?.webBuildId !== webBuildId) {
+    throw new Error("Vite build metadata does not match the embedded Web generation.");
+  }
+  if (!(await assetsContainText(stagedAssetsRoot, stagedAssetFiles, webBuildId))) {
+    throw new Error("Web generation identifier was not embedded in the built client.");
+  }
+  assertOptionalWebChunkIsLazy(stagedManifest, "vendor-mermaid");
   const currentAssets = generationAssetFilesFromManifest(
     stagedManifest,
     stagedAssetFiles,
@@ -264,12 +291,24 @@ try {
   await build({
     root: clientRoot,
     configFile: path.join(clientRoot, "vite.config.ts"),
+    define: {
+      __RAH_WEB_BUILD_ID__: JSON.stringify(webBuildId),
+    },
     build: {
       outDir: stagingRoot,
       emptyOutDir: true,
       manifest: true,
     },
   });
+  await writeFile(
+    path.join(stagingRoot, webBuildMetadataRelativePath),
+    `${JSON.stringify({
+      version: 1,
+      webBuildId,
+      builtAt: new Date().toISOString(),
+    }, null, 2)}\n`,
+    "utf8",
+  );
   await runNodeScript(
     path.join(scriptRoot, "precompress-web-assets.mjs"),
     [stagingRoot],

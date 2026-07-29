@@ -1,9 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  ConversationOutputProjection,
-  ConversationTurnProjection,
-  TurnFileChangesResponse,
-} from "@rah/runtime-protocol";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { TurnFileChangesResponse } from "@rah/runtime-protocol";
 import {
   listDirectory,
   readSessionConversationResourceIndex,
@@ -23,16 +19,18 @@ import { InspectorTurnChangesPane } from "./inspector/InspectorTurnChangesPane";
 import { ReviewDialog } from "./inspector/ReviewDialog";
 import type { ReviewScope } from "./inspector/ReviewSurface";
 import {
-  collectConversationResources,
-  mergeConversationOutputs,
-  mergeConversationSources,
-} from "./conversation-resources";
-import {
   invalidateCachedConversationResourceIndex,
   loadCachedConversationResourceIndex,
   readCachedConversationResourceIndex,
+  subscribeConversationResourceIndex,
   type ConversationResourceIndex,
 } from "./inspector/conversation-resource-index";
+import {
+  normalizeInspectorGitStatus,
+  readCachedSessionInspectorPrimary,
+  subscribeSessionInspectorPrimary,
+  type SessionInspectorPrimarySnapshot,
+} from "./inspector/session-inspector-primary-cache";
 import type {
   DirectoryEntry,
   FileDetailSelection,
@@ -48,7 +46,6 @@ type InspectorChangeScope = "turn" | "workspace";
 export function InspectorPane(props: {
   sessionId: string | null;
   workspaceRoot: string;
-  conversationTurns: readonly ConversationTurnProjection[];
   onOpenTerminal?: () => void;
   onClosePanel?: () => void;
   openFileRequest?: InspectorOpenFileRequest | null;
@@ -91,10 +88,6 @@ export function InspectorPane(props: {
   const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
   const gitStatusRequestRef = useRef(0);
   const turnChangesRequestRef = useRef(0);
-  const liveResources = useMemo(
-    () => collectConversationResources(props.conversationTurns),
-    [props.conversationTurns],
-  );
   const initialResourceCache = props.sessionId
     ? readCachedConversationResourceIndex(props.sessionId)
     : undefined;
@@ -102,20 +95,21 @@ export function InspectorPane(props: {
     sessionId: string | null;
     index: ConversationResourceIndex;
     indexing: boolean;
+    validated: boolean;
     error: string | null;
     warning: string | null;
   }>(() => ({
     sessionId: props.sessionId,
-    index: initialResourceCache?.index ?? liveResources,
-    indexing: Boolean(props.sessionId && !initialResourceCache?.complete),
-    error: null,
+    index: initialResourceCache?.index ?? { outputs: [], sources: [] },
+    indexing: Boolean(props.sessionId && !initialResourceCache?.validated),
+    validated: initialResourceCache?.validated ?? !props.sessionId,
+    error: initialResourceCache?.error ?? null,
     warning: initialResourceCache?.warning ?? null,
   }));
-  const [resourceIndexRetryToken, setResourceIndexRetryToken] = useState(0);
   const indexedResources =
     resourceIndexState.sessionId === props.sessionId
       ? resourceIndexState.index
-      : liveResources;
+      : { outputs: [], sources: [] };
   const resourceIndexing =
     resourceIndexState.sessionId === props.sessionId
       ? resourceIndexState.indexing
@@ -128,24 +122,19 @@ export function InspectorPane(props: {
     resourceIndexState.sessionId === props.sessionId
       ? resourceIndexState.warning
       : null;
-  const canonicalResources = useMemo(
-    () => ({
-      outputs: mergeConversationOutputs(liveResources.outputs, indexedResources.outputs),
-      sources: mergeConversationSources(liveResources.sources, indexedResources.sources),
-    }),
-    [indexedResources, liveResources],
-  );
-  const outputResources = useMemo<ConversationOutputProjection[]>(
-    () => canonicalResources.outputs,
-    [canonicalResources.outputs],
-  );
+  const resourceIndexValidated =
+    resourceIndexState.sessionId === props.sessionId
+      ? resourceIndexState.validated
+      : false;
+  const outputResources = indexedResources.outputs;
+  const sourceResources = indexedResources.sources;
   useEffect(() => {
-    const seedResources = collectConversationResources(props.conversationTurns);
     if (!props.sessionId) {
       setResourceIndexState({
         sessionId: null,
-        index: seedResources,
+        index: { outputs: [], sources: [] },
         indexing: false,
+        validated: true,
         error: null,
         warning: null,
       });
@@ -153,79 +142,54 @@ export function InspectorPane(props: {
     }
     const sessionId = props.sessionId;
     const cached = readCachedConversationResourceIndex(sessionId);
-    const initialIndex = cached
-      ? {
-          outputs: mergeConversationOutputs(seedResources.outputs, cached.index.outputs),
-          sources: mergeConversationSources(seedResources.sources, cached.index.sources),
-        }
-      : seedResources;
     setResourceIndexState({
       sessionId,
-      index: initialIndex,
-      indexing: !cached?.complete,
-      error: null,
+      index: cached?.index ?? { outputs: [], sources: [] },
+      indexing: !cached?.validated,
+      validated: cached?.validated ?? false,
+      error: cached?.error ?? null,
       warning: cached?.warning ?? null,
     });
-    let active = true;
-    void loadCachedConversationResourceIndex({
-      sessionId,
-      seedTurns: props.conversationTurns,
-      dependencies: {
-        readIndex: readSessionConversationResourceIndex,
-      },
-      onProgress: (resources) => {
-        if (active) {
-          setResourceIndexState((current) =>
-            current.sessionId === sessionId
-              ? { ...current, index: resources }
-              : current,
-          );
+    return subscribeConversationResourceIndex(sessionId, (snapshot) => {
+      setResourceIndexState((current) => {
+        if (current.sessionId !== sessionId) {
+          return current;
         }
-      },
-      onWarning: (warning) => {
-        if (active) {
-          setResourceIndexState((current) =>
-            current.sessionId === sessionId
-              ? { ...current, warning }
-              : current,
-          );
+        if (!snapshot) {
+          return {
+            sessionId,
+            index: { outputs: [], sources: [] },
+            indexing: true,
+            validated: false,
+            error: null,
+            warning: null,
+          };
         }
-      },
-    })
-      .catch((error) => {
-        if (active) {
-          setResourceIndexState((current) =>
-            current.sessionId === sessionId
-              ? {
-                  ...current,
-                  error: error instanceof Error ? error.message : String(error),
-                }
-              : current,
-          );
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setResourceIndexState((current) =>
-            current.sessionId === sessionId
-              ? { ...current, indexing: false }
-              : current,
-          );
-        }
+        return {
+          sessionId,
+          index: snapshot.index,
+          indexing: !snapshot.validated,
+          validated: snapshot.validated,
+          error: snapshot.error ?? null,
+          warning: snapshot.warning ?? null,
+        };
       });
-    return () => {
-      active = false;
-    };
-    // The detached index follows the session identity. Live turn resources are
-    // merged separately so ordinary conversation updates never restart a full
-    // historical scan.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.sessionId, resourceIndexRetryToken]);
+    });
+    // Historical indexing is owned by the selected-session preload pipeline.
+    // This component only observes its cache, so opening a tab cannot launch a
+    // lower-priority scan ahead of Chat or Changes/Files.
+  }, [props.sessionId]);
 
   const retryResourceIndex = () => {
     if (!props.sessionId) return;
-    invalidateCachedConversationResourceIndex(props.sessionId);
-    setResourceIndexRetryToken((token) => token + 1);
+    const sessionId = props.sessionId;
+    invalidateCachedConversationResourceIndex(sessionId);
+    void loadCachedConversationResourceIndex({
+      sessionId,
+      dependencies: {
+        readIndex: readSessionConversationResourceIndex,
+      },
+    }).catch(() => undefined);
   };
 
   const loadDirectory = async (directoryPath: string) => {
@@ -288,20 +252,7 @@ export function InspectorPane(props: {
       if (gitStatusRequestRef.current !== requestId) {
         return;
       }
-      setGitStatus({
-        ...(response.branch ? { branch: response.branch } : {}),
-        ...(response.baseBranch ? { baseBranch: response.baseBranch } : {}),
-        ...(response.comparisonMode ? { comparisonMode: response.comparisonMode } : {}),
-        ...(response.comparisonBase ? { comparisonBase: response.comparisonBase } : {}),
-        branchOptions: response.branchOptions ?? [],
-        branchFiles: response.branchFiles ?? [],
-        changedFiles: response.changedFiles,
-        stagedFiles: response.stagedFiles ?? [],
-        unstagedFiles: response.unstagedFiles ?? [],
-        totalBranch: response.totalBranch ?? response.branchFiles?.length ?? 0,
-        totalStaged: response.totalStaged ?? response.stagedFiles?.length ?? 0,
-        totalUnstaged: response.totalUnstaged ?? response.unstagedFiles?.length ?? 0,
-      });
+      setGitStatus(normalizeInspectorGitStatus(response));
       setSelectedBaseBranch(response.baseBranch);
     } catch (error) {
       if (gitStatusRequestRef.current !== requestId) {
@@ -355,13 +306,61 @@ export function InspectorPane(props: {
     setExpandedPaths(props.workspaceRoot ? new Set([props.workspaceRoot]) : new Set());
     setDirectoryEntriesByPath(new Map());
     setDirectoryErrorsByPath(new Map());
-    if (props.workspaceRoot) {
+    setDirectoryLoadingPaths(
+      props.workspaceRoot ? new Set([props.workspaceRoot]) : new Set(),
+    );
+    if (!props.sessionId && props.workspaceRoot) {
       void loadDirectory(props.workspaceRoot);
     }
+    if (!props.sessionId || !props.workspaceRoot) {
+      return;
+    }
+    const sessionId = props.sessionId;
+    const workspaceRoot = props.workspaceRoot;
+    const applySnapshot = (snapshot: SessionInspectorPrimarySnapshot) => {
+      setGitStatus(snapshot.gitStatus);
+      setSelectedBaseBranch(snapshot.gitStatus?.baseBranch);
+      setGitStatusError(snapshot.gitStatusError);
+      setGitStatusLoading(!snapshot.complete);
+      setDirectoryEntriesByPath((current) => {
+        const next = new Map(current);
+        next.set(workspaceRoot, snapshot.rootEntries);
+        return next;
+      });
+      setDirectoryErrorsByPath((current) => {
+        const next = new Map(current);
+        if (snapshot.directoryError) {
+          next.set(workspaceRoot, snapshot.directoryError);
+        } else {
+          next.delete(workspaceRoot);
+        }
+        return next;
+      });
+      setDirectoryLoadingPaths((current) => {
+        const next = new Set(current);
+        if (snapshot.complete) {
+          next.delete(workspaceRoot);
+        } else {
+          next.add(workspaceRoot);
+        }
+        return next;
+      });
+    };
+    const cached = readCachedSessionInspectorPrimary(sessionId, workspaceRoot);
+    if (cached) {
+      applySnapshot(cached);
+    } else {
+      setGitStatusLoading(true);
+    }
+    return subscribeSessionInspectorPrimary(
+      sessionId,
+      workspaceRoot,
+      applySnapshot,
+    );
   }, [props.sessionId, props.workspaceRoot]);
 
   useEffect(() => {
-    if (changeScope === "workspace") {
+    if (changeScope === "workspace" && !props.sessionId) {
       void loadGitStatus(undefined);
     }
   }, [changeScope, props.sessionId, props.workspaceRoot]);
@@ -496,8 +495,16 @@ export function InspectorPane(props: {
         workspaceRoot={props.workspaceRoot}
         activeTab={activeTab}
         changeCount={changeCount}
-        outputCount={outputResources.length}
-        sourceCount={canonicalResources.sources.length}
+        outputCount={
+          resourceIndexValidated || outputResources.length > 0
+            ? outputResources.length
+            : null
+        }
+        sourceCount={
+          resourceIndexValidated || sourceResources.length > 0
+            ? sourceResources.length
+            : null
+        }
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
         {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
@@ -595,7 +602,7 @@ export function InspectorPane(props: {
         ) : activeTab === "sources" ? (
           <InspectorResourcesPane
             workspaceRoot={props.workspaceRoot}
-            resources={canonicalResources.sources}
+            resources={sourceResources}
             description="Attachments, web pages, and external references recorded in provider history. The session does not need to run in RAH."
             loading={resourceIndexing}
             error={resourceIndexError}

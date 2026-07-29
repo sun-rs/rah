@@ -35,6 +35,10 @@ import {
   cacheProviderHistoryImageParts,
   isProviderHistoryPathAttachmentId,
 } from "./provider-history-attachments";
+import {
+  codexAssistantContentSignature,
+  parseCodexAssistantContent,
+} from "./codex-visual-artifacts";
 import type { ProviderActivity } from "./provider-activity";
 import { parsePersistedUserMessageContent } from "./session-input-attachments";
 import { timelineRuntimeModel } from "./timeline-runtime-model";
@@ -63,6 +67,8 @@ export type CodexSubmittedUserMessage = {
 export interface CodexAppServerTranslationState {
   pendingToolCalls: Map<string, PendingLiveToolCall>;
   agentMessageByItemId: Map<string, string[]>;
+  visibleAgentMessageTextByItemId: Map<string, string>;
+  visibleAgentMessageSignatureByItemId: Map<string, string>;
   reasoningByItemId: Map<string, string[]>;
   emittedUserMessageItemIds: Set<string>;
   emittedAgentMessageDeltaItemIds: Set<string>;
@@ -97,6 +103,8 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
   return {
     pendingToolCalls: new Map(),
     agentMessageByItemId: new Map(),
+    visibleAgentMessageTextByItemId: new Map(),
+    visibleAgentMessageSignatureByItemId: new Map(),
     reasoningByItemId: new Map(),
     emittedUserMessageItemIds: new Set(),
     emittedAgentMessageDeltaItemIds: new Set(),
@@ -1775,11 +1783,15 @@ function mapThreadItem(
       }
       const text = stringField(item, "text") ?? "";
       const buffered = (state.agentMessageByItemId.get(id) ?? []).join("");
-      const finalText = stripCodexContextualFragments(text || buffered);
+      const parsed = parseCodexAssistantContent(
+        stripCodexContextualFragments(text || buffered),
+      );
       state.completedAgentMessageItemIds.add(id);
       state.agentMessageByItemId.delete(id);
+      state.visibleAgentMessageTextByItemId.delete(id);
+      state.visibleAgentMessageSignatureByItemId.delete(id);
       state.lastAgentMessageDeltaByItemId.delete(id);
-      if (!finalText) {
+      if (!parsed.text && !parsed.content?.some((part) => part.kind === "visual")) {
         return [];
       }
       const identity = createLiveTimelineIdentity(state, {
@@ -1793,14 +1805,26 @@ function mapThreadItem(
       const messagePhase = assistantMessagePhase(item);
       if (state.emittedAgentMessageDeltaItemIds.has(id)) {
         return [
-          { type: "message_part_updated", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
+          ...(parsed.text
+            ? [{
+                type: "message_part_updated" as const,
+                turnId,
+                part: {
+                  messageId: id,
+                  partId: id,
+                  kind: "text" as const,
+                  text: parsed.text,
+                },
+              }]
+            : []),
           {
             type: "timeline_item_updated",
             turnId,
             item: {
               kind: "assistant_message",
-              text: finalText,
+              text: parsed.text,
               messageId: id,
+              ...(parsed.content ? { content: parsed.content } : {}),
               ...(messagePhase ? { phase: messagePhase } : {}),
               ...(runtimeModel ? { runtimeModel } : {}),
             },
@@ -1809,14 +1833,26 @@ function mapThreadItem(
         ];
       }
       return [
-        { type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
+        ...(parsed.text
+          ? [{
+              type: "message_part_added" as const,
+              turnId,
+              part: {
+                messageId: id,
+                partId: id,
+                kind: "text" as const,
+                text: parsed.text,
+              },
+            }]
+          : []),
         {
           type: "timeline_item",
           turnId,
           item: {
             kind: "assistant_message",
-            text: finalText,
+            text: parsed.text,
             messageId: id,
+            ...(parsed.content ? { content: parsed.content } : {}),
             ...(messagePhase ? { phase: messagePhase } : {}),
             ...(runtimeModel ? { runtimeModel } : {}),
           },
@@ -2724,8 +2760,8 @@ export function translateCodexAppServerNotification(
       if (!delta) {
         return invalidStreamActivities(notification, "agent message delta payload was not recognized");
       }
-      const visibleDelta = stripCodexContextualFragments(delta.delta, { trim: false });
-      if (visibleDelta.length === 0) {
+      const rawDelta = stripCodexContextualFragments(delta.delta, { trim: false });
+      if (rawDelta.length === 0) {
         return [];
       }
       const hasEmittedTimeline = state.emittedAgentMessageDeltaItemIds.has(delta.itemId);
@@ -2733,26 +2769,41 @@ export function translateCodexAppServerNotification(
         state.agentMessageByItemId,
         state.lastAgentMessageDeltaByItemId,
         delta.itemId,
-        visibleDelta,
+        rawDelta,
       )) {
         return [];
       }
-      const fullText = (state.agentMessageByItemId.get(delta.itemId) ?? []).join("");
+      const buffered = (state.agentMessageByItemId.get(delta.itemId) ?? []).join("");
+      const parsed = parseCodexAssistantContent(buffered, { streaming: true });
+      const signature = codexAssistantContentSignature(parsed);
+      const previousSignature =
+        state.visibleAgentMessageSignatureByItemId.get(delta.itemId);
+      if (signature === previousSignature) {
+        return [];
+      }
+      const previousText =
+        state.visibleAgentMessageTextByItemId.get(delta.itemId) ?? "";
+      state.visibleAgentMessageSignatureByItemId.set(delta.itemId, signature);
+      state.visibleAgentMessageTextByItemId.set(delta.itemId, parsed.text);
       const identity = createLiveTimelineIdentityFromNotification(notification, state, {
         itemKind: "assistant_message",
         providerItemKey: delta.itemId,
         providerMessageId: delta.itemId,
       });
       const runtimeModel = runtimeModelForTurn(state, turnId);
+      const hasVisibleContent =
+        parsed.text.length > 0 ||
+        Boolean(parsed.content?.some((part) => part.kind === "visual"));
       const timelineActivity =
-        fullText.trim().length > 0
+        hasVisibleContent
           ? [
               translated(notification, {
               type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
               item: {
                 kind: "assistant_message",
-                text: fullText,
+                text: parsed.text,
                 messageId: delta.itemId,
+                ...(parsed.content ? { content: parsed.content } : {}),
                 ...(runtimeModel ? { runtimeModel } : {}),
               },
               ...timelineIdentityProps(identity),
@@ -2762,16 +2813,38 @@ export function translateCodexAppServerNotification(
       if (timelineActivity.length > 0) {
         state.emittedAgentMessageDeltaItemIds.add(delta.itemId);
       }
+      const appendedVisibleText =
+        parsed.text.startsWith(previousText)
+          ? parsed.text.slice(previousText.length)
+          : "";
+      const messagePartActivity =
+        appendedVisibleText.length > 0
+          ? [
+              translated(notification, {
+                type: "message_part_delta",
+                part: {
+                  messageId: delta.itemId,
+                  partId: delta.itemId,
+                  kind: "text",
+                  delta: appendedVisibleText,
+                },
+              }),
+            ]
+          : parsed.text !== previousText && parsed.text.length > 0
+            ? [
+                translated(notification, {
+                  type: "message_part_updated",
+                  part: {
+                    messageId: delta.itemId,
+                    partId: delta.itemId,
+                    kind: "text",
+                    text: parsed.text,
+                  },
+                }),
+              ]
+            : [];
       return [
-        translated(notification, {
-          type: "message_part_delta",
-          part: {
-            messageId: delta.itemId,
-            partId: delta.itemId,
-            kind: "text",
-            delta: visibleDelta,
-          },
-        }),
+        ...messagePartActivity,
         ...timelineActivity,
       ];
     }

@@ -27,6 +27,27 @@ function readRootPackageVersion(rootDir: string): string | undefined {
   }
 }
 
+export function readWebBuildId(rootDir: string): string | undefined {
+  try {
+    const raw = readFileSync(
+      path.join(
+        rootDir,
+        "packages",
+        "client-web",
+        "dist",
+        ".rah-web-build.json",
+      ),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as { webBuildId?: unknown };
+    return typeof parsed.webBuildId === "string" && parsed.webBuildId.trim()
+      ? parsed.webBuildId.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function readSourceState(
   rootDir: string,
 ): Promise<{ sourceRevision?: string; sourceDirty?: boolean }> {
@@ -64,6 +85,7 @@ async function createRuntimeIdentity(
 ): Promise<RuntimeIdentityResponse> {
   const rootDir = process.cwd();
   const version = readRootPackageVersion(rootDir);
+  const webBuildId = readWebBuildId(rootDir);
   const { sourceRevision, sourceDirty } = await readSourceState(rootDir);
   return {
     name: "rah",
@@ -75,6 +97,7 @@ async function createRuntimeIdentity(
     ...(version ? { version } : {}),
     ...(sourceRevision ? { sourceRevision } : {}),
     ...(sourceDirty !== undefined ? { sourceDirty } : {}),
+    ...(webBuildId ? { webBuildId } : {}),
   };
 }
 

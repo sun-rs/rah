@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -8,7 +8,11 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket } from "ws";
 import { RuntimeEngine } from "./runtime-engine";
-import { startRahDaemon, type RahDaemon } from "./http-server";
+import {
+  readWebBuildId,
+  startRahDaemon,
+  type RahDaemon,
+} from "./http-server";
 import {
   MAX_JSON_BODY_BYTES,
   readJsonBody,
@@ -132,6 +136,22 @@ async function waitFor(predicate: () => void, timeoutMs = 3_000): Promise<void> 
   }
   throw new Error("Timed out waiting for condition.");
 }
+
+test("reads the exact Web build generation published beside the assets", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-web-build-id-"));
+  try {
+    const dist = path.join(root, "packages", "client-web", "dist");
+    mkdirSync(dist, { recursive: true });
+    writeFileSync(
+      path.join(dist, ".rah-web-build.json"),
+      JSON.stringify({ version: 1, webBuildId: "generation-123" }),
+      "utf8",
+    );
+    assert.equal(readWebBuildId(root), "generation-123");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("startRahDaemon", () => {
   let tempHome: string;
@@ -386,6 +406,43 @@ describe("startRahDaemon", () => {
     assert.equal(typeof resourceIndexBody.complete, "boolean");
     assert.ok(Array.isArray(resourceIndexBody.outputs));
     assert.ok(Array.isArray(resourceIndexBody.sources));
+  });
+
+  test("serves an isolated provider-native conversation visual document", async () => {
+    engine.getSessionConversationVisualArtifact = async (
+      sessionId,
+      artifactId,
+    ) => {
+      assert.equal(sessionId, "visual-session");
+      assert.equal(artifactId, "equity-curve.html");
+      return {
+        id: artifactId,
+        format: "interactive_html",
+        mimeType: "text/html",
+        fragment: '<main id="equity-curve">Interactive chart</main>',
+      };
+    };
+
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/sessions/visual-session/conversation/visual-artifacts/equity-curve.html?theme=dark`,
+      {
+        headers: { Origin: `http://127.0.0.1:${port}` },
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.match(
+      response.headers.get("content-security-policy") ?? "",
+      /default-src 'none'/,
+    );
+    const document = await response.text();
+    assert.match(document, /^<!doctype html>/);
+    assert.match(document, /<html lang="en" data-theme="dark">/);
+    assert.match(document, /id="equity-curve"/);
+    assert.match(document, /rah\.visual\.resize/);
   });
 
   test("streams canonical conversation deltas with live events", async () => {

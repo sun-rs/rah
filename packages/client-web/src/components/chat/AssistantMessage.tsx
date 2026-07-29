@@ -1,29 +1,56 @@
+import type { TimelineAssistantContentPart } from "@rah/runtime-protocol";
+import React from "react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { InteractiveVisualArtifact } from "./InteractiveVisualArtifact";
 
 export function AssistantMessage(props: {
   content: string;
+  contentParts?: TimelineAssistantContentPart[];
+  sessionId?: string;
   variant?: "final" | "process";
   onOpenLocalFile?: (path: string) => void;
 }) {
   const isFinalReply = props.variant === "final";
+  const renderText = (content: string, key?: string) =>
+    isFinalReply ? (
+      <MarkdownRenderer
+        key={key}
+        className="prose-chat prose-chat-final max-w-none text-[var(--app-fg)]"
+        content={content}
+        {...(props.onOpenLocalFile
+          ? { onOpenLocalFile: props.onOpenLocalFile }
+          : {})}
+      />
+    ) : (
+      <div key={key} className="assistant-process-message">
+        <MarkdownRenderer
+          className="prose-chat prose-chat-process max-w-none text-[14px] leading-relaxed text-[var(--app-muted)]"
+          content={content}
+          {...(props.onOpenLocalFile
+            ? { onOpenLocalFile: props.onOpenLocalFile }
+            : {})}
+        />
+      </div>
+    );
 
   return (
-    <div className="flex flex-col items-start" data-testid="chat-assistant-message">
-      {isFinalReply ? (
-        <MarkdownRenderer
-          className="prose-chat prose-chat-final max-w-none text-[var(--app-fg)]"
-          content={props.content}
-          {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
-        />
-      ) : (
-        <div className="assistant-process-message">
-          <MarkdownRenderer
-            className="prose-chat prose-chat-process max-w-none text-[14px] leading-relaxed text-[var(--app-muted)]"
-            content={props.content}
-            {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
-          />
-        </div>
-      )}
+    <div
+      className="flex w-full flex-col items-start gap-4"
+      data-testid="chat-assistant-message"
+    >
+      {props.contentParts
+        ? props.contentParts.map((part, index) =>
+            part.kind === "text" ? (
+              renderText(part.text, `text:${index}`)
+            ) : props.sessionId ? (
+              <InteractiveVisualArtifact
+                key={`visual:${part.artifact.id}:${index}`}
+                sessionId={props.sessionId}
+                artifact={part.artifact}
+              />
+            ) : null,
+          )
+        : renderText(props.content)}
     </div>
   );
 }

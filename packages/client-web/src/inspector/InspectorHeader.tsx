@@ -8,8 +8,8 @@ export function InspectorHeader(props: {
   workspaceRoot: string;
   activeTab: InspectorTab;
   changeCount: number;
-  outputCount: number;
-  sourceCount: number;
+  outputCount: number | null;
+  sourceCount: number | null;
   onTabChange: (tab: InspectorTab) => void;
   onOpenTerminal?: () => void;
   onClosePanel?: () => void;
@@ -75,7 +75,8 @@ export function InspectorHeader(props: {
               title="Files and media explicitly generated or delivered by this conversation"
             >
               <SegmentedButtonLabel size="compact" className="block truncate">
-                Outputs ({props.outputCount})
+                Outputs
+                {props.outputCount === null ? "" : ` (${props.outputCount})`}
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton
@@ -89,7 +90,8 @@ export function InspectorHeader(props: {
               title="Attachments, web pages, and external references recorded in provider history; the session does not need to run in RAH"
             >
               <SegmentedButtonLabel size="compact" className="block truncate">
-                Sources ({props.sourceCount})
+                Sources
+                {props.sourceCount === null ? "" : ` (${props.sourceCount})`}
               </SegmentedButtonLabel>
             </SegmentedButton>
             <SegmentedButton

@@ -235,6 +235,7 @@ export function OverlayScrollArea(props: {
       <div
         id={viewportId}
         ref={setViewportRef}
+        data-rah-scroll-viewport="true"
         className={joinClassNames(OVERLAY_SCROLL_AREA_LAYOUT.viewportClassName, props.viewportClassName)}
         onScroll={updateThumb}
       >

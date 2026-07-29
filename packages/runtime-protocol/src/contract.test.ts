@@ -483,6 +483,76 @@ test("assistant timeline messages accept only canonical message phases", () => {
   );
 });
 
+test("assistant timeline messages validate ordered interactive visual content", () => {
+  const baseEvent = {
+    id: "evt-assistant-visual",
+    seq: 1,
+    ts: "2026-07-29T00:00:00.000Z",
+    sessionId: "session-1",
+    type: "timeline.item.added" as const,
+    source: {
+      provider: "codex" as const,
+      channel: "structured_persisted" as const,
+      authority: "authoritative" as const,
+    },
+  };
+  const valid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: {
+        kind: "assistant_message",
+        text: "Before\n\nAfter",
+        content: [
+          { kind: "text", text: "Before" },
+          {
+            kind: "visual",
+            artifact: {
+              id: "curve.html",
+              format: "interactive_html",
+              mimeType: "text/html",
+              label: "Curve",
+            },
+          },
+          { kind: "text", text: "After" },
+        ],
+      },
+    },
+  });
+  assert.equal(valid.some((issue) => issue.severity === "error"), false);
+
+  const invalid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: {
+        kind: "assistant_message",
+        text: "",
+        content: [
+          {
+            kind: "visual",
+            artifact: {
+              id: "",
+              format: "png",
+              mimeType: "image/png",
+            },
+          },
+        ],
+      },
+    },
+  } as never);
+  assert.equal(
+    invalid.some((issue) => issue.code === "timeline.visual_artifact_id.invalid"),
+    true,
+  );
+  assert.equal(
+    invalid.some((issue) => issue.code === "timeline.visual_artifact_format.invalid"),
+    true,
+  );
+  assert.equal(
+    invalid.some((issue) => issue.code === "timeline.visual_artifact_mime.invalid"),
+    true,
+  );
+});
+
 test("system timeline messages accept only canonical placement scopes", () => {
   const baseEvent = {
     id: "evt-system-presentation",

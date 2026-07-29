@@ -139,7 +139,7 @@ HTTP 数据面有明确边界：static serving 只能读取构建产物目录；
 - artifact writer 在 provider notification 热路径之外异步执行，但同一 live bridge 的 notification 和同一稳定 owner/turn 写入必须保持到达顺序。摘要事件仍须等待原子 manifest 提交成功后发布；daemon 正常退出会等待在途写入。启动时和每 15 分钟执行保留维护：默认删除 30 天前的 artifact，每个 provider thread 最多保留 200 个、全局最多 2,000 个且总量最多 512 MiB；维护不能删除正在写入的 turn。Resume 虽然创建新的 Runtime ID，但只要仍指向同一 provider thread，就必须继续读取已经捕获的 turn artifact；Fork 使用新的 provider thread，artifact 与父线程隔离。
 - 最终回答出现时可先展示 turn outputs，但“Changed N files”卡片只有在 turn completed/failed/interrupted 后才出现，避免工作中数字反复跳变。卡片默认只展开 3 个文件，之后每次最多追加 50 个；Inspector 的 `This turn` 默认显示 40 个，之后每次最多追加 40 个。点击文件后通过 `/api/sessions/:sessionId/turns/:turnId/file-diff` 懒加载该轮冻结 diff，不能预取整轮大 patch。
 - turn Outputs 与 Changed files 必须保持独立语义，但不是互斥集合。Changed files 只表达 provider 权威本轮 diff；Outputs 表达 agent 明确交付给用户的资源。同一文件可以既是本轮修改，又是最终交付，因此允许同时出现。provider 原生 output resource（包括 assistant attachment/artifact）始终优先且不受扩展名限制；当 provider 没有暴露完整 output union 时，RAH 的兼容推断必须更保守：只接受“成功写入或编辑 + final answer 明确呈现同一条权威 path、URL 或文件名”的文档、媒体、数据或归档类交付物。普通 `.rs`、`.ts`、`.py` 等源码即使在 final answer 中被链接，也仍只属于 Changed files，除非 provider 原生将它暴露为 output。Changed files 是否已经到达、资源是否属于本轮 diff 都不能改变该判断。失败操作、只读 source、普通 inline code，以及没有成功产出证据的 final-answer Markdown 链接不能制造 output；final answer 明确嵌入的本地 Markdown 图片是窄补充路径，用于 shell 生成图片但 provider 未发 artifact 的情况，远程图片和 data URL 不适用。Outputs 直接显示交付物行，首屏最多展示 3 项并提供 `Show more / Show less`。
-- resource projector 必须优先消费 provider-neutral `ConversationActivityDescriptor` 的 kind/action/file targets/URLs，`tool.family` 和 provider-native observation kind 只作为兼容后备。因此 Codex code-mode wrapper、Claude 和 OpenCode 即使工具名不同，也能产生相同的 Sources/Outputs。历史列表页仍传输有界 turn summary；用户首次打开 Inspector 的 Outputs 或 Sources 时，前端只对当前已经载入且仍为 summary 的 turns 以最多 3 路并发按需补齐 detail，再由同一 projector 更新资源索引，不能在普通聊天加载路径预取整段大历史。
+- resource projector 必须优先消费 provider-neutral `ConversationActivityDescriptor` 的 kind/action/file targets/URLs，`tool.family` 和 provider-native observation kind 只作为兼容后备。因此 Codex code-mode wrapper、Claude 和 OpenCode 即使工具名不同，也能产生相同的 Sources/Outputs。历史列表页仍只传输有界 turn summary；选中 session 后必须先完成 Chat hydration，再按启动优先级并行预载 Changes/Files 与 daemon-owned Outputs/Sources 索引，不能等用户点击 Inspector 或具体 tab 才开始。资源索引是带版本的持久化派生数据：daemon 原子保存最后一个稳定的 Outputs/Sources 快照以及逐 turn fingerprint、detail hydration 状态和资源投影；同一 `sourceRevision` 在 daemon 重启后直接恢复，不重新扫描 provider 历史，append-only revision 只补齐新增 turn 并重验活动尾部，rewrite/truncation 则在完整分页结束后删除已消失 turn。最多 3 路 detail hydration 只作用于内部工作副本；磁盘通过同目录临时文件 + rename 提交，HTTP 在重建期间只能返回旧稳定快照或未知的 indexing 状态，前端绝不能看到逐条增长、重排的半成品列表。wire response 必须携带显式资源索引协议版本，客户端拒绝缺失/不匹配版本以及既非 `stable` 也非 `indexing` 的响应，不能再把旧 daemon 的字段缺失误判为稳定快照。session Inspector 不得把 Chat 当前已经加载的部分 turn 资源合并成临时列表；daemon 的已提交快照是唯一资源权威。持久化协议版本不兼容或缓存损坏时必须冷重建，不能发布旧协议内容。
 - Outputs 与 Changed files 共享边框、圆角、颜色、文件文字规格和交互反馈，但保留不同的信息结构。Outputs 不显示冗余总标题，每行展示缩略图或类型图标、文件名、类型和打开动作；Changed files 使用独立摘要显示本轮文件数和总增删行数，再列出路径及逐文件增删统计。不能把工作区累计 diff 混入任一 turn 卡片。
 - Inspector 的 `This turn` 与 `Workspace` 是两个明确 scope：前者只读本轮 artifact，不提供 stage/revert/commit；后者才读取当前工作区累计 Git 状态。禁止用工作区全局 `git diff` 反推本轮改动，因为它会混入其它 session、用户和未提交历史改动。旧历史如果没有当时保存的权威 artifact，必须显示 unavailable，不能用当前 Git 状态伪造。
 - Home New 与 Canvas New 的统一 Session Control 入口必须始终可见，不能因为容器过窄、provider catalog 尚未返回或宽屏快捷 selector 暂不可用而消失。宽屏 mode/model 快捷 selector 只是附加入口，不能替代统一 control。
@@ -555,6 +555,15 @@ Stop 按钮语义：
 - 不同 provider 的原始结构化输出差异由 adapter 吸收，前端只渲染 canonical text/markdown。
 - live 与 history 的重复消除应优先依赖 `TimelineIdentity.canonicalItemId`，而不是靠文本相同、时间接近来猜。
 - 当前阶段是 Timeline Identity v2 的 MVP：协议、daemon 透传、前端 upsert、core provider 的 native/derived identity 已具备。后续如果继续增强，应在 daemon 侧增加 epoch/seq ledger 做 replay/gap/catch-up，而不是把 text/time window 重新变成主逻辑。
+- assistant message 除纯文本视图外可以携带有序
+  `TimelineAssistantContentPart[]`，当前 union 只包含 `text` 与 `interactive_html visual`。
+  这是 provider-native history 的无损投影，不是 Markdown 扩展：Codex adapter 识别官方
+  `::codex-inline-vis{file="..."}`，在流式指令闭合前暂存协议尾部，闭合后才原子发布 visual；
+  历史 replay 使用同一个 parser，因此无需在 RAH 中启动 session 也能恢复。RAH 不改写用户
+  问题、不注入生成 PNG/HTML/CSV 的提示，也不从普通附件或文件扩展名猜测可视化。artifact 由
+  provider adapter 从 provider-owned visualization storage 解析，经过文件名、真实路径包含性、
+  symlink、普通文件和 2 MB 上限检查后，由 no-store HTML endpoint 返回；Web 仅在
+  `sandbox="allow-scripts"`、严格 CSP 的 iframe 中加载 vendored Codex Visualize host。
 
 ### Assistant 处理过程与最终回答
 

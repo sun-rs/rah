@@ -102,6 +102,7 @@ import type {
   PairingCodeResponse,
   PairingCodeStatusResponse,
   RevokeTrustedDeviceResponse,
+  RuntimeIdentityResponse,
 } from "@rah/runtime-protocol";
 
 const DEFAULT_DAEMON_PORT = 43111;
@@ -246,6 +247,53 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(extractResponseErrorMessage(response, raw));
   }
   return (await response.json()) as T;
+}
+
+async function requestText(path: string, init?: RequestInit): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`${getBaseUrl()}${path}`, {
+      ...init,
+      cache: init?.cache ?? "no-store",
+      credentials: "include",
+      headers: buildRequestHeaders(init),
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    throw new Error(
+      error instanceof Error ? error.message : "Network request failed.",
+    );
+  }
+  const raw = await response.text();
+  if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(RAH_AUTH_REQUIRED_EVENT));
+    }
+    throw new Error(extractResponseErrorMessage(response, raw));
+  }
+  return raw;
+}
+
+export async function readRuntimeIdentity(): Promise<RuntimeIdentityResponse> {
+  return requestJson<RuntimeIdentityResponse>("/api/runtime");
+}
+
+export async function readSessionConversationVisualArtifactDocument(
+  sessionId: string,
+  artifactId: string,
+  options: { theme: "light" | "dark"; signal?: AbortSignal },
+): Promise<string> {
+  const query = new URLSearchParams({ theme: options.theme });
+  return requestText(
+    `/api/sessions/${encodeURIComponent(
+      sessionId,
+    )}/conversation/visual-artifacts/${encodeURIComponent(
+      artifactId,
+    )}?${query.toString()}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function getDeviceAuthStatus(options?: {
@@ -942,7 +990,7 @@ export async function readWorkspace(
 
 export async function readGitStatus(
   sessionId: string,
-  options?: { scopeRoot?: string; baseBranch?: string },
+  options?: { scopeRoot?: string; baseBranch?: string; signal?: AbortSignal },
 ): Promise<GitStatusResponse> {
   const query = new URLSearchParams();
   if (options?.scopeRoot) {
@@ -952,18 +1000,24 @@ export async function readGitStatus(
     query.set("baseBranch", options.baseBranch);
   }
   const suffix = query.size ? `?${query.toString()}` : "";
-  return requestJson<GitStatusResponse>(`/api/sessions/${sessionId}/git-status${suffix}`);
+  return requestJson<GitStatusResponse>(
+    `/api/sessions/${sessionId}/git-status${suffix}`,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function readWorkspaceGitStatus(
   dir: string,
-  options?: { baseBranch?: string },
+  options?: { baseBranch?: string; signal?: AbortSignal },
 ): Promise<GitStatusResponse> {
   const query = new URLSearchParams({ dir });
   if (options?.baseBranch) {
     query.set("baseBranch", options.baseBranch);
   }
-  return requestJson<GitStatusResponse>(`/api/workspace/git-status?${query.toString()}`);
+  return requestJson<GitStatusResponse>(
+    `/api/workspace/git-status?${query.toString()}`,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function readGitDiff(

@@ -109,6 +109,27 @@ export interface TimelineRuntimeModel {
 
 export type AssistantMessagePhase = "commentary" | "final_answer";
 
+/**
+ * Provider-neutral reference to an interactive visual owned by the provider's
+ * persisted conversation storage. The id is intentionally opaque to clients;
+ * only the provider adapter may resolve it to bytes.
+ */
+export interface TimelineVisualArtifact {
+  id: string;
+  format: "interactive_html";
+  mimeType: "text/html";
+  label?: string;
+}
+
+/**
+ * Ordered assistant content preserves the position of provider-native visual
+ * directives without exposing those directives as Markdown. `text` on the
+ * assistant timeline item remains the searchable/copyable plain-text view.
+ */
+export type TimelineAssistantContentPart =
+  | { kind: "text"; text: string }
+  | { kind: "visual"; artifact: TimelineVisualArtifact };
+
 export type TimelinePlanStepStatus = "pending" | "in_progress" | "completed";
 export interface TimelinePlanStep {
   text: string;
@@ -131,6 +152,7 @@ export type TimelineItem =
       messageId?: string;
       phase?: AssistantMessagePhase;
       runtimeModel?: TimelineRuntimeModel;
+      content?: TimelineAssistantContentPart[];
     }
   | {
       kind: "reasoning";

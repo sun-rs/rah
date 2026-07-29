@@ -1,5 +1,8 @@
 import type { ConversationMetaTone } from "./ConversationMetaBadge";
-import type { SessionSideLifecycleState } from "@rah/runtime-protocol";
+import type {
+  ConversationProjection,
+  SessionSideLifecycleState,
+} from "@rah/runtime-protocol";
 
 export type ConversationLifecycleStatus = "running" | "stopped";
 
@@ -47,6 +50,7 @@ export function resolveConversationHeaderState(input: {
   status: ConversationLifecycleStatus;
   phase: ConversationPhase;
   sideState?: SessionSideLifecycleState;
+  externalActivity?: boolean;
 }): ConversationHeaderState {
   switch (input.sideState) {
     case "active":
@@ -87,6 +91,14 @@ export function resolveConversationHeaderState(input: {
     case "ready":
     case undefined:
       break;
+  }
+  if (input.status === "stopped" && input.externalActivity) {
+    return {
+      label: "Working externally",
+      tone: "working",
+      icon: "activity",
+      title: "Provider activity is continuing outside RAH",
+    };
   }
   if (input.status === "stopped") {
     if (input.phase === "failed") {
@@ -149,4 +161,19 @@ export function resolveConversationHeaderState(input: {
         title: "Status: Stopped",
       };
   }
+}
+
+export function conversationHasExternalActivity(
+  conversation: Pick<ConversationProjection, "turns"> | null | undefined,
+): boolean {
+  const latestTurn = conversation?.turns.at(-1);
+  if (!latestTurn) {
+    return false;
+  }
+  return (
+    latestTurn.status === "in_progress" ||
+    latestTurn.items.some(
+      (item) => item.status === "pending" || item.status === "running",
+    )
+  );
 }

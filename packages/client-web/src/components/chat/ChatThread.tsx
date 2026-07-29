@@ -197,6 +197,7 @@ function ContextCompactionDivider(props: {
 
 function renderTimelineItem(item: TimelineItem, options: {
   entryKey?: string;
+  sessionId?: string;
   canCopyAssistant?: boolean;
   onOpenLocalFile?: (path: string) => void;
   onLoadDetail?: () => Promise<void> | void;
@@ -217,6 +218,8 @@ function renderTimelineItem(item: TimelineItem, options: {
       return (
         <AssistantMessage
           content={item.text}
+          {...(item.content ? { contentParts: item.content } : {})}
+          {...(options.sessionId ? { sessionId: options.sessionId } : {})}
           variant={
             item.phase === "final_answer" || options.canCopyAssistant
               ? "final"
@@ -354,6 +357,7 @@ function renderTimelineItem(item: TimelineItem, options: {
 
 function renderEntry(
   entry: FeedEntry,
+  sessionId: string,
   canRespondToPermission: boolean | undefined,
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void,
   onOpenLocalFile: ((path: string) => void) | undefined,
@@ -369,6 +373,7 @@ function renderEntry(
     case "timeline":
       return renderTimelineItem(entry.item, {
         entryKey: entry.key,
+        sessionId,
         canCopyAssistant: copyableAssistantKeys.has(entry.key),
         ...(onOpenLocalFile ? { onOpenLocalFile } : {}),
         ...(entry.item.kind === "user_message" &&
@@ -664,6 +669,7 @@ export const ChatThread = memo(function ChatThread(props: {
     (entry: FeedEntry) =>
       renderEntry(
         entry,
+        props.sessionId,
         props.canRespondToPermission,
         props.onPermissionRespond,
         props.onOpenLocalFile,
@@ -677,6 +683,7 @@ export const ChatThread = memo(function ChatThread(props: {
       props.onLoadConversationTurnDetail,
       props.onOpenLocalFile,
       props.onPermissionRespond,
+      props.sessionId,
     ],
   );
   const assistantTurnHeaders = useMemo(
@@ -1952,6 +1959,7 @@ export const ChatThread = memo(function ChatThread(props: {
                 ) : (
                   renderEntry(
                     row.entry,
+                    props.sessionId,
                     props.canRespondToPermission,
                     props.onPermissionRespond,
                     props.onOpenLocalFile,

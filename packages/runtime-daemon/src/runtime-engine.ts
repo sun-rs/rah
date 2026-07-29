@@ -2592,6 +2592,24 @@ export class RuntimeEngine {
     };
   }
 
+  async getSessionConversationVisualArtifact(
+    sessionId: string,
+    artifactId: string,
+  ) {
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    const artifact =
+      await adapter?.getSessionConversationVisualArtifact?.(
+        sessionId,
+        artifactId,
+      );
+    if (!artifact) {
+      throw new Error(
+        `Unknown conversation visual artifact ${artifactId} for session ${sessionId}.`,
+      );
+    }
+    return artifact;
+  }
+
   async getSessionConversationTurnDetail(
     sessionId: string,
     options: { turnId: string; providerTurnId: string },
@@ -2657,6 +2675,7 @@ export class RuntimeEngine {
     return this.conversationResourceIndexes.load({
       sessionId,
       sourceRevision,
+      progressive: true,
       ...(options?.refresh ? { refresh: true } : {}),
       readTurns: (cursor) =>
         this.getSessionConversationTurns(sessionId, {

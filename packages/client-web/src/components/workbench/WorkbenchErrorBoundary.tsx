@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, Fragment, type ErrorInfo, type ReactNode } from "react";
 import { isLikelyStaleDynamicImportError } from "../../lazy-module-reload";
 
 type WorkbenchErrorBoundaryProps = {
@@ -9,6 +9,7 @@ type WorkbenchErrorBoundaryProps = {
 
 type WorkbenchErrorBoundaryState = {
   error: Error | null;
+  recoveryKey: number;
 };
 
 export class WorkbenchErrorBoundary extends Component<
@@ -17,9 +18,12 @@ export class WorkbenchErrorBoundary extends Component<
 > {
   state: WorkbenchErrorBoundaryState = {
     error: null,
+    recoveryKey: 0,
   };
 
-  static getDerivedStateFromError(error: Error): WorkbenchErrorBoundaryState {
+  static getDerivedStateFromError(
+    error: Error,
+  ): Pick<WorkbenchErrorBoundaryState, "error"> {
     return { error };
   }
 
@@ -29,9 +33,19 @@ export class WorkbenchErrorBoundary extends Component<
 
   componentDidUpdate(prevProps: WorkbenchErrorBoundaryProps) {
     if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
-      this.setState({ error: null });
+      this.setState((current) => ({
+        error: null,
+        recoveryKey: current.recoveryKey + 1,
+      }));
     }
   }
+
+  private retry = () => {
+    this.setState((current) => ({
+      error: null,
+      recoveryKey: current.recoveryKey + 1,
+    }));
+  };
 
   render() {
     if (this.state.error) {
@@ -47,19 +61,25 @@ export class WorkbenchErrorBoundary extends Component<
                 ? "The web app was updated while this page was open. Reload to continue."
                 : this.state.error.message || "Unknown rendering error."}
             </div>
-            {staleChunkError ? (
-              <button
-                type="button"
-                className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-3 text-xs font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                onClick={() => window.location.reload()}
-              >
-                Reload
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-3 text-xs font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] active:bg-[var(--app-hover)]"
+              onClick={
+                staleChunkError
+                  ? () => window.location.reload()
+                  : this.retry
+              }
+            >
+              {staleChunkError ? "Reload" : "Retry"}
+            </button>
           </div>
         </div>
       );
     }
-    return this.props.children;
+    return (
+      <Fragment key={this.state.recoveryKey}>
+        {this.props.children}
+      </Fragment>
+    );
   }
 }

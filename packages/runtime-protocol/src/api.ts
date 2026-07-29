@@ -65,6 +65,12 @@ export interface RuntimeIdentityResponse {
   version?: string;
   sourceRevision?: string;
   sourceDirty?: boolean;
+  /**
+   * Exact Web asset generation that was current when this daemon started.
+   * The browser compares this opaque value with its embedded generation to
+   * detect a newly published Web client served by an older daemon process.
+   */
+  webBuildId?: string;
 }
 
 export interface TrustedDeviceDescriptor {

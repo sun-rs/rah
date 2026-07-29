@@ -38,6 +38,7 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /assignRef/);
     assert.match(source, /viewportRef\?: Ref<HTMLDivElement>/);
     assert.match(source, /contentRef\?: Ref<HTMLDivElement>/);
+    assert.match(source, /data-rah-scroll-viewport="true"/);
   });
 
   test("uses OverlayScrollArea for utility panels, not main reading surfaces", () => {
