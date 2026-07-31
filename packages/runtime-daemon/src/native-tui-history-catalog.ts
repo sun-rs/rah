@@ -1,18 +1,30 @@
 import type { StoredSessionCatalogProvider } from "./stored-session-catalog-types";
 import type { StoredSessionCatalogRecord } from "./stored-session-catalog-types";
 
+export type NativeTuiHistoryResolveContext = {
+  cwd: string;
+  startupTimestampMs: number;
+  launchEnv?: Record<string, string>;
+};
+
 export interface NativeTuiHistoryCatalog {
   list(provider: StoredSessionCatalogProvider): readonly StoredSessionCatalogRecord[];
   find(
     provider: StoredSessionCatalogProvider,
     providerSessionId: string,
   ): StoredSessionCatalogRecord | undefined;
+  resolve(
+    provider: StoredSessionCatalogProvider,
+    providerSessionId: string,
+    context: NativeTuiHistoryResolveContext,
+  ): Promise<StoredSessionCatalogRecord | undefined>;
   requestRefresh(provider: StoredSessionCatalogProvider): void;
 }
 
 export const EMPTY_NATIVE_TUI_HISTORY_CATALOG: NativeTuiHistoryCatalog = {
   list: () => [],
   find: () => undefined,
+  resolve: async () => undefined,
   requestRefresh: () => undefined,
 };
 
@@ -20,7 +32,13 @@ type NativeTuiHistoryCatalogIndexOptions = {
   refresh: (
     provider: StoredSessionCatalogProvider,
   ) => void | Promise<void>;
+  resolve?: (
+    provider: StoredSessionCatalogProvider,
+    providerSessionId: string,
+    context: NativeTuiHistoryResolveContext,
+  ) => Promise<StoredSessionCatalogRecord | undefined>;
   refreshCooldownMs?: number;
+  resolveCooldownMs?: number;
   now?: () => number;
 };
 
@@ -42,17 +60,27 @@ export class NativeTuiHistoryCatalogIndex implements NativeTuiHistoryCatalog {
     StoredSessionCatalogProvider,
     Promise<void>
   >();
+  private readonly resolveInFlight = new Map<
+    string,
+    Promise<StoredSessionCatalogRecord | undefined>
+  >();
   private readonly lastRefreshRequestAt = new Map<
     StoredSessionCatalogProvider,
     number
   >();
+  private readonly lastResolveRequestAt = new Map<string, number>();
   private readonly refreshCooldownMs: number;
+  private readonly resolveCooldownMs: number;
   private readonly now: () => number;
 
   constructor(private readonly options: NativeTuiHistoryCatalogIndexOptions) {
     this.refreshCooldownMs = Math.max(
       0,
       Math.floor(options.refreshCooldownMs ?? 2_000),
+    );
+    this.resolveCooldownMs = Math.max(
+      0,
+      Math.floor(options.resolveCooldownMs ?? 250),
     );
     this.now = options.now ?? Date.now;
   }
@@ -95,6 +123,59 @@ export class NativeTuiHistoryCatalogIndex implements NativeTuiHistoryCatalog {
     return this.recordsByIdentity.get(this.identityKey(provider, providerSessionId));
   }
 
+  async resolve(
+    provider: StoredSessionCatalogProvider,
+    providerSessionId: string,
+    context: NativeTuiHistoryResolveContext,
+  ): Promise<StoredSessionCatalogRecord | undefined> {
+    const existing = this.find(provider, providerSessionId);
+    if (existing) {
+      return existing;
+    }
+    if (!this.options.resolve) {
+      this.requestRefresh(provider);
+      return undefined;
+    }
+    const identity = this.identityKey(provider, providerSessionId);
+    const current = this.resolveInFlight.get(identity);
+    if (current) {
+      return await current;
+    }
+    const now = this.now();
+    const lastRequestedAt = this.lastResolveRequestAt.get(identity);
+    if (
+      lastRequestedAt !== undefined &&
+      now - lastRequestedAt < this.resolveCooldownMs
+    ) {
+      return undefined;
+    }
+    this.lastResolveRequestAt.set(identity, now);
+    const resolution = Promise.resolve()
+      .then(() => this.options.resolve!(provider, providerSessionId, context))
+      .then(
+        (record) => {
+          if (record) {
+            this.upsert(record);
+            this.lastResolveRequestAt.delete(identity);
+          } else {
+            this.requestRefresh(provider);
+          }
+          return record;
+        },
+        () => {
+          this.requestRefresh(provider);
+          return undefined;
+        },
+      )
+      .finally(() => {
+        if (this.resolveInFlight.get(identity) === resolution) {
+          this.resolveInFlight.delete(identity);
+        }
+      });
+    this.resolveInFlight.set(identity, resolution);
+    return await resolution;
+  }
+
   requestRefresh(provider: StoredSessionCatalogProvider): void {
     if (this.refreshInFlight.has(provider)) {
       return;
@@ -117,6 +198,33 @@ export class NativeTuiHistoryCatalogIndex implements NativeTuiHistoryCatalog {
         }
       });
     this.refreshInFlight.set(provider, refresh);
+  }
+
+  private upsert(record: StoredSessionCatalogRecord): void {
+    const provider = record.ref.provider;
+    if (
+      provider !== "codex" &&
+      provider !== "claude" &&
+      provider !== "opencode"
+    ) {
+      return;
+    }
+    const records = this.recordsByProvider.get(provider) ?? [];
+    const index = records.findIndex(
+      (candidate) =>
+        candidate.ref.providerSessionId === record.ref.providerSessionId,
+    );
+    const next =
+      index < 0
+        ? [...records, record]
+        : records.map((candidate, candidateIndex) =>
+            candidateIndex === index ? record : candidate,
+          );
+    this.recordsByProvider.set(provider, next);
+    this.recordsByIdentity.set(
+      this.identityKey(provider, record.ref.providerSessionId),
+      record,
+    );
   }
 
   private identityKey(

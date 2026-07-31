@@ -142,7 +142,10 @@ import {
 import { StoredSessionMonitor } from "./stored-session-monitor";
 import { StoredSessionCatalog } from "./stored-session-catalog";
 import { reconcileStoredSessionCatalogRecords } from "./stored-session-catalog-reconciliation";
-import { CODEX_STORED_SESSION_CACHE_VERSION } from "./codex-stored-sessions";
+import {
+  CODEX_STORED_SESSION_CACHE_VERSION,
+  resolveCodexStoredSessionRecordNearStartup,
+} from "./codex-stored-sessions";
 import { StoredSessionLibraryStore } from "./stored-session-library";
 import type {
   StoredSessionCatalogProvider,
@@ -442,6 +445,25 @@ export class RuntimeEngine {
           provider,
           "native TUI history cache miss",
         ),
+      resolve: async (provider, providerSessionId, context) => {
+        if (provider !== "codex") {
+          return undefined;
+        }
+        const record = await resolveCodexStoredSessionRecordNearStartup({
+          providerSessionId,
+          startupTimestampMs: context.startupTimestampMs,
+          ...(context.launchEnv?.CODEX_HOME
+            ? { codexHome: context.launchEnv.CODEX_HOME }
+            : {}),
+        });
+        return record
+          ? {
+              ref: record.ref,
+              storagePath: record.rolloutPath,
+              archived: record.archived,
+            }
+          : undefined;
+      },
     });
     this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime(
       this.nativeTuiHistoryCatalog,

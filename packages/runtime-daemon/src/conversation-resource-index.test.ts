@@ -686,6 +686,7 @@ test("restored turn fingerprints make an appended history incremental", async ()
       appended.outputs.map((entry) => entry.id).sort(),
       ["first", "second"],
     );
+    await restartedStore.flushPersistence();
   } finally {
     await rm(persistenceRoot, { recursive: true, force: true });
   }
@@ -922,6 +923,7 @@ test("rejects an incompatible persisted protocol instead of publishing legacy da
     assert.deepEqual(rebuilt.outputs.map((entry) => entry.id), [
       "current-output",
     ]);
+    await currentStore.flushPersistence();
   } finally {
     await rm(persistenceRoot, { recursive: true, force: true });
   }
@@ -980,6 +982,7 @@ test("rejects a persisted envelope whose committed snapshot revision does not ma
     assert.deepEqual(rebuilt.outputs.map((entry) => entry.id), [
       "current-output",
     ]);
+    await restartedStore.flushPersistence();
   } finally {
     await rm(persistenceRoot, { recursive: true, force: true });
   }

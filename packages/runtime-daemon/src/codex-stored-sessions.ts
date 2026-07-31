@@ -1,4 +1,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  open as openFile,
+  readdir as readdirAsync,
+  stat as statAsync,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
@@ -46,7 +51,7 @@ type CodexStoredSessionParseResult =
   | { kind: "record"; record: CodexStoredSessionRecord }
   | {
       kind: "ignored";
-      reason: "chatgpt_work_chat" | "internal_subagent";
+      reason: "internal_subagent";
     }
   | { kind: "invalid" };
 
@@ -110,6 +115,26 @@ function readHeadLines(filePath: string, maxBytes = 512 * 1024): string[] {
   return readLeadingLines(filePath, { maxBytes, maxLines: MAX_HEAD_LINES });
 }
 
+async function readHeadLinesAsync(
+  filePath: string,
+  maxBytes = 512 * 1024,
+): Promise<string[]> {
+  const handle = await openFile(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, MAX_HEAD_LINES);
+  } finally {
+    await handle.close();
+  }
+}
+
 function truncateText(value: string, maxLength = 120): string {
   if (value.length <= maxLength) {
     return value;
@@ -143,19 +168,6 @@ function isCodexInternalSubagentSession(payload: Record<string, unknown>): boole
   return (
     isCodexSubagentSource(payload.thread_source) ||
     isCodexSubagentSource(payload.source)
-  );
-}
-
-function isChatGptWorkConversation(payload: Record<string, unknown>): boolean {
-  // Codex Desktop persists its Codex tasks and its ordinary ChatGPT "work"
-  // conversations under the same ~/.codex/sessions tree. The provider-owned
-  // session_meta originator is the stable surface boundary: Codex tasks use
-  // "Codex Desktop" (or a CLI originator), while ordinary ChatGPT work chats
-  // use "codex_work_desktop". Directory names, titles and session_index.jsonl
-  // are shared by both surfaces and therefore cannot be visibility authority.
-  return (
-    typeof payload.originator === "string" &&
-    payload.originator.trim().toLowerCase() === "codex_work_desktop"
   );
 }
 
@@ -201,8 +213,14 @@ function listRolloutFiles(
   return files.sort((left, right) => right.localeCompare(left));
 }
 
-function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResult {
-  const head = readHeadLines(filePath);
+function parseStoredSessionHead(options: {
+  filePath: string;
+  head: readonly string[];
+  size: number;
+  mtime: Date;
+  archived: boolean;
+}): CodexStoredSessionParseResult {
+  const { filePath, head, size, mtime, archived } = options;
   let sessionId: string | null = null;
   let cwd: string | undefined;
   let createdAt: string | undefined;
@@ -242,12 +260,11 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResu
       if (isCodexInternalSubagentSession(payload)) {
         return { kind: "ignored", reason: "internal_subagent" };
       }
-      // ChatGPT work conversations are user-owned chats, but they are not
-      // Codex tasks. Codex Desktop keeps them out of the task library even
-      // though their rollout files and title index live beside task history.
-      if (isChatGptWorkConversation(payload)) {
-        return { kind: "ignored", reason: "chatgpt_work_chat" };
-      }
+      // Every user-owned Codex Desktop root is part of the provider catalog,
+      // including roots whose provider originator is "codex_work_desktop".
+      // `originator` identifies the creating surface, not whether the user
+      // owns the thread. Internal subagents were rejected above using their
+      // explicit source metadata.
       sessionId = payload.id;
       if (typeof payload.cwd === "string") {
         cwd = payload.cwd;
@@ -295,8 +312,6 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResu
     return { kind: "invalid" };
   }
 
-  const stat = statSync(filePath);
-  const archived = isCodexStoredSessionArchivedPath(filePath);
   const preview = firstUserMessage ? truncateText(firstUserMessage) : path.basename(filePath);
   return {
     kind: "record",
@@ -309,7 +324,8 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResu
         title: truncateText(preview, 72),
         preview,
         ...(createdAt ? { createdAt } : {}),
-        updatedAt: stat.mtime.toISOString(),
+        updatedAt: mtime.toISOString(),
+        historyMeta: { bytes: size },
         ...(archived ? { providerState: { archived: true } } : {}),
         source: "provider_history",
         removalDisposition: "trash",
@@ -318,6 +334,118 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResu
       archived,
     },
   };
+}
+
+function parseStoredSessionRecord(filePath: string): CodexStoredSessionParseResult {
+  const stats = statSync(filePath);
+  return parseStoredSessionHead({
+    filePath,
+    head: readHeadLines(filePath),
+    size: stats.size,
+    mtime: stats.mtime,
+    archived: isCodexStoredSessionArchivedPath(filePath),
+  });
+}
+
+function codexDateSegmentsNear(timestampMs: number): string[] {
+  const anchor = Number.isFinite(timestampMs) ? timestampMs : Date.now();
+  const segments = new Set<string>();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  for (const dayOffset of [-1, 0, 1]) {
+    const date = new Date(anchor + dayOffset * 24 * 60 * 60 * 1_000);
+    segments.add(
+      path.join(
+        String(date.getFullYear()),
+        pad(date.getMonth() + 1),
+        pad(date.getDate()),
+      ),
+    );
+    segments.add(
+      path.join(
+        String(date.getUTCFullYear()),
+        pad(date.getUTCMonth() + 1),
+        pad(date.getUTCDate()),
+      ),
+    );
+  }
+  return [...segments];
+}
+
+/**
+ * Resolve a newly launched Codex task without scanning the provider's complete
+ * history tree.
+ *
+ * Codex embeds the provider session UUID in the rollout filename and stores
+ * new rollouts below a YYYY/MM/DD directory. Looking only in the local/UTC
+ * startup-day window turns live attachment into a bounded lookup independent
+ * of the size of ~/.codex/sessions. Older resumed tasks are expected to
+ * already be present in the persisted catalog; a miss here may still request
+ * the low-priority full reconciliation path.
+ */
+export async function resolveCodexStoredSessionRecordNearStartup(options: {
+  providerSessionId: string;
+  startupTimestampMs: number;
+  codexHome?: string;
+}): Promise<CodexStoredSessionRecord | undefined> {
+  const providerSessionId = options.providerSessionId.trim();
+  if (!providerSessionId) {
+    return undefined;
+  }
+  const codexHome =
+    options.codexHome?.trim() || process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const suffix = `-${providerSessionId}.jsonl`;
+  const candidates: CodexStoredSessionRecord[] = [];
+
+  for (const rootName of ["sessions", "archived_sessions"] as const) {
+    const archived = rootName === "archived_sessions";
+    for (const dateSegment of codexDateSegmentsNear(options.startupTimestampMs)) {
+      const directory = path.join(codexHome, rootName, dateSegment);
+      let entries;
+      try {
+        entries = await readdirAsync(directory, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (
+          !entry.isFile() ||
+          !entry.name.startsWith("rollout-") ||
+          !entry.name.endsWith(suffix)
+        ) {
+          continue;
+        }
+        const filePath = path.join(directory, entry.name);
+        try {
+          const [head, stats] = await Promise.all([
+            readHeadLinesAsync(filePath),
+            statAsync(filePath),
+          ]);
+          const parsed = parseStoredSessionHead({
+            filePath,
+            head,
+            size: stats.size,
+            mtime: stats.mtime,
+            archived,
+          });
+          if (
+            parsed.kind === "record" &&
+            parsed.record.ref.providerSessionId === providerSessionId
+          ) {
+            candidates.push(parsed.record);
+          }
+        } catch {
+          // Codex may still be creating the rollout. The native mirror retries
+          // this bounded lookup, so a transient partial file is not terminal.
+        }
+      }
+    }
+  }
+
+  return candidates.reduce<CodexStoredSessionRecord | undefined>(
+    (preferred, candidate) =>
+      preferCodexStoredSessionRecord(preferred, candidate),
+    undefined,
+  );
 }
 
 function shouldInvalidateCachedCodexTitle(ref: StoredSessionRef, filePath: string): boolean {

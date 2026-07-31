@@ -711,16 +711,23 @@ export class ConversationResourceIndexStore {
   }
 
   /**
-   * Waits for best-effort cache persistence. Runtime reads never use this as a
-   * response barrier; it exists for graceful shutdown and deterministic tests.
+   * Waits for every best-effort cache write and the retention pass it can
+   * schedule. Runtime reads never use this as a response barrier; it is the
+   * lifecycle boundary used by graceful shutdown and deterministic tests.
    */
   async flushPersistence(): Promise<void> {
-    while (this.pendingPersistence.size > 0 || this.persistenceDrain) {
+    while (
+      this.pendingPersistence.size > 0 ||
+      this.persistenceDrain ||
+      this.prunePromise
+    ) {
       this.ensurePersistenceDrain();
       const drain = this.persistenceDrain;
-      if (drain) {
-        await drain;
-      }
+      const prune = this.prunePromise;
+      await Promise.all([
+        drain ?? Promise.resolve(),
+        prune ?? Promise.resolve(),
+      ]);
     }
   }
 

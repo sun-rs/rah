@@ -33,11 +33,7 @@ function codexRecordsForRuntimeSession(
   session: NativeTuiProviderRuntimeSession,
   historyCatalog: NativeTuiHistoryCatalog,
 ): CodexStoredSessionRecord[] {
-  const records = historyCatalog.list("codex").map((record) => ({
-    ref: record.ref,
-    rolloutPath: record.storagePath,
-    archived: record.archived ?? record.ref.providerState?.archived === true,
-  }));
+  const records = historyCatalog.list("codex").map(toCodexStoredSessionRecord);
   const codexHome = session.launchEnv?.CODEX_HOME;
   if (!codexHome) {
     return records;
@@ -47,6 +43,18 @@ function codexRecordsForRuntimeSession(
       isWithinDirectory(record.rolloutPath, path.join(codexHome, "sessions")) ||
       isWithinDirectory(record.rolloutPath, path.join(codexHome, "archived_sessions")),
   );
+}
+
+function toCodexStoredSessionRecord(record: {
+  ref: CodexStoredSessionRecord["ref"];
+  storagePath: string;
+  archived?: boolean;
+}): CodexStoredSessionRecord {
+  return {
+    ref: record.ref,
+    rolloutPath: record.storagePath,
+    archived: record.archived ?? record.ref.providerState?.archived === true,
+  };
 }
 
 function observeCodexOutput(
@@ -104,11 +112,27 @@ async function updateCodexMirror(
   historyCatalog: NativeTuiHistoryCatalog,
 ): Promise<NativeTuiMirrorUpdate> {
   if (mirror?.provider !== "codex") {
-    const record = codexRecordsForRuntimeSession(session, historyCatalog).find(
+    if (!session.providerSessionId) {
+      return { status: "missing" };
+    }
+    let record = codexRecordsForRuntimeSession(session, historyCatalog).find(
       (candidate) => candidate.ref.providerSessionId === session.providerSessionId,
     );
-    if (!record || !session.providerSessionId) {
-      historyCatalog.requestRefresh("codex");
+    if (!record) {
+      const resolved = await historyCatalog.resolve(
+        "codex",
+        session.providerSessionId,
+        {
+          cwd: session.cwd,
+          startupTimestampMs: session.startupTimestampMs,
+          ...(session.launchEnv ? { launchEnv: session.launchEnv } : {}),
+        },
+      );
+      if (resolved) {
+        record = toCodexStoredSessionRecord(resolved);
+      }
+    }
+    if (!record) {
       return { status: "missing" };
     }
     mirror = {

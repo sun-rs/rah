@@ -70,3 +70,70 @@ test("missing-record refreshes are single-flight and cooldown bounded", async ()
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(refreshes, 2);
 });
+
+test("targeted native TUI resolution is single-flight and upserts the result", async () => {
+  let resolutions = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const resolvedRecord = record("codex", "codex-live");
+  const index = new NativeTuiHistoryCatalogIndex({
+    refresh: () => undefined,
+    resolve: async () => {
+      resolutions += 1;
+      await gate;
+      return resolvedRecord;
+    },
+  });
+  const context = {
+    cwd: "/workspace",
+    startupTimestampMs: 1_000,
+  };
+
+  const first = index.resolve("codex", "codex-live", context);
+  const second = index.resolve("codex", "codex-live", context);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolutions, 1);
+
+  release();
+  assert.equal(await first, resolvedRecord);
+  assert.equal(await second, resolvedRecord);
+  assert.equal(index.find("codex", "codex-live"), resolvedRecord);
+  assert.equal(await index.resolve("codex", "codex-live", context), resolvedRecord);
+  assert.equal(resolutions, 1);
+});
+
+test("missing targeted resolutions are retry bounded and fall back to reconciliation", async () => {
+  let now = 10_000;
+  let resolutions = 0;
+  let refreshes = 0;
+  const index = new NativeTuiHistoryCatalogIndex({
+    now: () => now,
+    resolveCooldownMs: 250,
+    refreshCooldownMs: 0,
+    refresh: () => {
+      refreshes += 1;
+    },
+    resolve: async () => {
+      resolutions += 1;
+      return undefined;
+    },
+  });
+  const context = {
+    cwd: "/workspace",
+    startupTimestampMs: 1_000,
+  };
+
+  assert.equal(await index.resolve("codex", "codex-missing", context), undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await index.resolve("codex", "codex-missing", context), undefined);
+  assert.equal(resolutions, 1);
+  assert.equal(refreshes, 1);
+
+  now += 251;
+  assert.equal(await index.resolve("codex", "codex-missing", context), undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolutions, 2);
+  assert.equal(refreshes, 2);
+});

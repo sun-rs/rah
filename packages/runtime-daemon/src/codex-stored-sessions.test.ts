@@ -21,6 +21,7 @@ import {
   getCodexGitStatus,
   getCodexStoredSessionHistoryPage,
   readWorkspaceFile,
+  resolveCodexStoredSessionRecordNearStartup,
   scanCodexStoredSessionCatalog,
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
@@ -179,6 +180,52 @@ describe("codex stored session discovery", () => {
     assert.equal(records[0]?.archived, false);
     assert.equal(records[0]?.ref.providerState?.archived, undefined);
     assert.equal(records[0]?.ref.preview, "Active copy");
+  });
+
+  test("resolves a newly launched rollout by identity without a full catalog scan", async () => {
+    const sessionId = "019e2222-cccc-7ddd-8eee-ffff00001111";
+    const cwd = path.join(tmpHome, "workspace");
+    const rolloutPath = writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId,
+      cwd,
+      timestamp: "2026-06-02T00:00:00.000Z",
+      text: "Who are you?",
+      originator: "Codex Desktop",
+    });
+
+    const resolved = await resolveCodexStoredSessionRecordNearStartup({
+      providerSessionId: sessionId,
+      startupTimestampMs: Date.parse("2026-06-02T00:00:03.000Z"),
+      codexHome: tmpHome,
+    });
+
+    assert.equal(resolved?.rolloutPath, rolloutPath);
+    assert.equal(resolved?.ref.providerSessionId, sessionId);
+    assert.equal(resolved?.ref.title, "Who are you?");
+    assert.equal(resolved?.ref.historyMeta?.bytes, statSync(rolloutPath).size);
+  });
+
+  test("targeted resolution includes user-owned Codex Desktop work roots", async () => {
+    const sessionId = "019e2222-dddd-7eee-8fff-000011112222";
+    const cwd = path.join(tmpHome, "workspace");
+    writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId,
+      cwd,
+      timestamp: "2026-06-02T00:00:00.000Z",
+      text: "ordinary ChatGPT conversation",
+      originator: "codex_work_desktop",
+    });
+
+    const resolved = await resolveCodexStoredSessionRecordNearStartup({
+      providerSessionId: sessionId,
+      startupTimestampMs: Date.parse("2026-06-02T00:00:03.000Z"),
+      codexHome: tmpHome,
+    });
+
+    assert.equal(resolved?.ref.providerSessionId, sessionId);
+    assert.equal(resolved?.ref.title, "ordinary ChatGPT conversation");
   });
 
   test("keeps user-visible fork ownership on the first session_meta and invalidates stale cache identity", () => {
@@ -376,7 +423,7 @@ describe("codex stored session discovery", () => {
     assert.ok(persistedCache.entries?.[parentPath]);
   });
 
-  test("keeps ChatGPT work chats out of the Codex task catalog and prunes stale cache rows", () => {
+  test("keeps all user-owned Codex Desktop roots in the catalog and cache", () => {
     const taskId = "019f4444-aaaa-7000-8bbb-ccccddddeeee";
     const chatId = "019f5555-bbbb-7000-8ccc-ddddeeeeffff";
     const taskCwd = path.join(tmpHome, "task-workspace");
@@ -427,15 +474,22 @@ describe("codex stored session discovery", () => {
     const scan = scanCodexStoredSessionCatalog();
     assert.equal(scan.complete, true);
     assert.deepEqual(
-      scan.records.map((record) => record.ref.providerSessionId),
-      [taskId],
+      scan.records.map((record) => record.ref.providerSessionId).sort(),
+      [chatId, taskId].sort(),
     );
-    assert.equal(scan.records[0]?.rolloutPath, taskPath);
+    assert.equal(
+      scan.records.find((record) => record.ref.providerSessionId === taskId)?.rolloutPath,
+      taskPath,
+    );
+    assert.equal(
+      scan.records.find((record) => record.ref.providerSessionId === chatId)?.rolloutPath,
+      chatPath,
+    );
 
     const persistedCache = JSON.parse(
       readFileSync(path.join(cacheDir, "codex.json"), "utf8"),
     ) as { entries?: Record<string, unknown> };
-    assert.equal(persistedCache.entries?.[chatPath], undefined);
+    assert.ok(persistedCache.entries?.[chatPath]);
     assert.ok(persistedCache.entries?.[taskPath]);
   });
 });

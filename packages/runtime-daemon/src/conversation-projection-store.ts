@@ -80,6 +80,51 @@ function earliestTimestamp(...values: Array<string | undefined>): string | undef
     .sort()[0];
 }
 
+function timestampMs(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Decide whether a resident projection actually contains newer lifecycle
+ * evidence than the provider-owned history turn it overlaps.
+ *
+ * A resident in-progress turn is not automatically newer: the provider can
+ * write final_answer/task_complete before the mirror consumes those lines,
+ * leaving an older optimistic `turn.started` projection in memory. Terminal
+ * history wins that race unless the resident turn demonstrably started after
+ * the persisted terminal timestamp (a genuinely newer turn/retry).
+ */
+function residentLifecycleIsNewer(
+  persisted: ConversationTurnProjection,
+  resident: ConversationTurnProjection,
+): boolean {
+  if (persisted.status === "in_progress") {
+    return true;
+  }
+  if (resident.status !== "in_progress") {
+    const persistedCompletedAt = timestampMs(persisted.completedAt);
+    const residentCompletedAt = timestampMs(resident.completedAt);
+    if (
+      persistedCompletedAt !== undefined &&
+      residentCompletedAt !== undefined
+    ) {
+      return residentCompletedAt >= persistedCompletedAt;
+    }
+    return true;
+  }
+  const persistedCompletedAt = timestampMs(persisted.completedAt);
+  const residentStartedAt = timestampMs(resident.startedAt);
+  return (
+    persistedCompletedAt !== undefined &&
+    residentStartedAt !== undefined &&
+    residentStartedAt > persistedCompletedAt
+  );
+}
+
 function mergeItemContent(
   existing: ConversationItemProjection,
   incoming: ConversationItemProjection,
@@ -463,11 +508,16 @@ export class ConversationProjectionStore {
           turns.push(liveTurn);
         }
       } else {
-        // A separate provider paging client can only expose persisted state.
-        // The resident stream owns the overlapping live turn lifecycle, even
-        // when the persisted snapshot still reports an older terminal status.
+        // Provider history can finish before the live mirror consumes its
+        // terminal lines. Only let resident state own lifecycle when its
+        // timestamps prove it is newer; otherwise a stale optimistic Working
+        // projection must not regress an authoritative completed turn.
+        const preferResidentLifecycle = residentLifecycleIsNewer(
+          turns[index]!,
+          liveTurn,
+        );
         turns[index] = mergeConversationTurn(turns[index]!, liveTurn, {
-          preferIncomingLifecycle: true,
+          preferIncomingLifecycle: preferResidentLifecycle,
         });
       }
     }

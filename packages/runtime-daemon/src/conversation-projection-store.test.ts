@@ -524,6 +524,111 @@ test("resident live lifecycle overrides a stale terminal history snapshot", () =
   store.close();
 });
 
+test("provider completion overrides an older optimistic resident working turn", () => {
+  const eventBus = new EventBus();
+  const store = new ConversationProjectionStore(eventBus);
+  store.mergeProjection(
+    {
+      sessionId: "session-1",
+      turns: [
+        {
+          id: "live-turn-1",
+          provider: "codex",
+          providerTurnId: "provider-turn-1",
+          status: "in_progress",
+          statusAuthority: "native",
+          startedAt: "2026-07-30T12:06:18.017Z",
+          items: [
+            {
+              id: "live-user-1",
+              turnId: "live-turn-1",
+              role: "user",
+              status: "completed",
+              content: {
+                kind: "timeline",
+                item: {
+                  kind: "user_message",
+                  text: "你是谁",
+                  messageId: "user-1",
+                },
+              },
+              source,
+              revision: 1,
+            },
+          ],
+          failedItemCount: 0,
+          activities: [],
+          revision: 1,
+        },
+      ],
+      revision: 1,
+      generatedAt: "2026-07-30T12:06:18.017Z",
+      sourceEventCount: 1,
+    },
+    { live: true },
+  );
+  const baseline: ConversationProjection = {
+    sessionId: "session-1",
+    turns: [
+      {
+        id: "history-turn-1",
+        provider: "codex",
+        providerTurnId: "provider-turn-1",
+        status: "completed",
+        statusAuthority: "native",
+        startedAt: "2026-07-30T12:06:18.017Z",
+        completedAt: "2026-07-30T12:06:21.847Z",
+        items: [
+          {
+            id: "history-final-1",
+            turnId: "history-turn-1",
+            role: "final",
+            status: "completed",
+            content: {
+              kind: "timeline",
+              item: {
+                kind: "assistant_message",
+                text: "我是 Codex。",
+                messageId: "assistant-1",
+                phase: "final_answer",
+              },
+            },
+            source: {
+              provider: "codex",
+              channel: "structured_persisted",
+              authority: "authoritative",
+            },
+            revision: 2,
+          },
+        ],
+        finalAnswerItemId: "history-final-1",
+        failedItemCount: 0,
+        activities: [],
+        revision: 2,
+      },
+    ],
+    revision: 2,
+    generatedAt: "2026-07-30T12:06:21.847Z",
+    sourceEventCount: 2,
+  };
+
+  const overlaid = store.overlayLiveProjection(baseline);
+  assert.equal(overlaid.turns.length, 1);
+  assert.equal(overlaid.turns[0]?.status, "completed");
+  assert.equal(overlaid.turns[0]?.completedAt, "2026-07-30T12:06:21.847Z");
+  assert.equal(overlaid.turns[0]?.finalAnswerItemId, "history-final-1");
+  assert.equal(
+    overlaid.turns[0]?.items.some(
+      (item) =>
+        item.content.kind === "timeline" &&
+        item.content.item.kind === "assistant_message" &&
+        item.content.item.text === "我是 Codex。",
+    ),
+    true,
+  );
+  store.close();
+});
+
 test("resident overlay appends only turns after the latest history overlap", () => {
   const eventBus = new EventBus();
   const store = new ConversationProjectionStore(eventBus);
