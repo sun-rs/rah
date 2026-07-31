@@ -96,6 +96,7 @@ const BOTTOM_FOREGROUND_SETTLE_FRAMES = 4;
 const BOTTOM_USER_JUMP_SETTLE_FRAMES = 8;
 const NO_COPYABLE_ASSISTANT_KEYS: ReadonlySet<string> = new Set();
 const PROCESS_TO_FINAL_ROW_GAP_PX = 10;
+const PWA_CHAT_DISPLAY_ROW_GAP_PX = 12;
 
 function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -109,6 +110,7 @@ function chatDisplayRowGapPx(
   row: ChatDisplayRow,
   index: number,
   rows: readonly ChatDisplayRow[],
+  defaultRowGapPx = VIRTUAL_FEED_ROW_GAP_PX,
 ): number {
   const nextRow = rows[index + 1];
   if (row.kind === "assistant_process_group" && nextRow?.kind === "feed_entry") {
@@ -123,7 +125,7 @@ function chatDisplayRowGapPx(
   if (nextRow?.kind === "turn_copy_action") {
     return 8;
   }
-  return VIRTUAL_FEED_ROW_GAP_PX;
+  return defaultRowGapPx;
 }
 
 function estimateChatDisplayRowHeight(row: ChatDisplayRow): number {
@@ -583,6 +585,18 @@ export const ChatThread = memo(function ChatThread(props: {
   loadingProcessTurnIdsRef.current = loadingProcessTurnIds;
   const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
+  const resolveChatDisplayRowGapPx = useCallback(
+    (row: ChatDisplayRow, index: number, rows: readonly ChatDisplayRow[]) =>
+      chatDisplayRowGapPx(
+        row,
+        index,
+        rows,
+        isPwaDisplayMode
+          ? PWA_CHAT_DISPLAY_ROW_GAP_PX
+          : VIRTUAL_FEED_ROW_GAP_PX,
+      ),
+    [isPwaDisplayMode],
+  );
   const projectedFeed = props.feed;
   const visibleEntriesWithPlans = useMemo(
     () =>
@@ -744,10 +758,10 @@ export const ChatThread = memo(function ChatThread(props: {
       buildVirtualFeedLayout(
         displayRows,
         measuredHeightsRef.current,
-        chatDisplayRowGapPx,
+        resolveChatDisplayRowGapPx,
         estimateChatDisplayRowHeight,
       ),
-    [displayRows, measuredHeightsVersion],
+    [displayRows, measuredHeightsVersion, resolveChatDisplayRowGapPx],
   );
   const turnNavigationItems = useMemo(
     () =>
@@ -1845,6 +1859,7 @@ export const ChatThread = memo(function ChatThread(props: {
     <div
       className="chat-thread-shell relative flex min-h-0 flex-1 flex-col"
       data-conversation-source="canonical"
+      data-chat-density={isPwaDisplayMode ? "mobile" : "default"}
       data-turn-navigation={isPwaDisplayMode ? "hidden" : "visible"}
     >
       <div className="relative min-h-0 flex-1">
@@ -1909,7 +1924,11 @@ export const ChatThread = memo(function ChatThread(props: {
             const rowGapPx =
               absoluteEntryIndex >= displayRows.length - 1
                 ? 0
-                : chatDisplayRowGapPx(row, absoluteEntryIndex, displayRows);
+                : resolveChatDisplayRowGapPx(
+                    row,
+                    absoluteEntryIndex,
+                    displayRows,
+                  );
             return (
               <MeasuredFeedEntry
                 key={row.key}

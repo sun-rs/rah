@@ -13,6 +13,9 @@ describe("overlay scroll area contract", () => {
 
     assert.match(OVERLAY_SCROLL_AREA_LAYOUT.viewportClassName, /\brah-scroll-overlay-area\b/);
     assert.doesNotMatch(OVERLAY_SCROLL_AREA_LAYOUT.viewportClassName, /\brah-scroll-panel\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.fillShellClassName, /\boverflow-hidden\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.fillViewportClassName, /\babsolute\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.fillViewportClassName, /\binset-0\b/);
     assert.match(OVERLAY_SCROLL_AREA_LAYOUT.trackClassName, /\btouch-none\b/);
     assert.match(OVERLAY_SCROLL_AREA_LAYOUT.trackClassName, /group-hover\/overlay-scroll:opacity-100/);
     assert.match(OVERLAY_SCROLL_AREA_LAYOUT.trackClassName, /group-focus-within\/overlay-scroll:opacity-100/);
@@ -38,7 +41,24 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /assignRef/);
     assert.match(source, /viewportRef\?: Ref<HTMLDivElement>/);
     assert.match(source, /contentRef\?: Ref<HTMLDivElement>/);
+    assert.match(source, /fill\?: boolean/);
     assert.match(source, /data-rah-scroll-viewport="true"/);
+    assert.match(source, /data-rah-scroll-fill=/);
+  });
+
+  test("keeps bounded picker lists inside their assigned flex area", () => {
+    const filePickerSource = readSource("./components/FileReferencePicker.tsx");
+    const workspacePickerSource = readSource("./components/WorkspacePicker.tsx");
+
+    for (const source of [filePickerSource, workspacePickerSource]) {
+      assert.match(source, /h-\[min\(85dvh,46rem\)\]/);
+      assert.match(source, /max-h-\[calc\(100dvh-2rem\)\]/);
+      assert.match(source, /flex-col overflow-hidden/);
+      assert.match(source, /<OverlayScrollArea\s+fill/);
+      assert.doesNotMatch(source, /viewportClassName="h-full px-4 pb-2"/);
+    }
+    assert.match(filePickerSource, /data-file-reference-picker-dialog=/);
+    assert.match(filePickerSource, /data-file-reference-picker-footer=/);
   });
 
   test("uses OverlayScrollArea for utility panels, not main reading surfaces", () => {

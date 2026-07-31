@@ -117,14 +117,15 @@ Resume 不清空已展示的 history：
 
 这些证据只在 daemon 内转换为 `ConversationEvidencePage`，随后进入 projector。浏览器不可直接读取。
 
-Codex Desktop 把多种产品表面写在同一个 `~/.codex/sessions` 树中，文件存在并不等于它是一个
-Codex Task。RAH 在读取首个 `session_meta.payload` 时执行产品边界过滤：
+Codex Desktop 把多种产品表面写在同一个 `~/.codex/sessions` 树中。RAH 在读取首个
+`session_meta.payload` 时识别用户根会话与内部执行记录：
 
-- `originator=codex_work_desktop` 是普通 ChatGPT Work 对话，不进入 Codex Task catalog；
+- `originator=Codex Desktop` 与 `originator=codex_work_desktop` 都属于用户拥有的根会话，进入
+  同一个 Codex catalog；
 - `thread_source` 或 `source` 明确包含 `subagent` 的 rollout 是父任务内部执行记录，不作为独立
   用户 Session；
-- 普通 Codex Task、用户显式 Fork 等可见根会话继续保留；
-- 过滤只改变 RAH 的 task catalog，不删除或改写 provider rollout。
+- 用户显式 Fork 等其他可见根会话继续保留；
+- 过滤只排除明确的内部执行记录，不删除或改写 provider rollout。
 
 目录名、文件名、标题、`session_index.jsonl` 与旧 RAH cache 都不能替代上述 provider metadata
 成为产品表面判断依据。
@@ -202,8 +203,8 @@ python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages
   重复 API 打开约 0.38–0.61s，真实浏览器切回可见内容约 0.8s。
 - `solars_new` rollout 约 223MB；真实浏览器首次可见历史约 1.2s，后续 API page 约
   0.10–0.54s。
-- 连续 3 次页面 reload，Sidebar DOM 在约 142–264ms 内稳定为同一组 3 个 active task；没有
-  ChatGPT Work 对话、内部 subagent rollout 或重复中文 Solars 行重新出现。
+- 连续 3 次页面 reload，Sidebar DOM 在约 142–264ms 内稳定为同一组 active 用户根会话；没有
+  internal subagent rollout 或重复中文 Solars 行出现。
 
 这些数字是同机回归证据，不是对任意磁盘、机器或持续增长速率的 SLA。
 
@@ -217,8 +218,8 @@ python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages
 - Resume 不重复下载已展示历史。
 - PWA 不请求完整目录。
 - 新建首条用户消息立即由 optimistic item 显示，canonical user 到达后原位接管。
-- Codex Task catalog 不包含 `codex_work_desktop` 对话与内部 subagent rollout；刷新、focus 与重复
-  catalog scan 后身份、数量和顺序保持稳定。
+- Codex catalog 同时包含 `Codex Desktop` 与 `codex_work_desktop` 创建的用户根会话，但不包含
+  internal subagent rollout；刷新、focus 与重复 catalog scan 后身份、数量和顺序保持稳定。
 - 完整 catalog scan 会清理旧 visibility contract 的 snapshot/cache；不完整 scan 保留 last-good。
 - 首屏处于 `loading` 时不发 source-revision probe；首屏完成后第一次 probe 不取消、重复或清空
   已显示 history。

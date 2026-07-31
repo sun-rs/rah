@@ -91,3 +91,27 @@ test("does not call an externally active provider session stopped", () => {
     "Stopped",
   );
 });
+
+test("runtime activity wins over a lagging Ready session summary", () => {
+  assert.deepEqual(
+    resolveConversationHeaderState({
+      status: "running",
+      phase: "ready",
+      runtimeStatus: "thinking",
+    }),
+    {
+      label: "Working",
+      tone: "working",
+      icon: "activity",
+      title: "Status: Working",
+    },
+  );
+  assert.equal(
+    resolveConversationHeaderState({
+      status: "running",
+      phase: "ready",
+      runtimeStatus: "stopping",
+    }).label,
+    "Stopping",
+  );
+});

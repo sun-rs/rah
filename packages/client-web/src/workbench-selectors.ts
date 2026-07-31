@@ -4,6 +4,7 @@ import {
   deriveWorkspaceInfos,
   deriveWorkspaceSections,
   groupRunningSessionsByDirectory,
+  isPathOwnedByHiddenWorkspace,
   sortWorkspaceInfos,
   type SessionDirectoryGroup,
   type WorkspaceInfo,
@@ -14,6 +15,7 @@ import { deriveSessionConversationActivityAt } from "./session-conversation-acti
 import type { SessionProjection } from "./types";
 import type { PendingSessionTransition } from "./session-transition-contract";
 import { visibleStoredSessionRefs } from "./session-history-grouping";
+import { isHiddenWorkspace } from "./session-store-workspace";
 
 export interface PrimaryPaneState {
   kind: "active" | "opening" | "empty";
@@ -36,6 +38,8 @@ export interface WorkbenchSessionCollections {
   workspaceInfos: WorkspaceInfo[];
   sortedWorkspaceInfos: WorkspaceInfo[];
   workspaceSections: WorkspaceSection[];
+  /** Stored sessions whose most-specific registered workspace remains visible. */
+  sidebarStoredSessions: StoredSessionRef[];
 }
 
 function sortSessionEntries(projections: Map<string, SessionProjection>): SessionProjection[] {
@@ -106,6 +110,7 @@ export function deriveWorkbenchSessionCollections(args: {
   storedSessions: StoredSessionRef[];
   workspaceDir: string;
   workspaceSortMode: WorkspaceSortMode;
+  hiddenWorkspaceDirs?: ReadonlySet<string>;
 }): WorkbenchSessionCollections {
   const allSessionEntries = sortSessionEntries(args.projections);
   const sideSessionEntries = allSessionEntries.filter(
@@ -158,17 +163,37 @@ export function deriveWorkbenchSessionCollections(args: {
     args.workspaceDir,
     { sessionActivityAtById },
   );
+  const hiddenWorkspaceDirs = args.hiddenWorkspaceDirs ?? new Set<string>();
+  const sidebarWorkspaceDirs = args.workspaceDirs.filter(
+    (directory) => !isHiddenWorkspace(hiddenWorkspaceDirs, directory),
+  );
+  const sidebarRunningSessionSummaries = runningSessionSummaries.filter(
+    (summary) =>
+      !isPathOwnedByHiddenWorkspace(
+        sidebarWorkspaceDirs,
+        hiddenWorkspaceDirs,
+        summary.session.rootDir || summary.session.cwd,
+      ),
+  );
+  const sidebarStoredSessions = visibleStoredSessionRefs(args.storedSessions).filter(
+    (session) =>
+      !isPathOwnedByHiddenWorkspace(
+        sidebarWorkspaceDirs,
+        hiddenWorkspaceDirs,
+        session.rootDir || session.cwd,
+      ),
+  );
   const workspaceInfos = deriveWorkspaceInfos(
-    args.workspaceDirs,
-    runningSessionSummaries,
-    visibleStoredSessionRefs(args.storedSessions),
-    runningSessionSummaries,
+    sidebarWorkspaceDirs,
+    sidebarRunningSessionSummaries,
+    sidebarStoredSessions,
+    sidebarRunningSessionSummaries,
     { sessionActivityAtById, includeStoredSessionActivity: true },
   );
   const sortedWorkspaceInfos = sortWorkspaceInfos(workspaceInfos, args.workspaceSortMode);
   const workspaceSections = deriveWorkspaceSections(
     sortedWorkspaceInfos,
-    runningSessionSummaries,
+    sidebarRunningSessionSummaries,
     { sessionActivityAtById },
   );
 
@@ -186,5 +211,6 @@ export function deriveWorkbenchSessionCollections(args: {
     workspaceInfos,
     sortedWorkspaceInfos,
     workspaceSections,
+    sidebarStoredSessions,
   };
 }

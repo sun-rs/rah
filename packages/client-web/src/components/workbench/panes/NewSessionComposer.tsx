@@ -31,7 +31,7 @@ import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachmen
 function MarqueeText(props: { text: string; shouldMarquee: boolean }) {
   return (
     <span
-      className="rah-marquee min-w-0"
+      className="rah-marquee min-w-0 flex-1 text-left"
       data-marquee={props.shouldMarquee ? "true" : "false"}
     >
       <span className="rah-marquee-track">
@@ -105,7 +105,7 @@ export function NewSessionComposer(props: {
   const hideSessionControl =
     shouldHideEmptyStateSessionControl(controlsRowWidth);
   const iconOnlyWorkspace =
-    shouldUseIconOnlyEmptyStateWorkspace(controlsRowWidth);
+    shouldUseIconOnlyEmptyStateWorkspace(controlsRowWidth, isPwaDisplayMode);
   const providerSelectorMode =
     props.providerSelectorMode === "auto"
       ? surfaceWidth !== null && surfaceWidth < 560

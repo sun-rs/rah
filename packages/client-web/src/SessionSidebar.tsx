@@ -505,6 +505,8 @@ function RunningSessionRow(props: {
     <div
       ref={rowRef}
       className={rowClassName}
+      data-sidebar-session-id={props.session.id}
+      data-sidebar-session-provider={props.session.provider}
       draggable={draggable}
       data-sidebar-reorder-key={props.reorder?.itemKey}
       data-sidebar-drop-position={reorderDropTarget.dropPosition ?? undefined}
@@ -667,7 +669,7 @@ function WorkspaceRow(props: {
   onTogglePinSession: (itemKey: string) => void;
   onSelectSession: (session: SidebarWorkspaceViewModel["sessions"][number]) => void;
   onArchiveSession: (session: SidebarWorkspaceViewModel["sessions"][number]) => void;
-  onSelectWorkspace: () => void;
+  onNewTaskInWorkspace: () => void;
   expandAllKey: number;
   expandAllValue: boolean;
 }) {
@@ -694,7 +696,10 @@ function WorkspaceRow(props: {
   }, [props.expandAllKey]);
 
   return (
-    <div className={SIDEBAR_LAYOUT.workspaceBlockClassName}>
+    <div
+      className={SIDEBAR_LAYOUT.workspaceBlockClassName}
+      data-workspace-dir={props.workspace.directory}
+    >
       {/* Workspace header */}
       <div
         className={SIDEBAR_LAYOUT.workspaceHeaderClassName}
@@ -769,7 +774,7 @@ function WorkspaceRow(props: {
               className={SIDEBAR_LAYOUT.workspaceActionButtonClassName}
               onClick={(event) => {
                 event.stopPropagation();
-                props.onSelectWorkspace();
+                props.onNewTaskInWorkspace();
               }}
               aria-label="New task in workspace"
               title="New task in workspace"
@@ -837,7 +842,7 @@ export function SessionSidebar(props: {
   onArchiveRunningSession: (sessionId: string) => void;
   onArchiveStoredSession: (session: StoredSessionRef) => void;
   onSelectCouncil?: (workspaceDir: string, councilId: string) => void;
-  onSelectWorkspace: (workspaceDir: string) => void;
+  onNewTaskInWorkspace: (workspaceDir: string) => void;
   enableSessionDrag?: boolean;
   enableCouncilDrag?: boolean;
   councils?: readonly CouncilSnapshot[];
@@ -1093,7 +1098,7 @@ export function SessionSidebar(props: {
                 props.onArchiveStoredSession(session.storedRef);
               }
             }}
-            onSelectWorkspace={() => props.onSelectWorkspace(workspace.directory)}
+            onNewTaskInWorkspace={() => props.onNewTaskInWorkspace(workspace.directory)}
             expandAllKey={expandAllKey}
             expandAllValue={expandAllValue}
           />

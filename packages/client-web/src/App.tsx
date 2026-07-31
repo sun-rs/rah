@@ -100,6 +100,9 @@ import {
 } from "./responsive-layout";
 import { resolveStoredSessionRef } from "./session-store-session-lifecycle";
 import { isStoredSessionArchived } from "./session-history-grouping";
+import {
+  sameWorkspaceDirectory,
+} from "./session-store-workspace";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import type { InspectorOpenFileRequest } from "./inspector/shared";
 import { preloadSelectedSessionView } from "./session-view-preload";
@@ -470,6 +473,7 @@ export function App() {
     storedSessionsCatalogDirty,
     recentSessions,
     workspaceDirs,
+    hiddenWorkspaceDirs,
     pinnedSidebarItems,
     debugScenarios,
     modelCatalogs,
@@ -534,6 +538,7 @@ export function App() {
       storedSessionsCatalogDirty: state.storedSessionsCatalogDirty,
       recentSessions: state.recentSessions,
       workspaceDirs: state.workspaceDirs,
+      hiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
       pinnedSidebarItems: state.pinnedSidebarItems,
       debugScenarios: state.debugScenarios,
       modelCatalogs: state.modelCatalogs,
@@ -709,6 +714,16 @@ export function App() {
     setRightOpen,
     setRightSidebarOpen,
   });
+  const selectNewTaskWorkspace = useCallback((dir: string) => {
+    setPendingNewSessionWorkspaceDir(null);
+    setNewTaskWorkspaceDir(dir);
+    setWorkspaceDir(dir);
+    setWorkspacePickerOpen(false);
+  }, [setWorkspaceDir, setWorkspacePickerOpen]);
+  const openNewTaskInWorkspace = useCallback((dir: string) => {
+    selectNewTaskWorkspace(dir);
+    pageController.openWorkspace(dir);
+  }, [pageController.openWorkspace, selectNewTaskWorkspace]);
   const workbenchMode = pageController.mode;
   const viewportTier = resolveResponsiveTier(viewportWidthPx);
   const {
@@ -853,10 +868,12 @@ export function App() {
         storedSessions: visibleStoredSessions,
         workspaceDir,
         workspaceSortMode,
+        hiddenWorkspaceDirs,
       });
   }, [
     clientId,
     councilProviderSessionKeys,
+    hiddenWorkspaceDirs,
     optimisticallyArchivedSessionKeys,
     projections,
     visibleStoredSessions,
@@ -868,6 +885,7 @@ export function App() {
     runningSessionEntries,
     runningSessionActivityAtById,
     sideSessionEntries,
+    sidebarStoredSessions,
     workspaceSections,
   } = sessionCollections;
   const {
@@ -876,7 +894,7 @@ export function App() {
   } = useWorkbenchSidebarPreferences(
     pinnedSidebarItems,
     workspaceSections,
-    visibleStoredSessions,
+    sidebarStoredSessions,
     {
       sessions: isInitialLoaded,
       storedSessions: storedSessionsCatalogLoaded && !storedSessionsCatalogDirty,
@@ -2250,7 +2268,7 @@ export function App() {
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
-      storedSessions={visibleStoredSessions}
+      storedSessions={sidebarStoredSessions}
       workspaceSortMode={workspaceSortMode}
       onWorkspaceSortModeChange={setWorkspaceSortMode}
       runningSessionActivityAtById={runningSessionActivityAtById}
@@ -2267,10 +2285,15 @@ export function App() {
         setLeftOpen(false);
       }}
       onRemoveWorkspace={(dir) => {
-        if (dir === newTaskWorkspaceDir) {
+        const replacementWorkspaceDir =
+          workspaceDirs.find((workspace) => !sameWorkspaceDirectory(workspace, dir)) ?? "";
+        if (sameWorkspaceDirectory(dir, newTaskWorkspaceDir)) {
           setNewTaskWorkspaceDir(
-            workspaceDirs.find((workspace) => workspace !== dir) ?? "",
+            replacementWorkspaceDir,
           );
+        }
+        if (sameWorkspaceDirectory(dir, pendingNewSessionWorkspaceDir ?? undefined)) {
+          setPendingNewSessionWorkspaceDir(null);
         }
         void removeWorkspace(dir);
       }}
@@ -2311,9 +2334,7 @@ export function App() {
       onSelectCouncil={(workspaceDir, councilId) => {
         pageController.openCouncil(workspaceDir, councilId);
       }}
-      onSelectWorkspace={(dir) => {
-        pageController.openWorkspace(dir);
-      }}
+      onNewTaskInWorkspace={openNewTaskInWorkspace}
       enableSessionDrag={workbenchMode === "canvas"}
       enableCouncilDrag={workbenchMode === "canvas"}
       debugScenarios={debugScenarios}
@@ -3933,12 +3954,7 @@ export function App() {
               availableWorkspaceDir={emptyStateAvailableWorkspaceDir}
               workspacePickerOpen={workspacePickerOpen}
               onToggleWorkspacePicker={() => setWorkspacePickerOpen((v) => !v)}
-              onSelectWorkspace={(dir) => {
-                setPendingNewSessionWorkspaceDir(null);
-                setNewTaskWorkspaceDir(dir);
-                setWorkspaceDir(dir);
-                setWorkspacePickerOpen(false);
-              }}
+              onSelectWorkspace={selectNewTaskWorkspace}
               onChooseNewWorkspace={setPendingNewSessionWorkspaceDir}
               newSessionProvider={newSessionProvider as ProviderChoice}
               onChangeProvider={(value) => setNewSessionProvider(value)}

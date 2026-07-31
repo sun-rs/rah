@@ -12,8 +12,10 @@ import {
 
 export const OVERLAY_SCROLL_AREA_LAYOUT = {
   shellClassName: "relative min-h-0 group/overlay-scroll",
+  fillShellClassName: "overflow-hidden",
   viewportClassName:
     "overflow-y-auto overscroll-y-contain rah-scroll-overlay-area",
+  fillViewportClassName: "absolute inset-0 min-h-0",
   trackClassName:
     "absolute bottom-2 right-0 top-2 z-10 w-2 cursor-default touch-none opacity-0 transition-opacity duration-150 group-hover/overlay-scroll:opacity-100 group-focus-within/overlay-scroll:opacity-100",
   thumbClassName:
@@ -54,6 +56,7 @@ export function OverlayScrollArea(props: {
   scrollAriaLabel?: string;
   viewportRef?: Ref<HTMLDivElement>;
   contentRef?: Ref<HTMLDivElement>;
+  fill?: boolean;
 }) {
   const viewportId = useId();
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -229,14 +232,23 @@ export function OverlayScrollArea(props: {
 
   return (
     <div
-      className={joinClassNames(OVERLAY_SCROLL_AREA_LAYOUT.shellClassName, props.className)}
+      className={joinClassNames(
+        OVERLAY_SCROLL_AREA_LAYOUT.shellClassName,
+        props.fill ? OVERLAY_SCROLL_AREA_LAYOUT.fillShellClassName : undefined,
+        props.className,
+      )}
       data-rah-scroll-area="overlay"
+      data-rah-scroll-fill={props.fill ? "true" : undefined}
     >
       <div
         id={viewportId}
         ref={setViewportRef}
         data-rah-scroll-viewport="true"
-        className={joinClassNames(OVERLAY_SCROLL_AREA_LAYOUT.viewportClassName, props.viewportClassName)}
+        className={joinClassNames(
+          OVERLAY_SCROLL_AREA_LAYOUT.viewportClassName,
+          props.fill ? OVERLAY_SCROLL_AREA_LAYOUT.fillViewportClassName : undefined,
+          props.viewportClassName,
+        )}
         onScroll={updateThumb}
       >
         <div ref={setContentRef} className={props.contentClassName}>

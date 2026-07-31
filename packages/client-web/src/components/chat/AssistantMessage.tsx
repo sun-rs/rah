@@ -23,7 +23,7 @@ export function AssistantMessage(props: {
     ) : (
       <div key={key} className="assistant-process-message">
         <MarkdownRenderer
-          className="prose-chat prose-chat-process max-w-none text-[14px] leading-relaxed text-[var(--app-muted)]"
+          className="prose-chat prose-chat-process max-w-none"
           content={content}
           {...(props.onOpenLocalFile
             ? { onOpenLocalFile: props.onOpenLocalFile }

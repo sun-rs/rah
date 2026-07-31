@@ -167,6 +167,8 @@ Tailwind 的 `sm/md` 都映射到 700px，`lg` 映射到 900px。组件如果需
 
 桌面左侧栏使用固定 header、纵向全局导航、独立 workspace/session 滚动区和底部 Settings 动作。新设备默认宽度为 272px，用户已经调整过的持久化宽度继续优先，不能在升级时覆盖。workspace/session 行使用紧凑字号、28px 行高和稳定缩进。每个已添加 workspace 显示其全部未归档根 Session：running 行显示 phase，stopped 行保留安静的静态样式；两者按 `{provider, providerSessionId}` 去重。Provider 当前 catalog 是 Session 身份、存在性与可见性的唯一权威；workbench snapshot、remembered recent、metadata cache 和 stored-history replay runtime 都只是展示/启动缓存，不能在 catalog 与真实 live runtime 都不包含某个 identity 时把旧 row 重新带回 Sidebar。完整 provider scan 会清理已移除或已过滤 row；不完整 scan 保留该 provider 的 last-good rows。用户置顶的 running Session/Council 进入 Workspaces 上方独立的 `Pinned` 区，并从原 workspace 列表移除；取消置顶后回到所属 workspace，不能同时显示两份。置顶顺序按用户操作持久化，Session 与 Council 清单尚未完成首次加载时不得把已保存项误删。桌面只存在一个固定在屏幕左上角的 edge toggle；侧栏展开、折叠时该按钮的坐标、尺寸和图标都不能变化，页面标题只预留等尺寸占位，不能再渲染第二个按钮。侧栏只在用户没有拖拽 resize 时执行 150ms 宽度过渡，拖拽期间必须关闭 transition，避免大量 session DOM 持续滞后重排。侧栏使用独立的语义背景、单像素内描边和极浅右侧阴影，不通过加深整块灰色来制造边界。`compact` 环境使用 Sheet 容器，但内部复用同一套纵向全局导航、Pinned、Workspaces 与底部 Settings 结构，不能退回顶部横排快捷图标或维护第二套导航状态。
 
+iOS standalone/PWA 的 Home New task composer 必须保留可读的 workspace pill，不能因 compact 宽度降级成只有 Folder 图标。竖屏规格固定为 `5.5rem`（88px）；超过 6 个字符的 workspace label 使用共享单向跑马灯，短名称保持静止。pill、附件入口和 Start session 必须在 390px 视口内共存，不能重叠或制造页面级横向滚动。非 PWA 的极窄浏览器仍可以使用 icon-only 降级。
+
 Session 启动画面必须把 provider identity 与 progress 分开：provider 图标保持静态且不叠加右下角 spinner，进度动画和 `Starting / Resuming / Opening` 状态同行显示。这样 provider 图标在启动前后保持同一语义，也不会出现两个边框相互遮挡。
 
 Settings 在桌面使用可见的纵向 section 导航，在 compact 环境使用横向可滚动 section 导航；内容区采用扁平设置行与单层 section surface，不使用卡片嵌套卡片。两种容器只改变导航排布，不维护不同的设置状态。
@@ -483,8 +485,9 @@ Conversation 正文。生产 daemon 的目录发现必须遵循：
 5. 删除/归档前读取权威目录；删除成功同步更新内存 revision 和原子快照。
 6. 当前 provider catalog 是身份权威；remembered/workbench/per-file cache 只能补充 metadata，
    不能独立证明 Session 仍存在或仍属于当前产品表面。
-7. Codex 必须从首个 `session_meta.payload` 排除 `originator=codex_work_desktop` 的普通 ChatGPT
-   Work 对话和明确标记为 subagent 的内部 rollout；物理文件与标题索引不能替代该边界。
+7. Codex 必须从首个 `session_meta.payload` 保留所有用户拥有的根会话，包括
+   `originator=Codex Desktop` 与 `originator=codex_work_desktop`；只排除明确标记为 subagent 的
+   内部 rollout。物理文件与标题索引不能替代该边界。
 8. catalog snapshot 与 provider metadata cache 具有 visibility contract version。完整扫描清理旧
    row；不完整扫描保留 last-good，不能因一次中断扫描让 Sidebar 数量抖动。
 9. 扫描结果、启动快照和持久化快照在进入 Session 投影前都必须按
@@ -594,6 +597,8 @@ Chat 展示按 turn 聚合：
 - 折叠区域如果包含失败工具，外层摘要必须保留失败数量和 warning tone，不能因为折叠而让失败不可见。
 - pending permission 不进入折叠处理组，必须始终留在主 timeline 等待用户操作。
 
+iOS standalone/PWA 的 Conversation 使用独立的阅读密度契约，而不是把桌面字号整体缩小：user、commentary 和 final answer 正文使用 `16px/24px`，代码正文使用 `13px`；用户气泡最大宽度为 Chat 内容区的 75%。触屏端不为用户气泡的 Copy 动作永久预留空白行，普通虚拟列表 turn gap 为 12px；assistant commentary 直接作为白底正文显示，不包裹带 padding 的浅灰卡片。桌面继续使用 `14px/22px` 与原动作布局。该组合的目标是同时提高字面可读性和每屏有效正文，不能只放大字号，也不能靠缩小字号掩盖动作行、气泡 padding 或 turn gap 造成的空白。
+
 `Worked` 的兼容耗时使用该可见 turn 的 user message 时间到 final answer 时间；这与 Codex persisted `task_started/task_complete` 的用户可感知区间一致，也避免为纯展示再维护第二套计时状态。分页尚未加载到 user message 时可以退化为首个已知 process item 时间，加载完整边界后应自动校正。
 
 ### Plan 与 canonical turn
@@ -698,14 +703,15 @@ npm run test:smoke:native-browser-webkit
 - Stop/Close 是否能关闭对应 running 执行体。
 - Detach / reload / hide canvas 是否不会关闭真实 TUI。
 - 历史打开是否先显示 tail，并能上滚到第一条用户消息。
-- Codex Sidebar 是否只包含用户可见 Task，不包含 ChatGPT Work 对话、内部 subagent rollout 或
-  remembered/cache 复活的旧 row；reload/focus 后数量、身份和顺序是否稳定。
+- Codex Sidebar 是否包含 Codex Desktop 展示的全部用户根会话（包括 `codex_work_desktop`），且不包含
+  internal subagent rollout 或 remembered/cache 复活的旧 row；reload/focus 后数量、身份和顺序是否稳定。
 - 超大且仍在增长的 rollout 首屏是否只发一个 history request；`sourceRevision` probe 是否等待
   `phase=loading` 完成并从响应 byte boundary 增量追赶。
 - Chat mirror 是否来自 provider 原厂 history/db 文件，Markdown 换行、列表、代码块是否保留且不重复。
 - interrupted/aborted turn 是否不会留下永久 Running tool。
 - Enhanced controls 是否保持 optional；native TUI 不应暴露假的 RAH-managed plan/access/model 控制。
 - iOS / iPad / desktop 的 composer、safe-area、sidebar 状态是否正常，且所有用户可见生命周期文案统一使用 running/stopped。
+- iOS standalone/PWA 的 New task workspace 是否保持 88px 文字 pill 与长名称跑马灯；Conversation 是否保持 16/24 正文、75% 用户气泡、12px turn gap、隐藏动作不占行及白底 commentary，同时不污染 desktop 的 14/22 契约。
 
 ## 14. 非目标
 

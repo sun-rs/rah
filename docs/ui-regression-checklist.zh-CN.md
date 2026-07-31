@@ -18,6 +18,7 @@
 npm run typecheck
 npm run test:web
 npm run build:web
+npm run test:p0:browser
 npm run test:smoke:terminal-browser
 npm run test:smoke:inspector-browser
 npm run test:smoke:history-long-browser
@@ -28,7 +29,7 @@ npm run test:smoke:history-long-browser
 - `typecheck` 全绿
 - `test:web` 全绿
 - `build:web` 成功
-- 3 条 browser smoke 全部通过
+- P0 工作区/PWA gate 与 3 条专项 browser smoke 全部通过
 
 如果这里不过，不要进入真机回归，先修自动化失败。
 
@@ -72,6 +73,12 @@ npm run test:smoke:history-long-browser
 
 检查：
 
+- 从 0 个 workspace 的空列表打开真实 picker，添加后只出现一行，刷新后仍存在
+- 同时注册父、子 workspace 时，嵌套 session 只出现在最具体的已注册目录下
+- 点击工作区行的新建按钮，New task composer 必须选择这一行对应的精确目录
+- 移除父 workspace 后，其 session 同步消失，已单独注册的子 workspace 和 session 不受影响
+- 移除最后一个 workspace 后，无需刷新即可看到空列表；此时仍能添加新 workspace
+- 刷新、切换焦点、重选 session 前后，workspace/session 的数量、顺序和归属保持一致
 - `Files` 始终按当前 workspace 范围显示
 - `Changes` 只有在 `workspace <= git 项目` 时显示
 - `workspace` 位于 git 项目上层、只是包含某个 git 子目录时，`Changes` 为空
@@ -81,6 +88,9 @@ npm run test:smoke:history-long-browser
 
 - session 选中后偷偷显示超出 workspace 范围的 git changes
 - workspace 高于 git 根时仍显示 nested repo changes
+- 添加/移除操作只有刷新后才收敛
+- 空列表无法恢复、出现重复 workspace，或 session 留在已移除工作区下
+- 工作区新建按钮打开了 composer，但目录仍是旧选择
 
 ## 四、移动端弹层
 
@@ -109,7 +119,27 @@ npm run test:smoke:history-long-browser
 
 ## 五、Composer / Chat
 
-### 1. Composer 对齐
+### 1. iOS PWA workspace 与阅读密度
+
+在 `390 x 844` 级竖屏、以 standalone PWA 打开的页面中检查：
+
+- Home New task 的 workspace selector 保持带文字的 pill，不退化成单独 Folder 图标
+- pill 宽度约 88px；名称超过 6 个字符时向左跑马，短名称保持静止
+- workspace pill、附件入口和发送按钮互不重叠，页面不存在横向滚动
+- 用户消息、assistant 过程正文和最终回答均为 16px 字号、24px 行高；代码正文不小于 13px
+- 用户气泡最大宽度为内容区 75%，不重新膨胀到 85%
+- 用户消息后的触屏 Copy 动作不占据空白行；消息到 `Working / Worked` 的普通 turn gap 为 12px
+- assistant commentary 是白底连续正文，不出现整块浅灰圆角气泡；最终回答仍与 Worked 区域保持明确分隔
+- Desktop 对照仍保持 14px/22px 与原有 Copy action，不被 PWA override 污染
+
+失败信号：
+
+- 字号很小但每屏内容没有增加，或一轮消息之间出现约一个按钮高度的空白
+- workspace 只剩图标、文字静止截断、pill 挤压发送按钮或造成横向溢出
+- commentary 重新出现大块浅灰背景和上下 padding
+- 为追求“更密”把正文压回 14px 以下，或把气泡放宽到接近整行
+
+### 2. Composer 对齐
 
 检查：
 
@@ -128,7 +158,7 @@ npm run test:smoke:history-long-browser
 - 输入框比按钮略高/略低
 - 多行后按钮被带着上移
 
-### 2. IME / 输入法
+### 3. IME / 输入法
 
 检查：
 
@@ -141,7 +171,7 @@ npm run test:smoke:history-long-browser
 - IME `Enter` 误发消息
 - 某类字符完全打不进去
 
-### 3. 底部浮层
+### 4. 底部浮层
 
 检查：
 

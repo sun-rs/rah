@@ -130,7 +130,10 @@ export function FileReferencePicker(props: {
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[90vw] max-w-xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
+        <Dialog.Content
+          data-file-reference-picker-dialog=""
+          className="fixed left-1/2 top-1/2 z-50 flex h-[min(85dvh,46rem)] max-h-[calc(100dvh-2rem)] w-[90vw] max-w-xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"
+        >
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="flex items-center gap-2 text-sm font-semibold text-[var(--app-fg)]">
               <Plus size={16} className="text-[var(--app-hint)]" />
@@ -166,8 +169,9 @@ export function FileReferencePicker(props: {
           </div>
 
           <OverlayScrollArea
+            fill
             className="min-h-0 flex-1"
-            viewportClassName="h-full px-4 pb-2"
+            viewportClassName="px-4 pb-2"
             scrollAriaLabel="File references"
           >
             {error ? (
@@ -222,7 +226,10 @@ export function FileReferencePicker(props: {
             )}
           </OverlayScrollArea>
 
-          <div className="flex items-center justify-between gap-3 border-t border-[var(--app-border)] px-4 py-3 shrink-0">
+          <div
+            data-file-reference-picker-footer=""
+            className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-t border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3"
+          >
             <div className="min-w-0 truncate text-xs text-[var(--app-hint)]">
               Current folder:{" "}
               <span className="text-[var(--app-fg)]">

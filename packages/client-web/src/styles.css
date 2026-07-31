@@ -71,6 +71,20 @@
   padding-left: 1rem !important;
 }
 
+.chat-thread-shell[data-chat-density="mobile"] {
+  --chat-font-size: 16px;
+  --chat-line-height: 24px;
+  --chat-code-font-size: 13px;
+}
+
+.chat-thread-shell[data-chat-density="mobile"] .chat-user-message-content {
+  max-width: 75%;
+}
+
+.chat-thread-shell[data-chat-density="mobile"] .chat-user-message-actions {
+  display: none;
+}
+
 @container chat-thread (min-width: 40rem) {
   .chat-turn-navigator {
     left: 0.25rem;
@@ -222,6 +236,24 @@ html[data-theme="light"] .code-block {
   border-radius: 0.9rem;
   background: color-mix(in oklab, var(--app-subtle-bg) 72%, transparent);
   padding: 0.55rem 0.75rem;
+}
+
+.prose-chat-process {
+  color: var(--app-muted);
+  font-family: var(--font-sans);
+  font-size: var(--chat-font-size);
+  line-height: var(--chat-line-height);
+}
+
+.chat-thread-shell[data-chat-density="mobile"] .assistant-process-message {
+  max-width: 100%;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.chat-thread-shell[data-chat-density="mobile"] .prose-chat-process {
+  color: var(--app-fg);
 }
 
 .prose-chat-process .prose-chat-block {

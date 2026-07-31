@@ -508,14 +508,18 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(sidebarSource, /workspaceTitleSelectedClassName/);
   });
 
-  test("exposes a workspace-scoped new task action through the shared workspace navigation path", () => {
+  test("exposes a workspace-scoped new task action through an explicit composer selection path", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
     const appSource = readSource("./App.tsx");
 
     assert.match(sidebarSource, /aria-label="New task in workspace"/);
     assert.match(sidebarSource, /<SquarePen size=\{14\} \/>/);
-    assert.match(sidebarSource, /props\.onSelectWorkspace\(\)/);
-    assert.match(appSource, /onSelectWorkspace=\{\(dir\) => \{\s*pageController\.openWorkspace\(dir\);\s*\}\}/);
+    assert.match(sidebarSource, /props\.onNewTaskInWorkspace\(\)/);
+    assert.match(
+      appSource,
+      /const openNewTaskInWorkspace = useCallback\(\(dir: string\) => \{\s*selectNewTaskWorkspace\(dir\);\s*pageController\.openWorkspace\(dir\);/,
+    );
+    assert.match(appSource, /onNewTaskInWorkspace=\{openNewTaskInWorkspace\}/);
   });
 
   test("keeps selected sessions at the same neutral depth as ordinary hover", () => {

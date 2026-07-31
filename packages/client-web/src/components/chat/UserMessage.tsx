@@ -167,7 +167,7 @@ export function UserMessage(props: {
       data-testid="chat-user-message"
       data-feed-key={props.entryKey}
     >
-      <div className="min-w-0 max-w-[85%] sm:max-w-[75%]">
+      <div className="chat-user-message-content min-w-0 max-w-[85%] sm:max-w-[75%]">
         <div className="rounded-2xl rounded-tr-md border border-[var(--user-bubble-border)] bg-[var(--user-bubble-bg)] px-3 py-2 text-[var(--user-bubble-fg)]">
           {props.attachments?.length || imageCount > attachmentImageCount ? (
             <UserMessageAttachments
@@ -180,7 +180,7 @@ export function UserMessage(props: {
             <CollapsibleUserMessageText text={visibleContent.text} />
           ) : null}
         </div>
-        <div className="mt-1.5 flex min-h-7 items-center justify-end gap-1">
+        <div className="chat-user-message-actions mt-1.5 flex min-h-7 items-center justify-end gap-1">
           <button
             type="button"
             onClick={handleCopy}

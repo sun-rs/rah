@@ -329,6 +329,7 @@ describe("composer contract", () => {
     assert.doesNotMatch(COMPOSER_LAYOUT.textareaClassName, /focus:ring-/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName, /h-10/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName, /h-10/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.pillClassName, /w-\[5\.5rem\]/);
     assert.match(
       EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName,
       /\bgap-1\b/,
@@ -503,6 +504,12 @@ describe("composer contract", () => {
     assert.ok(sessionControl > workspaceControl);
     assert.match(source, /EMPTY_STATE_COMPOSER_LAYOUT\.pillClassName/);
     assert.match(source, /shouldUseIconOnlyEmptyStateWorkspace/);
+    assert.match(
+      source,
+      /shouldUseIconOnlyEmptyStateWorkspace\(controlsRowWidth, isPwaDisplayMode\)/,
+    );
+    assert.match(source, /rah-marquee min-w-0 flex-1 text-left/);
+    assert.match(source, /const workspaceShouldMarquee = workspaceLabel\.length > 6/);
     assert.match(source, /<Folder size=\{iconOnlyWorkspace \? 18 : 12\}/);
     assert.match(source, /<ChevronDown[\s\S]*size=\{11\}/);
     assert.match(source, /<ProviderSelector/);
@@ -534,6 +541,7 @@ describe("composer contract", () => {
     assert.equal(shouldUseIconOnlyEmptyStateWorkspace(null), false);
     assert.equal(shouldUseIconOnlyEmptyStateWorkspace(379), true);
     assert.equal(shouldUseIconOnlyEmptyStateWorkspace(380), false);
+    assert.equal(shouldUseIconOnlyEmptyStateWorkspace(320, true), false);
     assert.equal(shouldHideEmptyStateSessionControl(null), false);
     assert.equal(shouldHideEmptyStateSessionControl(359), true);
     assert.equal(shouldHideEmptyStateSessionControl(360), false);

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendVisibleWorkspaceDir } from "./session-store-workspace";
+import {
+  appendVisibleWorkspaceDir,
+} from "./session-store-workspace";
 
 test("opening a session below an existing workspace does not create a nested workspace", () => {
   assert.deepEqual(

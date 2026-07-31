@@ -31,6 +31,41 @@ describe("Codex-compatible typography contract", () => {
     );
   });
 
+  test("uses readable copy and compact turn geometry in the iOS PWA", () => {
+    const proseSource = readSource("./styles.css");
+    const threadSource = readSource("./components/chat/ChatThread.tsx");
+    const userMessageSource = readSource("./components/chat/UserMessage.tsx");
+    const assistantMessageSource = readSource("./components/chat/AssistantMessage.tsx");
+
+    assert.match(
+      threadSource,
+      /data-chat-density=\{isPwaDisplayMode \? "mobile" : "default"\}/,
+    );
+    assert.match(threadSource, /const PWA_CHAT_DISPLAY_ROW_GAP_PX = 12;/);
+    assert.match(
+      proseSource,
+      /\.chat-thread-shell\[data-chat-density="mobile"\]\s*\{[\s\S]*?--chat-font-size:\s*16px;[\s\S]*?--chat-line-height:\s*24px;/,
+    );
+    assert.match(userMessageSource, /className="chat-user-message-content /);
+    assert.match(userMessageSource, /className="chat-user-message-actions /);
+    assert.match(
+      proseSource,
+      /\[data-chat-density="mobile"\] \.chat-user-message-content\s*\{\s*max-width:\s*75%;/,
+    );
+    assert.match(
+      proseSource,
+      /\[data-chat-density="mobile"\] \.chat-user-message-actions\s*\{\s*display:\s*none;/,
+    );
+    assert.match(
+      proseSource,
+      /\[data-chat-density="mobile"\] \.assistant-process-message\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?padding:\s*0;/,
+    );
+    assert.doesNotMatch(
+      assistantMessageSource,
+      /prose-chat-process[^"\n]*text-\[14px\]/,
+    );
+  });
+
   test("uses the Codex Desktop light diff palette and separate gutter tones", () => {
     const tokenSource = readSource("./index.css");
     const previewSource = readSource("./inspector/InspectorPreviewDisplays.tsx");

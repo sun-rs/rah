@@ -1,5 +1,6 @@
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { isReadOnlyReplay } from "./session-capabilities";
+import { isHiddenWorkspace } from "./session-store-workspace";
 
 export type SessionDirectoryGroup<T> = {
   key: string;
@@ -116,6 +117,23 @@ export function findOwningWorkspace(
     }
   }
   return null;
+}
+
+/**
+ * A removed workspace remains an ownership boundary even when a visible parent
+ * or child workspace exists. Resolve against both inventories first, then hide
+ * only paths whose most-specific registered owner is hidden.
+ */
+export function isPathOwnedByHiddenWorkspace(
+  visibleWorkspaceDirs: readonly string[],
+  hiddenWorkspaceDirs: ReadonlySet<string>,
+  sessionPath: string | undefined,
+): boolean {
+  const owner = findOwningWorkspace(
+    [...visibleWorkspaceDirs, ...hiddenWorkspaceDirs],
+    sessionPath,
+  );
+  return owner !== null && isHiddenWorkspace(hiddenWorkspaceDirs, owner);
 }
 
 export function deriveWorkspaceInfos(

@@ -381,6 +381,9 @@ export function WorkbenchSelectedPane(props: {
   const sessionHeaderState = resolveConversationHeaderState({
     status: sessionLifecycleStatus,
     phase: sessionPhase,
+    ...(props.selectedProjection?.currentRuntimeStatus
+      ? { runtimeStatus: props.selectedProjection.currentRuntimeStatus }
+      : {}),
     externalActivity:
       sessionLifecycleStatus === "stopped" &&
       conversationHasExternalActivity(conversation),

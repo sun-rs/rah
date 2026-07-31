@@ -26,12 +26,12 @@ Kimi CLI 对当前 RAH 的投入产出不成立：
 ## Codex Desktop 产品表面边界
 
 Codex Desktop 的 Codex Task、普通 ChatGPT Work 对话和内部 subagent rollout 可能共用
-`~/.codex/sessions` 物理目录。RAH 的 Codex provider scope 只包含用户可见的 Codex Task：
+`~/.codex/sessions` 物理目录。RAH 的 Codex provider scope 包含所有用户拥有的根会话：
 
-- `session_meta.payload.originator=codex_work_desktop` 的记录属于普通 ChatGPT Work 对话；
+- `session_meta.payload.originator=Codex Desktop` 与 `codex_work_desktop` 都是用户根会话的合法来源；
 - `session_meta.payload.source` 或 `thread_source` 明确包含 `subagent` 的记录属于父任务内部执行；
-- 两者都不进入 RAH Sidebar、Chats、Recent、All 或 Archived；
-- RAH 只做 catalog 过滤，不移动、修改或删除这些 provider-owned 文件。
+- 用户根会话进入 RAH Sidebar、Chats、Recent、All 或 Archived，并按其 workspace/archive 事实投影；
+- 只有明确的 internal subagent 不作为独立 Session；RAH 只做 catalog 过滤，不移动、修改或删除这些 provider-owned 文件。
 
 文件路径、标题索引和历史 RAH cache 不是产品表面权威。可见 Session 必须由当前 provider catalog
 确认，并按 `{provider, providerSessionId}` 投影成唯一 row。

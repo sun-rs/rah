@@ -252,6 +252,94 @@ describe("workbench selectors", () => {
     );
   });
 
+  test("keeps hidden workspace sessions addressable without projecting them into a visible parent", () => {
+    const clientId = "web-current";
+    const visible = controlledSummary({
+      id: "visible-session",
+      clientId,
+      rootDir: "/workspace/root/visible",
+    });
+    const hidden = controlledSummary({
+      id: "hidden-session",
+      clientId,
+      rootDir: "/workspace/root/hidden/project",
+    });
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [visible.session.id, projection(visible)],
+        [hidden.session.id, projection(hidden)],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/root"],
+      storedSessions: [],
+      workspaceDir: "/workspace/root",
+      workspaceSortMode: "created",
+      hiddenWorkspaceDirs: new Set(["/workspace/root/hidden"]),
+    });
+
+    assert.deepEqual(
+      collections.runningSessionEntries.map((entry) => entry.summary.session.id),
+      ["visible-session", "hidden-session"],
+    );
+    assert.deepEqual(
+      collections.workspaceSections.flatMap((section) =>
+        section.sessions.map((session) => session.session.id),
+      ),
+      ["visible-session"],
+    );
+  });
+
+  test("a hidden parent does not hide an independently registered child workspace", () => {
+    const clientId = "web-current";
+    const child = controlledSummary({
+      id: "child-session",
+      clientId,
+      rootDir: "/workspace/root/project",
+    });
+    const hiddenParentSession: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "hidden-parent-session",
+      cwd: "/workspace/root/other",
+      rootDir: "/workspace/root/other",
+      title: "hidden parent session",
+      source: "provider_history",
+    };
+    const visibleChildSession: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "visible-child-session",
+      cwd: "/workspace/root/project",
+      rootDir: "/workspace/root/project",
+      title: "visible child session",
+      source: "provider_history",
+    };
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([[child.session.id, projection(child)]]),
+      clientId,
+      workspaceDirs: ["/workspace/root/project"],
+      storedSessions: [hiddenParentSession, visibleChildSession],
+      workspaceDir: "/workspace/root/project",
+      workspaceSortMode: "created",
+      hiddenWorkspaceDirs: new Set(["/workspace/root"]),
+    });
+
+    assert.deepEqual(
+      collections.workspaceSections.map((section) => section.workspace.directory),
+      ["/workspace/root/project"],
+    );
+    assert.deepEqual(
+      collections.workspaceSections.flatMap((section) =>
+        section.sessions.map((session) => session.session.id),
+      ),
+      ["child-session"],
+    );
+    assert.deepEqual(
+      collections.sidebarStoredSessions.map((session) => session.providerSessionId),
+      ["visible-child-session"],
+    );
+  });
+
   test("uses visible session activity for updated workspace ordering", () => {
     const clientId = "web-current";
     const backgroundRefresh = controlledSummary({

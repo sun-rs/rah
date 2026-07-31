@@ -18,6 +18,18 @@ export type ConversationPhase =
 
 export type ConversationHeaderStateIcon = "activity" | "running" | "stopped";
 
+export type ConversationRuntimeStatus =
+  | "connecting"
+  | "connected"
+  | "authenticated"
+  | "session_active"
+  | "thinking"
+  | "streaming"
+  | "stopping"
+  | "retrying"
+  | "finished"
+  | "error";
+
 export type ConversationHeaderState = {
   label: string;
   tone: ConversationMetaTone;
@@ -49,6 +61,7 @@ function formatPhaseLabel(phase: ConversationPhase): string {
 export function resolveConversationHeaderState(input: {
   status: ConversationLifecycleStatus;
   phase: ConversationPhase;
+  runtimeStatus?: ConversationRuntimeStatus;
   sideState?: SessionSideLifecycleState;
   externalActivity?: boolean;
 }): ConversationHeaderState {
@@ -117,7 +130,15 @@ export function resolveConversationHeaderState(input: {
     };
   }
 
-  switch (input.phase) {
+  const effectivePhase =
+    input.phase === "ready" && input.runtimeStatus === "stopping"
+      ? "stopping"
+      : input.phase === "ready" &&
+          ["thinking", "streaming", "retrying"].includes(input.runtimeStatus ?? "")
+        ? "working"
+        : input.phase;
+
+  switch (effectivePhase) {
     case "ready":
       return {
         label: "Ready",
@@ -128,7 +149,7 @@ export function resolveConversationHeaderState(input: {
     case "starting":
     case "working":
     case "stopping": {
-      const label = formatPhaseLabel(input.phase);
+      const label = formatPhaseLabel(effectivePhase);
       return {
         label,
         tone: "working",
@@ -138,7 +159,7 @@ export function resolveConversationHeaderState(input: {
     }
     case "waiting_input":
     case "waiting_permission": {
-      const label = formatPhaseLabel(input.phase);
+      const label = formatPhaseLabel(effectivePhase);
       return {
         label,
         tone: "permission",

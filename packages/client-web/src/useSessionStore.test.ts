@@ -28,6 +28,7 @@ import {
   updateSessionSummaryInProjectionMap,
 } from "./session-store-projections";
 import { type SessionProjection } from "./types";
+import { deriveWorkbenchSessionCollections } from "./workbench-selectors";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
@@ -233,6 +234,69 @@ test("archive hides a session optimistically and requests only the recent respon
       false,
     );
     assert.equal(useSessionStore.getState().storedSessions[0]?.libraryState?.placement, "archive");
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+    useSessionStore.setState(originalState, true);
+  }
+});
+
+test("removing a workspace hides its row and sessions before the daemon responds", async () => {
+  const originalState = useSessionStore.getState();
+  const workspaceDir = "/workspace/remove-now";
+  const running = projection(workspaceDir);
+  const stored = liveStoredSessionRef(workspaceDir);
+  let resolveRemove: ((response: Response) => void) | undefined;
+  (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+  globalThis.fetch = (() =>
+    new Promise<Response>((resolve) => {
+      resolveRemove = resolve;
+    })) as typeof fetch;
+  useSessionStore.setState({
+    projections: new Map([[running.summary.session.id, running]]),
+    storedSessions: [stored],
+    recentSessions: [stored],
+    storedSessionsCatalogLoaded: true,
+    hiddenWorkspaceDirs: new Set<string>(),
+    workspaceDirs: [workspaceDir],
+    workspaceDir,
+    workspaceVisibilityVersion: 0,
+  });
+
+  try {
+    const pending = useSessionStore.getState().removeWorkspace(workspaceDir);
+    const optimistic = useSessionStore.getState();
+    const collections = deriveWorkbenchSessionCollections({
+      projections: optimistic.projections,
+      clientId: "web-current",
+      workspaceDirs: optimistic.workspaceDirs,
+      storedSessions: optimistic.storedSessions,
+      workspaceDir: optimistic.workspaceDir,
+      workspaceSortMode: "created",
+      hiddenWorkspaceDirs: optimistic.hiddenWorkspaceDirs,
+    });
+
+    assert.deepEqual(optimistic.workspaceDirs, []);
+    assert.equal(optimistic.workspaceDir, "");
+    assert.equal(optimistic.hiddenWorkspaceDirs.has(workspaceDir), true);
+    assert.deepEqual(collections.workspaceSections, []);
+    assert.deepEqual(collections.sidebarStoredSessions, []);
+
+    assert.ok(resolveRemove);
+    resolveRemove(
+      new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: [],
+          hiddenWorkspaces: [workspaceDir],
+          activeWorkspaceDir: "",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await pending;
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;

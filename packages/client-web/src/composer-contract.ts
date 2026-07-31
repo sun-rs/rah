@@ -100,8 +100,13 @@ export function shouldCompactEmptyStateSessionControls(
 
 export function shouldUseIconOnlyEmptyStateWorkspace(
   widthPx: number | null,
+  preservePill = false,
 ): boolean {
-  return widthPx !== null && widthPx < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX;
+  return (
+    !preservePill &&
+    widthPx !== null &&
+    widthPx < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX
+  );
 }
 
 export function shouldHideEmptyStateSessionControl(
