@@ -4,6 +4,7 @@ import type {
   PermissionResponseRequest,
   ProviderModelCatalog,
   ConversationItemDetailKind,
+  SessionInputAnnotation,
   SessionQueuedInput,
   SessionSummary,
   ConversationTurnDirectoryItem,
@@ -27,14 +28,26 @@ import type { FeedEntry, SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
 import { CouncilLogo } from "../../CouncilLogo";
-import { SessionControlPopover } from "../../SessionControlPopover";
+import { SessionModeControls } from "../../SessionModeControls";
+import { SessionModelControls } from "../../SessionModelControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { ComposerAttachmentBadge } from "../../ComposerAttachmentBadge";
 import { ComposerAttachmentControl } from "../../ComposerAttachmentControl";
+import { ComposerAnnotationBadge } from "../../ComposerAnnotationBadge";
+import {
+  UnifiedComposerSurface,
+  UnifiedComposerToolbar,
+} from "../../UnifiedComposerSurface";
 import { ComposerInputQueue } from "./ComposerInputQueue";
 import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
 import { shouldSubmitComposerOnEnter } from "../../../composer-keyboard";
-import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
+import {
+  canSubmitComposerInput,
+  COMPOSER_LAYOUT,
+  COMPOSER_PLACEHOLDER,
+  shouldShowComposerStopAction,
+  type ComposerSurface,
+} from "../../../composer-contract";
 import {
   HEADER_MENU_DANGER_ITEM_CLASS,
   HEADER_MENU_ITEM_CLASS,
@@ -56,13 +69,8 @@ import { ConversationPageShell } from "../shells/ConversationPageShell";
 import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
-  ConversationStateMetaBadge,
   type ConversationHeaderMetaItem,
 } from "../ConversationMetaBadge";
-import {
-  conversationHasExternalActivity,
-  resolveConversationHeaderState,
-} from "../conversation-header-meta";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import {
@@ -79,12 +87,12 @@ import {
   PROVIDER_TUI_REPLAY_TAIL_BYTES,
   shouldReplayInitialSessionTuiOutput,
 } from "../../../tui-surface-lifecycle";
-import { providerLabel } from "../../../types";
 import {
   conversationTurnsToFeed,
   stableConversationLocalFeed,
 } from "../../../conversation-feed";
 import type { SessionSideLayout } from "../session/session-side-state";
+import type { SelectedConversationText } from "../../../composer-annotations";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
 const TerminalPane = lazy(async () => ({
@@ -111,7 +119,13 @@ function formatFullTokens(value: number): string {
 
 function resolveContextUsageDisplay(
   usage: ContextUsage | undefined,
-): { label: string; compactLabel: string; ariaLabel: string; tooltip: string } | null {
+): {
+  label: string;
+  compactLabel: string;
+  ariaLabel: string;
+  tooltip: string;
+  percentUsed: number;
+} | null {
   if (usage?.percentUsed === undefined && usage?.percentRemaining === undefined) {
     return null;
   }
@@ -120,6 +134,7 @@ function resolveContextUsageDisplay(
   const percentRemaining = formatContextPercent(percentRemainingValue);
   const compactPercentRemaining = formatCompactContextPercent(percentRemainingValue);
   const label = `${compactPercentRemaining}%`;
+  const percentUsed = Math.max(0, Math.min(100, 100 - percentRemainingValue));
   const usedTokens = usage.usedTokens;
   const contextWindow = usage.contextWindow;
 
@@ -134,6 +149,7 @@ function resolveContextUsageDisplay(
       compactLabel: label,
       ariaLabel: `Context remaining: ${percentRemaining}%`,
       tooltip: `Context remaining: ${percentRemaining}%`,
+      percentUsed,
     };
   }
 
@@ -146,7 +162,77 @@ function resolveContextUsageDisplay(
     compactLabel: label,
     ariaLabel: `${tooltip} · ${percentRemaining}% remaining`,
     tooltip,
+    percentUsed,
   };
+}
+
+function ComposerContextIndicator(props: {
+  display: NonNullable<ReturnType<typeof resolveContextUsageDisplay>>;
+}) {
+  const rootRef = useRef<HTMLSpanElement | null>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span
+      ref={rootRef}
+      className="rah-chat-composer-secondary relative inline-flex shrink-0"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        className="inline-flex h-10 w-8 items-center justify-center rounded-full text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] md:h-9 lg:h-8"
+        aria-label={props.display.ariaLabel}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+      >
+        <span
+          className="relative h-[18px] w-[18px] rounded-full"
+          style={{
+            background: `conic-gradient(var(--app-hint) ${props.display.percentUsed}%, color-mix(in srgb, var(--app-hint) 20%, transparent) 0)`,
+          }}
+          aria-hidden="true"
+        >
+          <span className="absolute inset-[3px] rounded-full bg-[var(--app-bg)]" />
+        </span>
+      </button>
+      {open ? (
+        <span
+          role="tooltip"
+          className="absolute bottom-full right-0 z-[110] mb-2 w-max max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-left text-xs leading-5 text-[var(--app-fg)] shadow-lg"
+        >
+          <span className="block text-[var(--app-hint)]">Context window</span>
+          <span className="block font-medium">{props.display.tooltip}</span>
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 type SessionViewMode = "chat" | "tui";
@@ -200,6 +286,8 @@ export function WorkbenchSelectedPane(props: {
   draft: string;
   draftAttachments?: readonly ComposerAttachmentItem[] | undefined;
   draftAttachmentCount?: number | undefined;
+  draftAnnotations?: readonly SessionInputAnnotation[] | undefined;
+  draftAnnotationCount?: number | undefined;
   attachmentUploadPending?: boolean | undefined;
   attachmentError?: string | null | undefined;
   sendPending: boolean;
@@ -215,6 +303,9 @@ export function WorkbenchSelectedPane(props: {
   onUploadFiles?: ((files: readonly File[]) => void | Promise<void>) | undefined;
   onRemoveDraftAttachment?: ((index: number) => void) | undefined;
   onRemoveLastDraftAttachment?: (() => void) | undefined;
+  onClearDraftAnnotations?: (() => void) | undefined;
+  onAddSelectedText?: ((selection: SelectedConversationText) => void) | undefined;
+  onSelectedTextMoreDetails?: ((selection: SelectedConversationText) => void) | undefined;
   onSend: () => void;
   onUpdateQueuedInput: (clientMessageId: string, text: string) => Promise<void> | void;
   onDeleteQueuedInput: (clientMessageId: string) => Promise<void> | void;
@@ -374,54 +465,7 @@ export function WorkbenchSelectedPane(props: {
   const sessionLifecycleStatus = props.selectedIsReadOnlyReplay
     ? "stopped"
     : props.selectedSummary.session.status;
-  const sessionPhase =
-    isCouncilSession && props.selectedSummary.session.phase === "working"
-      ? "ready"
-      : props.selectedSummary.session.phase;
-  const sessionHeaderState = resolveConversationHeaderState({
-    status: sessionLifecycleStatus,
-    phase: sessionPhase,
-    ...(props.selectedProjection?.currentRuntimeStatus
-      ? { runtimeStatus: props.selectedProjection.currentRuntimeStatus }
-      : {}),
-    externalActivity:
-      sessionLifecycleStatus === "stopped" &&
-      conversationHasExternalActivity(conversation),
-    ...(props.selectedSummary.session.relationship?.sideState
-      ? { sideState: props.selectedSummary.session.relationship.sideState }
-      : {}),
-  });
-  const sessionHeaderMetaItems: ConversationHeaderMetaItem[] = [
-    {
-      slot: "status",
-      node: <ConversationStateMetaBadge state={sessionHeaderState} appearance="inline" />,
-    },
-  ];
-  if (contextUsageDisplay) {
-    sessionHeaderMetaItems.push({
-      slot: "context",
-      node: (
-        <span
-          className="group relative inline-flex shrink-0"
-          aria-label={contextUsageDisplay.ariaLabel}
-          tabIndex={0}
-        >
-          <ConversationMetaBadge
-            tone="context"
-            appearance="inline"
-            title={contextUsageDisplay.tooltip}
-            label={compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}
-          />
-          <span
-            role="tooltip"
-            className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] font-medium text-[var(--app-fg)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
-          >
-            {contextUsageDisplay.tooltip}
-          </span>
-        </span>
-      ),
-    });
-  }
+  const sessionHeaderMetaItems: ConversationHeaderMetaItem[] = [];
   if (isCouncilSession) {
     sessionHeaderMetaItems.push({
       slot: "source",
@@ -503,25 +547,13 @@ export function WorkbenchSelectedPane(props: {
       return next;
     });
   };
-  const showLiveAccessModeControl = Boolean(
-    props.canSwitchSessionModes &&
-      props.selectedSummary.session.mode &&
-      props.selectedSummary.session.mode.availableModes.length > 0,
-  );
-  const showLivePlanModeControl =
-    props.canSwitchSessionModes && liveModeControl.planModeAvailable;
-  const showLiveModelControl =
-    props.canSwitchSessionModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
   const resumeOnSend =
     props.composerSurface.kind === "compose" &&
     props.composerSurface.resumeOnSend === true;
-  const runningSessionControlUnavailableMessage =
-    !showLiveAccessModeControl &&
-    !showLivePlanModeControl &&
-    !showLiveModelControl &&
-    props.selectedSummary.session.liveBackend === "tui_mux"
-      ? `${providerLabel(props.selectedSummary.session.provider)} runs as a native TUI session here. Change model or permissions inside the provider TUI, or choose them before launch/resume.`
-      : undefined;
+  const useResumeConfiguration =
+    resumeOnSend ||
+    props.resumeModePending ||
+    (props.sendPending && props.selectedSummary.session.phase === "starting");
   const composerActionPending =
     props.composerSurface.kind === "claim_control"
       ? props.composerSurface.actionPending
@@ -540,6 +572,11 @@ export function WorkbenchSelectedPane(props: {
     sendPending: props.sendPending || props.attachmentUploadPending === true,
     nativeTuiPromptState: nativeTui?.promptState,
   });
+  const showStopAction = shouldShowComposerStopAction({
+    composerSurface: props.composerSurface,
+    draft: props.draft,
+    attachmentCount: props.draftAttachmentCount ?? 0,
+  });
   const resumeComposerButtonClassName =
     "inline-flex h-8 w-[6.75rem] shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
   const renderResumeComposer = (args: {
@@ -548,7 +585,7 @@ export function WorkbenchSelectedPane(props: {
     actionPending: boolean;
     onResume: () => void;
   }) => (
-    <div className="flex min-h-10 w-full items-center justify-between gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-1 md:min-h-9 lg:min-h-8">
+    <div className="flex min-h-10 w-full flex-col gap-1 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 md:flex-row md:items-center md:justify-between md:gap-2 md:min-h-9 lg:min-h-8">
       <div className="min-w-0 flex-1 truncate px-1">
         <span className="text-sm font-medium text-[var(--app-fg)]">{args.title}</span>
         {!compactComposerPrompts ? (
@@ -557,25 +594,29 @@ export function WorkbenchSelectedPane(props: {
           </span>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2.5">
-        <SessionControlPopover
+      <div
+        className="flex min-w-0 flex-wrap items-center justify-end gap-1 md:flex-nowrap md:gap-1.5"
+        data-resume-composer-controls="true"
+      >
+        <SessionModeControls
+          variant="composer"
           accessModes={props.resumeAccessModes}
           selectedAccessModeId={props.selectedResumeAccessModeId}
           planModeAvailable={props.resumePlanModeAvailable}
           planModeEnabled={props.resumePlanModeEnabled}
-          modeDisabled={resumeSessionControlPending || args.actionPending}
-          modelCatalog={props.modelCatalog}
-          modelCatalogLoading={props.modelCatalogLoading}
-          selectedModelId={props.selectedResumeModelId}
-          selectedReasoningId={props.selectedResumeReasoningId}
-          modelDisabled={resumeSessionControlPending || args.actionPending}
           disabled={resumeSessionControlPending || args.actionPending}
-          showModel
-          align="right"
-          buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
           onOpen={props.onRequestModelCatalogRefresh}
           onAccessModeChange={props.onResumeAccessModeChange}
           onPlanModeToggle={props.onResumePlanModeToggle}
+        />
+        <SessionModelControls
+          appearance="composer"
+          catalog={props.modelCatalog}
+          loading={props.modelCatalogLoading}
+          selectedModelId={props.selectedResumeModelId}
+          selectedReasoningId={props.selectedResumeReasoningId}
+          disabled={resumeSessionControlPending || args.actionPending}
+          onOpen={props.onRequestModelCatalogRefresh}
           onModelChange={props.onResumeModelChange}
           onReasoningChange={props.onResumeReasoningChange}
         />
@@ -668,6 +709,7 @@ export function WorkbenchSelectedPane(props: {
 
   const inspectorToggleOpen = props.inspectorToggleOpen ?? props.rightSidebarOpen;
   const draftAttachments = props.draftAttachments ?? [];
+  const draftAnnotations = props.draftAnnotations ?? [];
 
   return (
     <ConversationPageShell
@@ -685,7 +727,11 @@ export function WorkbenchSelectedPane(props: {
         }
         title={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
         titleText={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
-        meta={<ConversationHeaderMetaList items={sessionHeaderMetaItems} appearance="inline" />}
+        meta={
+          sessionHeaderMetaItems.length > 0 ? (
+            <ConversationHeaderMetaList items={sessionHeaderMetaItems} appearance="inline" />
+          ) : undefined
+        }
         actions={
           <>
           {nativeTuiAvailable ? (
@@ -1056,6 +1102,12 @@ export function WorkbenchSelectedPane(props: {
           {...(props.onOpenTurnFileChange
             ? { onOpenTurnFileChange: handleChatOpenTurnFileChange }
             : {})}
+          {...(props.onAddSelectedText
+            ? { onAddSelectedText: props.onAddSelectedText }
+            : {})}
+          {...(props.onSelectedTextMoreDetails
+            ? { onSelectedTextMoreDetails: props.onSelectedTextMoreDetails }
+            : {})}
         />
       )}
 
@@ -1065,7 +1117,7 @@ export function WorkbenchSelectedPane(props: {
           className="shrink-0 bg-[var(--app-bg)]"
           style={COMPOSER_LAYOUT.bottomPaddingStyle}
         >
-        <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
+        <div className="mx-auto max-w-3xl px-0 pt-2 md:px-4 md:pt-3">
           {props.composerSurface.kind === "unavailable" ? (
             <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
               Input is unavailable for this session.
@@ -1095,145 +1147,39 @@ export function WorkbenchSelectedPane(props: {
                   ? { onOpenSide: props.onOpenQueuedInputSide }
                   : {})}
               />
-              {/* Compose grid: attach | settings | textarea | [stop] | send */}
-              <div
-                className={
-                  props.composerSurface.showStopButton
-                    ? COMPOSER_LAYOUT.composeGridWithStopClassName
-                    : COMPOSER_LAYOUT.composeGridWithoutStopClassName
-                }
+              <UnifiedComposerSurface
+                surface="chat"
+                isPwa={isPwaDisplayMode}
+                className={COMPOSER_LAYOUT.composeGridClassName}
               >
-                {props.onUploadFiles ? (
-                  <ComposerAttachmentControl
-                    buttonClassName={COMPOSER_LAYOUT.attachButtonClassName}
-                    {...(props.fileReferenceDisabled !== undefined
-                      ? { referenceDisabled: props.fileReferenceDisabled }
-                      : {})}
-                    referenceDisabledTitle="File references are available in single-session view."
-                    onReferenceWorkspaceFile={props.onOpenFileReference}
-                    onUploadFiles={props.onUploadFiles}
-                    {...(props.attachmentUploadPending !== undefined
-                      ? { uploadPending: props.attachmentUploadPending }
-                      : {})}
-                  />
-                ) : null}
-
-                <SessionControlPopover
-                  accessModes={
-                    resumeOnSend
-                      ? props.resumeAccessModes
-                      : showLiveAccessModeControl
-                        ? liveModeControl.accessModes
-                        : []
-                  }
-                  selectedAccessModeId={
-                    resumeOnSend
-                      ? props.selectedResumeAccessModeId
-                      : liveModeControl.selectedAccessModeId
-                  }
-                  planModeAvailable={
-                    resumeOnSend ? props.resumePlanModeAvailable : showLivePlanModeControl
-                  }
-                  planModeEnabled={
-                    resumeOnSend
-                      ? props.resumePlanModeEnabled
-                      : liveModeControl.planModeEnabled
-                  }
-                  modeDisabled={
-                    resumeOnSend
-                      ? resumeSessionControlPending
-                      : sessionControlBusy || props.modeChangePending
-                  }
-                  modelCatalog={props.modelCatalog}
-                  modelCatalogLoading={props.modelCatalogLoading}
-                  selectedModelId={
-                    resumeOnSend
-                      ? props.selectedResumeModelId
-                      : props.selectedSummary.session.model?.currentModelId ?? null
-                  }
-                  selectedReasoningId={
-                    resumeOnSend
-                      ? props.selectedResumeReasoningId
-                      : props.selectedSummary.session.model?.currentReasoningId ?? null
-                  }
-                  modelDisabled={
-                    resumeOnSend
-                      ? resumeSessionControlPending
-                      : sessionControlBusy || props.modelChangePending
-                  }
-                  disabled={
-                    resumeOnSend
-                      ? resumeSessionControlPending
-                      : props.modeChangePending || props.modelChangePending
-                  }
-                  locked={!resumeOnSend && sessionControlBusy}
-                  {...(!resumeOnSend && runningSessionControlUnavailableMessage
-                    ? { unavailableMessage: runningSessionControlUnavailableMessage }
-                    : {})}
-                  showModel={resumeOnSend || showLiveModelControl}
-                  buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
-                  onOpen={props.onRequestModelCatalogRefresh}
-                  onAccessModeChange={(modeId) => {
-                    if (resumeOnSend) {
-                      props.onResumeAccessModeChange(modeId);
-                      return;
-                    }
-                    props.onSetSessionMode(
-                      props.selectedSummary.session.provider === "codex" &&
-                        liveModeControl.planModeEnabled
-                        ? codexPlanModeId(modeId) ?? modeId
-                        : modeId,
-                    );
-                  }}
-                  onPlanModeToggle={(enabled) => {
-                    if (resumeOnSend) {
-                      props.onResumePlanModeToggle(enabled);
-                      return;
-                    }
-                    props.onSetSessionMode(
-                      enabled
-                        ? props.selectedSummary.session.provider === "codex"
-                          ? codexPlanModeId(liveModeControl.selectedAccessModeId) ?? "plan"
-                          : "plan"
-                        : liveModeControl.selectedAccessModeId ?? "default",
-                    );
-                  }}
-                  onModelChange={(modelId, defaultReasoningId) => {
-                    if (resumeOnSend) {
-                      props.onResumeModelChange(modelId, defaultReasoningId);
-                      return;
-                    }
-                    props.onSetSessionModel(modelId, defaultReasoningId);
-                  }}
-                  onReasoningChange={(reasoningId) => {
-                    if (resumeOnSend) {
-                      props.onResumeReasoningChange(reasoningId);
-                      return;
-                    }
-                    props.onSetSessionModel(
-                      props.selectedSummary.session.model?.currentModelId ?? "",
-                      reasoningId,
-                    );
-                  }}
-                />
-
-                <div className="relative flex min-w-0 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]">
-                  <ComposerAttachmentBadge
-                    items={draftAttachments}
-                    onRemove={props.onRemoveDraftAttachment}
-                    layout={isPwaDisplayMode && draftAttachments.length > 1 ? "stack" : "row"}
-                    className="pointer-events-auto px-2 pt-1.5"
-                  />
+                <div className="rah-chat-composer-input relative flex min-w-0 flex-col">
+                  {draftAnnotations.length > 0 || draftAttachments.length > 0 ? (
+                    <div className="rah-chat-composer-context flex max-w-full flex-wrap items-start gap-2 px-1 pb-1.5">
+                      <ComposerAnnotationBadge
+                        items={draftAnnotations}
+                        onClear={props.onClearDraftAnnotations}
+                      />
+                      <ComposerAttachmentBadge
+                        items={draftAttachments}
+                        onRemove={props.onRemoveDraftAttachment}
+                        layout={
+                          isPwaDisplayMode && draftAttachments.length > 1
+                            ? "stack"
+                            : "row"
+                        }
+                      />
+                    </div>
+                  ) : null}
                   <TokenizedTextarea
                     ref={props.composerRef}
-                    textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} border-0 bg-transparent rounded-none focus:ring-0 ${draftAttachments.length > 0 ? "pt-1" : ""}`}
+                    textareaClassName={COMPOSER_LAYOUT.textareaClassName}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={props.draft}
                     scopeKey={`session:${props.selectedSummary.session.id}`}
                     ariaLabel="Message composer"
                     onChange={props.onDraftChange}
                     onPaste={props.onComposerPaste}
-                    placeholder=""
+                    placeholder={COMPOSER_PLACEHOLDER}
                     rows={1}
                     onKeyDown={(e) => {
                       if (
@@ -1255,57 +1201,193 @@ export function WorkbenchSelectedPane(props: {
                   />
                 </div>
 
-                {props.composerSurface.showStopButton ? (
-                  <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
-                    {props.composerSurface.kind === "compose" &&
-                    props.composerSurface.stopSpinner !== false ? (
-                      <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
-                    ) : null}
-                    <button
-                      type="button"
-                      disabled={stopDisabled}
-                      onClick={stopDisabled ? undefined : props.onInterrupt}
-                      title={
-                        props.composerSurface.kind === "compose"
-                          ? props.composerSurface.stopTitle
-                          : undefined
-                      }
-                      className={
-                        props.composerSurface.kind === "compose" &&
-                        props.composerSurface.stopTone === "warning"
-                          ? COMPOSER_LAYOUT.stopWarningButtonClassName
-                          : COMPOSER_LAYOUT.stopButtonClassName
-                      }
-                    >
-                      {props.composerSurface.kind === "compose" &&
-                      props.composerSurface.stopTone === "warning" ? (
-                        <span aria-hidden="true">Esc</span>
+                <UnifiedComposerToolbar
+                  leading={
+                    <>
+                      {props.onUploadFiles ? (
+                        <ComposerAttachmentControl
+                          buttonClassName={COMPOSER_LAYOUT.attachButtonClassName}
+                          {...(props.fileReferenceDisabled !== undefined
+                            ? { referenceDisabled: props.fileReferenceDisabled }
+                            : {})}
+                          referenceDisabledTitle="File references are available in single-session view."
+                          onReferenceWorkspaceFile={props.onOpenFileReference}
+                          onUploadFiles={props.onUploadFiles}
+                          {...(props.attachmentUploadPending !== undefined
+                            ? { uploadPending: props.attachmentUploadPending }
+                            : {})}
+                        />
                       ) : null}
-                      <span className="sr-only">
-                        {props.composerSurface.kind === "compose" &&
-                        props.composerSurface.stopAriaLabel
-                          ? props.composerSurface.stopAriaLabel
-                          : "Stop generating"}
-                      </span>
-                    </button>
-                  </div>
-                ) : null}
 
-                <button
-                  type="button"
-                  disabled={sendDisabled}
-                  onClick={props.onSend}
-                  aria-label="Send message"
-                  title={
-                    nativeTuiPromptDirty
-                      ? "Clear the current TUI prompt before sending from Chat."
-                      : undefined
+                      {props.composerSurface.kind === "compose" ? (
+                        <div className="rah-chat-composer-secondary min-w-0">
+                          <SessionModeControls
+                            variant="composer"
+                            accessModes={
+                              useResumeConfiguration
+                                ? props.resumeAccessModes
+                                : liveModeControl.accessModes
+                            }
+                            selectedAccessModeId={
+                              useResumeConfiguration
+                                ? props.selectedResumeAccessModeId
+                                : liveModeControl.selectedAccessModeId
+                            }
+                            planModeAvailable={
+                              useResumeConfiguration
+                                ? props.resumePlanModeAvailable
+                                : liveModeControl.planModeAvailable
+                            }
+                            planModeEnabled={
+                              useResumeConfiguration
+                                ? props.resumePlanModeEnabled
+                                : liveModeControl.planModeEnabled
+                            }
+                            disabled={
+                              useResumeConfiguration
+                                ? resumeSessionControlPending
+                                : !props.canSwitchSessionModes ||
+                                  sessionControlBusy ||
+                                  props.modeChangePending
+                            }
+                            onOpen={props.onRequestModelCatalogRefresh}
+                            onAccessModeChange={(modeId) => {
+                              if (useResumeConfiguration) {
+                                props.onResumeAccessModeChange(modeId);
+                                return;
+                              }
+                              props.onSetSessionMode(
+                                props.selectedSummary.session.provider === "codex" &&
+                                  liveModeControl.planModeEnabled
+                                  ? codexPlanModeId(modeId) ?? modeId
+                                  : modeId,
+                              );
+                            }}
+                            onPlanModeToggle={(enabled) => {
+                              if (useResumeConfiguration) {
+                                props.onResumePlanModeToggle(enabled);
+                                return;
+                              }
+                              props.onSetSessionMode(
+                                enabled
+                                  ? props.selectedSummary.session.provider === "codex"
+                                    ? codexPlanModeId(
+                                        liveModeControl.selectedAccessModeId,
+                                      ) ?? "plan"
+                                    : "plan"
+                                  : liveModeControl.selectedAccessModeId ?? "default",
+                              );
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                    </>
                   }
-                  className={COMPOSER_LAYOUT.sendButtonClassName}
-                >
-                  <ArrowUp size={18} />
-                </button>
-              </div>
+                  trailing={
+                    <>
+                      {contextUsageDisplay ? (
+                        <ComposerContextIndicator display={contextUsageDisplay} />
+                      ) : null}
+                      {props.composerSurface.kind === "compose" ? (
+                        <div className="rah-chat-composer-secondary min-w-0">
+                          <SessionModelControls
+                            appearance="composer"
+                            catalog={props.modelCatalog}
+                            selectedModelId={
+                              useResumeConfiguration
+                                ? props.selectedResumeModelId
+                                : props.selectedSummary.session.model?.currentModelId ?? null
+                            }
+                            selectedReasoningId={
+                              useResumeConfiguration
+                                ? props.selectedResumeReasoningId
+                                : props.selectedSummary.session.model?.currentReasoningId ?? null
+                            }
+                            loading={props.modelCatalogLoading}
+                            disabled={
+                              useResumeConfiguration
+                                ? resumeSessionControlPending
+                                : !props.canSwitchSessionModel ||
+                                  sessionControlBusy ||
+                                  props.modelChangePending
+                            }
+                            onOpen={props.onRequestModelCatalogRefresh}
+                            onModelChange={(modelId, defaultReasoningId) => {
+                              if (useResumeConfiguration) {
+                                props.onResumeModelChange(modelId, defaultReasoningId);
+                                return;
+                              }
+                              props.onSetSessionModel(modelId, defaultReasoningId);
+                            }}
+                            onReasoningChange={(reasoningId) => {
+                              if (useResumeConfiguration) {
+                                props.onResumeReasoningChange(reasoningId);
+                                return;
+                              }
+                              props.onSetSessionModel(
+                                props.selectedSummary.session.model?.currentModelId ?? "",
+                                reasoningId,
+                              );
+                            }}
+                          />
+                        </div>
+                      ) : null}
+
+                      {showStopAction ? (
+                        <button
+                          type="button"
+                          data-composer-primary-action="stop"
+                          disabled={stopDisabled}
+                          onClick={stopDisabled ? undefined : props.onInterrupt}
+                          aria-label={
+                            props.composerSurface.kind === "compose" &&
+                            props.composerSurface.stopAriaLabel
+                              ? props.composerSurface.stopAriaLabel
+                              : "Stop generating"
+                          }
+                          title={
+                            props.composerSurface.kind === "compose"
+                              ? props.composerSurface.stopTitle
+                              : undefined
+                          }
+                          className={
+                            props.composerSurface.kind === "compose" &&
+                            props.composerSurface.stopTone === "warning"
+                              ? COMPOSER_LAYOUT.stopWarningActionButtonClassName
+                              : COMPOSER_LAYOUT.primaryActionButtonClassName
+                          }
+                        >
+                          {props.composerSurface.kind === "compose" &&
+                          props.composerSurface.stopTone === "warning" ? (
+                            <span aria-hidden="true">Esc</span>
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="block h-2.5 w-2.5 rounded-[2px] bg-current"
+                            />
+                          )}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          data-composer-primary-action="send"
+                          disabled={sendDisabled}
+                          onClick={props.onSend}
+                          aria-label="Send message"
+                          title={
+                            nativeTuiPromptDirty
+                              ? "Clear the current TUI prompt before sending from Chat."
+                              : undefined
+                          }
+                          className={COMPOSER_LAYOUT.primaryActionButtonClassName}
+                        >
+                          <ArrowUp className="h-[18px] w-[18px] md:h-4 md:w-4" />
+                        </button>
+                      )}
+                    </>
+                  }
+                />
+              </UnifiedComposerSurface>
               {props.attachmentError ? (
                 <p className="mt-1 px-2 text-xs text-destructive" role="status">
                   {props.attachmentError}

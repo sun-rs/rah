@@ -13,19 +13,24 @@ export type ComposerSurface =
       stopDisabled?: boolean;
       stopTitle?: string;
       stopTone?: "danger" | "warning";
-      stopSpinner?: boolean;
       stopAriaLabel?: string;
     }
   | { kind: "unavailable" };
 
 /* ── Unified sizing tokens ── */
-/* compact (<700px) 40px | medium (700–899px) 36px | wide (>=900px) 32px */
-const BTN = "h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8";
-const GAP = "gap-1.5 md:gap-2";
+/* Touch (<700px) stays 40px; pointer layouts use Codex-dense 32/28px slots. */
+const BTN = "h-10 w-10 md:h-8 md:w-8 lg:h-7 lg:w-7";
+const GAP = "gap-1.5";
 const ROUNDED = "rounded-xl";
+const COMPOSER_GHOST_BASE =
+  "border border-transparent bg-transparent text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40";
+const PRIMARY_ACTION_SLOT = `rah-chat-composer-primary shrink-0 self-end ${BTN} rounded-full flex items-center justify-center`;
+const PRIMARY_ACTION_BUTTON = `${PRIMARY_ACTION_SLOT} bg-primary text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40`;
 
 /* ── Base textarea ── */
-const TEXTAREA_BASE = `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base font-normal leading-6 placeholder:text-[var(--app-hint)] placeholder:opacity-60 focus:outline-none`;
+const TEXTAREA_BASE = `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border border-0 bg-transparent text-base font-normal leading-6 md:text-sm md:leading-5 placeholder:text-[var(--app-hint)] placeholder:opacity-55 focus:outline-none focus:ring-0`;
+
+export const COMPOSER_PLACEHOLDER = "Work with Rah";
 
 export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {
@@ -37,85 +42,50 @@ export const COMPOSER_LAYOUT = {
   rowClassName: `flex items-end ${GAP}`,
   controlsGapClassName: GAP,
 
-  /* Grid: [attach] [settings] [textarea] [stop?] [send] */
-  composeGridWithoutStopClassName: `grid items-end grid-cols-[auto_auto_1fr_auto] ${GAP}`,
-  composeGridWithStopClassName: `grid items-end grid-cols-[auto_auto_1fr_auto_auto] ${GAP}`,
+  /* One surface: textarea spans row one; the shared toolbar owns row two. */
+  composeGridClassName: `relative flex min-w-0 flex-col justify-between gap-1 p-2.5 md:min-h-[6.25rem] md:px-3 md:py-2`,
 
-  /* Attach button (left of textarea) */
-  attachButtonClassName: `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors`,
+  /* Borderless secondary controls match Codex Desktop's composerSm + ghost buttons. */
+  attachButtonClassName: `rah-chat-composer-attach shrink-0 self-end ${BTN} rounded-full ${COMPOSER_GHOST_BASE} flex items-center justify-center`,
+  settingsButtonClassName: `rah-chat-composer-settings shrink-0 self-end ${BTN} rounded-full ${COMPOSER_GHOST_BASE} flex items-center justify-center`,
+  ghostIconButtonClassName: `shrink-0 self-end ${BTN} rounded-full ${COMPOSER_GHOST_BASE} flex items-center justify-center`,
+  ghostTextButtonClassName: `inline-flex h-10 md:h-8 lg:h-7 min-w-0 items-center gap-1 rounded-full ${COMPOSER_GHOST_BASE} px-2 text-[13px] leading-[18px]`,
 
-  settingsButtonClassName: `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors`,
+  /* Send and Stop replace one another in the same right-edge action slot. */
+  primaryActionButtonClassName: PRIMARY_ACTION_BUTTON,
+  sendButtonClassName: PRIMARY_ACTION_BUTTON,
+  stopWarningActionButtonClassName: `${PRIMARY_ACTION_SLOT} border border-amber-400/70 bg-amber-100 text-[10px] font-semibold tracking-[0.02em] text-amber-700 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100`,
 
-  /* Send button (right of textarea) */
-  sendButtonClassName: `shrink-0 self-end ${BTN} rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors`,
-
-  /* Stop / generating spinner */
-  stopWrapperClassName: `relative shrink-0 self-end ${BTN}`,
-  stopSpinnerClassName:
-    "pointer-events-none absolute inset-0 rounded-full border-2 border-[var(--app-danger)]/30 border-t-white/90 animate-[spin_0.95s_linear_infinite]",
-  stopButtonClassName:
-    "absolute inset-[3px] rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:opacity-50",
-  stopWarningButtonClassName:
-    "absolute inset-0 rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
-
-  textareaClassName: `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] max-h-[280px]`,
-  textareaContentClassName: `px-3 py-[7px] md:px-3 md:py-[5px] lg:py-[3px] text-base font-normal leading-6`,
+  textareaClassName: `${TEXTAREA_BASE} ${ROUNDED} min-h-[2.25rem] px-1 py-1 md:min-h-8 max-h-[280px]`,
+  textareaContentClassName: `px-1 py-1 text-base font-normal leading-6 md:text-sm md:leading-5`,
 } as const;
 
 export const EMPTY_STATE_COMPOSER_LAYOUT = {
   textareaWrapperClassName: "max-w-full",
 
   /* Landing textarea — generous bottom padding so the inline controls never overlap typed text */
-  textareaClassName: `${TEXTAREA_BASE} rounded-2xl px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 min-h-[7.5rem] md:min-h-[8rem] max-h-[50vh]`,
-  textareaContentClassName: `px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 text-base font-normal leading-6 min-h-[7.5rem] md:min-h-[8rem]`,
+  textareaClassName: `${TEXTAREA_BASE} rounded-2xl px-1 py-1 min-h-[2.25rem] md:min-h-8 max-h-[50vh]`,
+  textareaContentClassName: `px-1 py-1 text-base font-normal leading-6 min-h-[2.25rem] md:min-h-8 md:text-sm md:leading-5`,
 
-  /* Controls row — anchored to the bottom edge of the textarea card */
+  /* Controls row — part of the same white surface, below the textarea. */
   controlsRowClassName:
-    "absolute bottom-3 left-3 right-3 z-10 flex items-end justify-between gap-2",
+    "mt-1 md:mt-0",
 
   leftControlsClassName:
-    "flex min-w-0 flex-1 flex-nowrap items-center gap-1 md:gap-2 overflow-visible",
+    "flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-visible",
 
-  /* Secondary pills */
-  pillClassName: `inline-flex h-10 md:h-9 lg:h-8 w-[5.5rem] md:w-[7rem] lg:w-[7.25rem] shrink-0 min-w-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2 md:px-3 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]`,
+  rightControlsClassName:
+    "flex min-w-0 shrink-0 flex-nowrap items-center justify-end gap-1 overflow-visible",
 
-  /* Attach button */
-  attachButtonClassName: `shrink-0 self-end ${BTN} rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors`,
+  /* New-task-only workspace control, expressed with the same ghost language. */
+  workspaceButtonClassName: `inline-flex h-7 w-auto max-w-[12rem] shrink min-w-0 items-center gap-1.5 rounded-lg ${COMPOSER_GHOST_BASE} px-1.5 text-[13px] leading-[18px]`,
+
+  /* Attach and Send retain touch targets; only Send carries a solid surface. */
+  attachButtonClassName: `shrink-0 self-end ${BTN} rounded-full ${COMPOSER_GHOST_BASE} flex items-center justify-center`,
 
   /* Send button */
   sendButtonClassName: `shrink-0 self-end ${BTN} rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors`,
 } as const;
-
-export const EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX = 620;
-export const EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX = 380;
-export const EMPTY_STATE_HIDE_SESSION_CONTROL_WIDTH_PX = 360;
-
-export function shouldCompactEmptyStateSessionControls(
-  widthPx: number | null,
-): boolean {
-  return (
-    widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX
-  );
-}
-
-export function shouldUseIconOnlyEmptyStateWorkspace(
-  widthPx: number | null,
-  preservePill = false,
-): boolean {
-  return (
-    !preservePill &&
-    widthPx !== null &&
-    widthPx < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX
-  );
-}
-
-export function shouldHideEmptyStateSessionControl(
-  widthPx: number | null,
-): boolean {
-  return (
-    widthPx !== null && widthPx < EMPTY_STATE_HIDE_SESSION_CONTROL_WIDTH_PX
-  );
-}
 
 function bestEffortEscTuiProviderLabel(provider: string): string | undefined {
   if (provider === "claude") {
@@ -141,6 +111,19 @@ export function canSubmitComposerInput(args: {
     return false;
   }
   return true;
+}
+
+export function shouldShowComposerStopAction(args: {
+  composerSurface: ComposerSurface;
+  draft: string;
+  attachmentCount?: number | undefined;
+}): boolean {
+  return (
+    args.composerSurface.kind === "compose" &&
+    args.composerSurface.showStopButton &&
+    !args.draft.trim() &&
+    (args.attachmentCount ?? 0) <= 0
+  );
 }
 
 export function deriveComposerSurface(args: {
@@ -187,7 +170,6 @@ export function deriveComposerSurface(args: {
       kind: "compose",
       showStopButton: true,
       stopTone: "warning",
-      stopSpinner: false,
       stopAriaLabel: `Send Esc to ${bestEffortEscLabel} TUI`,
       stopTitle: `Send Esc to the ${bestEffortEscLabel} TUI. Chat is a TUI mirror, so this is best-effort.`,
     };

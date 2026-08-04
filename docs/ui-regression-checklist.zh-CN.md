@@ -54,6 +54,9 @@ npm run test:smoke:history-long-browser
 
 - 左侧 sidebar 能正常展开、折叠
 - 触摸拖拽 sidebar 宽度时可用，不会只对鼠标生效
+- Desktop rail 与 standalone PWA Sheet 都声明 `data-sidebar-protocol="codex-compact-v1"`；两边计算样式必须同时为：40px header、4px New task 顶距、8px 双侧内容 inset、30px workspace/session 行、10px 圆角、2px 同组间距、6px workspace 组间距、28px action 槽
+- RAH / 一级导航 / 分组 / workspace / session 分别为 `16/20/600`、`15/20/500`、`13/18/550`、`14/20/500`、`14/20/450`；workspace/session 标题中心与行中心偏差为 0
+- PWA workspace/session 滚动区不得因 scrollbar gutter 比一级导航额外缩窄右边距；Desktop/PWA 的字体、图标、行高、圆角和间距不能由 `md:` 或 coarse-pointer media query 各自覆盖
 - 右上角 Inspector 按钮始终存在
 - 选中 `workspace` 时不会自动弹出 inspector
 - inspector 的开合只由右上角按钮控制
@@ -66,6 +69,8 @@ npm run test:smoke:history-long-browser
 失败信号：
 
 - 触摸拖拽无效
+- Desktop 与 PWA 的同一侧栏元素出现不同的计算行高、字体或左右 inset
+- session/workspace 标题贴近 pill 上沿，或右侧 hover surface 贴住 divider / 被 scrollbar gutter 挤窄
 - tab 条第二行换行
 - 点击 workspace 导致 inspector 自己收起或自己弹出
 
@@ -123,21 +128,21 @@ npm run test:smoke:history-long-browser
 
 在 `390 x 844` 级竖屏、以 standalone PWA 打开的页面中检查：
 
-- Home New task 的 workspace selector 保持带文字的 pill，不退化成单独 Folder 图标
-- pill 宽度约 88px；名称超过 6 个字符时向左跑马，短名称保持静止
-- workspace pill、附件入口和发送按钮互不重叠，页面不存在横向滚动
-- 用户消息、assistant 过程正文和最终回答均为 16px 字号、24px 行高；代码正文不小于 13px
+- Home New task 的 workspace selector 位于 composer 外部的独立灰色上下文行，保留 Folder 图标和可读名称
+- 名称超过 18 个字符时向左跑马，短名称保持静止且不能出现重复文本轨道
+- workspace 上下文行不挤占 agent 配置；权限/Plan 与完整模型/effort 在 390px 下稳定分成两行，页面不存在横向滚动
+- Session/Council 对话正文读取 12–20px Appearance 设置；默认 14px/22px，代码随正文在 11–16px 有界联动，且菜单、Sidebar、标题字号不随之改变
 - 用户气泡最大宽度为内容区 75%，不重新膨胀到 85%
 - 用户消息后的触屏 Copy 动作不占据空白行；消息到 `Working / Worked` 的普通 turn gap 为 12px
 - assistant commentary 是白底连续正文，不出现整块浅灰圆角气泡；最终回答仍与 Worked 区域保持明确分隔
-- Desktop 对照仍保持 14px/22px 与原有 Copy action，不被 PWA override 污染
+- Desktop 对照仍保持同一所选对话字号与原有 Copy action；Desktop/PWA 只允许布局密度不同，不再给 PWA 额外放大正文
 
 失败信号：
 
 - 字号很小但每屏内容没有增加，或一轮消息之间出现约一个按钮高度的空白
-- workspace 只剩图标、文字静止截断、pill 挤压发送按钮或造成横向溢出
+- workspace 回到 composer 内挤压 agent 配置、短名称重复滚动、或造成横向溢出
 - commentary 重新出现大块浅灰背景和上下 padding
-- 为追求“更密”把正文压回 14px 以下，或把气泡放宽到接近整行
+- 为追求“更密”把正文压到 14px 以下、让字号设置改变 UI 菜单，或把气泡放宽到接近整行
 
 ### 2. Composer 对齐
 

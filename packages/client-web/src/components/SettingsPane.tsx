@@ -38,6 +38,11 @@ import { useBrowserNotificationSettings } from "../browser-notifications";
 import type { ProviderChoice } from "./ProviderSelector";
 import { providerModelCatalogKey, useSessionStore } from "../useSessionStore";
 import { TrustedDevicesSettings } from "./TrustedDevicesSettings";
+import {
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
+  useAppearancePreferences,
+} from "../hooks/useAppearancePreferences";
 
 type SettingsTab = "chat" | "models" | "devices" | "status" | "appearance" | "version" | "about";
 
@@ -108,6 +113,80 @@ function SettingsToggleRow(props: {
           }`}
         />
       </button>
+    </div>
+  );
+}
+
+function SettingsNumberRow(props: {
+  label: string;
+  description: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(props.value));
+
+  useEffect(() => {
+    setDraft(String(props.value));
+  }, [props.value]);
+
+  const commit = () => {
+    const parsed = Number.parseFloat(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(props.value));
+      return;
+    }
+    const next = Math.min(props.max, Math.max(props.min, Math.round(parsed)));
+    setDraft(String(next));
+    props.onChange(next);
+  };
+
+  return (
+    <div className="flex flex-col items-stretch gap-3 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-[var(--app-fg)]">{props.label}</div>
+        <div className="mt-1 text-xs leading-5 text-[var(--app-hint)]">
+          {props.description}
+        </div>
+      </div>
+      <div className="flex w-full shrink-0 items-center gap-3 sm:w-auto">
+        <input
+          type="range"
+          min={props.min}
+          max={props.max}
+          step={1}
+          value={props.value}
+          onChange={(event) => props.onChange(Number.parseInt(event.target.value, 10))}
+          aria-label={`${props.label} slider`}
+          className="min-w-0 flex-1 accent-[var(--app-resource-link)] sm:w-36 sm:flex-none"
+        />
+        <input
+          type="number"
+          min={props.min}
+          max={props.max}
+          step={1}
+        value={draft}
+          onChange={(event) => {
+            const nextDraft = event.target.value;
+            setDraft(nextDraft);
+            const parsed = Number.parseFloat(nextDraft);
+            if (Number.isFinite(parsed) && parsed >= props.min && parsed <= props.max) {
+              props.onChange(Math.round(parsed));
+            }
+          }}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+          aria-label={props.label}
+          className="h-8 w-16 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-right text-sm text-[var(--app-fg)] shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]"
+        />
+        <span className="text-sm text-[var(--app-hint)]">px</span>
+      </div>
     </div>
   );
 }
@@ -234,6 +313,10 @@ export function SettingsPane() {
     setShowModelInfoInChat,
   } = useChatPreferences();
   const browserNotifications = useBrowserNotificationSettings();
+  const {
+    uiFontSize,
+    setUiFontSize,
+  } = useAppearancePreferences();
   const [providerDiagnostics, setProviderDiagnostics] = useState<ProviderDiagnostic[]>([]);
   const [modelCatalogs, setModelCatalogs] = useState<Partial<Record<ProviderChoice, ProviderModelCatalog>>>({});
   const storeModelCatalogs = useSessionStore((state) => state.modelCatalogs);
@@ -929,6 +1012,16 @@ export function SettingsPane() {
               <div className="py-4">
                 <ThemeToggle />
               </div>
+            </div>
+            <div className={SETTINGS_SECTION_CLASS}>
+              <SettingsNumberRow
+                label="Conversation text size"
+                description="12–20px. Changes Session and Council conversation text only, immediately."
+                value={uiFontSize}
+                min={UI_FONT_SIZE_MIN}
+                max={UI_FONT_SIZE_MAX}
+                onChange={setUiFontSize}
+              />
             </div>
           </div>
         ) : activeTab === "chat" ? (

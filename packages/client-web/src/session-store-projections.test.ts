@@ -189,6 +189,46 @@ test("replaceSessionsResponse keeps a pending stored replay projection until the
   assert.equal(next.selectedSessionId, provisionalId);
 });
 
+test("refresh keeps the selected loaded stopped replay in memory", () => {
+  const ref: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "thread-loaded",
+    cwd: "/tmp/rah",
+    rootDir: "/tmp/rah",
+    title: "Loaded history",
+  };
+  const replay = createPendingStoredReplayProjection(ref);
+  replay.conversation = {
+    phase: "ready",
+    loadedScope: "history",
+    turns: [],
+    nextCursor: null,
+    revision: 1,
+    daemonRevision: 1,
+    pendingDeltas: [],
+    needsRefresh: false,
+    approximateBytes: 128,
+    sourceRevision: "source-1",
+    loadedAt: "2026-06-06T12:00:00.000Z",
+    lastError: null,
+  };
+  const projections = new Map<string, SessionProjection>([[replay.summary.session.id, replay]]);
+
+  const next = replaceSessionsResponse(
+    {
+      projections,
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: replay.summary.session.id,
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse(),
+  );
+
+  assert.strictEqual(next.projections.get(replay.summary.session.id), replay);
+  assert.equal(next.selectedSessionId, replay.summary.session.id);
+});
+
 test("replaceSessionsResponse drops pending stored replay projection once the real replay exists", () => {
   const ref: StoredSessionRef = {
     provider: "codex",

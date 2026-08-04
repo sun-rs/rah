@@ -1,7 +1,6 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
-  ConversationTurnFileChangesProjection,
   ConversationTurnDirectoryItem,
   ConversationTurnDirectoryStatus,
 } from "@rah/runtime-protocol";
@@ -9,7 +8,10 @@ import { scanSelectedJsonlLines } from "./bounded-jsonl-reader.ts";
 import { serveBackgroundIpcTask } from "./background-ipc-task";
 import { parsePersistedUserMessageContent } from "./session-input-attachments.ts";
 
-const CACHE_VERSION = 9;
+// Version 10 deliberately drops patch_apply_end-derived file changes. Those
+// records describe individual patch operations, not the provider's final
+// aggregate turn diff, so retaining a v9 cache could resurrect false cards.
+const CACHE_VERSION = 10;
 const USER_PREVIEW_TEXT_LIMIT = 96;
 const ASSISTANT_PREVIEW_TEXT_LIMIT = 144;
 const SUMMARY_TEXT_LIMIT = 256 * 1024;
@@ -30,7 +32,6 @@ export type CodexIndexedTurn = ConversationTurnDirectoryItem & {
   assistantText?: string;
   assistantItemId?: string;
   assistantPhase?: "commentary" | "final_answer";
-  fileChanges?: ConversationTurnFileChangesProjection;
 };
 
 export type CodexTurnDirectorySnapshot = {
@@ -112,7 +113,6 @@ type LookupWorkerRequest = {
   kind: "codex-turn-lookup";
   cachePath: string;
   turnIds: string[];
-  includeFileChanges: boolean;
 };
 
 type WorkerRequest =
@@ -261,99 +261,6 @@ function removeRolledBackTurns(items: CodexIndexedTurn[], countValue: unknown): 
   items.splice(cutIndex);
 }
 
-function countPatchLines(diff: string): { additions: number; deletions: number } {
-  let additions = 0;
-  let deletions = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      additions += 1;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      deletions += 1;
-    }
-  }
-  return { additions, deletions };
-}
-
-function contentLineCount(content: string): number {
-  if (content.length === 0) {
-    return 0;
-  }
-  const lineCount = content.split("\n").length;
-  return content.endsWith("\n") ? lineCount - 1 : lineCount;
-}
-
-function relativeChangePath(filePath: string, workspaceRoot: string): string {
-  if (!workspaceRoot || !path.isAbsolute(filePath)) {
-    return filePath;
-  }
-  const relative = path.relative(workspaceRoot, filePath);
-  return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`)
-    ? relative
-    : filePath;
-}
-
-function appendPatchSummary(
-  turn: CodexIndexedTurn,
-  payload: Record<string, unknown>,
-  workspaceRoot: string,
-): void {
-  if (payload.success !== true) {
-    return;
-  }
-  const rawChanges = payload.changes;
-  if (!rawChanges || typeof rawChanges !== "object" || Array.isArray(rawChanges)) {
-    return;
-  }
-  const summaries = new Map(
-    (turn.fileChanges?.files ?? []).map((file) => [file.path, { ...file }]),
-  );
-  for (const [rawPath, rawChange] of Object.entries(
-    rawChanges as Record<string, unknown>,
-  )) {
-    if (!rawChange || typeof rawChange !== "object" || Array.isArray(rawChange)) {
-      continue;
-    }
-    const change = rawChange as Record<string, unknown>;
-    const filePath = relativeChangePath(rawPath, workspaceRoot);
-    const kind = typeof change.type === "string" ? change.type : "update";
-    const diff =
-      typeof change.unified_diff === "string"
-        ? change.unified_diff
-        : typeof change.unifiedDiff === "string"
-          ? change.unifiedDiff
-          : "";
-    const content = typeof change.content === "string" ? change.content : "";
-    const counts = diff
-      ? countPatchLines(diff)
-      : kind === "add"
-        ? { additions: contentLineCount(content), deletions: 0 }
-        : kind === "delete"
-          ? { additions: 0, deletions: contentLineCount(content) }
-          : { additions: 0, deletions: 0 };
-    const existing = summaries.get(filePath) ?? {
-      path: filePath,
-      additions: 0,
-      deletions: 0,
-    };
-    existing.additions += counts.additions;
-    existing.deletions += counts.deletions;
-    summaries.set(filePath, existing);
-  }
-  // Codex Desktop presents the final turn diff in Git's deterministic path
-  // order, not in the chronological order of individual patch calls.
-  const files = [...summaries.values()].sort((left, right) =>
-    left.path === right.path ? 0 : left.path < right.path ? -1 : 1,
-  );
-  if (files.length === 0) {
-    return;
-  }
-  turn.fileChanges = {
-    files,
-    totalAdditions: files.reduce((total, file) => total + file.additions, 0),
-    totalDeletions: files.reduce((total, file) => total + file.deletions, 0),
-  };
-}
-
 function createFallbackTurn(
   items: CodexIndexedTurn[],
   timestamp: string,
@@ -431,7 +338,6 @@ function applyRolloutLine(
   items: CodexIndexedTurn[],
   line: string,
   context: ParsedLineContext,
-  workspaceRoot: string,
   captureSummaryText = false,
 ): void {
   if (!shouldParseLine(line)) {
@@ -528,15 +434,6 @@ function applyRolloutLine(
           turn.assistantPhase = payload.phase === "final_answer" ? "final_answer" : "commentary";
           turn.hasFinalAnswer = turn.assistantPhase === "final_answer" || turn.hasFinalAnswer;
         }
-        turn.endOffset = context.endOffset;
-        return;
-      }
-      case "patch_apply_end": {
-        const turn = findTurn(items, payload.turn_id) ?? items.at(-1);
-        if (!turn) {
-          return;
-        }
-        appendPatchSummary(turn, payload, workspaceRoot);
         turn.endOffset = context.endOffset;
         return;
       }
@@ -662,7 +559,6 @@ async function scanAppendedLines(args: {
         args.items,
         text,
         { startOffset, endOffset },
-        args.workspaceRoot,
         args.captureSummaryText ?? false,
       );
     },
@@ -770,20 +666,13 @@ export async function hydrateCodexTurnSummaries(
   return ordered;
 }
 
-function compactIndexedTurn(
-  item: CodexIndexedTurn,
-  includeFileChanges = false,
-): CodexIndexedTurn {
+function compactIndexedTurn(item: CodexIndexedTurn): CodexIndexedTurn {
   const {
     userText: _userText,
     assistantText: _assistantText,
-    fileChanges,
     ...compact
   } = item;
-  return {
-    ...compact,
-    ...(includeFileChanges && fileChanges ? { fileChanges } : {}),
-  };
+  return compact;
 }
 
 function cachedSummaryMatchesTurn(
@@ -846,7 +735,7 @@ function mergeSummaryDetail(
   detail: CachedCodexTurnSummary,
 ): CodexIndexedTurn {
   return {
-    ...compactIndexedTurn(turn, true),
+    ...compactIndexedTurn(turn),
     ...(detail.userText !== undefined ? { userText: detail.userText } : {}),
     ...(detail.userItemId !== undefined ? { userItemId: detail.userItemId } : {}),
     ...(detail.userImageCount !== undefined
@@ -1002,10 +891,9 @@ function transportSnapshot(
 async function hydrateCodexTurnSummaryPage(
   request: SummaryWorkerRequest,
 ): Promise<CodexTurnSummaryPageWorkerResult> {
-  // A summary page, its turn boundaries, and its per-turn changes must come
-  // from one provider-file revision. Refresh the append-only directory in this
-  // same isolated process instead of serially spawning a scan worker, summary
-  // worker, and file-change lookup worker on the request path.
+  // A summary page and its turn boundaries must come from one provider-file
+  // revision. File changes are restored separately from RAH's frozen
+  // authoritative turn artifact, never inferred from rollout patch activity.
   const snapshot = await scanCodexTurnDirectory({
     providerSessionId: request.providerSessionId,
     rolloutPath: request.rolloutPath,
@@ -1094,7 +982,7 @@ async function hydrateCodexTurnSummaryPage(
       const detail = detailsById.get(item.id);
       return detail
         ? mergeSummaryDetail(item, detail)
-        : compactIndexedTurn(item, true);
+        : compactIndexedTurn(item);
     }),
     request.textBudgetBytes ?? DEFAULT_SUMMARY_PAGE_TEXT_BUDGET,
   );
@@ -1125,7 +1013,7 @@ async function lookupCodexTurns(
   const requested = new Set(request.turnIds);
   return snapshot.items
     .filter((item) => requested.has(item.id))
-    .map((item) => compactIndexedTurn(item, request.includeFileChanges));
+    .map((item) => compactIndexedTurn(item));
 }
 
 async function readCache(cachePath: string): Promise<CodexTurnDirectorySnapshot | null> {

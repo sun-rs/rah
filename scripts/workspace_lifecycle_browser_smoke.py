@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -35,7 +36,189 @@ CASE_IDS = [
     "WORKSPACE-NEW-TASK-001",
     "PWA-COMPOSER-WORKSPACE-PILL-001",
     "PWA-CONVERSATION-DENSITY-001",
+    "PWA-GLOBAL-NOTICE-001",
+    "PWA-TURN-CHANGE-PREVIEW-001",
+    "COMPOSER-UNIFIED-SURFACE-001",
+    "CHAT-MARKDOWN-IMAGES-001",
+    "SIDEBAR-DENSITY-001",
 ]
+
+
+SIDEBAR_VISUAL_METRICS_SCRIPT = """
+surface => {
+  const one = selector => surface.querySelector(selector);
+  const round = value => Math.round(value * 100) / 100;
+  const rect = element => element?.getBoundingClientRect() ?? null;
+  const css = element => element ? getComputedStyle(element) : null;
+  const px = value => round(Number.parseFloat(value || '0'));
+  const centerDelta = (row, title) => {
+    const rowRect = rect(row);
+    const titleRect = rect(title);
+    if (!rowRect || !titleRect) return null;
+    return round(
+      titleRect.top + titleRect.height / 2 -
+      (rowRect.top + rowRect.height / 2)
+    );
+  };
+  const surfaceRect = rect(surface);
+  const surfaceStyle = css(surface);
+  const surfaceRightEdge = surfaceRect
+    ? surfaceRect.right - px(surfaceStyle?.borderRightWidth)
+    : null;
+  const header = one('.rah-sidebar-header-frame');
+  const headerRect = rect(header);
+  const headerStyle = css(header);
+  const headerTitle = one('.rah-sidebar-header-title');
+  const headerTitleRect = rect(headerTitle);
+  const headerTitleStyle = css(headerTitle);
+  const navigation = one('.rah-sidebar-primary-navigation');
+  const navigationStyle = css(navigation);
+  const firstNavigationRow = navigation?.querySelector('.rah-sidebar-navigation-item');
+  const firstNavigationRect = rect(firstNavigationRow);
+  const firstNavigationStyle = css(firstNavigationRow);
+  const firstNavigationIcon = firstNavigationRow?.querySelector('svg');
+  const firstNavigationIconRect = rect(firstNavigationIcon);
+  const sectionLabel = one('[data-sidebar-section-label]');
+  const sectionLabelStyle = css(sectionLabel);
+  const workspaceRow = one('[data-sidebar-workspace-row="true"]');
+  const workspaceRect = rect(workspaceRow);
+  const workspaceStyle = css(workspaceRow);
+  const workspaceTitle = workspaceRow?.querySelector('.rah-sidebar-workspace-title');
+  const workspaceTitleStyle = css(workspaceTitle);
+  const workspaceIcon = workspaceRow?.querySelector('svg');
+  const workspaceIconRect = rect(workspaceIcon);
+  const sessionRow = one('[data-sidebar-session-id]');
+  const sessionRect = rect(sessionRow);
+  const sessionStyle = css(sessionRow);
+  const sessionTitle = sessionRow?.querySelector('.rah-sidebar-session-title');
+  const sessionTitleStyle = css(sessionTitle);
+  const actionCell = one('.rah-sidebar-action-cell');
+  const actionCellRect = rect(actionCell);
+  const rowListStyle = css(one('.rah-sidebar-row-list'));
+  const workspaceListStyle = css(one('.rah-sidebar-workspace-list'));
+  if (
+    !surfaceRect || !headerRect || !headerTitleRect || !firstNavigationRect ||
+    !firstNavigationIconRect || !workspaceRect || !workspaceIconRect ||
+    !sessionRect || !actionCellRect
+  ) return null;
+  return {
+    protocol: surface.getAttribute('data-sidebar-protocol'),
+    header: {
+      height: round(headerRect.height),
+      borderBottom: px(headerStyle?.borderBottomWidth),
+      titleOffsetLeft: round(headerTitleRect.left - surfaceRect.left),
+      fontSize: px(headerTitleStyle?.fontSize),
+      lineHeight: px(headerTitleStyle?.lineHeight),
+      fontWeight: Number(headerTitleStyle?.fontWeight),
+    },
+    navigation: {
+      topGap: round(firstNavigationRect.top - headerRect.bottom),
+      insetLeft: round(firstNavigationRect.left - surfaceRect.left),
+      insetRight: round(surfaceRightEdge - firstNavigationRect.right),
+      rowHeight: round(firstNavigationRect.height),
+      rowRadius: px(firstNavigationStyle?.borderRadius),
+      rowGap: px(navigationStyle?.rowGap),
+      itemGap: px(firstNavigationStyle?.columnGap),
+      fontSize: px(firstNavigationStyle?.fontSize),
+      lineHeight: px(firstNavigationStyle?.lineHeight),
+      fontWeight: Number(firstNavigationStyle?.fontWeight),
+      iconWidth: round(firstNavigationIconRect.width),
+      iconHeight: round(firstNavigationIconRect.height),
+    },
+    sectionLabel: {
+      fontSize: px(sectionLabelStyle?.fontSize),
+      lineHeight: px(sectionLabelStyle?.lineHeight),
+      fontWeight: Number(sectionLabelStyle?.fontWeight),
+    },
+    workspace: {
+      insetLeft: round(workspaceRect.left - surfaceRect.left),
+      insetRight: round(surfaceRightEdge - workspaceRect.right),
+      height: round(workspaceRect.height),
+      radius: px(workspaceStyle?.borderRadius),
+      fontSize: px(workspaceTitleStyle?.fontSize),
+      lineHeight: px(workspaceTitleStyle?.lineHeight),
+      fontWeight: Number(workspaceTitleStyle?.fontWeight),
+      iconWidth: round(workspaceIconRect.width),
+      iconHeight: round(workspaceIconRect.height),
+      titleCenterDelta: centerDelta(workspaceRow, workspaceTitle),
+    },
+    session: {
+      insetLeft: round(sessionRect.left - surfaceRect.left),
+      insetRight: round(surfaceRightEdge - sessionRect.right),
+      height: round(sessionRect.height),
+      radius: px(sessionStyle?.borderRadius),
+      fontSize: px(sessionTitleStyle?.fontSize),
+      lineHeight: px(sessionTitleStyle?.lineHeight),
+      fontWeight: Number(sessionTitleStyle?.fontWeight),
+      titleCenterDelta: centerDelta(sessionRow, sessionTitle),
+    },
+    lists: {
+      rowGap: px(rowListStyle?.rowGap),
+      workspaceGap: px(workspaceListStyle?.rowGap),
+    },
+    action: {
+      width: round(actionCellRect.width),
+      height: round(actionCellRect.height),
+    },
+  };
+}
+"""
+
+
+EXPECTED_SIDEBAR_VISUAL_METRICS = {
+    "protocol": "codex-compact-v1",
+    "header": {
+        "height": 40,
+        "borderBottom": 0,
+        "titleOffsetLeft": 48,
+        "fontSize": 16,
+        "lineHeight": 20,
+        "fontWeight": 600,
+    },
+    "navigation": {
+        "topGap": 4,
+        "insetLeft": 8,
+        "insetRight": 8,
+        "rowHeight": 32,
+        "rowRadius": 10,
+        "rowGap": 2,
+        "itemGap": 10,
+        "fontSize": 15,
+        "lineHeight": 20,
+        "fontWeight": 500,
+        "iconWidth": 18,
+        "iconHeight": 18,
+    },
+    "sectionLabel": {
+        "fontSize": 13,
+        "lineHeight": 18,
+        "fontWeight": 550,
+    },
+    "workspace": {
+        "insetLeft": 8,
+        "insetRight": 8,
+        "height": 30,
+        "radius": 10,
+        "fontSize": 14,
+        "lineHeight": 20,
+        "fontWeight": 500,
+        "iconWidth": 16,
+        "iconHeight": 16,
+        "titleCenterDelta": 0,
+    },
+    "session": {
+        "insetLeft": 8,
+        "insetRight": 8,
+        "height": 30,
+        "radius": 10,
+        "fontSize": 14,
+        "lineHeight": 20,
+        "fontWeight": 450,
+        "titleCenterDelta": 0,
+    },
+    "lists": {"rowGap": 2, "workspaceGap": 6},
+    "action": {"width": 28, "height": 28},
+}
 
 
 def write_history_fixture(
@@ -46,6 +229,24 @@ def write_history_fixture(
     timestamp: str,
     originator: str,
 ) -> pathlib.Path:
+    gallery_paths = [
+        workspace / "rah-gallery-overview.svg",
+        workspace / "rah-gallery-breakdown.svg",
+    ]
+    gallery_colors = [("#2563eb", "Overview"), ("#059669", "Breakdown")]
+    for image_path, (color, label) in zip(gallery_paths, gallery_colors):
+        image_path.write_text(
+            "".join(
+                [
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">',
+                    '<rect width="640" height="360" fill="#f8fafc"/>',
+                    f'<path d="M40 290 C130 250 190 275 265 190 S420 145 600 70" fill="none" stroke="{color}" stroke-width="10"/>',
+                    f'<text x="40" y="55" font-family="system-ui" font-size="30" fill="#111827">{label}</text>',
+                    "</svg>",
+                ]
+            ),
+            encoding="utf-8",
+        )
     rollout_dir = codex_home / "sessions" / "2026" / "07" / "31"
     rollout_dir.mkdir(parents=True, exist_ok=True)
     rollout_path = rollout_dir / f"rollout-{timestamp.replace(':', '-')}-{provider_session_id}.jsonl"
@@ -96,7 +297,16 @@ def write_history_fixture(
             "payload": {
                 "type": "message",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": f"{title} answer"}],
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": (
+                            f"{title} answer\n\n"
+                            f"![Overview]({gallery_paths[0]})\n\n"
+                            f"![Breakdown]({gallery_paths[1]})"
+                        ),
+                    }
+                ],
                 "phase": "final_answer",
             },
         },
@@ -111,6 +321,69 @@ def write_history_fixture(
         encoding="utf-8",
     )
     return rollout_path
+
+
+def write_turn_change_artifact(
+    rah_home: pathlib.Path,
+    provider_session_id: str,
+) -> None:
+    turn_id = f"workspace-lifecycle-{provider_session_id}"
+    owner_id = f"provider:codex\0{provider_session_id}"
+    changed_path = "src/pwa-turn-review.ts"
+    unified_diff = (
+        f"diff --git a/{changed_path} b/{changed_path}\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        f"+++ b/{changed_path}\n"
+        "@@ -0,0 +1 @@\n"
+        "+export const pwaTurnReview = true;\n"
+    )
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
+
+    turn_dir = (
+        rah_home
+        / "runtime-daemon"
+        / "turn-artifacts"
+        / digest(owner_id)
+        / digest(turn_id)
+    )
+    turn_dir.mkdir(parents=True, exist_ok=True)
+    diff_file = "workspace-lifecycle-fixture.diff"
+    (turn_dir / diff_file).write_text(unified_diff, encoding="utf-8")
+    (turn_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "ownerId": owner_id,
+                "turnId": turn_id,
+                "capturedAt": "2026-07-31T10:00:01.000Z",
+                "fileChanges": {
+                    "files": [
+                        {
+                            "path": changed_path,
+                            "additions": 1,
+                            "deletions": 0,
+                        }
+                    ],
+                    "totalAdditions": 1,
+                    "totalDeletions": 0,
+                },
+                "truncated": False,
+                "files": [
+                    {
+                        "path": changed_path,
+                        "diffFile": diff_file,
+                        "truncated": False,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def workspace_row(page, workspace: pathlib.Path):
@@ -188,6 +461,40 @@ def assert_workspace_api(
         raise AssertionError(f"workspace list contains duplicates: {actual!r}")
 
 
+def assert_pwa_workbench_header_clear_of_notice(page, page_name: str) -> dict[str, float]:
+    header = page.locator('[data-workbench-header]:visible').first
+    expect(header).to_be_visible(timeout=10_000)
+    metrics = header.evaluate(
+        """
+        element => {
+          const notice = document.querySelector(
+            '[data-workbench-callout-variant="pwa-compact"]'
+          );
+          if (!notice) return null;
+          const headerRect = element.getBoundingClientRect();
+          const noticeRect = notice.getBoundingClientRect();
+          return {
+            headerHeight: headerRect.height,
+            headerBottom: headerRect.bottom,
+            noticeTop: noticeRect.top,
+            gap: noticeRect.top - headerRect.bottom,
+          };
+        }
+        """
+    )
+    if metrics is None:
+        raise AssertionError(f"{page_name} omitted its PWA header or recovery notice")
+    if metrics["headerHeight"] != 40:
+        raise AssertionError(
+            f"{page_name} diverged from the shared 40px PWA header: {metrics!r}"
+        )
+    if metrics["gap"] < 3.5:
+        raise AssertionError(
+            f"PWA recovery notice overlaps {page_name} header divider: {metrics!r}"
+        )
+    return metrics
+
+
 def main() -> int:
     try:
         preflight_browser_runtime()
@@ -245,6 +552,7 @@ def main() -> int:
             "2026-07-31T10:00:00.000Z",
             "Codex Desktop",
         )
+        write_turn_change_artifact(rah_home, parent_session_id)
         write_history_fixture(
             codex_home,
             child_workspace,
@@ -291,6 +599,111 @@ def main() -> int:
             assert_workspace_session(page, child_workspace, child_title, visible=True)
             save_browser_screenshot(page, artifact_dir, "02-most-specific-workspace-ownership")
 
+            desktop_session_row = page.locator(
+                '[data-sidebar-session-provider="codex"]'
+            ).filter(has_text=parent_title).first
+            expect(desktop_session_row).to_be_visible(timeout=10_000)
+            desktop_sidebar_metrics = page.locator(
+                '[data-sidebar-surface="desktop"]:visible'
+            ).evaluate(SIDEBAR_VISUAL_METRICS_SCRIPT)
+            if desktop_sidebar_metrics != EXPECTED_SIDEBAR_VISUAL_METRICS:
+                raise AssertionError(
+                    "Desktop sidebar diverged from codex-compact-v1: "
+                    f"{desktop_sidebar_metrics!r}"
+                )
+            desktop_session_row.hover()
+            page.wait_for_timeout(180)
+            desktop_session_actions = desktop_session_row.evaluate(
+                """
+                element => {
+                  const actionGroup = element.querySelector(
+                    '.rah-sidebar-session-hover-actions'
+                  );
+                  const actionStyle = actionGroup
+                    ? getComputedStyle(actionGroup)
+                    : null;
+                  const rowStyle = getComputedStyle(element);
+                  const visibleActions = [...element.querySelectorAll(
+                    '.coarse-pointer-action-target'
+                  )].filter(action => {
+                    const style = getComputedStyle(action);
+                    return style.opacity !== '0' && style.pointerEvents !== 'none';
+                  });
+                  return {
+                    hovered: element.matches(':hover'),
+                    fineHover: matchMedia('(hover: hover) and (pointer: fine)').matches,
+                    rowBackground: rowStyle.backgroundColor,
+                    actionBackground: actionStyle?.backgroundColor ?? null,
+                    actionShadow: actionStyle?.boxShadow ?? null,
+                    visibleActionCount: visibleActions.length,
+                  };
+                }
+                """
+            )
+            if not desktop_session_actions["hovered"] or not desktop_session_actions["fineHover"]:
+                raise AssertionError(
+                    "Desktop Session action check did not run under a fine-pointer hover: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["rowBackground"] == "rgba(0, 0, 0, 0)":
+                raise AssertionError(
+                    "Desktop Session hover did not paint the shared row surface: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["actionBackground"] != "rgba(0, 0, 0, 0)":
+                raise AssertionError(
+                    "Desktop Session actions regained a separate background plate: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["actionShadow"] != "none":
+                raise AssertionError(
+                    "Desktop Session actions regained a separate shadow: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["visibleActionCount"] != 2:
+                raise AssertionError(
+                    "Desktop Session hover did not reveal both actions: "
+                    f"{desktop_session_actions!r}"
+                )
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "02a-desktop-session-actions-seamless",
+            )
+
+            desktop_session_tooltip = page.locator('[role="tooltip"]').filter(
+                has_text=parent_title
+            )
+            expect(desktop_session_tooltip).to_be_visible(timeout=2_000)
+            page.mouse.move(1_000, 700)
+            expect(desktop_session_tooltip).to_have_count(0, timeout=1_000)
+
+            desktop_session_row.hover()
+            page.wait_for_timeout(40)
+            page.locator("body").dispatch_event(
+                "pointerdown",
+                {"pointerType": "mouse", "button": 0, "buttons": 1},
+            )
+            page.wait_for_timeout(200)
+            expect(desktop_session_tooltip).to_have_count(0)
+
+            desktop_second_session_row = page.locator(
+                '[data-sidebar-session-provider="codex"]'
+            ).filter(has_text=child_title).first
+            expect(desktop_second_session_row).to_be_visible(timeout=10_000)
+            desktop_second_session_tooltip = page.locator(
+                '[role="tooltip"]'
+            ).filter(has_text=child_title)
+            page.mouse.move(1_000, 700)
+            desktop_session_row.hover()
+            expect(desktop_session_tooltip).to_be_visible(timeout=2_000)
+            desktop_second_session_row.hover()
+            expect(desktop_session_tooltip).to_have_count(0, timeout=1_000)
+            expect(desktop_second_session_tooltip).to_be_visible(timeout=2_000)
+            expect(page.locator('[role="tooltip"]')).to_have_count(1)
+            page.mouse.move(1_000, 700)
+            expect(desktop_second_session_tooltip).to_have_count(0, timeout=1_000)
+
             child_row = workspace_row(page, child_workspace)
             hover_workspace_header(page, child_workspace)
             child_row.get_by_role(
@@ -302,7 +715,244 @@ def main() -> int:
                 f'button[aria-label="Select workspace"][title="{child_workspace}"]'
             )
             expect(selected_workspace).to_be_visible(timeout=10_000)
+            desktop_new_surface = page.locator(
+                '.rah-unified-composer[data-surface="new-task"]:visible'
+            )
+            desktop_workspace_strip = page.locator(
+                '.rah-new-task-workspace-strip:visible'
+            )
+            desktop_provider_module = page.locator(
+                '[data-provider-selector="module"]:visible'
+            )
+            desktop_new_task_metrics = page.evaluate(
+                """
+                () => {
+                  const composer = document.querySelector(
+                    '.rah-unified-composer[data-surface="new-task"]'
+                  );
+                  const strip = document.querySelector(
+                    '.rah-new-task-workspace-strip'
+                  );
+                  const trigger = strip?.querySelector(
+                    'button[aria-label="Select workspace"]'
+                  );
+                  const provider = document.querySelector(
+                    '[data-provider-selector="module"]'
+                  );
+                  const selected = provider?.querySelector('[aria-checked="true"]');
+                  if (!composer || !strip || !trigger || !provider || !selected) return null;
+                  const composerRect = composer.getBoundingClientRect();
+                  const stripRect = strip.getBoundingClientRect();
+                  const triggerRect = trigger.getBoundingClientRect();
+                  const selectedStyle = getComputedStyle(selected);
+                  const selectedLabel = selected.querySelector(
+                    '.provider-choice-label-text'
+                  );
+                  const markerStyle = selectedLabel
+                    ? getComputedStyle(selectedLabel, '::after')
+                    : null;
+                  return {
+                    overlap: composerRect.bottom - stripRect.top,
+                    stripHeight: stripRect.height,
+                    triggerHeight: triggerRect.height,
+                    providerHeight: provider.getBoundingClientRect().height,
+                    selectedCount: provider.querySelectorAll('[aria-checked="true"]').length,
+                    selectedBackground: selectedStyle.backgroundColor,
+                    selectedBoxShadow: selectedStyle.boxShadow,
+                    selectedFontWeight: selectedStyle.fontWeight,
+                    selectedLabelWidth: selectedLabel?.getBoundingClientRect().width ?? null,
+                    selectedMarkerWidth: markerStyle?.width ?? null,
+                    selectedMarkerHeight: markerStyle?.height ?? null,
+                    selectedMarkerOpacity: markerStyle?.opacity ?? null,
+                    selectedMarkerBackground: markerStyle?.backgroundColor ?? null,
+                    selectedButtonMarkerDisplay: getComputedStyle(
+                      selected,
+                      '::after'
+                    ).display,
+                    moduleBackground: getComputedStyle(provider).backgroundColor,
+                    moduleBorderWidth: getComputedStyle(provider).borderTopWidth,
+                  };
+                }
+                """
+            )
+            if desktop_new_task_metrics is None:
+                raise AssertionError("Desktop New task accessory geometry is incomplete")
+            if (
+                abs(desktop_new_task_metrics["overlap"] - 8) > 1
+                or abs(desktop_new_task_metrics["stripHeight"] - 40) > 1
+                or abs(desktop_new_task_metrics["triggerHeight"] - 28) > 1
+            ):
+                raise AssertionError(
+                    "Desktop workspace strip is not tucked under the composer: "
+                    f"{desktop_new_task_metrics!r}"
+                )
+            if (
+                desktop_new_task_metrics["selectedCount"] != 1
+                or abs(desktop_new_task_metrics["providerHeight"] - 36) > 1
+                or desktop_new_task_metrics["selectedBackground"]
+                != "rgba(0, 0, 0, 0)"
+                or desktop_new_task_metrics["selectedBoxShadow"] != "none"
+                or desktop_new_task_metrics["selectedFontWeight"] != "600"
+                or desktop_new_task_metrics["selectedLabelWidth"] is None
+                or desktop_new_task_metrics["selectedMarkerWidth"] is None
+                or abs(
+                    float(desktop_new_task_metrics["selectedMarkerWidth"][:-2])
+                    - desktop_new_task_metrics["selectedLabelWidth"]
+                )
+                > 1
+                or desktop_new_task_metrics["selectedMarkerHeight"] != "2px"
+                or desktop_new_task_metrics["selectedMarkerOpacity"] != "1"
+                or desktop_new_task_metrics["selectedMarkerBackground"]
+                == "rgba(0, 0, 0, 0)"
+                or desktop_new_task_metrics["selectedButtonMarkerDisplay"] != "none"
+                or desktop_new_task_metrics["moduleBorderWidth"] != "0px"
+            ):
+                raise AssertionError(
+                    "Desktop provider selector is not a flat single-layer strip: "
+                    f"{desktop_new_task_metrics!r}"
+                )
+            desktop_provider_module.hover()
+            desktop_provider_hover_metrics = desktop_provider_module.evaluate(
+                """
+                element => {
+                  const selected = element.querySelector('[aria-checked="true"]');
+                  return {
+                    moduleBackground: getComputedStyle(element).backgroundColor,
+                    selectedBackground: selected
+                      ? getComputedStyle(selected).backgroundColor
+                      : null,
+                  };
+                }
+                """
+            )
+            if (
+                desktop_provider_hover_metrics["moduleBackground"]
+                == "rgba(0, 0, 0, 0)"
+                or desktop_provider_hover_metrics["selectedBackground"]
+                != "rgba(0, 0, 0, 0)"
+            ):
+                raise AssertionError(
+                    "Desktop provider hover must add only the grouped surface: "
+                    f"{desktop_provider_hover_metrics!r}"
+                )
+            page.locator("h1:visible").hover()
+            page.wait_for_timeout(180)
+            desktop_provider_leave_background = desktop_provider_module.evaluate(
+                "element => getComputedStyle(element).backgroundColor"
+            )
+            if desktop_provider_leave_background != "rgba(0, 0, 0, 0)":
+                raise AssertionError(
+                    "Desktop provider grouped hover surface persisted after pointer leave: "
+                    f"{desktop_provider_leave_background!r}"
+                )
+            expect(desktop_new_surface).to_be_visible(timeout=10_000)
+            expect(desktop_workspace_strip).to_be_visible(timeout=10_000)
+            expect(desktop_provider_module).to_be_visible(timeout=10_000)
             save_browser_screenshot(page, artifact_dir, "03-new-task-workspace-selected")
+
+            page.locator("button:visible").filter(has_text=parent_title).click(
+                timeout=10_000
+            )
+            desktop_gallery = page.locator(
+                '[data-markdown-image-grid="true"]'
+            ).last
+            expect(desktop_gallery).to_be_visible(timeout=20_000)
+            desktop_gallery_metrics = desktop_gallery.evaluate(
+                """
+                element => {
+                  const style = getComputedStyle(element);
+                  const previews = [...element.querySelectorAll('[data-testid="conversation-inline-image"]')];
+                  const rects = previews.map(preview => preview.getBoundingClientRect());
+                  const imageRects = [...element.querySelectorAll('.prose-chat-image-thumbnail')]
+                    .map(image => image.getBoundingClientRect());
+                  const finalAnswer = element.closest('.prose-chat-final');
+                  const finalStyle = finalAnswer ? getComputedStyle(finalAnswer) : null;
+                  return {
+                    display: style.display,
+                    flexWrap: style.flexWrap,
+                    gap: style.gap,
+                    count: previews.length,
+                    sameRow: rects.length === 2 && Math.abs(rects[0].top - rects[1].top) <= 1,
+                    maxHeight: Math.max(...imageRects.map(rect => rect.height)),
+                    fontSize: finalStyle?.fontSize ?? null,
+                    lineHeight: finalStyle?.lineHeight ?? null,
+                    fontWeight: finalStyle?.fontWeight ?? null,
+                  };
+                }
+                """
+            )
+            expected_gallery_metrics = {
+                "display": "flex",
+                "flexWrap": "wrap",
+                "gap": "12px",
+                "count": 2,
+                "sameRow": True,
+                "fontSize": "14px",
+                "lineHeight": "22px",
+                "fontWeight": "430",
+            }
+            for key, expected in expected_gallery_metrics.items():
+                if desktop_gallery_metrics.get(key) != expected:
+                    raise AssertionError(
+                        "Desktop Markdown gallery contract drifted: "
+                        f"expected={expected_gallery_metrics!r} actual={desktop_gallery_metrics!r}"
+                    )
+            if desktop_gallery_metrics["maxHeight"] > 160.5:
+                raise AssertionError(
+                    f"Desktop local thumbnail exceeded 160px: {desktop_gallery_metrics!r}"
+                )
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "03a-desktop-markdown-thumbnail-gallery",
+            )
+
+            page.locator('button[aria-label="Settings"]:visible').click(
+                timeout=10_000
+            )
+            settings_dialog = page.get_by_role("dialog").filter(has_text="Settings")
+            expect(settings_dialog).to_be_visible(timeout=10_000)
+            settings_dialog.get_by_role(
+                "button", name="Appearance", exact=True
+            ).click(timeout=10_000)
+            navigation_font_before = settings_dialog.get_by_role(
+                "button", name="Appearance", exact=True
+            ).evaluate("element => getComputedStyle(element).fontSize")
+            ui_font_input = settings_dialog.get_by_role(
+                "spinbutton", name="Conversation text size", exact=True
+            )
+            expect(ui_font_input).to_have_value("14")
+            expect(ui_font_input).to_have_attribute("min", "12")
+            expect(ui_font_input).to_have_attribute("max", "20")
+            ui_font_input.fill("18")
+            ui_font_input.press("Enter")
+            expect(page.locator("html")).to_have_attribute("data-rah-ui-font-size", "18")
+            expect(page.locator("html")).to_have_attribute("data-rah-code-font-size", "16")
+            adjusted_type_metrics = page.locator(".prose-chat-final").last.evaluate(
+                """
+                element => {
+                  const style = getComputedStyle(element);
+                  return { fontSize: style.fontSize, lineHeight: style.lineHeight };
+                }
+                """
+            )
+            if adjusted_type_metrics != {"fontSize": "18px", "lineHeight": "26px"}:
+                raise AssertionError(
+                    f"Appearance UI font setting did not update the conversation: {adjusted_type_metrics!r}"
+                )
+            navigation_font_after = settings_dialog.get_by_role(
+                "button", name="Appearance", exact=True
+            ).evaluate("element => getComputedStyle(element).fontSize")
+            if navigation_font_after != navigation_font_before:
+                raise AssertionError(
+                    "Conversation text size leaked into navigation UI: "
+                    f"before={navigation_font_before!r} after={navigation_font_after!r}"
+                )
+            ui_font_input.fill("14")
+            ui_font_input.press("Enter")
+            settings_dialog.get_by_role("button", name="Close", exact=True).click(
+                timeout=10_000
+            )
 
             pwa_context = browser.new_context(
                 viewport={"width": 390, "height": 844},
@@ -318,7 +968,29 @@ def main() -> int:
             )
             pwa_page = pwa_context.new_page()
             pwa_page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def force_runtime_generation_mismatch(route):
+                response = route.fetch()
+                payload = response.json()
+                payload["webBuildId"] = "workspace-smoke-daemon-generation"
+                headers = {
+                    key: value
+                    for key, value in response.headers.items()
+                    if key.lower() not in {"content-length", "content-encoding"}
+                }
+                route.fulfill(
+                    status=response.status,
+                    headers=headers,
+                    content_type="application/json",
+                    body=json.dumps(payload),
+                )
+
+            pwa_page.route("**/api/runtime", force_runtime_generation_mismatch)
             pwa_page.goto(base_url, wait_until="domcontentloaded")
+            pwa_notice = pwa_page.locator(
+                '[data-workbench-callout-variant="pwa-compact"]'
+            )
+            expect(pwa_notice).to_be_visible(timeout=10_000)
             pwa_workspace_trigger = pwa_page.locator(
                 'button[aria-label="Select workspace"]:visible'
             )
@@ -335,20 +1007,85 @@ def main() -> int:
                 '.rah-marquee[data-marquee="true"]'
             )
             expect(pwa_marquee).to_have_count(1)
+            pwa_new_surface = pwa_page.locator(
+                '.rah-unified-composer[data-surface="new-task"][data-pwa="true"]'
+            )
+            expect(pwa_new_surface).to_be_visible(timeout=10_000)
+            pwa_workspace_strip = pwa_page.locator(
+                '.rah-new-task-workspace-strip:visible'
+            )
+            expect(pwa_workspace_strip).to_be_visible(timeout=10_000)
             trigger_box = pwa_workspace_trigger.bounding_box()
-            send_box = pwa_page.locator(
-                'button[aria-label="Start session"]:visible'
-            ).bounding_box()
-            if trigger_box is None or send_box is None:
-                raise AssertionError("PWA composer controls omitted layout geometry")
-            if not 87 <= trigger_box["width"] <= 89:
+            surface_box = pwa_new_surface.bounding_box()
+            strip_box = pwa_workspace_strip.bounding_box()
+            if trigger_box is None or surface_box is None or strip_box is None:
+                raise AssertionError("PWA workspace context omitted layout geometry")
+            if trigger_box["width"] > 193:
                 raise AssertionError(
-                    f"PWA workspace pill width drifted from 5.5rem: {trigger_box!r}"
+                    f"PWA workspace control exceeded its bounded width: {trigger_box!r}"
                 )
-            if trigger_box["x"] + trigger_box["width"] > send_box["x"]:
+            workspace_overlap = surface_box["y"] + surface_box["height"] - strip_box["y"]
+            if abs(workspace_overlap - 8) > 1:
                 raise AssertionError(
-                    "PWA workspace pill overlaps the Start session button: "
-                    f"workspace={trigger_box!r} send={send_box!r}"
+                    "PWA workspace context is not tucked 8px under the composer: "
+                    f"surface={surface_box!r} strip={strip_box!r} overlap={workspace_overlap!r}"
+                )
+            if abs(strip_box["height"] - 40) > 1 or abs(trigger_box["height"] - 28) > 1:
+                raise AssertionError(
+                    "PWA workspace accessory is not using the compact 40/28 geometry: "
+                    f"strip={strip_box!r} trigger={trigger_box!r}"
+                )
+            pwa_provider_module = pwa_page.locator(
+                '[data-provider-selector="module"]:visible'
+            )
+            expect(pwa_provider_module).to_be_visible(timeout=10_000)
+            pwa_provider_metrics = pwa_provider_module.evaluate(
+                """
+                element => {
+                  const selected = element.querySelector('[aria-checked="true"]');
+                  if (!selected) return null;
+                  const selectedStyle = getComputedStyle(selected);
+                  const markerStyle = getComputedStyle(selected, '::after');
+                  const selectedLabel = selected.querySelector(
+                    '.provider-choice-label-text'
+                  );
+                  return {
+                    selectedCount: element.querySelectorAll('[aria-checked="true"]').length,
+                    moduleHeight: element.getBoundingClientRect().height,
+                    selectedBackground: selectedStyle.backgroundColor,
+                    selectedBoxShadow: selectedStyle.boxShadow,
+                    selectedFontWeight: selectedStyle.fontWeight,
+                    selectedMarkerWidth: markerStyle.width,
+                    selectedMarkerHeight: markerStyle.height,
+                    selectedMarkerOpacity: markerStyle.opacity,
+                    selectedMarkerBackground: markerStyle.backgroundColor,
+                    selectedLabelDisplay: selectedLabel
+                      ? getComputedStyle(selectedLabel).display
+                      : null,
+                    moduleBorderWidth: getComputedStyle(element).borderTopWidth,
+                  };
+                }
+                """
+            )
+            if (
+                pwa_provider_metrics is None
+                or pwa_provider_metrics["selectedCount"] != 1
+                or abs(pwa_provider_metrics["moduleHeight"] - 36) > 1
+                or pwa_provider_metrics["selectedBackground"]
+                != "rgba(0, 0, 0, 0)"
+                or pwa_provider_metrics["selectedBoxShadow"] != "none"
+                or pwa_provider_metrics["selectedFontWeight"] != "600"
+                or pwa_provider_metrics["selectedMarkerWidth"] != "20px"
+                or pwa_provider_metrics["selectedMarkerHeight"] != "2px"
+                or pwa_provider_metrics["selectedMarkerOpacity"] != "1"
+                or pwa_provider_metrics["selectedMarkerBackground"]
+                == "rgba(0, 0, 0, 0)"
+                or pwa_provider_metrics["selectedLabelDisplay"] != "none"
+                or pwa_provider_metrics["moduleBorderWidth"] != "0px"
+            ):
+                raise AssertionError(
+                    "PWA provider selector is not a flat single-layer strip: "
+                    f"{pwa_provider_metrics!r}"
                 )
             animation_name = pwa_marquee.locator(
                 ".rah-marquee-track"
@@ -360,11 +1097,238 @@ def main() -> int:
             if pwa_page.evaluate(
                 "document.documentElement.scrollWidth > document.documentElement.clientWidth"
             ):
-                raise AssertionError("PWA workspace pill caused horizontal overflow")
+                raise AssertionError("PWA workspace context caused horizontal overflow")
+            pwa_new_control_metrics = pwa_new_surface.evaluate(
+                """
+                element => {
+                  const mode = element.querySelector('[data-composer-control="permissions"]');
+                  const plan = element.querySelector('[data-composer-control="plan"]');
+                  const model = element.querySelector('[data-composer-control="model"]');
+                  const primary = element.querySelector('[aria-label="Start session"]');
+                  if (!mode || !plan || !model || !primary) return null;
+                  const boxes = [mode, plan, model, primary].map(node => node.getBoundingClientRect());
+                  const overlaps = (a, b) => !(
+                    a.right <= b.left || b.right <= a.left ||
+                    a.bottom <= b.top || b.bottom <= a.top
+                  );
+                  return {
+                    modeText: mode.textContent?.trim() || '',
+                    planText: plan.textContent?.trim() || '',
+                    modelText: model.textContent?.trim() || '',
+                    overlap: boxes.some((box, index) =>
+                      boxes.slice(index + 1).some(other => overlaps(box, other))
+                    ),
+                    modelBelowMode: boxes[2].top >= boxes[0].bottom - 1,
+                  };
+                }
+                """
+            )
+            if pwa_new_control_metrics is None:
+                raise AssertionError("PWA New task omitted an agent capability control")
+            if pwa_new_control_metrics["overlap"] or not pwa_new_control_metrics["modelBelowMode"]:
+                raise AssertionError(
+                    f"PWA New task controls are not a stable two-row layout: {pwa_new_control_metrics!r}"
+                )
+            if not all(
+                pwa_new_control_metrics[key]
+                for key in ("modeText", "planText", "modelText")
+            ):
+                raise AssertionError(
+                    f"PWA New task capability labels are incomplete: {pwa_new_control_metrics!r}"
+                )
+            pwa_notice_metrics = pwa_notice.evaluate(
+                """
+                element => {
+                  const host = element.closest('[data-workbench-notice-host]');
+                  const composer = document.querySelector(
+                    '.rah-unified-composer[data-surface="new-task"][data-pwa="true"]'
+                  );
+                  if (!host || !composer) return null;
+                  const rect = element.getBoundingClientRect();
+                  const hostRect = host.getBoundingClientRect();
+                  const composerRect = composer.getBoundingClientRect();
+                  const style = getComputedStyle(element);
+                  const probe = document.createElement('span');
+                  probe.style.position = 'fixed';
+                  probe.style.pointerEvents = 'none';
+                  probe.style.background = 'var(--app-bg)';
+                  probe.style.border = '1px solid var(--app-border)';
+                  document.body.appendChild(probe);
+                  const probeStyle = getComputedStyle(probe);
+                  const pageBackgroundColor = probeStyle.backgroundColor;
+                  const neutralBorderColor = probeStyle.borderColor;
+                  probe.remove();
+                  const rgb = value => {
+                    const components = (value.match(/[\\d.]+/g) || [])
+                      .slice(0, 3)
+                      .map(Number);
+                    return value.startsWith('color(srgb')
+                      ? components.map(component => component * 255)
+                      : components;
+                  };
+                  const colorDistance = (left, right) => {
+                    const a = rgb(left);
+                    const b = rgb(right);
+                    if (a.length !== 3 || b.length !== 3) return null;
+                    return Math.sqrt(a.reduce(
+                      (sum, component, index) => sum + ((component - b[index]) ** 2),
+                      0,
+                    ));
+                  };
+                  return {
+                    height: rect.height,
+                    backgroundColor: style.backgroundColor,
+                    borderColor: style.borderColor,
+                    pageBackgroundColor,
+                    neutralBorderColor,
+                    backgroundDistanceFromPage: colorDistance(
+                      style.backgroundColor,
+                      pageBackgroundColor,
+                    ),
+                    borderDistanceFromNeutral: colorDistance(
+                      style.borderColor,
+                      neutralBorderColor,
+                    ),
+                    borderRadius: style.borderRadius,
+                    boxShadow: style.boxShadow,
+                    insetLeft: rect.left - hostRect.left,
+                    insetRight: hostRect.right - rect.right,
+                    insetTop: rect.top - hostRect.top,
+                    insetBottom: hostRect.bottom - rect.bottom,
+                    overlapsComposer: rect.bottom > composerRect.top,
+                  };
+                }
+                """
+            )
+            if pwa_notice_metrics is None:
+                raise AssertionError("PWA recovery notice geometry is unavailable")
+            if pwa_notice_metrics["height"] > 72:
+                raise AssertionError(
+                    f"PWA recovery notice exceeded 72px: {pwa_notice_metrics!r}"
+                )
+            if pwa_notice_metrics["backgroundColor"] == "rgb(255, 244, 219)":
+                raise AssertionError(
+                    "PWA recovery notice still uses the high-contrast warning surface: "
+                    f"{pwa_notice_metrics!r}"
+                )
+            if pwa_notice_metrics["borderColor"] == "rgb(217, 119, 6)":
+                raise AssertionError(
+                    "PWA recovery notice still uses the high-contrast warning border: "
+                    f"{pwa_notice_metrics!r}"
+                )
+            background_distance = pwa_notice_metrics["backgroundDistanceFromPage"]
+            if background_distance is None or not 0 < background_distance <= 24:
+                raise AssertionError(
+                    "PWA recovery notice background is not a restrained page tint: "
+                    f"{pwa_notice_metrics!r}"
+                )
+            border_distance = pwa_notice_metrics["borderDistanceFromNeutral"]
+            if border_distance is None or not 0 < border_distance <= 48:
+                raise AssertionError(
+                    "PWA recovery notice border is not a restrained warning-neutral mix: "
+                    f"{pwa_notice_metrics!r}"
+                )
+            if pwa_notice_metrics["borderRadius"] != "12px":
+                raise AssertionError(
+                    f"PWA recovery notice corner radius drifted: {pwa_notice_metrics!r}"
+                )
+            if pwa_notice_metrics["boxShadow"] != "none":
+                raise AssertionError(
+                    f"PWA recovery notice regained an intrusive shadow: {pwa_notice_metrics!r}"
+                )
+            for inset_name in ("insetLeft", "insetRight", "insetTop", "insetBottom"):
+                if pwa_notice_metrics[inset_name] < 3.5:
+                    raise AssertionError(
+                        "PWA recovery notice host clips a corner: "
+                        f"{pwa_notice_metrics!r}"
+                    )
+            if pwa_notice_metrics["overlapsComposer"]:
+                raise AssertionError(
+                    f"PWA recovery notice overlaps New task: {pwa_notice_metrics!r}"
+                )
+            pwa_permission_control = pwa_new_surface.locator(
+                'button[data-composer-control="permissions"]'
+            )
+            expect(pwa_permission_control).to_be_visible(timeout=10_000)
+            pwa_attach_control = pwa_new_surface.locator(
+                'button[aria-label="Add a reference or attachment"]'
+            )
+            expect(pwa_attach_control).to_be_visible(timeout=10_000)
+            composer_icon_script = """
+                element => {
+                  const icon = element.querySelector('svg');
+                  const probe = document.createElement('span');
+                  probe.style.position = 'fixed';
+                  probe.style.color = 'var(--app-fg)';
+                  document.body.appendChild(probe);
+                  const expectedForeground = getComputedStyle(probe).color;
+                  probe.remove();
+                  return {
+                    color: getComputedStyle(element).color,
+                    expectedForeground,
+                    width: icon?.getAttribute('width') || null,
+                    strokeWidth: icon?.getAttribute('stroke-width') || null,
+                  };
+                }
+            """
+            pwa_attach_icon = pwa_attach_control.evaluate(composer_icon_script)
+            pwa_permission_icon = pwa_permission_control.evaluate(composer_icon_script)
+            if pwa_attach_icon != {
+                "color": pwa_attach_icon["expectedForeground"],
+                "expectedForeground": pwa_attach_icon["expectedForeground"],
+                "width": "20",
+                "strokeWidth": "1.75",
+            }:
+                raise AssertionError(
+                    f"PWA composer add icon lost its visual weight: {pwa_attach_icon!r}"
+                )
+            if pwa_permission_icon["width"] != "15" or pwa_permission_icon["strokeWidth"] != "1.8":
+                raise AssertionError(
+                    "PWA composer permission icon does not use the shared ghost-control weight: "
+                    f"{pwa_permission_icon!r}"
+                )
+            pwa_page.evaluate(
+                "document.activeElement instanceof HTMLElement && document.activeElement.blur()"
+            )
+            pwa_new_idle = pwa_new_surface.evaluate(
+                """
+                element => {
+                  const rect = element.getBoundingClientRect();
+                  const style = getComputedStyle(element);
+                  return {
+                    width: rect.width,
+                    left: rect.left,
+                    borderColor: style.borderColor,
+                    boxShadow: style.boxShadow,
+                  };
+                }
+                """
+            )
+            pwa_new_surface.locator("textarea").focus()
+            pwa_page.wait_for_timeout(220)
+            pwa_new_focused = pwa_new_surface.evaluate(
+                """
+                element => {
+                  const rect = element.getBoundingClientRect();
+                  const style = getComputedStyle(element);
+                  return {
+                    width: rect.width,
+                    left: rect.left,
+                    borderColor: style.borderColor,
+                    boxShadow: style.boxShadow,
+                  };
+                }
+                """
+            )
+            if pwa_new_focused != pwa_new_idle:
+                raise AssertionError(
+                    "PWA New task composer changed geometry or emphasis on focus: "
+                    f"idle={pwa_new_idle!r} focused={pwa_new_focused!r}"
+                )
             save_browser_screenshot(
                 pwa_page,
                 artifact_dir,
-                "03b-pwa-new-task-workspace-pill",
+                "03b-pwa-new-task-workspace-context",
             )
 
             pwa_page.locator('button[aria-label="Open sidebar"]:visible').click(
@@ -375,13 +1339,132 @@ def main() -> int:
                     f'[data-workspace-dir="{workspace_root}"]:visible'
                 )
             ).to_be_visible(timeout=10_000)
+            pwa_sidebar_metrics = pwa_page.locator(
+                '[data-sidebar-surface="pwa"]:visible'
+            ).evaluate(SIDEBAR_VISUAL_METRICS_SCRIPT)
+            if pwa_sidebar_metrics != EXPECTED_SIDEBAR_VISUAL_METRICS:
+                raise AssertionError(
+                    "PWA sidebar diverged from codex-compact-v1: "
+                    f"{pwa_sidebar_metrics!r}"
+                )
+            if pwa_sidebar_metrics != desktop_sidebar_metrics:
+                raise AssertionError(
+                    "Desktop and PWA sidebar metrics drifted apart: "
+                    f"desktop={desktop_sidebar_metrics!r} pwa={pwa_sidebar_metrics!r}"
+                )
+            save_browser_screenshot(
+                pwa_page,
+                artifact_dir,
+                "03b-pwa-sidebar-codex-compact",
+            )
+            pwa_new_task_nav_metrics = pwa_page.locator(
+                'button[aria-label="New task"]:visible'
+            ).evaluate(
+                """
+                element => {
+                  const probe = document.createElement('span');
+                  probe.style.position = 'fixed';
+                  probe.style.background = 'var(--rah-sidebar-row-hover-bg)';
+                  element.appendChild(probe);
+                  const expectedBackground = getComputedStyle(probe).backgroundColor;
+                  probe.remove();
+                  const style = getComputedStyle(element);
+                  return {
+                    background: style.backgroundColor,
+                    expectedBackground,
+                    outlineStyle: style.outlineStyle,
+                  };
+                }
+                """
+            )
+            if pwa_new_task_nav_metrics != {
+                "background": pwa_new_task_nav_metrics["expectedBackground"],
+                "expectedBackground": pwa_new_task_nav_metrics["expectedBackground"],
+                "outlineStyle": "none",
+            }:
+                raise AssertionError(
+                    "PWA primary navigation selection diverged from the Session hover surface: "
+                    f"{pwa_new_task_nav_metrics!r}"
+                )
+            pwa_page.get_by_role("button", name="Council", exact=True).click(
+                timeout=10_000
+            )
+            council_header_metrics = assert_pwa_workbench_header_clear_of_notice(
+                pwa_page,
+                "Council",
+            )
+            pwa_page.locator('button[aria-label="Open sidebar"]:visible').click(
+                timeout=10_000
+            )
+            pwa_page.get_by_role("button", name="Canvas", exact=True).click(
+                timeout=10_000
+            )
+            canvas_header_metrics = assert_pwa_workbench_header_clear_of_notice(
+                pwa_page,
+                "Canvas",
+            )
+            if canvas_header_metrics != council_header_metrics:
+                raise AssertionError(
+                    "PWA Council and Canvas do not share one header/notice geometry: "
+                    f"council={council_header_metrics!r} canvas={canvas_header_metrics!r}"
+                )
+            pwa_page.locator('button[aria-label="Open sidebar"]:visible').click(
+                timeout=10_000
+            )
             pwa_page.locator("button:visible").filter(
                 has_text=parent_title
             ).click(timeout=10_000)
+            session_header_metrics = assert_pwa_workbench_header_clear_of_notice(
+                pwa_page,
+                "Session Chat",
+            )
+            if session_header_metrics != council_header_metrics:
+                raise AssertionError(
+                    "PWA Session Chat, Council, and Canvas do not share one header/notice geometry: "
+                    f"session={session_header_metrics!r} council={council_header_metrics!r}"
+                )
             pwa_shell = pwa_page.locator(
                 '.chat-thread-shell[data-chat-density="mobile"]'
             )
             expect(pwa_shell).to_be_visible(timeout=20_000)
+            pwa_turn_change_card = pwa_page.locator(
+                '[data-testid="conversation-turn-file-changes"]'
+            )
+            expect(pwa_turn_change_card).to_be_visible(timeout=20_000)
+            pwa_turn_change_card.locator('button[title^="Open "]').first.click(
+                timeout=10_000
+            )
+            pwa_turn_file_viewer = pwa_page.locator(
+                '[data-testid="inspector-file-viewer"]:visible'
+            )
+            expect(pwa_turn_file_viewer).to_have_count(1, timeout=10_000)
+            expect(
+                pwa_page.get_by_text("Inspector", exact=True)
+            ).to_have_count(0, timeout=10_000)
+            pwa_turn_file_viewer.get_by_role(
+                "button", name="Close", exact=True
+            ).click(timeout=10_000)
+            expect(pwa_turn_file_viewer).to_have_count(0, timeout=10_000)
+            expect(pwa_shell).to_be_visible(timeout=10_000)
+            expect(
+                pwa_page.get_by_text("Inspector", exact=True)
+            ).to_have_count(0, timeout=10_000)
+
+            pwa_turn_change_card.get_by_role(
+                "button", name="审查本轮变动", exact=True
+            ).click(timeout=10_000)
+            expect(
+                pwa_page.get_by_text("Review this turn", exact=True)
+            ).to_be_visible(timeout=10_000)
+            pwa_page.get_by_role(
+                "button", name="Close review", exact=True
+            ).click(timeout=10_000)
+            expect(
+                pwa_page.get_by_text("Review this turn", exact=True)
+            ).to_have_count(0, timeout=10_000)
+            expect(
+                pwa_page.get_by_text("Inspector", exact=True)
+            ).to_have_count(0, timeout=10_000)
             pwa_user_message = pwa_page.locator(
                 '[data-testid="chat-user-message"]'
             ).last
@@ -408,8 +1491,8 @@ def main() -> int:
                 """
             )
             expected_user_metrics = {
-                "fontSize": "16px",
-                "lineHeight": "24px",
+                "fontSize": "14px",
+                "lineHeight": "22px",
                 "maxWidth": "75%",
                 "actionsDisplay": "none",
                 "rowGap": 12,
@@ -430,7 +1513,7 @@ def main() -> int:
                 }
                 """
             )
-            if pwa_final_metrics != {"fontSize": "16px", "lineHeight": "24px"}:
+            if pwa_final_metrics != {"fontSize": "14px", "lineHeight": "22px"}:
                 raise AssertionError(
                     f"PWA final-answer type scale drifted: {pwa_final_metrics!r}"
                 )
@@ -467,18 +1550,163 @@ def main() -> int:
                 "backgroundColor": "rgba(0, 0, 0, 0)",
                 "borderRadius": "0px",
                 "paddingTop": "0px",
-                "fontSize": "16px",
-                "lineHeight": "24px",
+                "fontSize": "14px",
+                "lineHeight": "22px",
             }
             if pwa_process_metrics != expected_process_metrics:
                 raise AssertionError(
                     "PWA process-message density contract drifted: "
                     f"expected={expected_process_metrics!r} actual={pwa_process_metrics!r}"
                 )
+            pwa_chat_surface = pwa_page.locator(
+                '.rah-unified-composer[data-surface="chat"][data-pwa="true"]'
+            )
+            expect(pwa_chat_surface).to_be_visible(timeout=10_000)
+            pwa_chat_textarea = pwa_chat_surface.locator(
+                'textarea[aria-label="Message composer"]'
+            )
+            pwa_chat_textarea.evaluate("element => element.blur()")
+            pwa_page.wait_for_timeout(220)
+
+            def read_pwa_chat_composer_metrics():
+                return pwa_chat_surface.evaluate(
+                    """
+                    element => {
+                      const textarea = element.querySelector('textarea');
+                      const secondary = element.querySelector('.rah-chat-composer-secondary');
+                      const toolbar = element.querySelector('.rah-composer-toolbar');
+                      const model = element.querySelector('[data-composer-control="model"]');
+                      const primary = element.querySelector('.rah-chat-composer-primary');
+                      if (!textarea || !secondary || !toolbar || !primary) return null;
+                      const rect = element.getBoundingClientRect();
+                      const textareaRect = textarea.getBoundingClientRect();
+                      const style = getComputedStyle(element);
+                      const textareaStyle = getComputedStyle(textarea);
+                      return {
+                        width: rect.width,
+                        height: rect.height,
+                        left: rect.left,
+                        borderColor: style.borderColor,
+                        secondaryDisplay: getComputedStyle(secondary).display,
+                        toolbarDisplay: getComputedStyle(toolbar).display,
+                        modelBeforePrimary: model
+                          ? model.getBoundingClientRect().right <= primary.getBoundingClientRect().left
+                          : null,
+                        textareaHeight: textareaRect.height,
+                        textareaWhiteSpace: textareaStyle.whiteSpace,
+                      };
+                    }
+                    """
+                )
+
+            pwa_chat_idle = read_pwa_chat_composer_metrics()
+            if pwa_chat_idle is None:
+                raise AssertionError("PWA Chat composer omitted required controls")
+            if not 54 <= pwa_chat_idle["height"] <= 62:
+                raise AssertionError(
+                    f"PWA idle Chat composer is not a one-row pill: {pwa_chat_idle!r}"
+                )
+            if pwa_chat_idle["secondaryDisplay"] != "none":
+                raise AssertionError(
+                    f"PWA idle Chat composer exposed expanded controls: {pwa_chat_idle!r}"
+                )
+            if pwa_chat_idle["textareaWhiteSpace"] != "nowrap":
+                raise AssertionError(
+                    f"PWA idle Chat draft is not folded to one line: {pwa_chat_idle!r}"
+                )
+
+            long_chat_draft = "First line remains in the task\nSecond line is revealed on focus\nThird line proves bounded growth"
+            pwa_chat_textarea.fill(long_chat_draft)
+            pwa_page.wait_for_timeout(260)
+            pwa_chat_focused = read_pwa_chat_composer_metrics()
+            if pwa_chat_focused is None:
+                raise AssertionError("PWA focused Chat composer metrics are unavailable")
+            if pwa_chat_focused["width"] < pwa_chat_idle["width"] + 24:
+                raise AssertionError(
+                    "PWA focused Chat composer did not expand horizontally: "
+                    f"idle={pwa_chat_idle!r} focused={pwa_chat_focused!r}"
+                )
+            if pwa_chat_focused["height"] <= pwa_chat_idle["height"] + 24:
+                raise AssertionError(
+                    "PWA focused Chat composer did not reveal multiline input: "
+                    f"idle={pwa_chat_idle!r} focused={pwa_chat_focused!r}"
+                )
+            if pwa_chat_focused["height"] > 340:
+                raise AssertionError(
+                    f"PWA focused Chat composer exceeded its height cap: {pwa_chat_focused!r}"
+                )
+            if pwa_chat_focused["secondaryDisplay"] == "none":
+                raise AssertionError(
+                    f"PWA focused Chat composer hid session controls: {pwa_chat_focused!r}"
+                )
+            if pwa_chat_focused["modelBeforePrimary"] is False:
+                raise AssertionError(
+                    "PWA focused Chat model control is not immediately before the primary action: "
+                    f"{pwa_chat_focused!r}"
+                )
+            if pwa_chat_focused["borderColor"] == pwa_chat_idle["borderColor"]:
+                raise AssertionError(
+                    "PWA focused Chat composer did not deepen its border: "
+                    f"idle={pwa_chat_idle!r} focused={pwa_chat_focused!r}"
+                )
+            save_browser_screenshot(
+                pwa_page,
+                artifact_dir,
+                "03c-pwa-chat-composer-expanded",
+            )
+
+            pwa_model_control = pwa_chat_surface.locator(
+                '[data-composer-control="model"]'
+            )
+            pwa_model_control.click(timeout=10_000)
+            expect(pwa_model_control).to_have_attribute("aria-expanded", "true")
+            pwa_page.wait_for_timeout(220)
+            pwa_chat_menu_open = read_pwa_chat_composer_metrics()
+            if pwa_chat_menu_open is None:
+                raise AssertionError("PWA Chat composer vanished while model menu was open")
+            if (
+                pwa_chat_menu_open["secondaryDisplay"] == "none"
+                or abs(pwa_chat_menu_open["width"] - pwa_chat_focused["width"]) > 1
+            ):
+                raise AssertionError(
+                    "PWA Chat composer collapsed while its model menu was open: "
+                    f"focused={pwa_chat_focused!r} menu={pwa_chat_menu_open!r}"
+                )
+            pwa_model_control.click(timeout=10_000)
+            pwa_page.evaluate(
+                "document.activeElement instanceof HTMLElement && document.activeElement.blur()"
+            )
+            pwa_page.wait_for_timeout(260)
+            pwa_chat_blurred = read_pwa_chat_composer_metrics()
+            if pwa_chat_blurred is None:
+                raise AssertionError("PWA blurred Chat composer metrics are unavailable")
+            if abs(pwa_chat_blurred["width"] - pwa_chat_idle["width"]) > 1:
+                raise AssertionError(
+                    "PWA Chat composer did not restore its idle inset: "
+                    f"idle={pwa_chat_idle!r} blurred={pwa_chat_blurred!r}"
+                )
+            if pwa_chat_blurred["height"] > 62:
+                raise AssertionError(
+                    "PWA blurred Chat composer did not fold a long draft: "
+                    f"blurred={pwa_chat_blurred!r}"
+                )
+            if pwa_chat_blurred["textareaWhiteSpace"] != "nowrap":
+                raise AssertionError(
+                    f"PWA blurred Chat draft is not folded to one line: {pwa_chat_blurred!r}"
+                )
+            if pwa_page.evaluate(
+                "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+            ):
+                raise AssertionError("PWA Chat composer caused horizontal overflow")
             save_browser_screenshot(
                 pwa_page,
                 artifact_dir,
                 "03c-pwa-conversation-density",
+            )
+            save_browser_screenshot(
+                pwa_page,
+                artifact_dir,
+                "03d-pwa-chat-composer-folded-draft",
             )
             pwa_context.close()
 
@@ -537,9 +1765,21 @@ def main() -> int:
                         "An empty Workspaces list can add a workspace through the real picker.",
                         "Nested stored sessions move to the most-specific registered workspace.",
                         "User-owned Codex Desktop roots remain visible for both supported originators.",
+                        "Desktop and PWA sidebars compute the same codex-compact-v1 header, typography, row, inset, gap, icon, action, and vertical-centering metrics.",
+                        "Desktop Session hover actions reuse the row surface without a separate background plate or shadow.",
+                        "Desktop Session tooltips have one owner: cross-row hover replaces the active card, leaving clears it, and pending timers cannot reopen it after a page pointerdown.",
                         "Workspace New task selects that exact workspace in the composer.",
-                        "iOS PWA New task keeps an 88px workspace pill with an active marquee.",
-                        "iOS PWA conversation copy uses 16/24 type, 75% user bubbles, 12px turn gaps, and flat process text.",
+                        "Desktop and iOS PWA New task tuck a compact 40px workspace accessory 8px beneath the composer, use a 28px trigger, and keep long-name marquee bounded.",
+                        "Desktop and touch New task provider modules stay borderless and item backgrounds stay transparent; Desktop selection uses a blue text-width marker, touch uses a blue 20x2 icon marker, and the single grouped pointer hover surface disappears after leave.",
+                        "iOS PWA recovery notice keeps a low-contrast orange tint, shadow-free corners, and clear composer separation.",
+                        "iOS PWA primary navigation selection reuses the Session hover surface without a focus outline.",
+                        "iOS PWA Session Chat, Council, and Canvas share one 40px single-line header and keep recovery notices below the divider.",
+                        "iOS PWA turn-file and shared turn-review flows close directly back to Chat without exposing a full-screen Inspector.",
+                        "iOS PWA New task keeps fixed geometry and emphasis on focus while exposing session controls.",
+                        "iOS PWA conversation copy uses the shared 12-20px conversation setting, 75% user bubbles, 12px turn gaps, and flat process text.",
+                        "iOS PWA Chat folds idle drafts to one row, then stays expanded for focus or open model menus.",
+                        "Desktop Markdown images wrap as a 12px-gap thumbnail gallery capped at 160px for local resources.",
+                        "Appearance exposes only a persisted 12-20px Session/Council text setting, derives code size proportionally, updates conversation type immediately, and leaves navigation unchanged.",
                         "Reload preserves workspace count, order, and unique rows.",
                         "Removing a parent hides its sessions immediately without hiding a registered child.",
                         "Removing the final workspace hides its sessions without requiring reload.",

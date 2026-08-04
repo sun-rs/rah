@@ -383,6 +383,30 @@ describe("session model UI defaults", () => {
     assert.equal(state.reasoning?.id, "xhigh");
   });
 
+  test("shows the strongest effort when runtime state omits an otherwise explicit default", () => {
+    const state = resolveSelectedModelDraft({
+      catalog: modelCatalog({}),
+      selectedModelId: "gpt-current",
+      selectedReasoningId: null,
+    });
+
+    assert.equal(state.model?.id, "gpt-current");
+    assert.equal(state.reasoning?.id, "xhigh");
+  });
+
+  test("keeps an explicit provider-default model parameter hidden", () => {
+    const catalog = modelCatalog({});
+    const model = catalog.models.find((entry) => entry.id === "gpt-current");
+    if (model) model.defaultReasoningId = null;
+    const state = resolveSelectedModelDraft({
+      catalog,
+      selectedModelId: "gpt-current",
+      selectedReasoningId: null,
+    });
+
+    assert.equal(state.reasoning, null);
+  });
+
   test("falls back to the first model instead of provider defaults", () => {
     const state = resolveSelectedModelDraft({
       catalog: modelCatalog({}),

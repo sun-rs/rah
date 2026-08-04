@@ -792,6 +792,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
     const deps = startupDeps({
+      selectedSessionId: "history",
       projections,
       storedSessions: [
         {
@@ -1152,6 +1153,231 @@ describe("session startup model and mode requests", () => {
     ]);
   });
 
+  test("history resume completion does not steal selection after the user opens another session", async () => {
+    const history = summary({
+      id: "history-background-resume",
+      provider: "codex",
+      providerSessionId: "thread-background-resume",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const other = summary({
+      id: "other-session",
+      provider: "codex",
+      providerSessionId: "thread-other",
+      cwd: "/tmp/rah",
+    });
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const sent: Array<{ sessionId: string; text: string }> = [];
+    const deps = startupDeps(
+      {
+        projections: new Map([
+          ["history-background-resume", createEmptySessionProjection(history)],
+          ["other-session", createEmptySessionProjection(other)],
+        ]),
+        selectedSessionId: "history-background-resume",
+        storedSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-background-resume",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+            createdAt: "2026-04-29T00:00:00.000Z",
+          },
+        ],
+        recentSessions: [],
+      },
+      {
+        sendInput: async (sessionId: string, text: string) => {
+          sent.push({ sessionId, text });
+        },
+      },
+    );
+    installWebApiMocks(async (request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        await resumeGate;
+        return {
+          session: summary({
+            id: "claimed-background-resume",
+            provider: "codex",
+            providerSessionId: "thread-background-resume",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    const resuming = resumeHistorySessionCommand(deps, "history-background-resume", {
+      initialInput: "continue A in the background",
+    });
+    deps.set({ selectedSessionId: "other-session" });
+    releaseResume();
+
+    assert.equal(await resuming, "claimed-background-resume");
+    assert.equal(deps.get().selectedSessionId, "other-session");
+    assert.equal(deps.get().projections.has("history-background-resume"), false);
+    assert.equal(deps.get().projections.has("claimed-background-resume"), true);
+    assert.deepEqual(sent, [
+      {
+        sessionId: "claimed-background-resume",
+        text: "continue A in the background",
+      },
+    ]);
+  });
+
+  test("history resume failure restores A without stealing a newer selection of B", async () => {
+    const history = summary({
+      id: "history-background-failure",
+      provider: "codex",
+      providerSessionId: "thread-background-failure",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const other = summary({
+      id: "other-background-failure",
+      provider: "codex",
+      providerSessionId: "thread-other-background-failure",
+      cwd: "/tmp/rah",
+    });
+    const historyProjection = createEmptySessionProjection(history);
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const deps = startupDeps({
+      projections: new Map([
+        ["history-background-failure", historyProjection],
+        ["other-background-failure", createEmptySessionProjection(other)],
+      ]),
+      selectedSessionId: "history-background-failure",
+      storedSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-background-failure",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      recentSessions: [],
+    });
+    installWebApiMocks(async (request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        await resumeGate;
+        return new Response(JSON.stringify({ error: "resume failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    const resuming = resumeHistorySessionCommand(deps, "history-background-failure", {
+      initialInput: "continue A even if startup fails",
+    });
+    deps.set({ selectedSessionId: "other-background-failure" });
+    releaseResume();
+
+    await assert.rejects(resuming, /resume failed/);
+    assert.equal(deps.get().selectedSessionId, "other-background-failure");
+    assert.equal(
+      deps.get().projections.get("history-background-failure"),
+      historyProjection,
+    );
+  });
+
+  test("post-resume control refresh does not steal a newer session selection", async () => {
+    const history = summary({
+      id: "history-control-refresh",
+      provider: "codex",
+      providerSessionId: "thread-control-refresh",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const other = summary({
+      id: "other-control-session",
+      provider: "codex",
+      providerSessionId: "thread-other-control",
+      cwd: "/tmp/rah",
+    });
+    let releaseModelRefresh!: () => void;
+    let markModelRefreshStarted!: () => void;
+    const modelRefreshGate = new Promise<void>((resolve) => {
+      releaseModelRefresh = resolve;
+    });
+    const modelRefreshStarted = new Promise<void>((resolve) => {
+      markModelRefreshStarted = resolve;
+    });
+    const deps = startupDeps({
+      projections: new Map([
+        ["history-control-refresh", createEmptySessionProjection(history)],
+        ["other-control-session", createEmptySessionProjection(other)],
+      ]),
+      selectedSessionId: "history-control-refresh",
+      storedSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-control-refresh",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      recentSessions: [],
+    });
+    installWebApiMocks(async (request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed-control-refresh",
+            provider: "codex",
+            providerSessionId: "thread-control-refresh",
+            cwd: "/tmp/rah",
+            modelId: "gpt-old",
+          }),
+        };
+      }
+      if (request.url.endsWith("/api/sessions/claimed-control-refresh/model")) {
+        markModelRefreshStarted();
+        await modelRefreshGate;
+        return {
+          session: summary({
+            id: "claimed-control-refresh",
+            provider: "codex",
+            providerSessionId: "thread-control-refresh",
+            cwd: "/tmp/rah",
+            modelId: "gpt-new",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    const resuming = resumeHistorySessionCommand(deps, "history-control-refresh", {
+      modelId: "gpt-new",
+    });
+    await modelRefreshStarted;
+    assert.equal(deps.get().selectedSessionId, "claimed-control-refresh");
+    deps.set({ selectedSessionId: "other-control-session" });
+    releaseModelRefresh();
+
+    assert.equal(await resuming, "claimed-control-refresh");
+    assert.equal(deps.get().selectedSessionId, "other-control-session");
+  });
+
   test("history send failure removes the immediate message and Starting runtime status", async () => {
     const history = summary({
       id: "history-send-failure",
@@ -1245,8 +1471,8 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
     const deps = startupDeps({
-      projections,
       selectedSessionId: "history",
+      projections,
       storedSessions: [
         {
           provider: "codex",
@@ -1269,6 +1495,92 @@ describe("session startup model and mode requests", () => {
       ["claimed", "claimed"],
     );
     assert.equal(resumeRequests, 1);
+  });
+
+  test("a send that joins an in-flight history activation is preserved and delivered", async () => {
+    const history = summary({
+      id: "history-join-send",
+      provider: "codex",
+      providerSessionId: "thread-join-send",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    let resumeRequests = 0;
+    const sent: Array<{ sessionId: string; text: string; skipOptimisticQueue?: boolean }> = [];
+    const deps = startupDeps(
+      {
+        selectedSessionId: "history-join-send",
+        projections: new Map([
+          ["history-join-send", createEmptySessionProjection(history)],
+        ]),
+        storedSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-join-send",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+          },
+        ],
+      },
+      {
+        sendInput: async (
+          sessionId: string,
+          text: string,
+          _attachments: unknown,
+          identity: { skipOptimisticQueue?: boolean } | undefined,
+        ) => {
+          sent.push({
+            sessionId,
+            text,
+            ...(identity?.skipOptimisticQueue ? { skipOptimisticQueue: true } : {}),
+          });
+        },
+      },
+    );
+    installWebApiMocks(async (request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        resumeRequests += 1;
+        await resumeGate;
+        return {
+          session: summary({
+            id: "claimed-join-send",
+            provider: "codex",
+            providerSessionId: "thread-join-send",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    const activation = resumeHistorySessionCommand(deps, "history-join-send");
+    const send = resumeHistorySessionCommand(deps, "history-join-send", {
+      initialInput: "do not lose this question",
+    });
+    const staged = deps.get().projections.get("history-join-send");
+    assert.equal(staged?.summary.session.phase, "starting");
+    assert.equal(staged?.feed.length, 1);
+
+    releaseResume();
+    assert.deepEqual(await Promise.all([activation, send]), [
+      "claimed-join-send",
+      "claimed-join-send",
+    ]);
+    assert.equal(resumeRequests, 1);
+    assert.deepEqual(sent, [
+      {
+        sessionId: "claimed-join-send",
+        text: "do not lose this question",
+        skipOptimisticQueue: true,
+      },
+    ]);
   });
 
   test("resume history keeps the resumed session when post-resume control update fails", async () => {
@@ -1304,6 +1616,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
     const deps = startupDeps({
+      selectedSessionId: "history",
       projections,
       storedSessions: [
         {

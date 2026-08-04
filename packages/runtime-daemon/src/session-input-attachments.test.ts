@@ -13,6 +13,7 @@ import {
   nativeTuiInputText,
   openCodePromptParts,
   parsePersistedUserMessageContent,
+  textWithResponseAnnotations,
 } from "./session-input-attachments";
 import { cacheProviderHistoryImageParts } from "./provider-history-attachments";
 
@@ -159,4 +160,66 @@ test("untrusted image-like blocks remain plain user text", () => {
   assert.equal(parsed.imageCount, 0);
   assert.deepEqual(parsed.attachments, []);
   assert.deepEqual(parsed.mentionedFiles, []);
+});
+
+test("serializes response annotations as provider context without changing visible history text", () => {
+  const request: SessionInputRequest = {
+    clientId: "client-1",
+    text: "Explain the tradeoff.",
+    annotations: [
+      {
+        id: "annotation-1",
+        text: "The callback remains below 250µs.",
+        annotation: "Why is this safe?",
+        source: {
+          sessionId: "session-1",
+          entryKey: "assistant-1",
+          role: "assistant",
+        },
+      },
+    ],
+  };
+
+  const providerText = textWithResponseAnnotations(request);
+  assert.match(providerText, /^# Response annotations:/);
+  assert.match(providerText, /<response-annotations>/);
+  assert.match(providerText, /The callback remains below 250µs\./);
+  assert.doesNotMatch(providerText, /annotation-1|session-1|assistant-1/);
+
+  const parsed = parsePersistedUserMessageContent(providerText);
+  assert.equal(parsed.text, "Explain the tradeoff.");
+  assert.deepEqual(parsed.annotations, [
+    {
+      text: "The callback remains below 250µs.",
+      annotation: "Why is this safe?",
+    },
+  ]);
+});
+
+test("routes the same annotation context to Codex, native TUI, and OpenCode", () => {
+  const request: SessionInputRequest = {
+    clientId: "client-1",
+    text: "Continue.",
+    annotations: [{ id: "annotation-1", text: "Selected result" }],
+  };
+
+  const codex = codexTurnInput(request);
+  const native = nativeTuiInputText(request);
+  const openCode = openCodePromptParts(request);
+  assert.match(codex[0]?.type === "text" ? codex[0].text : "", /Selected result/);
+  assert.match(native, /Selected result/);
+  assert.match(openCode[0]?.type === "text" ? openCode[0].text : "", /Selected result/);
+});
+
+test("does not strip a user-authored annotation-like block unless its JSON is valid", () => {
+  const source = `# Response annotations:
+not daemon context
+<response-annotations>
+not-json
+</response-annotations>
+
+Keep this text.`;
+  const parsed = parsePersistedUserMessageContent(source);
+  assert.equal(parsed.text, source);
+  assert.deepEqual(parsed.annotations, []);
 });

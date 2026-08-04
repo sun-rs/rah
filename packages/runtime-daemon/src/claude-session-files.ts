@@ -43,6 +43,7 @@ import {
   projectCouncilMcpToolCall,
   type NormalizedCouncilMcpToolCall,
 } from "./council/council-mcp-projection";
+import { parseResponseAnnotationEnvelope } from "./session-input-attachments";
 
 const REHYDRATED_CAPABILITIES = {
   liveAttach: false,
@@ -329,7 +330,9 @@ function isClaudeNoResponsePlaceholderContent(content: unknown): boolean {
 
 function extractUserMessageText(content: unknown): string | null {
   if (typeof content === "string") {
-    const text = trimClaudeTranscriptBlankLines(stripClaudeTurnAbortedContext(content));
+    const text = trimClaudeTranscriptBlankLines(
+      parseResponseAnnotationEnvelope(stripClaudeTurnAbortedContext(content)).text,
+    );
     if (!text.trim() || isClaudeTranscriptNoiseText(text)) {
       return null;
     }
@@ -341,7 +344,9 @@ function extractUserMessageText(content: unknown): string | null {
   if (parts.length === 0) {
     return null;
   }
-  const text = trimClaudeTranscriptBlankLines(parts.join("\n"));
+  const text = trimClaudeTranscriptBlankLines(
+    parseResponseAnnotationEnvelope(parts.join("\n")).text,
+  );
   return text.trim() ? text : null;
 }
 

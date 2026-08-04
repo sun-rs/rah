@@ -47,6 +47,7 @@ import {
   HISTORY_WORKLOAD_PRIORITY,
   sharedHistoryWorkloadScheduler,
 } from "./history-workload-governor";
+import { parseResponseAnnotationEnvelope } from "./session-input-attachments";
 
 export interface OpenCodeStoredSessionRecord {
   ref: StoredSessionRef;
@@ -1665,6 +1666,9 @@ function buildStoredSessionRecord(
   const cwd = normalizeDirectory(row.directory ?? undefined) ?? undefined;
   const projectRoot = normalizeDirectory(row.project_worktree ?? undefined);
   const rootDir = projectRoot && projectRoot !== "/" ? projectRoot : cwd;
+  const visiblePreview = row.preview
+    ? parseResponseAnnotationEnvelope(row.preview).text.trim()
+    : undefined;
   const ref: StoredSessionRef = withHistoryMeta({
     provider: "opencode",
     providerSessionId: row.id,
@@ -1673,7 +1677,7 @@ function buildStoredSessionRecord(
     ...(cwd ? { cwd } : {}),
     ...(rootDir ? { rootDir } : {}),
     ...(row.title ? { title: row.title } : {}),
-    ...(row.preview ? { preview: truncateText(row.preview) } : {}),
+    ...(visiblePreview ? { preview: truncateText(visiblePreview) } : {}),
     ...(toIso(row.time_created) ? { createdAt: toIso(row.time_created)! } : {}),
     ...(toIso(row.time_updated) ? { updatedAt: toIso(row.time_updated)! } : {}),
     ...(toIso(row.time_updated) ? { lastUsedAt: toIso(row.time_updated)! } : {}),

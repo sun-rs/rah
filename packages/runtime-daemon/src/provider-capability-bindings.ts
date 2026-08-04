@@ -29,8 +29,6 @@ export function hasStoredHistoryCapability(
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationTurnDetail === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
-      .getSessionConversationTurnFileDiff === "function" ||
-    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationSourceRevision === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
       .getSessionConversationVisualArtifact === "function" ||
@@ -77,12 +75,6 @@ export function bindStoredHistoryCapability(
       ? {
           getSessionConversationTurnDetail:
             adapter.getSessionConversationTurnDetail.bind(adapter),
-        }
-      : {}),
-    ...(adapter.getSessionConversationTurnFileDiff
-      ? {
-          getSessionConversationTurnFileDiff:
-            adapter.getSessionConversationTurnFileDiff.bind(adapter),
         }
       : {}),
     ...(adapter.getSessionConversationSourceRevision

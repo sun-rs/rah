@@ -14,6 +14,7 @@ import type {
   SessionConfigOption,
   SessionConfigValue,
   SessionInputAttachment,
+  SessionInputAnnotation,
   SessionInputQueuePolicy,
   SessionBranchKind,
   SessionWorkspaceMode,
@@ -295,6 +296,7 @@ export interface SessionInputRequest {
   clientId: string;
   text: string;
   attachments?: SessionInputAttachment[];
+  annotations?: SessionInputAnnotation[];
   /**
    * Stable client-generated id for this submitted user message. The daemon and
    * provider mirrors should echo it when they can so optimistic UI rows can be

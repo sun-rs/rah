@@ -16,10 +16,7 @@ import path from "node:path";
 import test from "node:test";
 import { materializeCodexAppServerTurnsPage } from "./codex-app-server-turns-page";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
-import {
-  readCodexConversationTurnDetail,
-  readCodexConversationTurnFileDiff,
-} from "./codex-turn-history";
+import { readCodexConversationTurnDetail } from "./codex-turn-history";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 
 function line(timestamp: string, type: string, payload: Record<string, unknown>): string {
@@ -68,7 +65,7 @@ function recordFor(filePath: string, providerSessionId = "codex-thread-1"): Code
   };
 }
 
-test("Codex turn directory preserves absolute paths when history metadata has no workspace", async () => {
+test("Codex turn directory never promotes patch activity into authoritative file changes", async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-turn-directory-no-cwd-"));
   const previousRahHome = process.env.RAH_HOME;
   process.env.RAH_HOME = path.join(tempDir, "rah-home");
@@ -105,22 +102,12 @@ test("Codex turn directory preserves absolute paths when history metadata has no
   try {
     const directory = await store.getDirectory("rah-session-without-cwd", record);
     assert.equal(directory.complete, true);
-    const changes = await store.getFileChangesByTurnIds(record, ["turn-without-cwd"]);
-    assert.deepEqual(changes.get("turn-without-cwd"), {
-      files: [{ path: changedPath, additions: 1, deletions: 1 }],
-      totalAdditions: 1,
-      totalDeletions: 1,
+    const summaryPage = await store.getSummaryPage(record, {
+      limit: 1,
+      sourceSettled: true,
     });
-    const range = await store.getTurnRange(record, "turn-without-cwd");
-    assert.ok(range);
-    const diff = await readCodexConversationTurnFileDiff({
-      sessionId: "rah-session-without-cwd",
-      turnId: "turn-without-cwd",
-      path: changedPath,
-      record,
-      range,
-    });
-    assert.match(diff?.diff ?? "", /-old\n\+new/);
+    const turn = summaryPage.data[0] as { fileChanges?: unknown } | undefined;
+    assert.equal(turn?.fileChanges, undefined);
   } finally {
     await store.shutdown();
     if (previousRahHome === undefined) {
@@ -258,26 +245,13 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
       "turn-2": false,
       "turn-1": true,
     });
-    assert.deepEqual(
+    assert.equal(
       (
         summaryPage.data.find(
           (turn) => (turn as { id?: string }).id === "turn-1",
-        ) as {
-          fileChanges?: {
-            files: Array<{ path: string; additions: number; deletions: number }>;
-            totalAdditions: number;
-            totalDeletions: number;
-          };
-        }
+        ) as { fileChanges?: unknown }
       ).fileChanges,
-      {
-        files: [
-          { path: "docs/report.md", additions: 2, deletions: 0 },
-          { path: "src/main.ts", additions: 2, deletions: 1 },
-        ],
-        totalAdditions: 4,
-        totalDeletions: 1,
-      },
+      undefined,
     );
     const summaryUser = summaryEvidence.events.find(
       (event) =>
@@ -291,20 +265,6 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
     );
     assert.equal(summaryUser.payload.item.imageCount, 1);
     assert.equal(summaryUser.payload.item.attachments, undefined);
-    assert.deepEqual(
-      (await store.getFileChangesByTurnIds(record, ["turn-1", "turn-2"])).get(
-        "turn-1",
-      ),
-      {
-        files: [
-          { path: "docs/report.md", additions: 2, deletions: 0 },
-          { path: "src/main.ts", additions: 2, deletions: 1 },
-        ],
-        totalAdditions: 4,
-        totalDeletions: 1,
-      },
-    );
-
     appendFileSync(
       rolloutPath,
       `${[
@@ -328,19 +288,6 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
 
     const range = await store.getTurnRange(record, "turn-1");
     assert.ok(range);
-    const historicalDiff = await readCodexConversationTurnFileDiff({
-      sessionId: "rah-session-1",
-      turnId: "turn-1",
-      path: "src/main.ts",
-      record,
-      range,
-    });
-    assert.equal(historicalDiff?.sessionId, "rah-session-1");
-    assert.equal(historicalDiff?.turnId, "turn-1");
-    assert.equal(historicalDiff?.path, "src/main.ts");
-    assert.match(historicalDiff?.diff ?? "", /--- a\/src\/main\.ts/);
-    assert.match(historicalDiff?.diff ?? "", /\n-old\n\+new\n\+next\n/);
-    assert.equal(historicalDiff?.truncated, false);
     const turn = await readCodexConversationTurnDetail({
       sessionId: "rah-session-1",
       turnId: "turn-1",

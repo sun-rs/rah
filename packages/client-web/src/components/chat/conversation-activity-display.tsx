@@ -89,7 +89,7 @@ export function conversationActivityLabel(
   const plural = count === 1 ? "" : "s";
   switch (kind) {
     case "command":
-      return running ? `Running ${count} command${plural}` : `Ran ${count} command${plural}`;
+      return `Run ${count} command${plural}`;
     case "file_read":
       return running ? `Reading ${count} file${plural}` : `Read ${count} file${plural}`;
     case "file_change":

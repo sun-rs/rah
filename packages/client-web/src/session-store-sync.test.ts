@@ -424,6 +424,45 @@ describe("session store recovery", () => {
     );
   });
 
+  test("turns a selected live session into a stopped replay when close arrives", () => {
+    const live = summary({ id: "live-stop", providerSessionId: "thread-stop" });
+    const projection = createEmptySessionProjection(live);
+    projection.feed = [
+      {
+        key: "assistant:visible-before-stop",
+        kind: "timeline",
+        item: { kind: "assistant_message", text: "keep this transcript" },
+        ts: "2026-05-10T00:00:00.000Z",
+      },
+    ];
+    projection.currentRuntimeStatus = "thinking";
+
+    const next = applyProjectionEventsToSyncState({
+      state: {
+        projections: new Map([["live-stop", projection]]),
+        unreadSessionIds: new Set<string>(),
+        selectedSessionId: "live-stop",
+        workspaceVisibilityVersion: 0,
+        sessionTopologyVersion: 0,
+        eventStreamOpenRevision: 0,
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: null,
+      },
+      events: [event(10, { type: "session.closed", payload: {} }, "live-stop")],
+      applyEventsToMap,
+    });
+
+    assert.equal(next.selectedSessionId, "live-stop");
+    assert.equal(next.projections.get("live-stop")?.summary.session.status, "stopped");
+    assert.equal(next.projections.get("live-stop")?.summary.session.capabilities.steerInput, false);
+    assert.equal(next.projections.get("live-stop")?.currentRuntimeStatus, undefined);
+    assert.deepEqual(
+      next.projections.get("live-stop")?.feed.map((entry) => entry.key),
+      ["assistant:visible-before-stop"],
+    );
+  });
+
   test("moves selected history projection to live session when resume live events arrive", () => {
     const history = summary({
       id: "history",

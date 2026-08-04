@@ -32,10 +32,13 @@ import {
   X,
 } from "lucide-react";
 import { readWorkspaceGitStatus } from "./api";
-import { ProviderLogo } from "./components/ProviderLogo";
 import { CouncilLogo } from "./components/CouncilLogo";
+import { ProviderLogo } from "./components/ProviderLogo";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
+import {
+  SIDEBAR_LAYOUT,
+  SIDEBAR_VISUAL_PROTOCOL,
+} from "./sidebar-layout-contract";
 import {
   deriveSidebarCouncilViewModels,
   deriveSidebarWorkspaceViewModels,
@@ -52,6 +55,13 @@ import {
   sidebarPinnedOrderKey,
   type SidebarDropPosition,
 } from "./sidebar-section-order";
+import {
+  advanceSidebarDestructiveAction,
+  SIDEBAR_DESTRUCTIVE_ACTION_ARM_TIMEOUT_MS,
+} from "./sidebar-destructive-action";
+import {
+  useSidebarSessionTooltipController,
+} from "./useSidebarSessionTooltipController";
 
 const sessionWorkspaceBranchCache = new Map<string, string | null>();
 const sessionWorkspaceBranchRequests = new Map<string, Promise<string | null>>();
@@ -184,11 +194,6 @@ function loadSessionWorkspaceBranch(workspaceDir: string): Promise<string | null
   return request;
 }
 
-function supportsDesktopHover(): boolean {
-  return typeof window !== "undefined" &&
-    window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-}
-
 function FadingSingleLineText(props: { children: string; className: string }) {
   const titleRef = useRef<HTMLSpanElement | null>(null);
   const [overflowing, setOverflowing] = useState(false);
@@ -259,11 +264,9 @@ function SidebarStatusIndicator(props: { status: SidebarActivityStatus }) {
 }
 
 function SessionRowTooltip(props: {
-  anchor: HTMLDivElement | null;
+  anchor: HTMLElement;
   id: string;
-  open: boolean;
   session: SidebarWorkspaceViewModel["sessions"][number];
-  onRequestClose: () => void;
 }) {
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const [style, setStyle] = useState<CSSProperties>({});
@@ -272,9 +275,6 @@ function SessionRowTooltip(props: {
   );
 
   useLayoutEffect(() => {
-    if (!props.open || !props.anchor) {
-      return;
-    }
     const anchorRect = props.anchor.getBoundingClientRect();
     const width = Math.min(320, Math.max(220, window.innerWidth - 16));
     const height = tooltipRef.current?.getBoundingClientRect().height ?? 112;
@@ -287,31 +287,19 @@ function SessionRowTooltip(props: {
       Math.max(8, window.innerHeight - height - 8),
     );
     setStyle({ left, top, width });
-  }, [props.anchor, props.open, branch]);
+  }, [props.anchor, branch]);
 
   useEffect(() => {
-    if (!props.open) {
-      return;
-    }
     let active = true;
     void loadSessionWorkspaceBranch(props.session.workspaceDir).then((nextBranch) => {
       if (active) {
         setBranch(nextBranch);
       }
     });
-    const close = () => props.onRequestClose();
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
     return () => {
       active = false;
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
     };
-  }, [props.onRequestClose, props.open, props.session.workspaceDir]);
-
-  if (!props.open) {
-    return null;
-  }
+  }, [props.session.workspaceDir]);
 
   return createPortal(
     <div
@@ -391,7 +379,7 @@ function WorkspaceSortMenu(props: {
         title="排序"
         onClick={() => setOpen((current) => !current)}
       >
-        <ListFilter size={14} />
+        <ListFilter size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} />
       </button>
 
       {open ? (
@@ -407,11 +395,11 @@ function WorkspaceSortMenu(props: {
               }}
             >
               <span className="flex items-center gap-2">
-                {option.value === "created" ? <PlusCircle size={14} className="text-[var(--app-hint)]" /> : <Pencil size={14} className="text-[var(--app-hint)]" />}
+                {option.value === "created" ? <PlusCircle size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} className="text-[var(--app-hint)]" /> : <Pencil size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} className="text-[var(--app-hint)]" />}
                 <span>{option.label}</span>
               </span>
               <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
-                {props.value === option.value ? <Check size={14} /> : null}
+                {props.value === option.value ? <Check size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} /> : null}
               </span>
             </button>
           ))}
@@ -424,7 +412,7 @@ function WorkspaceSortMenu(props: {
               setOpen(false);
             }}
           >
-            <ChevronDown size={14} className="text-[var(--app-hint)]" />
+            <ChevronDown size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} className="text-[var(--app-hint)]" />
             <span>全部展开</span>
           </button>
           <button
@@ -435,7 +423,7 @@ function WorkspaceSortMenu(props: {
               setOpen(false);
             }}
           >
-            <ChevronUp size={14} className="text-[var(--app-hint)]" />
+            <ChevronUp size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} className="text-[var(--app-hint)]" />
             <span>全部折叠</span>
           </button>
         </div>
@@ -447,15 +435,15 @@ function WorkspaceSortMenu(props: {
 function RunningSessionRow(props: {
   session: SidebarWorkspaceViewModel["sessions"][number];
   canvasDraggable: boolean;
+  nested?: boolean;
   reorder?: SidebarReorderBinding;
+  tooltipDescriptionId?: string | undefined;
+  tooltipKey: string;
   onTogglePin: () => void;
   onArchive: () => void;
   onSelect: () => void;
 }) {
-  const rowRef = useRef<HTMLDivElement | null>(null);
-  const tooltipId = useId();
-  const tooltipTimerRef = useRef<number | null>(null);
-  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [archiveArmed, setArchiveArmed] = useState(false);
   const titleClassName =
     props.session.originKind === "council"
       ? `${SIDEBAR_LAYOUT.sessionTitleClassName} ${COUNCIL_ACCENT_TITLE_CLASSNAME}`
@@ -465,67 +453,47 @@ function RunningSessionRow(props: {
       ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
       : SIDEBAR_LAYOUT.sessionRowIdleClassName
   }`;
-  const selectButtonClassName = SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName;
+  const selectButtonClassName = `${SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName} ${
+    props.nested ? SIDEBAR_LAYOUT.sessionNestedSelectButtonClassName : ""
+  }`;
   const actionGroupClassName = `${SIDEBAR_LAYOUT.sessionActionGroupBaseClassName} ${
-    props.session.archivable
-      ? SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName
-      : SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName
+    archiveArmed
+      ? SIDEBAR_LAYOUT.sessionArchiveArmedGroupClassName
+      : props.session.archivable
+        ? SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName
+        : SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName
   }`;
   const reorderDropTarget = useSidebarReorderDropTarget(props.reorder);
   const draggable = props.canvasDraggable || props.reorder !== undefined;
 
-  const clearTooltipTimer = () => {
-    if (tooltipTimerRef.current !== null) {
-      window.clearTimeout(tooltipTimerRef.current);
-      tooltipTimerRef.current = null;
-    }
-  };
-  const openTooltip = (delayed: boolean) => {
-    if (!supportsDesktopHover()) {
+  useEffect(() => {
+    if (!archiveArmed) {
       return;
     }
-    clearTooltipTimer();
-    if (!delayed) {
-      setTooltipOpen(true);
-      return;
-    }
-    tooltipTimerRef.current = window.setTimeout(() => {
-      tooltipTimerRef.current = null;
-      setTooltipOpen(true);
-    }, 320);
-  };
-  const closeTooltip = () => {
-    clearTooltipTimer();
-    setTooltipOpen(false);
-  };
-
-  useEffect(() => () => clearTooltipTimer(), []);
+    const timeoutId = window.setTimeout(
+      () => setArchiveArmed(false),
+      SIDEBAR_DESTRUCTIVE_ACTION_ARM_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [archiveArmed]);
 
   return (
     <div
-      ref={rowRef}
       className={rowClassName}
       data-sidebar-session-id={props.session.id}
       data-sidebar-session-provider={props.session.provider}
+      data-sidebar-session-tooltip-key={props.tooltipKey}
+      data-sidebar-archive-armed={archiveArmed ? "true" : undefined}
       draggable={draggable}
       data-sidebar-reorder-key={props.reorder?.itemKey}
       data-sidebar-drop-position={reorderDropTarget.dropPosition ?? undefined}
       onPointerDownCapture={markSidebarPointerFocus}
       onKeyDownCapture={clearSidebarPointerFocusForKeyboard}
-      onMouseEnter={() => openTooltip(true)}
-      onMouseLeave={closeTooltip}
-      onFocusCapture={() => openTooltip(false)}
-      onBlurCapture={(event) => {
-        clearSidebarPointerFocusAfterBlur(event);
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          closeTooltip();
-        }
-      }}
+      onBlurCapture={clearSidebarPointerFocusAfterBlur}
       onDragStart={(event) => {
         if (!draggable) {
           return;
         }
-        closeTooltip();
         if (props.canvasDraggable) {
           event.dataTransfer.setData("application/x-rah-session-id", props.session.id);
         }
@@ -545,20 +513,25 @@ function RunningSessionRow(props: {
           type="button"
           onClick={props.onSelect}
           className={selectButtonClassName}
-          aria-describedby={tooltipOpen ? tooltipId : undefined}
+          aria-describedby={props.tooltipDescriptionId}
         >
-          <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
-            <ProviderLogo
-              provider={props.session.provider}
-              className={SIDEBAR_LAYOUT.sessionIconClassName}
-              variant="bare"
-            />
-          </span>
+          {props.session.provider === "claude" || props.session.provider === "opencode" ? (
+            <span className={SIDEBAR_LAYOUT.sessionProviderIconSlotClassName}>
+              <ProviderLogo
+                provider={props.session.provider}
+                className={SIDEBAR_LAYOUT.sessionProviderIconClassName}
+                variant="bare"
+              />
+            </span>
+          ) : null}
           <FadingSingleLineText className={titleClassName}>
             {props.session.title}
           </FadingSingleLineText>
         </button>
-        <div className={SIDEBAR_LAYOUT.sessionActionSlotClassName}>
+        <div
+          className={SIDEBAR_LAYOUT.sessionActionSlotClassName}
+          data-sidebar-has-actions="true"
+        >
           <SidebarStatusIndicator status={props.session.status} />
           <span className={actionGroupClassName}>
             <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
@@ -573,32 +546,39 @@ function RunningSessionRow(props: {
                 title={props.session.pinned ? "Unpin" : "Pin"}
                 aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
               >
-                <Pin size={14} className={props.session.pinned ? "fill-current" : ""} />
+                <Pin size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} className={props.session.pinned ? "fill-current" : ""} />
               </button>
             </span>
             {props.session.archivable ? (
               <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
                 <button
                   type="button"
-                  onClick={props.onArchive}
-                  className={`${SIDEBAR_LAYOUT.sessionActionButtonClassName} ${SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName}`}
-                  title="Archive"
-                  aria-label="Archive session"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const transition = advanceSidebarDestructiveAction(archiveArmed);
+                    setArchiveArmed(transition.armed);
+                    if (transition.execute) {
+                      props.onArchive();
+                    }
+                  }}
+                  className={`${SIDEBAR_LAYOUT.sessionActionButtonClassName} ${
+                    archiveArmed
+                      ? `${SIDEBAR_LAYOUT.sessionActionButtonArmedClassName} ${SIDEBAR_LAYOUT.sessionActionDangerClassName}`
+                      : SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName
+                  }`}
+                  data-sidebar-archive-armed={archiveArmed ? "true" : "false"}
+                  aria-pressed={archiveArmed}
+                  title={archiveArmed ? "Click again to archive" : "Archive"}
+                  aria-label={archiveArmed ? "Click again to archive session" : "Archive session"}
                 >
-                  <Archive size={14} />
+                  <Archive size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} />
                 </button>
               </span>
             ) : null}
           </span>
         </div>
       </div>
-      <SessionRowTooltip
-        anchor={rowRef.current}
-        id={tooltipId}
-        open={tooltipOpen}
-        session={props.session}
-        onRequestClose={closeTooltip}
-      />
     </div>
   );
 }
@@ -645,8 +625,8 @@ function CouncilRow(props: {
           onClick={props.onSelect}
           className={selectButtonClassName}
         >
-          <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
-            <CouncilLogo className={SIDEBAR_LAYOUT.sessionIconClassName} tone="black" variant="bare" />
+          <span className={SIDEBAR_LAYOUT.councilIconSlotClassName}>
+            <CouncilLogo className={SIDEBAR_LAYOUT.councilIconClassName} tone="black" variant="bare" />
           </span>
           <FadingSingleLineText
             className={`${SIDEBAR_LAYOUT.sessionTitleClassName} ${COUNCIL_ACCENT_TITLE_CLASSNAME}`}
@@ -672,6 +652,8 @@ function WorkspaceRow(props: {
   onNewTaskInWorkspace: () => void;
   expandAllKey: number;
   expandAllValue: boolean;
+  activeTooltipKey: string | null;
+  tooltipId: string;
 }) {
   const [showRemove, setShowRemove] = useState(false);
   const [expanded, setExpanded] = useState(true);
@@ -687,7 +669,10 @@ function WorkspaceRow(props: {
     if (!showRemove) {
       return;
     }
-    const timeoutId = window.setTimeout(() => setShowRemove(false), 2000);
+    const timeoutId = window.setTimeout(
+      () => setShowRemove(false),
+      SIDEBAR_DESTRUCTIVE_ACTION_ARM_TIMEOUT_MS,
+    );
     return () => window.clearTimeout(timeoutId);
   }, [showRemove]);
 
@@ -703,6 +688,7 @@ function WorkspaceRow(props: {
       {/* Workspace header */}
       <div
         className={SIDEBAR_LAYOUT.workspaceHeaderClassName}
+        data-sidebar-workspace-row="true"
         onPointerDownCapture={markSidebarPointerFocus}
         onKeyDownCapture={clearSidebarPointerFocusForKeyboard}
         onBlurCapture={clearSidebarPointerFocusAfterBlur}
@@ -717,7 +703,9 @@ function WorkspaceRow(props: {
           aria-current={props.workspace.selected ? "location" : undefined}
         >
           <span className={SIDEBAR_LAYOUT.workspaceDisclosureIconClassName}>
-            {expanded ? <FolderOpen size={14} /> : <Folder size={14} />}
+            {expanded
+              ? <FolderOpen size={SIDEBAR_VISUAL_PROTOCOL.rowIconPx} strokeWidth={1.75} />
+              : <Folder size={SIDEBAR_VISUAL_PROTOCOL.rowIconPx} strokeWidth={1.75} />}
           </span>
           <FadingSingleLineText className={SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName}>
             {props.workspace.displayName}
@@ -725,7 +713,9 @@ function WorkspaceRow(props: {
         </button>
         <div
           className={`${SIDEBAR_LAYOUT.workspaceActionSlotClassName} ${
-            showRemove ? "opacity-100 pointer-events-auto" : SIDEBAR_LAYOUT.workspaceActionHiddenClassName
+            showRemove
+              ? SIDEBAR_LAYOUT.workspaceActionVisibleClassName
+              : SIDEBAR_LAYOUT.workspaceActionHiddenClassName
           }`}
         >
           <span className={SIDEBAR_LAYOUT.sessionActionCellClassName}>
@@ -764,7 +754,7 @@ function WorkspaceRow(props: {
                 }}
                 title="More"
               >
-                <MoreHorizontal size={14} />
+                <MoreHorizontal size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} />
               </button>
             )}
           </span>
@@ -779,7 +769,7 @@ function WorkspaceRow(props: {
               aria-label="New task in workspace"
               title="New task in workspace"
             >
-              <SquarePen size={14} />
+              <SquarePen size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} />
             </button>
           </span>
         </div>
@@ -788,16 +778,24 @@ function WorkspaceRow(props: {
       {/* Running workspace items */}
       {hasItems && expanded ? (
         <div id={itemsId} className={SIDEBAR_LAYOUT.sessionListClassName}>
-          {props.workspace.items.map((item) => (
-            <RunningSessionRow
-              key={item.stableKey}
-              session={item}
-              canvasDraggable={props.enableSessionDrag && item.running}
-              onTogglePin={() => props.onTogglePinSession(item.pinItemKey)}
-              onArchive={() => props.onArchiveSession(item)}
-              onSelect={() => props.onSelectSession(item)}
-            />
-          ))}
+          {props.workspace.items.map((item) => {
+            const tooltipKey = `workspace:${props.workspace.directory}:${item.stableKey}`;
+            return (
+              <RunningSessionRow
+                key={item.stableKey}
+                session={item}
+                tooltipKey={tooltipKey}
+                tooltipDescriptionId={
+                  props.activeTooltipKey === tooltipKey ? props.tooltipId : undefined
+                }
+                nested
+                canvasDraggable={props.enableSessionDrag && item.running}
+                onTogglePin={() => props.onTogglePinSession(item.pinItemKey)}
+                onArchive={() => props.onArchiveSession(item)}
+                onSelect={() => props.onSelectSession(item)}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -851,6 +849,8 @@ export function SessionSidebar(props: {
 }) {
   const [expandAllKey, setExpandAllKey] = useState(0);
   const [expandAllValue, setExpandAllValue] = useState(true);
+  const tooltipController = useSidebarSessionTooltipController();
+  const tooltipId = useId();
   const workspaceViewModels = useMemo(
     () =>
       deriveSidebarWorkspaceViewModels({
@@ -939,6 +939,26 @@ export function SessionSidebar(props: {
       return item ? [item] : [];
     });
   }, [councilItems, councilSectionOrder]);
+  const tooltipSessionByKey = useMemo(() => {
+    const sessions = new Map<
+      string,
+      SidebarWorkspaceViewModel["sessions"][number]
+    >();
+    for (const { workspaceDir, item } of orderedPinnedItems) {
+      const orderKey = sidebarPinnedOrderKey(workspaceDir, item.pinItemKey);
+      sessions.set(`pinned:${orderKey}`, item);
+    }
+    for (const workspace of sidebarPartition.workspaces) {
+      for (const item of workspace.items) {
+        sessions.set(`workspace:${workspace.directory}:${item.stableKey}`, item);
+      }
+    }
+    return sessions;
+  }, [orderedPinnedItems, sidebarPartition.workspaces]);
+  const activeTooltipTarget = tooltipController.activeTarget;
+  const activeTooltipSession = activeTooltipTarget
+    ? tooltipSessionByKey.get(activeTooltipTarget.key) ?? null
+    : null;
   const workspaceCount = sidebarPartition.workspaces.length;
   const sessionCount = workspaceViewModels.reduce(
     (count, workspace) => count + workspace.sessions.length,
@@ -959,17 +979,29 @@ export function SessionSidebar(props: {
   };
 
   return (
-    <div className={SIDEBAR_LAYOUT.rootClassName}>
+    <div
+      className={SIDEBAR_LAYOUT.rootClassName}
+      onPointerOver={tooltipController.onPointerOver}
+      onPointerOut={tooltipController.onPointerOut}
+      onFocusCapture={tooltipController.onFocusCapture}
+      onBlurCapture={tooltipController.onBlurCapture}
+      onDragStartCapture={tooltipController.reset}
+    >
       {orderedPinnedItems.length > 0 ? (
         <div className={SIDEBAR_LAYOUT.pinnedSectionClassName}>
-          <div className={SIDEBAR_LAYOUT.pinnedHeaderClassName}>Pinned</div>
+          <div className={SIDEBAR_LAYOUT.pinnedHeaderClassName} data-sidebar-section-label="pinned">Pinned</div>
           <div className={SIDEBAR_LAYOUT.pinnedListClassName}>
             {orderedPinnedItems.map(({ workspaceDir, item }) => {
               const orderKey = sidebarPinnedOrderKey(workspaceDir, item.pinItemKey);
+              const tooltipKey = `pinned:${orderKey}`;
               return (
                 <RunningSessionRow
                   key={orderKey}
                   session={item}
+                  tooltipKey={tooltipKey}
+                  tooltipDescriptionId={
+                    activeTooltipTarget?.key === tooltipKey ? tooltipId : undefined
+                  }
                   canvasDraggable={props.enableSessionDrag === true && item.running}
                   reorder={{
                     itemKey: orderKey,
@@ -1004,7 +1036,7 @@ export function SessionSidebar(props: {
           aria-label="Running Councils"
           data-sidebar-council-section
         >
-          <div className={SIDEBAR_LAYOUT.councilHeaderClassName}>
+          <div className={SIDEBAR_LAYOUT.councilHeaderClassName} data-sidebar-section-label="councils">
             <span>Councils</span>
             <span
               className={SIDEBAR_LAYOUT.councilCountClassName}
@@ -1034,7 +1066,11 @@ export function SessionSidebar(props: {
       {/* Toolbar */}
       <div className={SIDEBAR_LAYOUT.toolbarClassName}>
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className={SIDEBAR_LAYOUT.toolbarLabelClassName} title="Workspaces">
+          <span
+            className={SIDEBAR_LAYOUT.toolbarLabelClassName}
+            title="Workspaces"
+            data-sidebar-section-label="workspaces"
+          >
             <span className={SIDEBAR_LAYOUT.toolbarLabelFullClassName}>Workspaces</span>
             <span className={SIDEBAR_LAYOUT.toolbarLabelShortClassName}>WS</span>
           </span>
@@ -1064,7 +1100,7 @@ export function SessionSidebar(props: {
             <WorkspacePicker
               currentDir=""
               triggerLabel=""
-              triggerIcon={<FolderPlus size={14} />}
+              triggerIcon={<FolderPlus size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} />}
               triggerClassName={SIDEBAR_LAYOUT.toolbarIconButtonClassName}
               triggerAriaLabel="Add workspace"
               onSelect={props.onAddWorkspace}
@@ -1101,6 +1137,8 @@ export function SessionSidebar(props: {
             onNewTaskInWorkspace={() => props.onNewTaskInWorkspace(workspace.directory)}
             expandAllKey={expandAllKey}
             expandAllValue={expandAllValue}
+            activeTooltipKey={activeTooltipTarget?.key ?? null}
+            tooltipId={tooltipId}
           />
         ))}
       </div>
@@ -1129,6 +1167,14 @@ export function SessionSidebar(props: {
             ))}
           </div>
         </div>
+      ) : null}
+      {activeTooltipTarget && activeTooltipSession ? (
+        <SessionRowTooltip
+          key={activeTooltipTarget.key}
+          anchor={activeTooltipTarget.anchor}
+          id={tooltipId}
+          session={activeTooltipSession}
+        />
       ) : null}
     </div>
   );

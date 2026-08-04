@@ -789,6 +789,41 @@ export class WorkbenchStateStore {
     this.persistState();
   }
 
+  pruneMissingProviderSessions(
+    provider: StoredSessionRef["provider"],
+    retainedProviderSessionIds: ReadonlySet<string>,
+  ): boolean {
+    const removedKeys = new Set(
+      [...this.state.sessions, ...this.state.recentSessions]
+        .filter(
+          (session) =>
+            session.provider === provider &&
+            !retainedProviderSessionIds.has(session.providerSessionId),
+        )
+        .map(sessionKey),
+    );
+    if (removedKeys.size === 0) {
+      return false;
+    }
+    const sessionTitleOverrides = { ...this.state.sessionTitleOverrides };
+    for (const key of removedKeys) {
+      delete sessionTitleOverrides[key];
+    }
+    this.state = {
+      ...this.state,
+      sessionTitleOverrides,
+      sessions: this.state.sessions.filter((session) => !removedKeys.has(sessionKey(session))),
+      recentSessions: this.state.recentSessions.filter(
+        (session) => !removedKeys.has(sessionKey(session)),
+      ),
+      pinnedSidebarItems: this.state.pinnedSidebarItems.filter(
+        (item) => !removedKeys.has(item.itemKey.replace(/^session:/, "")),
+      ),
+    };
+    this.persistState();
+    return true;
+  }
+
   setSessionTitleOverride(
     session: Pick<StoredSessionRef, "provider" | "providerSessionId">,
     title: string,

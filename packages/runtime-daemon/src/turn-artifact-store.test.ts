@@ -75,6 +75,47 @@ test("replaces the authoritative snapshot for the same turn instead of accumulat
   assert.equal(storedEntries.filter((entry) => entry.endsWith(".tmp")).length, 0);
 });
 
+test("clears stale files when the authoritative cumulative turn diff becomes empty", async () => {
+  const { store } = createStore();
+  await store.replaceTurnDiff(
+    "session-1",
+    "turn-1",
+    unifiedDiff("src/stale.ts", "before", "after"),
+  );
+
+  const cleared = await store.replaceTurnDiff("session-1", "turn-1", "");
+
+  assert.deepEqual(cleared, {
+    files: [],
+    totalAdditions: 0,
+    totalDeletions: 0,
+  });
+  assert.deepEqual(
+    (await store.getTurnFileChanges("session-1", "turn-1")).fileChanges,
+    cleared,
+  );
+  await assert.rejects(
+    store.getTurnFileDiff("session-1", "turn-1", "src/stale.ts"),
+    /Unknown turn file/,
+  );
+});
+
+test("rejects malformed authoritative updates without replacing the last valid artifact", async () => {
+  const { store } = createStore();
+  const validDiff = unifiedDiff("src/demo.ts", "before", "after");
+  await store.replaceTurnDiff("session-1", "turn-1", validDiff);
+
+  await assert.rejects(
+    store.replaceTurnDiff("session-1", "turn-1", "this is not unified diff data"),
+    /not valid unified diff data/,
+  );
+
+  assert.equal(
+    (await store.getTurnFileDiff("session-1", "turn-1", "src/demo.ts")).diff,
+    validDiff,
+  );
+});
+
 test("persists frozen turn artifacts across store instances and isolates session identities", async () => {
   const { rootDir, store } = createStore();
   await store.replaceTurnDiff(
@@ -197,6 +238,37 @@ test("reports a damaged frozen artifact instead of exposing a filesystem read er
   await assert.rejects(
     store.getTurnFileDiff("session-1", "turn-1", "src/demo.ts"),
     /Turn artifact manifest is invalid/,
+  );
+});
+
+test("rejects a manifest whose visible summary and clickable files diverge", async () => {
+  const { rootDir, store } = createStore();
+  await store.replaceTurnDiff(
+    "session-1",
+    "turn-1",
+    unifiedDiff("src/demo.ts", "one", "two"),
+  );
+  const manifestEntry = readdirSync(rootDir, {
+    recursive: true,
+    encoding: "utf8",
+  }).find((entry) => entry.endsWith("manifest.json"));
+  assert.ok(manifestEntry);
+  const manifestPath = path.join(rootDir, manifestEntry);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    fileChanges: {
+      files: Array<{ path: string; additions: number; deletions: number }>;
+    };
+  };
+  manifest.fileChanges.files[0]!.path = "src/other.ts";
+  writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+
+  await assert.rejects(
+    store.getTurnFileChanges("session-1", "turn-1"),
+    /manifest is invalid/,
+  );
+  await assert.rejects(
+    store.getTurnFileDiff("session-1", "turn-1", "src/demo.ts"),
+    /manifest is invalid/,
   );
 });
 

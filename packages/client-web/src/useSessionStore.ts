@@ -7,6 +7,7 @@ import type {
   RahEvent,
   SessionConfigValue,
   SessionInputAttachment,
+  SessionInputAnnotation,
   ConversationItemDetailKind,
   SessionSummary,
   StoredSessionIdentity,
@@ -137,6 +138,7 @@ interface StartSessionOptions {
   modeId?: string;
   initialInput?: string;
   initialAttachments?: SessionInputAttachment[];
+  initialAnnotations?: SessionInputAnnotation[];
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   onSessionCreated?: (sessionId: string) => void;
 }
@@ -149,6 +151,7 @@ interface ResumeHistorySessionOptions {
   reasoningId?: string | null;
   initialInput?: string;
   initialAttachments?: SessionInputAttachment[];
+  initialAnnotations?: SessionInputAnnotation[];
 }
 
 type ModelCatalogLoadState = {
@@ -282,9 +285,10 @@ interface SessionState {
     text: string,
     attachments?: SessionInputAttachment[],
     identity?: {
-      clientMessageId: string;
-      clientTurnId: string;
+      clientMessageId?: string;
+      clientTurnId?: string;
       skipOptimisticQueue?: boolean;
+      annotations?: SessionInputAnnotation[];
     },
   ) => Promise<void>;
   updateQueuedInput: (sessionId: string, clientMessageId: string, text: string) => Promise<void>;
@@ -768,9 +772,22 @@ export function applyStoredSessionDiscoveryEvents(events: readonly RahEvent[]): 
       };
     }
     const recentSessions = applyStoredSessionsDeltaToRecent(state.recentSessions, delta);
-    if (!state.storedSessionsCatalogLoaded || state.storedSessionsCatalogRevision === null) {
+    if (!state.storedSessionsCatalogLoaded) {
       return {
         ...(pinnedSidebarItems === null ? {} : { pinnedSidebarItems }),
+        storedSessions: applyStoredSessionsDeltaToRecent(state.storedSessions, delta),
+        recentSessions,
+        storedSessionsCatalogDirty: true,
+      };
+    }
+    if (state.storedSessionsCatalogRevision === null) {
+      return {
+        ...(pinnedSidebarItems === null ? {} : { pinnedSidebarItems }),
+        // A cached catalog intentionally has no delta baseline for declaring
+        // Chats/All clean, but discovery removals are still authoritative for
+        // Sidebar identity. Apply them immediately instead of leaving stale
+        // rows visible until a later full catalog request.
+        storedSessions: applyStoredSessionsDeltaToCatalog(state.storedSessions, delta),
         recentSessions,
         storedSessionsCatalogDirty: true,
       };
@@ -1526,6 +1543,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...(options?.initialAttachments !== undefined
           ? { initialAttachments: options.initialAttachments }
           : {}),
+        ...(options?.initialAnnotations !== undefined
+          ? { initialAnnotations: options.initialAnnotations }
+          : {}),
       },
     );
   },
@@ -1548,7 +1568,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }));
     try {
       const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-      const archivedKeys = new Set([key]);
+      const storedSessionsMode = storedSessionsModeForState(get());
       const sessionsResponse = await api.archiveStoredSession(
         {
           ...session,
@@ -1559,17 +1579,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               }
             : {}),
         },
-        { storedSessions: "recent" },
+        { storedSessions: storedSessionsMode },
       );
       set((state) => {
+        const responseRevision = sessionsResponse.storedSessionsRevision ?? null;
+        const catalogResponseIsStale =
+          storedSessionsMode === "all" &&
+          responseRevision !== null &&
+          state.storedSessionsCatalogRevision !== null &&
+          responseRevision < state.storedSessionsCatalogRevision;
         const applied = applySessionsResponse(state, sessionsResponse, {
           workspaceVisibilityVersionAtRequest,
-          preserveStoredSessionCatalog: state.storedSessionsCatalogLoaded,
-          preserveLocalStoppedHistory: true,
-          excludeLocalStoppedHistoryKeys: archivedKeys,
+          // Archive returns the post-mutation provider projection. It must
+          // replace the matching client catalog instead of merging arbitrary
+          // previous_running rows back into the Sidebar.
+          preserveLocalStoppedHistory: false,
         });
+        const catalogPatch = catalogResponseIsStale
+          ? {
+              storedSessions: state.storedSessions,
+              recentSessions: state.recentSessions,
+            }
+          : storedSessionsMode === "all"
+            ? {
+                storedSessionsCatalogLoaded: true,
+                storedSessionsCatalogDirty: false,
+                storedSessionsCatalogRevision:
+                  responseRevision ?? state.storedSessionsCatalogRevision,
+              }
+            : {};
         return {
           ...applied,
+          ...catalogPatch,
           optimisticallyArchivedSessionKeys: withoutSetValue(
             state.optimisticallyArchivedSessionKeys,
             key,
@@ -1793,6 +1834,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionId,
       text,
       ...(attachments !== undefined ? { attachments } : {}),
+      ...(identity?.annotations?.length ? { annotations: identity.annotations } : {}),
       ...(identity?.clientMessageId ? { clientMessageId: identity.clientMessageId } : {}),
       ...(identity?.clientTurnId ? { clientTurnId: identity.clientTurnId } : {}),
       ...(identity?.skipOptimisticQueue === true ? { skipOptimisticQueue: true } : {}),

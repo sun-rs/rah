@@ -9,12 +9,21 @@ import {
 import type {
   SessionConfigValue,
   SessionInputAttachment,
+  SessionInputAnnotation,
   SessionSummary,
 } from "@rah/runtime-protocol";
 import type { ProviderChoice } from "../components/ProviderSelector";
 import { insertTextAtSelection } from "../composer-text-insertion";
 import { imageFilesFromClipboardData } from "../composer-image-attachments";
 import { useComposerAttachments } from "./useComposerAttachments";
+import { useComposerAnnotations } from "./useComposerAnnotations";
+import {
+  createComposerAnnotation,
+  type SelectedConversationText,
+} from "../composer-annotations";
+
+const MORE_DETAILS_PROMPT =
+  "请详细说明这段选中的内容，并结合当前任务上下文解释它的含义和影响。";
 
 type StartSessionInput = {
   provider: ProviderChoice;
@@ -22,6 +31,7 @@ type StartSessionInput = {
   title: string;
   initialInput: string;
   initialAttachments?: SessionInputAttachment[];
+  initialAnnotations?: SessionInputAnnotation[];
   modeId?: string;
   model?: string;
   optionValues?: Record<string, SessionConfigValue>;
@@ -33,6 +43,7 @@ type SendInputFn = (
   sessionId: string,
   text: string,
   attachments?: SessionInputAttachment[],
+  options?: { annotations?: SessionInputAnnotation[] },
 ) => Promise<unknown>;
 type StartSessionFn = (options: StartSessionInput) => Promise<unknown>;
 
@@ -56,6 +67,7 @@ export function useWorkbenchComposerState(args: {
     setDrafts((current) => updateComposerDraftMap(current, draftKey, nextDraft));
   };
   const draftAttachments = useComposerAttachments(draftKey ?? "no-session");
+  const draftAnnotations = useComposerAnnotations(draftKey ?? "no-session");
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [emptyStateDraft, setEmptyStateDraft] = useState("");
   const emptyStateAttachments = useComposerAttachments();
@@ -115,11 +127,15 @@ export function useWorkbenchComposerState(args: {
   );
 
   const handleSend = async () => {
-    if (!args.selectedSummary || (!draft.trim() && draftAttachments.count === 0)) {
+    if (
+      !args.selectedSummary ||
+      (!draft.trim() && draftAttachments.count === 0)
+    ) {
       return;
     }
     const textDraft = draft;
     const attachmentDraft = draftAttachments.take();
+    const annotationDraft = draftAnnotations.take();
     const sessionId = args.selectedSummary.session.id;
     setDraft("");
     pendingSendCountRef.current += 1;
@@ -130,11 +146,13 @@ export function useWorkbenchComposerState(args: {
           sessionId,
           textDraft,
           attachmentDraft.map((item) => item.attachment),
+          annotationDraft.length ? { annotations: annotationDraft } : undefined,
         );
         draftAttachments.release(attachmentDraft);
       } catch {
         setDraft((current) => (current.trim() ? current : textDraft));
         draftAttachments.restore(attachmentDraft);
+        draftAnnotations.restore(annotationDraft);
       } finally {
         pendingSendCountRef.current = Math.max(0, pendingSendCountRef.current - 1);
         if (pendingSendCountRef.current === 0) {
@@ -229,6 +247,40 @@ export function useWorkbenchComposerState(args: {
     });
   };
 
+  const addDraftSelectedText = (selection: SelectedConversationText) => {
+    const annotation = createComposerAnnotation(selection);
+    if (!annotation) {
+      return;
+    }
+    draftAnnotations.add(annotation);
+    queueMicrotask(() => composerRef.current?.focus());
+  };
+
+  const requestDraftSelectedTextDetails = (selection: SelectedConversationText) => {
+    const annotation = createComposerAnnotation(selection);
+    if (!annotation) {
+      return;
+    }
+    draftAnnotations.add(annotation);
+    setDraft((current) => {
+      if (current.includes(MORE_DETAILS_PROMPT)) {
+        return current;
+      }
+      return current.trim()
+        ? `${current.trimEnd()}\n\n${MORE_DETAILS_PROMPT}`
+        : MORE_DETAILS_PROMPT;
+    });
+    queueMicrotask(() => {
+      const textarea = composerRef.current;
+      if (!textarea) {
+        return;
+      }
+      textarea.focus();
+      const end = textarea.value.length;
+      textarea.setSelectionRange(end, end);
+    });
+  };
+
   return {
     composerRef,
     draft,
@@ -236,6 +288,8 @@ export function useWorkbenchComposerState(args: {
     draftAttachmentCount: draftAttachments.count,
     draftAttachmentUploadPending: draftAttachments.uploading,
     draftAttachmentError: draftAttachments.error,
+    draftAnnotations: draftAnnotations.items,
+    draftAnnotationCount: draftAnnotations.count,
     emptyStateComposerRef,
     emptyStateDraft,
     emptyStateAttachments: emptyStateAttachments.items,
@@ -250,15 +304,19 @@ export function useWorkbenchComposerState(args: {
     uploadDraftFiles: draftAttachments.uploadFiles,
     uploadEmptyStateFiles: emptyStateAttachments.uploadFiles,
     clearDraftAttachments: draftAttachments.clear,
+    clearDraftAnnotations: draftAnnotations.clear,
     clearEmptyStateAttachments: emptyStateAttachments.clear,
     removeDraftAttachment: draftAttachments.remove,
     removeEmptyStateAttachment: emptyStateAttachments.remove,
     removeLastDraftAttachment: draftAttachments.removeLast,
     removeLastEmptyStateAttachment: emptyStateAttachments.removeLast,
+    removeDraftAnnotation: draftAnnotations.remove,
     handleSend,
     handleEmptyStateSend,
     insertDraftReference,
     insertEmptyStateReference,
+    addDraftSelectedText,
+    requestDraftSelectedTextDetails,
   };
 }
 

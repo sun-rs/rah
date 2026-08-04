@@ -71,6 +71,110 @@ describe("WorkbenchStateStore", () => {
     await second.shutdown();
   });
 
+  test("complete provider reconciliation prunes remembered orphan sessions", async () => {
+    const daemonDir = path.join(tmpRoot, "runtime-daemon");
+    mkdirSync(daemonDir, { recursive: true });
+    const staleKey = "codex:stale-browser-qa";
+    writeFileSync(
+      path.join(daemonDir, "workbench-state.json"),
+      JSON.stringify({
+        version: 3,
+        updatedAt: "2026-08-04T00:00:00.000Z",
+        workspaces: ["/workspace/skew", "/workspace/claude"],
+        hiddenWorkspaces: [],
+        hiddenSessionKeys: [],
+        sessionTitleOverrides: {
+          [staleKey]: "RAH_BROWSER_STATE_SEQUENCE_QA",
+          "codex:current-codex": "Current Codex",
+        },
+        pendingSessionTitleOverrides: {},
+        sessions: [
+          {
+            provider: "codex",
+            providerSessionId: "stale-browser-qa",
+            cwd: "/workspace/skew",
+            rootDir: "/workspace/skew",
+            title: "RAH_BROWSER_STATE_SEQUENCE_QA",
+            source: "previous_running",
+          },
+          {
+            provider: "codex",
+            providerSessionId: "current-codex",
+            cwd: "/workspace/skew",
+            rootDir: "/workspace/skew",
+            title: "Current Codex",
+            source: "previous_running",
+          },
+          {
+            provider: "claude",
+            providerSessionId: "current-claude",
+            cwd: "/workspace/claude",
+            rootDir: "/workspace/claude",
+            title: "Current Claude",
+            source: "previous_running",
+          },
+        ],
+        recentSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "stale-browser-qa",
+            cwd: "/workspace/skew",
+            rootDir: "/workspace/skew",
+            title: "RAH_BROWSER_STATE_SEQUENCE_QA",
+            source: "previous_running",
+          },
+          {
+            provider: "codex",
+            providerSessionId: "current-codex",
+            cwd: "/workspace/skew",
+            rootDir: "/workspace/skew",
+            title: "Current Codex",
+            source: "previous_running",
+          },
+        ],
+        tuiMuxLiveSessions: [],
+        pinnedSidebarItems: [
+          {
+            workspaceDir: "/workspace/skew",
+            itemKey: `session:${staleKey}`,
+          },
+          {
+            workspaceDir: "/workspace/skew",
+            itemKey: "session:codex:current-codex",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const store = new WorkbenchStateStore(daemonDir);
+    store.load();
+    assert.equal(
+      store.pruneMissingProviderSessions("codex", new Set(["current-codex"])),
+      true,
+    );
+    await store.flush();
+
+    const snapshot = store.snapshot();
+    assert.deepEqual(
+      snapshot.sessions.map((session) => `${session.provider}:${session.providerSessionId}`),
+      ["codex:current-codex", "claude:current-claude"],
+    );
+    assert.deepEqual(
+      snapshot.recentSessions.map((session) => `${session.provider}:${session.providerSessionId}`),
+      ["codex:current-codex"],
+    );
+    assert.deepEqual(snapshot.sessionTitleOverrides, {
+      "codex:current-codex": "Current Codex",
+    });
+    assert.deepEqual(snapshot.pinnedSidebarItems, [
+      {
+        workspaceDir: "/workspace/skew",
+        itemKey: "session:codex:current-codex",
+      },
+    ]);
+  });
+
   test("listSessions exposes hidden workspaces from persisted workbench state", async () => {
     const engine = new RuntimeEngine();
     await engine.addWorkspace("/workspace/demo");

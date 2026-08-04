@@ -26,6 +26,7 @@ import {
   normalizeCouncilMcpToolCall,
   projectCouncilMcpToolCall,
 } from "./council/council-mcp-projection";
+import { parseResponseAnnotationEnvelope } from "./session-input-attachments";
 
 type OpenCodeMessageRole = "user" | "assistant";
 
@@ -554,11 +555,13 @@ function takePendingSubmittedUserMessage(
   state: OpenCodeActivityState,
   text: string,
   providerMessageId: string,
+  visibleText = text,
 ): PendingSubmittedOpenCodeUserMessage | undefined {
   const index = state.pendingSubmittedUserMessages.findIndex(
     (message) =>
       message.providerMessageId === providerMessageId ||
-      (message.providerMessageId === undefined && message.text === text),
+      (message.providerMessageId === undefined &&
+        (message.text === text || message.text === visibleText)),
   );
   if (index < 0) {
     return undefined;
@@ -757,14 +760,20 @@ function translateOpenCodePart(
         if (state.passiveUserMessageIds.has(part.messageID)) {
           return [];
         }
-        const submitted = takePendingSubmittedUserMessage(state, text, part.messageID);
+        const visibleText = parseResponseAnnotationEnvelope(text).text;
+        const submitted = takePendingSubmittedUserMessage(
+          state,
+          text,
+          part.messageID,
+          visibleText,
+        );
         const userTurnId = submitted?.turnId ?? turnId;
         return [
           {
             type: "timeline_item",
             item: {
               kind: "user_message",
-              text,
+              text: submitted?.text ?? visibleText,
               messageId: part.messageID,
               ...(submitted?.clientMessageId !== undefined
                 ? { clientMessageId: submitted.clientMessageId }

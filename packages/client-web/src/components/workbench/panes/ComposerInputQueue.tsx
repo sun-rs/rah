@@ -125,7 +125,12 @@ export function ComposerInputQueue(props: {
               />
             ) : (
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--app-fg)]">
-                {item.text || (item.attachments?.length ? "Attachment message" : "Empty message")}
+                {item.text ||
+                  (item.attachments?.length
+                    ? "Attachment message"
+                    : item.annotations?.length
+                      ? `${item.annotations.length} selected text annotation${item.annotations.length === 1 ? "" : "s"}`
+                      : "Empty message")}
               </span>
             )}
 

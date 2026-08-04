@@ -6,6 +6,7 @@ export function AssistantMessage(props: {
   content: string;
   contentParts?: TimelineAssistantContentPart[];
   sessionId?: string;
+  entryKey?: string;
   variant?: "final" | "process";
   onOpenLocalFile?: (path: string) => void;
 }) {
@@ -36,6 +37,9 @@ export function AssistantMessage(props: {
     <div
       className="flex w-full flex-col items-start gap-4"
       data-testid="chat-assistant-message"
+      data-selection-source="conversation-message"
+      data-selection-entry-key={props.entryKey}
+      data-selection-role="assistant"
     >
       {props.contentParts
         ? props.contentParts.map((part, index) =>

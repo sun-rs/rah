@@ -282,6 +282,41 @@ describe("applyProviderActivity", () => {
         ).diff,
         unifiedDiff,
       );
+
+      const [cleared] = await applyProviderActivityAsync(
+        services,
+        sessionId,
+        {
+          provider: "codex",
+          channel: "structured_live",
+          raw: {
+            method: "turn/diff/updated",
+            params: { turnId: "turn-1", diff: "" },
+          },
+        },
+        {
+          type: "turn_file_changes_updated",
+          turnId: "turn-1",
+          unifiedDiff: "",
+        },
+      );
+      assert.equal(cleared?.type, "turn.file_changes.updated");
+      if (cleared?.type === "turn.file_changes.updated") {
+        assert.deepEqual(cleared.payload.fileChanges, {
+          files: [],
+          totalAdditions: 0,
+          totalDeletions: 0,
+        });
+      }
+      await assert.rejects(
+        turnArtifacts.getTurnFileDiff(
+          ownerId,
+          "turn-1",
+          "src/demo.ts",
+          sessionId,
+        ),
+        /Unknown turn file/,
+      );
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }

@@ -1602,17 +1602,11 @@ rl.on('line', (line) => {
 
     services.sessionStore.removeSession(runtimeSessionId);
 
-    const diff = await storedHistory.getSessionConversationTurnFileDiff(
-      runtimeSessionId,
-      {
-        providerTurnId: turnId,
-        path: "src/main.ts",
-      },
+    assert.equal(
+      "getSessionConversationTurnFileDiff" in storedHistory,
+      false,
+      "rollout patch activity must not expose a historical turn diff reader",
     );
-    assert.equal(diff?.sessionId, runtimeSessionId);
-    assert.equal(diff?.turnId, turnId);
-    assert.match(diff?.diff ?? "", /--- a\/src\/main\.ts/);
-    assert.match(diff?.diff ?? "", /\n-old\n\+new/);
 
     const sourceRevision =
       await storedHistory.getSessionConversationSourceRevision(runtimeSessionId);

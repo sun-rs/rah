@@ -6,7 +6,13 @@ import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { FileResourceIcon, fileResourceKind } from "./FileResourceIcon";
-import { createMarkdownComponents, MarkdownRenderer } from "./MarkdownRenderer";
+import {
+  coalesceMarkdownImageBlocks,
+  createMarkdownComponents,
+  isImageOnlyMarkdownBlock,
+  MarkdownRenderer,
+  selectionIntersectsNode,
+} from "./MarkdownRenderer";
 
 describe("MarkdownRenderer", () => {
   test("renders formatted Markdown on the first render without a plain-text suspense phase", () => {
@@ -95,6 +101,43 @@ describe("MarkdownRenderer", () => {
     assert.match(html, /alt="Remote chart"/);
   });
 
+  test("coalesces consecutive image-only blocks into a wrapping thumbnail grid", () => {
+    assert.equal(
+      isImageOnlyMarkdownBlock("![First](https://example.com/first.png)"),
+      true,
+    );
+    assert.deepEqual(
+      coalesceMarkdownImageBlocks([
+        "![First](https://example.com/first.png)",
+        "![Second](https://example.com/second.png)",
+        "Caption",
+      ]),
+      [
+        "![First](https://example.com/first.png)\n![Second](https://example.com/second.png)",
+        "Caption",
+      ],
+    );
+
+    const html = renderToStaticMarkup(
+      <MarkdownRenderer
+        className="prose-chat"
+        content={
+          "![First](https://example.com/first.png)\n\n![Second](https://example.com/second.png)"
+        }
+      />,
+    );
+
+    assert.match(html, /data-markdown-image-grid="true"/);
+    assert.equal(
+      [...html.matchAll(/data-testid="conversation-inline-image"/g)].length,
+      2,
+    );
+    assert.equal(
+      [...html.matchAll(/prose-chat-image-thumbnail-remote/g)].length,
+      2,
+    );
+  });
+
   test("classifies resource icons from stable file extensions", () => {
     assert.equal(fileResourceKind("src/main.rs"), "code");
     assert.equal(fileResourceKind("report.csv"), "spreadsheet");
@@ -134,9 +177,28 @@ describe("MarkdownRenderer", () => {
     );
 
     assert.match(html, /class="prose-chat-local-file-link"/);
+    assert.match(html, /data-selectable-conversation-text="true"/);
     assert.match(html, /data-file-icon-name="react"/);
     assert.match(html, /data-file-icon-tone="inherit"/);
     assert.doesNotMatch(html, /color:var\(--file-icon-cyan\)/);
+  });
+
+  test("distinguishes pointer text selection from a local-file activation", () => {
+    const target = {} as Node;
+    const intersectingSelection = {
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => ({
+        intersectsNode: (node: Node) => node === target,
+      }),
+    } as unknown as Pick<Selection, "isCollapsed" | "rangeCount" | "getRangeAt">;
+
+    assert.equal(selectionIntersectsNode(intersectingSelection, target), true);
+    assert.equal(
+      selectionIntersectsNode({ ...intersectingSelection, isCollapsed: true }, target),
+      false,
+    );
+    assert.equal(selectionIntersectsNode(null, target), false);
   });
 
   test("does not link ordinary inline code spans", () => {

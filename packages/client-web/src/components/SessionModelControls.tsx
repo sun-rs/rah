@@ -35,7 +35,7 @@ function selectedReasoning(
   if (options.length === 0) {
     return null;
   }
-  if (selectedReasoningId === null) {
+  if (selectedReasoningId === null && model?.defaultReasoningId === null) {
     return null;
   }
   const normalizedReasoningId = selectedReasoningId?.trim() || null;
@@ -485,11 +485,13 @@ export function SessionModelControls(props: {
   compact?: boolean;
   iconOnly?: boolean;
   mobileIconOnly?: boolean;
+  appearance?: "default" | "composer";
   allowProviderDefault?: boolean;
   onOpen?: (() => void) | undefined;
   onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
   onReasoningChange: (reasoningId: string) => void;
 }) {
+  const composerAppearance = props.appearance === "composer";
   const { model, reasoning } = resolveSelectedModelDraft({
     catalog: props.catalog,
     selectedModelId: props.selectedModelId,
@@ -497,8 +499,6 @@ export function SessionModelControls(props: {
     allowProviderDefault: props.allowProviderDefault,
   });
   const models = props.catalog?.models ?? [];
-  const reasoningOptions = model?.reasoningOptions ?? [];
-
   const [open, setOpen] = useState(false);
   const [panelView, setPanelView] = useState<"model-list" | "param-list">("model-list");
   const [draftModelId, setDraftModelId] = useState<string | null>(null);
@@ -637,30 +637,39 @@ export function SessionModelControls(props: {
     setOpen(false);
   };
 
-  if (models.length === 0 && !props.loading) {
+  if (models.length === 0 && !props.loading && !props.onOpen) {
     return null;
   }
 
+  const modelLabel = (model?.id ?? props.selectedModelId?.trim()) || "Model";
+  const reasoningLabel = (reasoning?.label ?? props.selectedReasoningId?.trim()) || null;
   const labelParts: string[] = [];
   if (props.loading && models.length === 0) {
     labelParts.push("Loading…");
   } else {
-    labelParts.push(model?.id ?? "Model");
-    if (reasoningOptions.length > 1 && reasoning) {
-      labelParts.push(reasoning.label);
+    labelParts.push(modelLabel);
+    if (reasoningLabel) {
+      labelParts.push(reasoningLabel);
     }
   }
   const label = labelParts.join(" / ");
 
   const pillBase =
     "inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
-  const triggerClass = props.iconOnly
-    ? `${pillBase} icon-click-feedback h-8 w-8 shrink-0 justify-center p-0`
-    : props.compact
-      ? `${pillBase} h-9 w-full justify-start px-2.5`
-      : props.mobileIconOnly
-        ? `${pillBase} icon-click-feedback h-10 w-10 shrink-0 justify-center p-0 min-[700px]:h-9 min-[700px]:w-auto min-[700px]:justify-start min-[700px]:px-3 lg:h-8`
-        : `${pillBase} h-8 md:h-9 px-2.5 md:px-3`;
+  const composerTriggerClass = `icon-click-feedback inline-flex h-10 md:h-8 lg:h-7 min-w-0 shrink items-center gap-1 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
+    props.mobileIconOnly
+      ? "w-10 justify-center px-0 min-[700px]:w-auto min-[700px]:max-w-[11rem] min-[700px]:justify-start min-[700px]:px-1.5 lg:w-auto"
+      : "max-w-[13rem] justify-start px-2 md:px-1.5"
+  }`;
+  const triggerClass = composerAppearance
+    ? composerTriggerClass
+    : props.iconOnly
+      ? `${pillBase} icon-click-feedback h-8 w-8 shrink-0 justify-center p-0`
+      : props.compact
+        ? `${pillBase} h-9 w-full justify-start px-2.5`
+        : props.mobileIconOnly
+          ? `${pillBase} icon-click-feedback h-10 w-10 shrink-0 justify-center p-0 min-[700px]:h-9 min-[700px]:w-auto min-[700px]:justify-start min-[700px]:px-3 lg:h-8`
+          : `${pillBase} h-8 md:h-9 px-2.5 md:px-3`;
 
   return (
     <>
@@ -680,13 +689,31 @@ export function SessionModelControls(props: {
         aria-haspopup="listbox"
         aria-expanded={open}
         title={label}
+        data-composer-control={composerAppearance ? "model" : undefined}
       >
         {props.loading && models.length === 0 ? (
           <LoaderCircle size={12} className="animate-spin text-[var(--app-hint)]" />
+        ) : !composerAppearance || props.iconOnly || props.mobileIconOnly ? (
+          <Cpu
+            size={composerAppearance ? 15 : 12}
+            strokeWidth={composerAppearance ? 1.8 : 2}
+            className={`shrink-0 text-[var(--app-hint)] ${
+              composerAppearance && props.mobileIconOnly ? "min-[700px]:hidden" : ""
+            }`}
+          />
+        ) : null}
+        {props.iconOnly ? null : composerAppearance ? (
+          <span
+            className={`flex min-w-0 items-center gap-1 ${
+              props.mobileIconOnly ? "hidden min-[700px]:flex" : ""
+            }`}
+          >
+            <span className="min-w-0 truncate">{modelLabel}</span>
+            {reasoningLabel ? (
+              <span className="shrink-0 text-[var(--app-hint)]">{reasoningLabel}</span>
+            ) : null}
+          </span>
         ) : (
-          <Cpu size={12} className="shrink-0 text-[var(--app-hint)]" />
-        )}
-        {props.iconOnly ? null : (
           <span
             className={`min-w-0 truncate ${
               props.mobileIconOnly ? "hidden min-[700px]:inline" : ""
@@ -697,10 +724,13 @@ export function SessionModelControls(props: {
         )}
         {props.iconOnly ? null : (
           <ChevronDown
-            size={12}
+            size={composerAppearance ? 14 : 12}
+            strokeWidth={composerAppearance ? 1.8 : 2}
             className={`shrink-0 text-[var(--app-hint)] transition-transform ${
               open ? "rotate-180" : ""
-            } ${props.mobileIconOnly ? "hidden min-[700px]:block" : ""}`}
+            } ${composerAppearance ? "md:h-3 md:w-3" : ""} ${
+              props.mobileIconOnly ? "hidden min-[700px]:block" : ""
+            }`}
           />
         )}
       </button>

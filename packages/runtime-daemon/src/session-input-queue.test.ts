@@ -114,3 +114,27 @@ test("restoring an existing uncertain submission resets it to queued", () => {
   assert.equal(restoreRuntimeQueuedInput(queue, item), false);
   assert.equal(queue[0]?.state, "queued");
 });
+
+test("queued input projection preserves structured response annotations", () => {
+  const item = runtimeQueuedInput({
+    clientId: "client-1",
+    clientMessageId: "message-1",
+    text: "Explain this.",
+    annotations: [
+      {
+        id: "annotation-1",
+        text: "Selected response text",
+        source: {
+          sessionId: "session-1",
+          entryKey: "assistant-1",
+          role: "assistant",
+        },
+      },
+    ],
+  });
+
+  const projected = projectSessionInputQueue([item]);
+  assert.deepEqual(projected[0]?.annotations, item.annotations);
+  assert.notEqual(projected[0]?.annotations, item.annotations);
+  assert.notEqual(projected[0]?.annotations?.[0]?.source, item.annotations?.[0]?.source);
+});

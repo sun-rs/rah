@@ -7,7 +7,10 @@ import {
 } from "../actions/WorkbenchSidebarNavigation";
 import { Sheet } from "../../Sheet";
 import { OverlayScrollArea } from "../../OverlayScrollArea";
-import { SIDEBAR_LAYOUT } from "../../../sidebar-layout-contract";
+import {
+  SIDEBAR_LAYOUT,
+  SIDEBAR_VISUAL_STYLE,
+} from "../../../sidebar-layout-contract";
 import type { WorkspaceSortMode } from "../../../session-browser";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
@@ -21,6 +24,7 @@ export function WorkbenchSidebarShell(props: {
   leftOpen: boolean;
   onLeftOpenChange: (open: boolean) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizeReset: () => void;
   sidebarContent: ReactNode;
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
@@ -93,16 +97,19 @@ export function WorkbenchSidebarShell(props: {
       </button>
       <aside
         data-sidebar-open={props.sidebarOpen ? "true" : "false"}
-        className={`rah-workbench-sidebar hidden shrink-0 flex-col overflow-hidden md:flex ${
+        data-sidebar-protocol={SIDEBAR_LAYOUT.protocolDataValue}
+        data-sidebar-surface="desktop"
+        className={`rah-workbench-sidebar ${SIDEBAR_LAYOUT.protocolClassName} hidden shrink-0 flex-col overflow-hidden md:flex ${
           props.isResizing ? "" : "transition-[width] duration-150 ease-out"
         }`}
         style={{
+          ...SIDEBAR_VISUAL_STYLE,
           width: props.sidebarOpen ? `var(--rah-sidebar-width, ${props.sidebarWidth}px)` : 0,
         }}
       >
-        <div className="rah-sidebar-header flex h-12 min-w-0 shrink-0 items-center pl-12 pr-2">
+        <div className={SIDEBAR_LAYOUT.desktopHeaderClassName}>
           {props.sidebarOpen ? (
-            <span className="truncate text-[13px] font-semibold text-[var(--app-fg)]">RAH</span>
+            <span className={SIDEBAR_LAYOUT.headerTitleClassName}>RAH</span>
           ) : null}
         </div>
         {props.sidebarOpen ? (
@@ -133,6 +140,9 @@ export function WorkbenchSidebarShell(props: {
         <div
           className={`hidden md:block resize-handle ${props.isResizing ? "dragging" : ""}`}
           onPointerDown={props.onResizeStart}
+          onDoubleClick={props.onResizeReset}
+          title="Drag to resize · double-click to reset to 272px"
+          aria-label="Resize sidebar; double-click to reset width"
         />
       ) : null}
 
@@ -146,7 +156,15 @@ export function WorkbenchSidebarShell(props: {
         closeLabel="Collapse sidebar"
         initialFocus="content"
         viewportClassName="md:!hidden"
-        title={<span>RAH</span>}
+        contentClassName={SIDEBAR_LAYOUT.protocolClassName}
+        contentStyle={SIDEBAR_VISUAL_STYLE}
+        contentDataAttributes={{
+          "data-sidebar-protocol": SIDEBAR_LAYOUT.protocolDataValue,
+          "data-sidebar-surface": "pwa",
+        }}
+        headerClassName={SIDEBAR_LAYOUT.sheetHeaderClassName}
+        headerTitleClassName={SIDEBAR_LAYOUT.headerTitleClassName}
+        title="RAH"
         bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
         <WorkbenchSidebarNavigation
@@ -164,7 +182,7 @@ export function WorkbenchSidebarShell(props: {
           onHome={() => runMobileAction(props.onHome)}
         />
         <div
-          className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain rah-scroll-panel rah-scroll-panel-y ${SIDEBAR_LAYOUT.sidebarSheetContentClassName}`}
+          className={`rah-sidebar-sheet-scroll min-h-0 flex-1 overflow-y-auto overscroll-y-contain ${SIDEBAR_LAYOUT.sidebarSheetContentClassName}`}
         >
           {props.sidebarContent}
         </div>

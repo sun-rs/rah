@@ -8,11 +8,14 @@ import { composeConversationProjectionDeltas } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
-import { mergeResumedHistoryProjection } from "./session-store-session-lifecycle";
+import {
+  createStoppedReplayProjection,
+  mergeResumedHistoryProjection,
+} from "./session-store-session-lifecycle";
 import { connectSessionStoreTransport } from "./session-store-transport";
 import type { PendingSessionTransition } from "./session-transition-contract";
 import { isTransportErrorMessage } from "./transport-error";
-import type { SessionProjection } from "./types";
+import { applyEventToProjection, type SessionProjection } from "./types";
 
 export type RecoverTransportOptions = {
   signal?: AbortSignal;
@@ -345,6 +348,38 @@ function selectedResumedReplayClosedByEvents(
     : null;
 }
 
+function selectedLiveSessionClosedByEvents(
+  state: SessionSyncState,
+  events: readonly RahEvent[],
+): SessionProjection | null {
+  const selectedSessionId = state.selectedSessionId;
+  const selectedProjection = selectedSessionId
+    ? state.projections.get(selectedSessionId)
+    : undefined;
+  if (
+    !selectedProjection ||
+    selectedProjection.summary.session.status !== "running" ||
+    !selectedProjection.summary.session.providerSessionId ||
+    isReadOnlyReplay(selectedProjection.summary)
+  ) {
+    return null;
+  }
+
+  let latestProjection = selectedProjection;
+  for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
+    if (event.sessionId !== selectedSessionId) {
+      continue;
+    }
+    if (event.type === "session.closed") {
+      return createStoppedReplayProjection(latestProjection);
+    }
+    if (event.type !== "process.output.appended") {
+      latestProjection = applyEventToProjection(latestProjection, event);
+    }
+  }
+  return null;
+}
+
 function findLiveProjectionForReplay(
   projections: ReadonlyMap<string, SessionProjection>,
   replayProjection: SessionProjection,
@@ -384,10 +419,29 @@ export function applyProjectionEventsToSyncState(args: {
   ) => Map<string, SessionProjection>;
 }): Pick<SessionSyncState, "projections" | "selectedSessionId" | "sessionTopologyVersion"> {
   const resumedReplay = selectedResumedReplayClosedByEvents(args.state, args.events);
+  const stoppedReplay = resumedReplay
+    ? null
+    : selectedLiveSessionClosedByEvents(args.state, args.events);
   const projections = args.applyEventsToMap(args.state.projections, args.events);
   const sessionTopologyVersion = eventsMayChangeSessionTopology(args.events)
     ? args.state.sessionTopologyVersion + 1
     : args.state.sessionTopologyVersion;
+  if (!resumedReplay && !stoppedReplay) {
+    return {
+      projections,
+      selectedSessionId: args.state.selectedSessionId,
+      sessionTopologyVersion,
+    };
+  }
+  if (stoppedReplay) {
+    const next = new Map(projections);
+    next.set(stoppedReplay.summary.session.id, stoppedReplay);
+    return {
+      projections: next,
+      selectedSessionId: stoppedReplay.summary.session.id,
+      sessionTopologyVersion,
+    };
+  }
   if (!resumedReplay) {
     return {
       projections,

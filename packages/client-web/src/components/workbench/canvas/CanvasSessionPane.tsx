@@ -117,7 +117,7 @@ export function CanvasSessionPane(props: {
     request: {
       modeId?: string;
       modelId?: string;
-      reasoningId?: string;
+      reasoningId?: string | null;
       optionValues?: Record<string, SessionConfigValue>;
       initialInput?: string;
       initialAttachments?: SessionInputAttachment[];
@@ -199,22 +199,26 @@ export function CanvasSessionPane(props: {
       null,
     preserveMissingSelectedModel: resumeDraftModelId === null,
   });
+  const effectiveResumeModelId = modelControl.model?.id ?? null;
+  const effectiveResumeReasoningId = modelControl.reasoning?.id ?? null;
   const buildResumeRequest = () => {
     const modelDraft = props.resumeModelDraft;
+    const draftMatchesEffectiveModel =
+      resumeDraftModelId !== null && resumeDraftModelId === effectiveResumeModelId;
     const optionValues =
-      (resumeDraftModelId ? modelDraft?.optionValues : undefined) ??
-      (resumeDraftModelId
+      (draftMatchesEffectiveModel ? modelDraft?.optionValues : undefined) ??
+      (effectiveResumeModelId
         ? buildModelOptionValuesFromReasoning({
             catalog: props.modelCatalog,
-            modelId: resumeDraftModelId,
-            reasoningId: modelDraft?.reasoningId ?? null,
+            modelId: effectiveResumeModelId,
+            reasoningId: effectiveResumeReasoningId,
           })
         : undefined);
     return {
       ...(modeControl.effectiveModeId ? { modeId: modeControl.effectiveModeId } : {}),
-      ...(resumeDraftModelId ? { modelId: resumeDraftModelId } : {}),
-      ...(resumeDraftModelId && modelDraft?.reasoningId
-        ? { reasoningId: modelDraft.reasoningId }
+      ...(effectiveResumeModelId ? { modelId: effectiveResumeModelId } : {}),
+      ...(effectiveResumeModelId
+        ? { reasoningId: effectiveResumeReasoningId }
         : {}),
       ...(optionValues !== undefined ? { optionValues } : {}),
     };
@@ -391,10 +395,12 @@ export function CanvasSessionPane(props: {
       }}
       onClaimControl={() => {
         const modelDraft = props.resumeModelDraft;
-        const modelId = resumeDraftModelId;
-        const reasoningId = modelDraft?.reasoningId ?? modelControl.reasoning?.id ?? null;
+        const modelId = effectiveResumeModelId;
+        const reasoningId =
+          (resumeDraftModelId === modelId ? modelDraft?.reasoningId : undefined) ??
+          effectiveResumeReasoningId;
         const optionValues =
-          (modelId ? modelDraft?.optionValues : undefined) ??
+          (resumeDraftModelId === modelId ? modelDraft?.optionValues : undefined) ??
           (modelId
             ? buildModelOptionValuesFromReasoning({
                 catalog: props.modelCatalog,
@@ -488,6 +494,7 @@ export function CanvasSessionPane(props: {
           ...(optionValues ? { optionValues } : {}),
         };
         props.onRememberModelDraft(provider, next);
+        props.onResumeModelDraftChange(props.summary.session.id, next);
         void props.onSetSessionModel(props.summary.session.id, modelId, reasoningId, optionValues);
       }}
       sideTaskCount={props.sideProjections?.length ?? 0}

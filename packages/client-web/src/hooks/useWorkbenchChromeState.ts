@@ -215,6 +215,26 @@ export function useWorkbenchChromeState() {
     document.body.style.userSelect = "none";
   };
 
+  const resetSidebarWidth = () => {
+    activePointerIdRef.current = null;
+    sidebarWidthRef.current = SIDEBAR_DEFAULT_WIDTH;
+    pendingSidebarWidthRef.current = SIDEBAR_DEFAULT_WIDTH;
+    if (sidebarResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+      sidebarResizeFrameRef.current = null;
+    }
+    applySidebarWidthCss(SIDEBAR_DEFAULT_WIDTH);
+    setSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+    setIsResizing(false);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    try {
+      window.localStorage.setItem("rah-sidebar-width", String(SIDEBAR_DEFAULT_WIDTH));
+    } catch {
+      // ignore
+    }
+  };
+
   return {
     fileReferenceOpen,
     isResizing,
@@ -234,6 +254,7 @@ export function useWorkbenchChromeState() {
     setSettingsOpen,
     setSidebarOpen,
     setTerminalOpen,
+    resetSidebarWidth,
     startSidebarResize,
   };
 }

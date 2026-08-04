@@ -177,7 +177,120 @@ test("pin-only workbench discovery updates shared pins without dirtying stored c
   }
 });
 
-test("archive hides a session optimistically and requests only the recent response", async () => {
+test("cached discovery removals immediately prune the Sidebar catalog", () => {
+  const originalState = useSessionStore.getState();
+  const staleSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "stale-browser-qa",
+    cwd: "/workspace/skew",
+    rootDir: "/workspace/skew",
+    title: "RAH_BROWSER_STATE_SEQUENCE_QA",
+    source: "previous_running",
+  };
+  const currentSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "current-session",
+    cwd: "/workspace/skew",
+    rootDir: "/workspace/skew",
+    title: "Current session",
+    source: "provider_history",
+  };
+  useSessionStore.setState({
+    storedSessions: [staleSession, currentSession],
+    recentSessions: [staleSession, currentSession],
+    storedSessionsCatalogLoaded: true,
+    storedSessionsCatalogDirty: true,
+    storedSessionsCatalogRevision: null,
+  });
+
+  try {
+    const needsNetworkRefresh = applyStoredSessionDiscoveryEvents([
+      {
+        id: "event-remove-stale-cached-session",
+        seq: 1,
+        ts: "2026-08-04T00:00:00.000Z",
+        sessionId: "workbench:stored-sessions",
+        type: "session.discovery",
+        source: {
+          provider: "system",
+          channel: "system",
+          authority: "authoritative",
+        },
+        payload: {
+          version: 1,
+          storedSessions: {
+            revision: 9,
+            upsert: [],
+            remove: [{ provider: "codex", providerSessionId: "stale-browser-qa" }],
+          },
+        },
+      } satisfies RahEvent,
+    ]);
+
+    assert.equal(needsNetworkRefresh, false);
+    const state = useSessionStore.getState();
+    assert.deepEqual(
+      state.storedSessions.map((session) => session.providerSessionId),
+      ["current-session"],
+    );
+    assert.deepEqual(
+      state.recentSessions.map((session) => session.providerSessionId),
+      ["current-session"],
+    );
+    assert.equal(state.storedSessionsCatalogDirty, true);
+    assert.equal(state.storedSessionsCatalogRevision, null);
+  } finally {
+    useSessionStore.setState(originalState, true);
+  }
+});
+
+test("recent discovery removals prune the Sidebar before All has loaded", () => {
+  const originalState = useSessionStore.getState();
+  const staleSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "stale-recent-session",
+    source: "previous_running",
+  };
+  useSessionStore.setState({
+    storedSessions: [staleSession],
+    recentSessions: [staleSession],
+    storedSessionsCatalogLoaded: false,
+    storedSessionsCatalogDirty: false,
+    storedSessionsCatalogRevision: null,
+  });
+
+  try {
+    applyStoredSessionDiscoveryEvents([
+      {
+        id: "event-remove-stale-recent-session",
+        seq: 1,
+        ts: "2026-08-04T00:00:00.000Z",
+        sessionId: "workbench:stored-sessions",
+        type: "session.discovery",
+        source: {
+          provider: "system",
+          channel: "system",
+          authority: "authoritative",
+        },
+        payload: {
+          version: 1,
+          storedSessions: {
+            revision: 2,
+            upsert: [],
+            remove: [{ provider: "codex", providerSessionId: "stale-recent-session" }],
+          },
+        },
+      } satisfies RahEvent,
+    ]);
+
+    assert.deepEqual(useSessionStore.getState().storedSessions, []);
+    assert.deepEqual(useSessionStore.getState().recentSessions, []);
+  } finally {
+    useSessionStore.setState(originalState, true);
+  }
+});
+
+test("archive replaces the Sidebar catalog without reviving stale sessions", async () => {
   const originalState = useSessionStore.getState();
   const session: StoredSessionRef = {
     provider: "codex",
@@ -186,6 +299,30 @@ test("archive hides a session optimistically and requests only the recent respon
     cwd: "/workspace/current",
     rootDir: "/workspace/current",
     title: "Archive now",
+  };
+  const staleQaSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "stale-browser-qa",
+    source: "previous_running",
+    cwd: "/workspace/skew",
+    rootDir: "/workspace/skew",
+    title: "RAH_BROWSER_NATIVE_CODEX_COMPLETION_QA",
+  };
+  const staleArchivedSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "stale-archived-session",
+    source: "provider_history",
+    cwd: "/workspace/solars",
+    rootDir: "/workspace/solars",
+    title: "Find RU0204 last trading day",
+  };
+  const currentSession: StoredSessionRef = {
+    provider: "codex",
+    providerSessionId: "current-session",
+    source: "provider_history",
+    cwd: "/workspace/current",
+    rootDir: "/workspace/current",
+    title: "Current session",
   };
   let resolveArchive: ((response: Response) => void) | undefined;
   let requestedUrl = "";
@@ -197,9 +334,11 @@ test("archive hides a session optimistically and requests only the recent respon
     });
   }) as typeof fetch;
   useSessionStore.setState({
-    storedSessions: [session],
-    recentSessions: [session],
+    storedSessions: [session, staleQaSession, staleArchivedSession, currentSession],
+    recentSessions: [session, staleQaSession, staleArchivedSession, currentSession],
     storedSessionsCatalogLoaded: true,
+    storedSessionsCatalogDirty: false,
+    storedSessionsCatalogRevision: 8,
     optimisticallyArchivedSessionKeys: new Set(),
     workspaceDirs: ["/workspace/current"],
     workspaceDir: "/workspace/current",
@@ -213,14 +352,25 @@ test("archive hides a session optimistically and requests only the recent respon
       true,
     );
     assert.equal(optimistic.storedSessions[0]?.libraryState?.placement, "archive");
-    assert.match(requestedUrl, /storedSessions=recent/);
+    assert.match(requestedUrl, /storedSessions=all/);
     assert.ok(resolveArchive);
     resolveArchive(
       new Response(
         JSON.stringify({
           sessions: [],
-          storedSessions: [],
-          recentSessions: [],
+          storedSessions: [
+            {
+              ...session,
+              libraryState: {
+                placement: "archive",
+                backend: "provider_native",
+                archivedAt: "2026-08-04T00:00:00.000Z",
+              },
+            },
+            currentSession,
+          ],
+          recentSessions: [currentSession],
+          storedSessionsRevision: 9,
           workspaceDirs: ["/workspace/current"],
           hiddenWorkspaces: [],
           activeWorkspaceDir: "/workspace/current",
@@ -234,6 +384,16 @@ test("archive hides a session optimistically and requests only the recent respon
       false,
     );
     assert.equal(useSessionStore.getState().storedSessions[0]?.libraryState?.placement, "archive");
+    assert.deepEqual(
+      useSessionStore.getState().storedSessions.map((entry) => entry.providerSessionId),
+      ["archive-now", "current-session"],
+    );
+    assert.deepEqual(
+      useSessionStore.getState().recentSessions.map((entry) => entry.providerSessionId),
+      ["current-session"],
+    );
+    assert.equal(useSessionStore.getState().storedSessionsCatalogDirty, false);
+    assert.equal(useSessionStore.getState().storedSessionsCatalogRevision, 9);
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;

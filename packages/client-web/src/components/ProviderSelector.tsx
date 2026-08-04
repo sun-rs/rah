@@ -31,7 +31,7 @@ function StatusDot({ status }: { status: ProviderDiagnostic["status"] }) {
 }
 
 /**
- * ProviderSelector - Flat, horizontal pill design.
+ * ProviderSelector - Quiet grouped selector with one persistent selected item.
  *
  * Modes:
  * - "grid": For empty states. 3-column grid for core running providers.
@@ -54,11 +54,6 @@ export function ProviderSelector(props: {
     }
     return map;
   }, [diagnostics]);
-  const selectedOptionIndex = Math.max(
-    0,
-    PROVIDER_OPTIONS.findIndex((option) => option.value === value),
-  );
-
   if (mode === "rail") {
     return (
       <div className="provider-choice-rail" role="toolbar" aria-label="Provider selection">
@@ -99,7 +94,8 @@ export function ProviderSelector(props: {
   if (mode === "icons") {
     return (
       <div
-        className="grid grid-cols-3 gap-1.5"
+        className="provider-choice-module mx-auto grid h-9 w-full max-w-[24rem] grid-cols-3 gap-0 p-0"
+        data-provider-selector="module"
         role="radiogroup"
         aria-label="Provider selection"
       >
@@ -113,10 +109,8 @@ export function ProviderSelector(props: {
               role="radio"
               aria-checked={selected}
               onClick={() => onChange(option.value)}
-              className={`relative inline-flex h-8 min-w-0 items-center justify-center rounded-lg border transition-colors ${
-                selected
-                  ? "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                  : "border-transparent bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+              className={`provider-choice-option provider-choice-option-icon-only inline-flex h-9 min-w-0 items-center justify-center transition-colors ${
+                selected ? "is-selected" : ""
               }`}
               aria-label={option.label}
               title={option.label}
@@ -137,20 +131,14 @@ export function ProviderSelector(props: {
   const isDialog = mode === "dialog";
 
   if (!isDialog) {
-    /* Empty state selector: a centered, compact segmented rail. */
+    /* Empty state selector: a quiet module with one persistent selected item. */
     return (
       <div
-        className="relative mx-auto grid h-10 w-full max-w-none grid-cols-3 rounded-xl bg-[var(--app-subtle-bg)] p-1 sm:max-w-[24rem]"
+        className="provider-choice-module mx-auto grid h-9 w-full max-w-none grid-cols-3 gap-0 p-0 sm:max-w-[24rem]"
+        data-provider-selector="module"
         role="radiogroup"
         aria-label="Provider selection"
       >
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute bottom-1 left-1 top-1 w-[calc(33.333333%_-_0.166667rem)] rounded-[8px] border border-[var(--app-border)] bg-[var(--app-bg)] transition-transform duration-200 ease-out dark:bg-[var(--app-subtle-bg)]"
-          style={{
-            transform: `translateX(${selectedOptionIndex * 100}%)`,
-          }}
-        />
         {PROVIDER_OPTIONS.map((option) => {
           const selected = value === option.value;
           const diagnostic = diagnosticsMap.get(option.value);
@@ -163,14 +151,10 @@ export function ProviderSelector(props: {
               aria-checked={selected}
               onClick={() => onChange(option.value)}
               className={`
-                group relative z-10 inline-flex min-w-0 items-center justify-center gap-1.5
-                rounded-lg px-1.5 text-[13px] font-medium leading-none
+                provider-choice-option provider-choice-option-with-label group inline-flex h-9 min-w-0 items-center justify-center gap-1.5
+                px-1.5 text-[13px] font-medium leading-none
                 transition-colors duration-200 ease-out
-                ${
-                  selected
-                    ? "text-[var(--app-fg)]"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                }
+                ${selected ? "is-selected" : ""}
               `}
             >
               <ProviderLogo
@@ -179,7 +163,9 @@ export function ProviderSelector(props: {
                 className="h-4 w-4 shrink-0"
               />
 
-              <span className="hidden truncate sm:inline">{option.label}</span>
+              <span className="provider-choice-label-text hidden whitespace-nowrap sm:inline-block">
+                {option.label}
+              </span>
 
               {!selected && diagnostic ? (
                 <span className="hidden shrink-0 scale-75 sm:inline">

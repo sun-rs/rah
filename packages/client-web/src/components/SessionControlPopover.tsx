@@ -143,9 +143,9 @@ export function SessionControlPopover(props: {
         }}
         className={`${props.buttonClassName} ${
           !enabled
-            ? "cursor-not-allowed opacity-35 grayscale hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-hint)]"
+            ? "cursor-not-allowed opacity-50 grayscale hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-hint)]"
             : unavailable
-              ? "cursor-not-allowed opacity-45 grayscale hover:bg-[var(--app-subtle-bg)]"
+              ? "cursor-not-allowed opacity-55 grayscale hover:bg-[var(--app-subtle-bg)]"
               : ""
         }`}
         title={
@@ -163,7 +163,7 @@ export function SessionControlPopover(props: {
         aria-disabled={unavailable || undefined}
         aria-expanded={open}
       >
-        <SlidersHorizontal size={16} />
+        <SlidersHorizontal size={18} strokeWidth={2.25} />
       </button>
       {notice
         ? createPortal(

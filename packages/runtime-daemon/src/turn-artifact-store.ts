@@ -134,13 +134,63 @@ function utf8Prefix(value: string, maxBytes: number): {
 }
 
 function isStoredTurnFile(value: unknown): value is StoredTurnFile {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as StoredTurnFile;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    typeof (value as StoredTurnFile).path === "string" &&
-    typeof (value as StoredTurnFile).diffFile === "string" &&
-    typeof (value as StoredTurnFile).truncated === "boolean"
+    typeof candidate.path === "string" &&
+    candidate.path.length > 0 &&
+    typeof candidate.diffFile === "string" &&
+    candidate.diffFile.length > 0 &&
+    path.basename(candidate.diffFile) === candidate.diffFile &&
+    !candidate.diffFile.includes("\\") &&
+    candidate.diffFile.endsWith(".diff") &&
+    typeof candidate.truncated === "boolean"
+  );
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isStoredFileChanges(
+  value: unknown,
+): value is ConversationTurnFileChangesProjection {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Partial<ConversationTurnFileChangesProjection>;
+  if (
+    !Array.isArray(candidate.files) ||
+    !isNonNegativeInteger(candidate.totalAdditions) ||
+    !isNonNegativeInteger(candidate.totalDeletions)
+  ) {
+    return false;
+  }
+  const paths = new Set<string>();
+  let totalAdditions = 0;
+  let totalDeletions = 0;
+  for (const file of candidate.files) {
+    if (
+      typeof file !== "object" ||
+      file === null ||
+      Array.isArray(file) ||
+      typeof file.path !== "string" ||
+      file.path.length === 0 ||
+      paths.has(file.path) ||
+      !isNonNegativeInteger(file.additions) ||
+      !isNonNegativeInteger(file.deletions)
+    ) {
+      return false;
+    }
+    paths.add(file.path);
+    totalAdditions += file.additions;
+    totalDeletions += file.deletions;
+  }
+  return (
+    totalAdditions === candidate.totalAdditions &&
+    totalDeletions === candidate.totalDeletions
   );
 }
 
@@ -159,10 +209,18 @@ function parseStoredArtifact(value: unknown): StoredTurnArtifact | null {
     typeof candidate.turnId !== "string" ||
     typeof candidate.capturedAt !== "string" ||
     typeof candidate.truncated !== "boolean" ||
-    typeof candidate.fileChanges !== "object" ||
-    candidate.fileChanges === null ||
+    !isStoredFileChanges(candidate.fileChanges) ||
     !Array.isArray(candidate.files) ||
     !candidate.files.every(isStoredTurnFile)
+  ) {
+    return null;
+  }
+  const storedPaths = new Set(candidate.files.map((file) => file.path));
+  if (
+    storedPaths.size !== candidate.files.length ||
+    storedPaths.size !== candidate.fileChanges.files.length ||
+    !candidate.fileChanges.files.every((file) => storedPaths.has(file.path)) ||
+    candidate.truncated !== candidate.files.some((file) => file.truncated)
   ) {
     return null;
   }
@@ -353,6 +411,9 @@ export class TurnArtifactStore {
       // Keep parsing out of the app-server notification stack and serialize it per turn.
       await new Promise<void>((resolve) => setImmediate(resolve));
       const parsed = parseUnifiedDiff(unifiedDiff);
+      if (unifiedDiff.trim().length > 0 && parsed.files.length === 0) {
+        throw new Error("Authoritative turn diff is not valid unified diff data.");
+      }
       summary = parsed.summary;
       await mkdir(turnDir, { recursive: true, mode: 0o700 });
 

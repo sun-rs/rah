@@ -178,6 +178,17 @@ test("a follow-up submitted during structured work is queued even for a legacy s
           size: 128,
         },
       ],
+      annotations: [
+        {
+          id: "annotation-1",
+          text: "Selected assistant text",
+          source: {
+            sessionId: "session-queue",
+            entryKey: "assistant-1",
+            role: "assistant",
+          },
+        },
+      ],
     });
 
     const queued = state.projections.get("session-queue")?.summary.session.inputQueue;
@@ -186,6 +197,9 @@ test("a follow-up submitted during structured work is queued even for a legacy s
     assert.equal(queued?.[0]?.position, 1);
     assert.deepEqual(queued?.[0]?.attachments?.map((attachment) => attachment.id), [
       "attachment-1",
+    ]);
+    assert.deepEqual(queued?.[0]?.annotations?.map((annotation) => annotation.id), [
+      "annotation-1",
     ]);
     assert.equal(state.projections.get("session-queue")?.feed.length, 0);
 

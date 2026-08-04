@@ -48,6 +48,7 @@ import { useNativeTuiDiagnostics } from "./hooks/useNativeTuiDiagnostics";
 import { useWorkbenchComposerState } from "./hooks/useWorkbenchComposerState";
 import { useWorkbenchSelectionState } from "./hooks/useWorkbenchSelectionState";
 import { initializeTheme } from "./hooks/useTheme";
+import { initializeAppearancePreferences } from "./hooks/useAppearancePreferences";
 import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
 import { useCanvasController } from "./hooks/useCanvasController";
 import { useWorkbenchPageController } from "./hooks/useWorkbenchPageController";
@@ -97,6 +98,7 @@ import { latestCompletedProviderTurnId } from "./session-branch-boundary";
 import {
   resolveResponsiveTier,
   resolveSidePanelOpenForTier,
+  resolveTurnFileOpenSurface,
 } from "./responsive-layout";
 import { resolveStoredSessionRef } from "./session-store-session-lifecycle";
 import { isStoredSessionArchived } from "./session-history-grouping";
@@ -106,6 +108,10 @@ import {
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import type { InspectorOpenFileRequest } from "./inspector/shared";
 import { preloadSelectedSessionView } from "./session-view-preload";
+import {
+  readSessionModelPreference,
+  rememberSessionModelPreference,
+} from "./session-model-preferences";
 import {
   CANVAS_PANE_IDS,
   canvasPaneLabel,
@@ -240,6 +246,14 @@ type FilePreviewDialogErrorBoundaryProps = {
 
 type FilePreviewDialogErrorBoundaryState = {
   error: Error | null;
+};
+
+type TurnFileOpenRequest = {
+  id: number;
+  kind: "turn_changes";
+  sessionId: string;
+  turnId: string;
+  path: string;
 };
 
 class FilePreviewDialogErrorBoundary extends Component<
@@ -630,6 +644,62 @@ export function App() {
       sideLayoutByParentId,
     );
   }, [sideLayoutByParentId]);
+
+  const readPersistedSessionModelDraft = useCallback(
+    (sessionId: string): ModelDraft | undefined => {
+      const summary = projections.get(sessionId)?.summary;
+      if (!summary) {
+        return undefined;
+      }
+      return readSessionModelPreference(
+        typeof window === "undefined" ? undefined : window.localStorage,
+        summary.session,
+      );
+    },
+    [projections],
+  );
+
+  const modelDraftForSession = useCallback(
+    (sessionId: string): ModelDraft | undefined =>
+      resumeModelDrafts[sessionId] ?? readPersistedSessionModelDraft(sessionId),
+    [readPersistedSessionModelDraft, resumeModelDrafts],
+  );
+
+  const updateResumeModelDraft = useCallback(
+    (sessionId: string, nextDraft: ModelDraft) => {
+      const summary = projections.get(sessionId)?.summary;
+      if (summary) {
+        rememberSessionModelPreference(
+          typeof window === "undefined" ? undefined : window.localStorage,
+          summary.session,
+          nextDraft,
+        );
+      }
+      setResumeModelDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
+    },
+    [projections],
+  );
+
+  useEffect(() => {
+    setResumeModelDrafts((current) => {
+      let next: Record<string, ModelDraft> | null = null;
+      for (const [sessionId, projection] of projections) {
+        if (current[sessionId]?.modelId) {
+          continue;
+        }
+        const remembered = readSessionModelPreference(
+          typeof window === "undefined" ? undefined : window.localStorage,
+          projection.summary.session,
+        );
+        if (!remembered?.modelId) {
+          continue;
+        }
+        next ??= { ...current };
+        next[sessionId] = remembered;
+      }
+      return next ?? current;
+    });
+  }, [projections]);
   const pendingBranchOperationsRef = useRef(new Map<string, BranchOperationKind>());
   const [pendingBranchOperations, setPendingBranchOperations] = useState<
     Map<string, BranchOperationKind>
@@ -660,6 +730,8 @@ export function App() {
   const inspectorOpenRequestIdRef = useRef(0);
   const [mainInspectorOpenRequest, setMainInspectorOpenRequest] =
     useState<InspectorOpenFileRequest | null>(null);
+  const [transientTurnFileOpenRequest, setTransientTurnFileOpenRequest] =
+    useState<TurnFileOpenRequest | null>(null);
   const [canvasInspectorOpenRequests, setCanvasInspectorOpenRequests] = useState<
     Partial<Record<CanvasPaneId, InspectorOpenFileRequest>>
   >({});
@@ -684,6 +756,7 @@ export function App() {
     settingsOpen,
     sidebarOpen,
     sidebarWidth,
+    resetSidebarWidth,
     startSidebarResize,
     terminalOpen,
     visualViewportBottomInsetPx,
@@ -762,6 +835,7 @@ export function App() {
 
   useEffect(() => {
     initializeTheme();
+    initializeAppearancePreferences();
     void init();
   }, [init]);
 
@@ -969,7 +1043,12 @@ export function App() {
           workspaceMode: "shared",
           ...(lastTurnId ? { lastTurnId } : {}),
         });
-        await sendInput(sideSessionId, item.text, item.attachments);
+        await sendInput(
+          sideSessionId,
+          item.text,
+          item.attachments,
+          item.annotations?.length ? { annotations: item.annotations } : undefined,
+        );
         await deleteQueuedInput(parentSessionId, item.clientMessageId);
       } finally {
         pendingBranchOperationsRef.current.delete(parentSessionId);
@@ -1364,7 +1443,7 @@ export function App() {
   }, []);
 
   const createTurnFileOpenRequest = useCallback(
-    (sessionId: string, turnId: string, path: string): InspectorOpenFileRequest => {
+    (sessionId: string, turnId: string, path: string): TurnFileOpenRequest => {
       inspectorOpenRequestIdRef.current += 1;
       return {
         id: inspectorOpenRequestIdRef.current,
@@ -1379,11 +1458,25 @@ export function App() {
 
   const openMainTurnFile = useCallback(
     (sessionId: string, turnId: string, path: string) => {
-      setMainInspectorOpenRequest(createTurnFileOpenRequest(sessionId, turnId, path));
+      const request = createTurnFileOpenRequest(sessionId, turnId, path);
+      if (resolveTurnFileOpenSurface(viewportTier) === "transient-viewer") {
+        setMainInspectorOpenRequest(null);
+        setTransientTurnFileOpenRequest(request);
+        setRightSidebarOpen(false);
+        setRightOpen(false);
+        return;
+      }
+      setTransientTurnFileOpenRequest(null);
+      setMainInspectorOpenRequest(request);
       setRightSidebarOpen(true);
-      setRightOpen(true);
+      setRightOpen(false);
     },
-    [createTurnFileOpenRequest, setRightOpen, setRightSidebarOpen],
+    [
+      createTurnFileOpenRequest,
+      setRightOpen,
+      setRightSidebarOpen,
+      viewportTier,
+    ],
   );
 
   const openCanvasTurnFile = useCallback(
@@ -1400,6 +1493,7 @@ export function App() {
 
   useEffect(() => {
     setMainInspectorOpenRequest(null);
+    setTransientTurnFileOpenRequest(null);
   }, [selectedSessionId]);
 
   const setCanvasPaneSession = (paneId: CanvasPaneId, sessionId: string) => {
@@ -1858,13 +1952,14 @@ export function App() {
     if (
       !isInitialLoaded ||
       workbenchMode !== "single" ||
-      primaryPaneState.kind !== "empty" ||
-      !emptyStateAvailableWorkspaceDir
+      primaryPaneState.kind !== "empty"
     ) {
       return;
     }
     void loadProviderModels(currentProvider, {
-      cwd: emptyStateAvailableWorkspaceDir,
+      ...(emptyStateAvailableWorkspaceDir
+        ? { cwd: emptyStateAvailableWorkspaceDir }
+        : {}),
       background: true,
       reason: "new-session-visible",
     }).catch(() => undefined);
@@ -1916,7 +2011,31 @@ export function App() {
         )
       ]
     : undefined;
-  const resumeModelDraft = selectedSummary ? resumeModelDrafts[selectedSummary.session.id] : undefined;
+  useEffect(() => {
+    if (!isInitialLoaded || !selectedSummary) {
+      return;
+    }
+    const provider = selectedSummary.session.provider;
+    if (provider === "custom") {
+      return;
+    }
+    void loadProviderModels(provider as ProviderChoice, {
+      ...(selectedSummary.session.cwd
+        ? { cwd: selectedSummary.session.cwd }
+        : {}),
+      background: true,
+      reason: "session-visible",
+    }).catch(() => undefined);
+  }, [
+    isInitialLoaded,
+    loadProviderModels,
+    selectedSummary?.session.cwd,
+    selectedSummary?.session.id,
+    selectedSummary?.session.provider,
+  ]);
+  const resumeModelDraft = selectedSummary
+    ? modelDraftForSession(selectedSummary.session.id)
+    : undefined;
   const resumeDraftModelId = draftModelIdForCatalog(
     selectedModelCatalogState?.catalog,
     resumeModelDraft,
@@ -1941,14 +2060,18 @@ export function App() {
         catalog: selectedModelCatalogState?.catalog ?? null,
       })
     : null;
+  const effectiveResumeModelId = resumeModelControl?.model?.id ?? null;
+  const effectiveResumeReasoningId = resumeModelControl?.reasoning?.id ?? null;
   const selectedHistoryResumeRequest = (() => {
+    const draftMatchesEffectiveModel =
+      resumeDraftModelId !== null && resumeDraftModelId === effectiveResumeModelId;
     const optionValues =
-      (resumeDraftModelId ? resumeModelDraft?.optionValues : undefined) ??
-      (resumeDraftModelId
+      (draftMatchesEffectiveModel ? resumeModelDraft?.optionValues : undefined) ??
+      (effectiveResumeModelId
         ? buildModelOptionValuesFromReasoning({
             catalog: selectedModelCatalogState?.catalog,
-            modelId: resumeDraftModelId,
-            reasoningId: resumeModelDraft?.reasoningId ?? null,
+            modelId: effectiveResumeModelId,
+            reasoningId: effectiveResumeReasoningId,
           })
         : undefined);
     return {
@@ -1956,19 +2079,24 @@ export function App() {
       ...(resumeModeControl?.effectiveModeId
         ? { modeId: resumeModeControl.effectiveModeId }
         : {}),
-      ...(resumeDraftModelId ? { modelId: resumeDraftModelId } : {}),
+      ...(effectiveResumeModelId ? { modelId: effectiveResumeModelId } : {}),
       ...(optionValues !== undefined ? { optionValues } : {}),
-      ...(resumeDraftModelId && resumeModelDraft?.reasoningId
-        ? { reasoningId: resumeModelDraft.reasoningId }
+      ...(effectiveResumeModelId
+        ? { reasoningId: effectiveResumeReasoningId }
         : {}),
     };
   })();
-  const sendSelectedInput: typeof sendInput = async (sessionId, text, attachments) => {
+  const sendSelectedInput: typeof sendInput = async (
+    sessionId,
+    text,
+    attachments,
+    options,
+  ) => {
     if (
       !selectedIsReadOnlyReplay ||
       selectedSummary?.session.id !== sessionId
     ) {
-      return sendInput(sessionId, text, attachments);
+      return sendInput(sessionId, text, attachments, options);
     }
     if (selectedStoredRef?.providerState?.archived === true) {
       throw new Error("Archived sessions are read-only.");
@@ -1979,6 +2107,9 @@ export function App() {
         ...selectedHistoryResumeRequest,
         initialInput: text,
         ...(attachments !== undefined ? { initialAttachments: attachments } : {}),
+        ...(options?.annotations?.length
+          ? { initialAnnotations: options.annotations }
+          : {}),
       },
     );
     if (!resumedSessionId) {
@@ -1993,6 +2124,8 @@ export function App() {
     draftAttachmentCount,
     draftAttachmentUploadPending,
     draftAttachmentError,
+    draftAnnotations,
+    draftAnnotationCount,
     emptyStateComposerRef,
     emptyStateDraft,
     emptyStateAttachments,
@@ -2010,10 +2143,13 @@ export function App() {
     removeEmptyStateAttachment,
     removeLastDraftAttachment,
     removeLastEmptyStateAttachment,
+    clearDraftAnnotations,
     handleSend,
     handleEmptyStateSend,
     insertDraftReference,
     insertEmptyStateReference,
+    addDraftSelectedText,
+    requestDraftSelectedTextDetails,
   } = useWorkbenchComposerState({
     selectedSummary,
     availableWorkspaceDir: emptyStateAvailableWorkspaceDir,
@@ -2326,10 +2462,10 @@ export function App() {
         void activateHistorySession(session, { confirmCreateMissingWorkspace });
       }}
       onArchiveRunningSession={(sessionId) => {
-        requestArchiveRuntimeSession(sessionId);
+        void archiveSessionAndClearCanvasTargets(sessionId).catch(() => undefined);
       }}
       onArchiveStoredSession={(session) => {
-        requestArchiveHistorySession(session);
+        void archiveHistorySessionAndClearCanvasTargets(session).catch(() => undefined);
       }}
       onSelectCouncil={(workspaceDir, councilId) => {
         pageController.openCouncil(workspaceDir, councilId);
@@ -2405,7 +2541,6 @@ export function App() {
   const rootStyle = {
     "--workbench-keyboard-inset": `${visualViewportBottomInsetPx}px`,
     "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx + visualViewportBottomInsetPx}px)`,
-    "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
   const mobileCanvasEnabled = true;
   const inspectorToggleOpen = resolveSidePanelOpenForTier(
@@ -2466,15 +2601,13 @@ export function App() {
           }
         }}
         resumeModeDraft={resumeModeDrafts[summary.session.id]}
-        resumeModelDraft={resumeModelDrafts[summary.session.id]}
+        resumeModelDraft={modelDraftForSession(summary.session.id)}
         modeChangePending={modeChangeSessionId === summary.session.id}
         modelChangePending={modelChangeSessionId === summary.session.id}
         onResumeModeDraftChange={(sessionId, nextDraft) => {
           setResumeModeDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
         }}
-        onResumeModelDraftChange={(sessionId, nextDraft) => {
-          setResumeModelDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
-        }}
+        onResumeModelDraftChange={updateResumeModelDraft}
         onRememberModelDraft={(draftProvider, nextDraft) => {
           rememberModelDraft(draftProvider, nextDraft);
           setStartModelDrafts((current) => ({
@@ -2569,6 +2702,7 @@ export function App() {
         onResizeStart={(e) => {
           startSidebarResize(e);
         }}
+        onResizeReset={resetSidebarWidth}
         sidebarContent={sidebarContent}
         storedSessions={visibleStoredSessions}
         recentSessions={visibleRecentSessions}
@@ -3412,7 +3546,7 @@ export function App() {
                       }
                     }}
                     resumeModeDraft={resumeModeDrafts[summary.session.id]}
-                    resumeModelDraft={resumeModelDrafts[summary.session.id]}
+                    resumeModelDraft={modelDraftForSession(summary.session.id)}
                     modeChangePending={modeChangeSessionId === summary.session.id}
                     modelChangePending={modelChangeSessionId === summary.session.id}
                     onResumeModeDraftChange={(sessionId, nextDraft) => {
@@ -3421,12 +3555,7 @@ export function App() {
                         [sessionId]: nextDraft,
                       }));
                     }}
-                    onResumeModelDraftChange={(sessionId, nextDraft) => {
-                      setResumeModelDrafts((current) => ({
-                        ...current,
-                        [sessionId]: nextDraft,
-                      }));
-                    }}
+                    onResumeModelDraftChange={updateResumeModelDraft}
                     onRememberModelDraft={(draftProvider, nextDraft) => {
                       rememberModelDraft(draftProvider, nextDraft);
                       setStartModelDrafts((current) => ({
@@ -3614,12 +3743,17 @@ export function App() {
               draftAttachmentCount={draftAttachmentCount}
               attachmentUploadPending={draftAttachmentUploadPending}
               attachmentError={draftAttachmentError}
+              draftAnnotations={draftAnnotations}
+              draftAnnotationCount={draftAnnotationCount}
               sendPending={sendPending}
               onDraftChange={setDraft}
               onComposerPaste={handleDraftPaste}
               onUploadFiles={uploadDraftFiles}
               onRemoveDraftAttachment={removeDraftAttachment}
               onRemoveLastDraftAttachment={removeLastDraftAttachment}
+              onClearDraftAnnotations={clearDraftAnnotations}
+              onAddSelectedText={addDraftSelectedText}
+              onSelectedTextMoreDetails={requestDraftSelectedTextDetails}
               onSend={() => void handleSend()}
               onUpdateQueuedInput={(clientMessageId, text) =>
                 updateQueuedInput(selectedSummary.session.id, clientMessageId, text)
@@ -3640,7 +3774,10 @@ export function App() {
               selectedResumeAccessModeId={resumeModeControl?.selectedAccessModeId ?? null}
               resumePlanModeAvailable={resumeModeControl?.planModeAvailable ?? false}
               resumePlanModeEnabled={resumeModeControl?.planModeEnabled ?? false}
-              resumeModePending={pendingSessionAction?.kind === "resume_history"}
+              resumeModePending={
+                pendingSessionAction?.kind === "resume_history" &&
+                pendingSessionAction.sessionId === selectedSummary.session.id
+              }
               selectedResumeModelId={resumeModelControl?.model?.id ?? null}
               selectedResumeReasoningId={resumeModelControl?.reasoning?.id ?? null}
               onResumeAccessModeChange={(modeId) => {
@@ -3682,17 +3819,14 @@ export function App() {
                   ...current,
                   [provider]: modelId ? nextDraft : {},
                 }));
-                setResumeModelDrafts((current) => ({
-                  ...current,
-                  [selectedSummary.session.id]: nextDraft,
-                }));
+                updateResumeModelDraft(selectedSummary.session.id, nextDraft);
               }}
               onResumeReasoningChange={(reasoningId) => {
                 const provider = selectedSummary.session.provider as ProviderChoice;
                 const modelId =
                   draftModelIdForCatalog(
                     selectedModelCatalogState?.catalog,
-                    resumeModelDrafts[selectedSummary.session.id],
+                    resumeModelDraft,
                   ) ??
                   resumeModelControl?.model?.id ??
                   null;
@@ -3704,7 +3838,7 @@ export function App() {
                     })
                   : undefined;
                 const { optionValues: _previousOptionValues, ...previousDraft } =
-                  resumeModelDrafts[selectedSummary.session.id] ?? {};
+                  resumeModelDraft ?? {};
                 void _previousOptionValues;
                 const nextDraft = {
                   ...previousDraft,
@@ -3717,25 +3851,23 @@ export function App() {
                   ...current,
                   [provider]: nextDraft.modelId ? nextDraft : {},
                 }));
-                setResumeModelDrafts((current) => ({
-                  ...current,
-                  [selectedSummary.session.id]: nextDraft,
-                }));
+                updateResumeModelDraft(selectedSummary.session.id, nextDraft);
               }}
               onClaimControl={() => {
                 const sessionId = selectedSummary.session.id;
                 const modeId = resumeModeControl?.effectiveModeId ?? null;
-                const modelDraft = resumeModelDrafts[sessionId];
-                const modelId = draftModelIdForCatalog(
+                const modelDraft = modelDraftForSession(sessionId);
+                const draftModelId = draftModelIdForCatalog(
                   selectedModelCatalogState?.catalog,
                   modelDraft,
                 );
+                const modelId = resumeModelControl?.model?.id ?? draftModelId;
                 const reasoningId =
-                  (modelId ? modelDraft?.reasoningId : undefined) ??
+                  (draftModelId === modelId ? modelDraft?.reasoningId : undefined) ??
                   resumeModelControl?.reasoning?.id ??
                   null;
                 const optionValues =
-                  (modelId ? modelDraft?.optionValues : undefined) ??
+                  (draftModelId === modelId ? modelDraft?.optionValues : undefined) ??
                   (modelId
                     ? buildModelOptionValuesFromReasoning({
                         catalog: selectedModelCatalogState?.catalog,
@@ -3868,6 +4000,7 @@ export function App() {
                   ...current,
                   [provider]: modelId ? nextDraft : {},
                 }));
+                updateResumeModelDraft(selectedSummary.session.id, nextDraft);
                 setModelChangeSessionId(selectedSummary.session.id);
                 void setSessionModel(
                   selectedSummary.session.id,
@@ -4050,6 +4183,26 @@ export function App() {
 
         </div>
       </WorkbenchErrorBoundary>
+
+      {transientTurnFileOpenRequest ? (
+        <FilePreviewDialogErrorBoundary
+          resetKey={`turn:${transientTurnFileOpenRequest.id}:${transientTurnFileOpenRequest.path}`}
+          onClose={() => setTransientTurnFileOpenRequest(null)}
+        >
+          <InspectorFileDetailDialog
+            sessionId={transientTurnFileOpenRequest.sessionId}
+            workspaceRoot={selectedInspectorWorkspaceDir}
+            selection={{
+              path: transientTurnFileOpenRequest.path,
+              source: "turn_changes",
+              sessionId: transientTurnFileOpenRequest.sessionId,
+              turnId: transientTurnFileOpenRequest.turnId,
+            }}
+            onRefreshChanges={() => undefined}
+            onClose={() => setTransientTurnFileOpenRequest(null)}
+          />
+        </FilePreviewDialogErrorBoundary>
+      ) : null}
 
       {linkedFilePreviewPath ? (
         <FilePreviewDialogErrorBoundary

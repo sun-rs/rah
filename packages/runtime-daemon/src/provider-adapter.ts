@@ -31,7 +31,6 @@ import type {
   StoredSessionArchiveBackend,
   StoredSessionRef,
   SteerQueuedInputRequest,
-  TurnFileDiffResponse,
   WorkspaceSnapshotResponse,
   ManagedSession,
   UpdateQueuedInputRequest,
@@ -218,10 +217,6 @@ export interface ProviderStoredHistoryAdapter {
     sessionId: string,
     options: { providerTurnId: string },
   ): ConversationEvidencePage | undefined | Promise<ConversationEvidencePage | undefined>;
-  getSessionConversationTurnFileDiff?(
-    sessionId: string,
-    options: { providerTurnId: string; path: string },
-  ): TurnFileDiffResponse | undefined | Promise<TurnFileDiffResponse | undefined>;
   getSessionConversationSourceRevision?(
     sessionId: string,
   ): string | undefined | Promise<string | undefined>;

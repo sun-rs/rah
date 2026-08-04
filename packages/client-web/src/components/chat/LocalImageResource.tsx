@@ -18,7 +18,7 @@ export function LocalImageResource(props: {
   const [loading, setLoading] = useState(Boolean(props.path && !props.url));
   const [failed, setFailed] = useState(false);
   const { ref: previewHostRef, nearViewport } =
-    useNearViewport<HTMLDivElement>();
+    useNearViewport<HTMLSpanElement>();
 
   useEffect(() => {
     if (!props.path || props.url) {
@@ -70,7 +70,11 @@ export function LocalImageResource(props: {
       className={
         props.mode === "compact"
           ? "h-full w-full object-cover"
-          : "max-h-[min(22rem,58vh)] max-w-full object-contain"
+          : `prose-chat-image-thumbnail ${
+              props.path
+                ? "prose-chat-image-thumbnail-local"
+                : "prose-chat-image-thumbnail-remote"
+            }`
       }
     />
   ) : loading ? (
@@ -87,43 +91,50 @@ export function LocalImageResource(props: {
 
   if (props.mode === "compact") {
     return (
-      <div
+      <span
         ref={previewHostRef}
         className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--app-subtle-bg)]"
         data-image-load-failed={failed ? "true" : undefined}
       >
         {image}
-      </div>
+      </span>
     );
   }
 
   const title = props.path ?? props.url ?? props.alt ?? "Image";
   const canOpen = Boolean((props.path && props.onOpenLocalFile) || props.url);
   const className =
-    "prose-chat-image-preview my-3 flex min-h-24 max-w-full items-center justify-center overflow-hidden rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-1.5 text-left";
+    "prose-chat-image-preview inline-flex max-w-full items-center justify-center overflow-hidden rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-0 text-left shadow-sm";
+  const imageState = loading ? "loading" : failed ? "failed" : "ready";
+  const sourceKind = props.path ? "local" : "remote";
 
   if (!canOpen) {
     return (
-      <div
-        ref={previewHostRef}
-        className={className}
-        title={title}
-        data-testid="conversation-inline-image"
-        data-image-load-failed={failed ? "true" : undefined}
-      >
-        {image}
-      </div>
+      <span ref={previewHostRef} className="prose-chat-image-preview-host">
+        <span
+          className={className}
+          title={title}
+          data-testid="conversation-inline-image"
+          data-image-source-kind={sourceKind}
+          data-image-state={imageState}
+          data-image-load-failed={failed ? "true" : undefined}
+        >
+          {image}
+        </span>
+      </span>
     );
   }
 
   return (
-    <div ref={previewHostRef} className="my-3 max-w-full">
+    <span ref={previewHostRef} className="prose-chat-image-preview-host">
       <button
         type="button"
-        className={`${className} my-0 cursor-zoom-in transition-colors hover:border-[var(--app-muted)]`}
+        className={`${className} cursor-zoom-in transition-colors hover:border-[var(--app-muted)]`}
         title={props.path ? `Open in Inspector: ${props.path}` : title}
         aria-label={props.alt ?? title}
         data-testid="conversation-inline-image"
+        data-image-source-kind={sourceKind}
+        data-image-state={imageState}
         data-image-load-failed={failed ? "true" : undefined}
         onClick={(event) => {
           event.preventDefault();
@@ -137,6 +148,6 @@ export function LocalImageResource(props: {
       >
         {image}
       </button>
-    </div>
+    </span>
   );
 }

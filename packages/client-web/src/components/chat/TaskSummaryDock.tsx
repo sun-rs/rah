@@ -1,23 +1,10 @@
-import { useId, useState } from "react";
-import { Check, ChevronDown, ChevronUp, Circle, ListChecks, LoaderCircle } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Check, Circle, ListChecks, LoaderCircle } from "lucide-react";
 import { usePwaDisplayMode } from "../../hooks/usePwaDisplayMode";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { CodexChangedFilesIcon } from "./codex-file-icon-assets";
 import { ConversationActivityIcon, conversationActivityLabel } from "./conversation-activity-display";
 import { currentPlanProgress, type CurrentPlan } from "./current-plan";
-
-function turnStatusLabel(status: CurrentPlan["turn"]["status"]): string {
-  switch (status) {
-    case "in_progress":
-      return "Working";
-    case "completed":
-      return "Completed";
-    case "interrupted":
-      return "Interrupted";
-    case "failed":
-      return "Failed";
-  }
-}
 
 export function TaskSummaryDock(props: {
   plan: CurrentPlan;
@@ -26,11 +13,13 @@ export function TaskSummaryDock(props: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
+  const dockRef = useRef<HTMLDivElement | null>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
   const progress = currentPlanProgress(props.plan);
   const planTitle = props.plan.item.text.match(/^#\s+(.+)$/m)?.[1]?.trim() || "Plan";
-  const status = turnStatusLabel(props.plan.turn.status);
-  const activities = props.plan.turn.activities.filter((activity) => activity.totalCount > 0);
+  const activities = props.plan.turn.activities.filter(
+    (activity) => activity.kind !== "plan" && activity.totalCount > 0,
+  );
   const fileChanges = props.plan.turn.fileChanges;
   const hasFileChanges = Boolean(fileChanges?.files.length);
   const overlayVisibilityClassName = isPwaDisplayMode
@@ -39,12 +28,40 @@ export function TaskSummaryDock(props: {
       : "invisible pointer-events-none opacity-0"
     : "invisible pointer-events-none opacity-0 group-hover:visible group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:visible group-focus-within:pointer-events-auto group-focus-within:opacity-100";
 
+  useEffect(() => {
+    if (!isPwaDisplayMode || !expanded) {
+      return;
+    }
+    const dismissOutside = (event: PointerEvent) => {
+      if (!dockRef.current?.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    const dismissWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("keydown", dismissWithEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("keydown", dismissWithEscape);
+    };
+  }, [expanded, isPwaDisplayMode]);
+
+  useEffect(() => {
+    if (!isPwaDisplayMode) {
+      setExpanded(false);
+    }
+  }, [isPwaDisplayMode]);
+
   return (
     <section
       className="chat-task-summary relative z-[40] shrink-0 px-4 pb-2 pt-1"
       aria-label="Task summary"
     >
-      <div className="group relative mx-auto w-fit max-w-full">
+      <div ref={dockRef} className="group relative mx-auto w-fit max-w-full">
         <div
           id={detailsId}
           data-testid="task-summary-overlay"
@@ -93,29 +110,24 @@ export function TaskSummaryDock(props: {
               />
             )}
             {activities.length > 0 || hasFileChanges ? (
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-[var(--app-border)] pt-2 text-xs text-[var(--app-hint)]">
-                {activities.map((activity) => (
-                  <span key={activity.kind} className="inline-flex items-center gap-1.5">
-                    <ConversationActivityIcon kind={activity.kind} size={12} />
-                    {conversationActivityLabel(
-                      activity.kind,
-                      activity.totalCount,
-                      activity.runningCount > 0,
-                    )}
-                  </span>
-                ))}
+              <div className="mt-3 flex min-w-0 flex-nowrap items-center gap-3 overflow-x-auto overscroll-x-contain whitespace-nowrap border-t border-[var(--app-border)] pt-2 text-xs text-[var(--app-hint)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {fileChanges?.files.length ? (
                   <button
                     type="button"
-                    className="inline-flex min-h-7 items-center gap-1.5 rounded-md px-1.5 text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                    onClick={props.onReviewChanges}
+                    className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                    onClick={() => {
+                      if (isPwaDisplayMode) {
+                        setExpanded(false);
+                      }
+                      props.onReviewChanges?.();
+                    }}
                     disabled={!props.onReviewChanges}
                     aria-label="Review files changed by this turn"
                   >
                     <CodexChangedFilesIcon className="h-3.5 w-3.5" />
                     <span>
-                      {fileChanges.files.length}{" "}
-                      {fileChanges.files.length === 1 ? "file" : "files"} changed
+                      Changed {fileChanges.files.length}{" "}
+                      {fileChanges.files.length === 1 ? "file" : "files"}
                     </span>
                     <span className="font-medium text-[var(--app-success)]">
                       +{fileChanges.totalAdditions}
@@ -125,34 +137,51 @@ export function TaskSummaryDock(props: {
                     </span>
                   </button>
                 ) : null}
+                {activities.map((activity) => (
+                  <span key={activity.kind} className="inline-flex shrink-0 items-center gap-1.5">
+                    <ConversationActivityIcon kind={activity.kind} size={12} />
+                    {conversationActivityLabel(
+                      activity.kind,
+                      activity.totalCount,
+                      activity.runningCount > 0,
+                    )}
+                  </span>
+                ))}
               </div>
             ) : null}
           </div>
         </div>
         <button
           type="button"
-          className="flex min-h-9 max-w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+          data-task-summary-disclosure={isPwaDisplayMode ? "tap" : "hover"}
+          className="flex h-8 max-w-full min-w-0 items-center gap-1.5 rounded-[10px] border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+          onPointerDown={(event) => {
+            if (!isPwaDisplayMode) {
+              event.preventDefault();
+            }
+          }}
           onClick={() => {
             if (isPwaDisplayMode) {
               setExpanded((value) => !value);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") {
+              return;
+            }
+            if (isPwaDisplayMode) {
+              setExpanded(false);
+            } else {
+              event.currentTarget.blur();
             }
           }}
           aria-controls={detailsId}
           aria-expanded={isPwaDisplayMode ? expanded : undefined}
         >
           <ListChecks size={15} className="shrink-0 text-[var(--app-hint)]" />
-          <span className="shrink-0 font-medium">Task summary</span>
           <span className="min-w-0 truncate text-xs text-[var(--app-hint)]">
-            {`${status} · `}
             {progress ? `${progress.completed}/${progress.total}` : planTitle}
             {progress?.activeStep ? ` · ${progress.activeStep}` : ""}
-          </span>
-          <span className="ml-auto shrink-0 text-[var(--app-hint)]">
-            {isPwaDisplayMode && expanded ? (
-              <ChevronDown size={15} />
-            ) : (
-              <ChevronUp size={15} />
-            )}
           </span>
         </button>
       </div>

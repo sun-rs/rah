@@ -1023,6 +1023,46 @@ describe("startRahDaemon", () => {
     );
   });
 
+  test("accepts structured response annotations and rejects duplicate annotation ids", () => {
+    const annotation = {
+      id: "annotation-1",
+      text: "Selected assistant text",
+      source: {
+        sessionId: "session-1",
+        entryKey: "assistant-1",
+        role: "assistant" as const,
+      },
+    };
+    assert.deepEqual(
+      parseSessionInputRequest({
+        clientId: "client-1",
+        text: "Explain this.",
+        annotations: [annotation],
+      }),
+      {
+        clientId: "client-1",
+        text: "Explain this.",
+        annotations: [annotation],
+      },
+    );
+    assert.throws(
+      () => parseSessionInputRequest({
+        clientId: "client-1",
+        text: "Explain this.",
+        annotations: [annotation, annotation],
+      }),
+      /duplicate annotation ids/,
+    );
+    assert.throws(
+      () => parseSessionInputRequest({
+        clientId: "client-1",
+        text: "Explain this.",
+        annotations: [{ ...annotation, annotation: "x".repeat(20_001) }],
+      }),
+      /annotation is too long/,
+    );
+  });
+
   test("rejects removed model and access aliases at the public HTTP boundary", () => {
     assert.throws(
       () =>

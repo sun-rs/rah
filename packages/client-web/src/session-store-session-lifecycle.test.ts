@@ -118,4 +118,43 @@ test("remembers closed sessions using visible conversation activity, not runtime
 
   assert.equal(next.recentSessions[0]?.lastUsedAt, "2026-05-01T10:04:00.000Z");
   assert.equal(next.storedSessions[0]?.updatedAt, "2026-05-01T10:04:00.000Z");
+  assert.equal(next.selectedSessionId, "session-1");
+  assert.equal(next.projections.get("session-1")?.summary.session.status, "stopped");
+  assert.equal(next.projections.get("session-1")?.summary.session.phase, "ended");
+  assert.equal(
+    next.projections.get("session-1")?.summary.session.capabilities.steerInput,
+    false,
+  );
+  assert.deepEqual(
+    next.projections.get("session-1")?.feed.map((entry) => entry.key),
+    ["assistant:answer", "runtime:status"],
+  );
+  assert.equal(next.projections.get("session-1")?.currentRuntimeStatus, undefined);
+});
+
+test("removes a stopped live projection when it was not the selected chat", () => {
+  const sessionSummary = summary();
+  const next = applyClosedSessionState(
+    {
+      projections: new Map([[sessionSummary.session.id, projection(sessionSummary)]]),
+      unreadSessionIds: new Set(),
+      hiddenWorkspaceDirs: new Set(),
+      workspaceDirs: ["/workspace/rah"],
+      workspaceVisibilityVersion: 0,
+      sessionTopologyVersion: 0,
+      workspaceDir: "/workspace/rah",
+      selectedSessionId: "another-session",
+      newSessionProvider: "codex",
+      error: null,
+      pendingSessionTransition: null,
+      pendingSessionAction: null,
+      storedSessions: [],
+      recentSessions: [],
+    },
+    sessionSummary.session.id,
+    sessionSummary,
+  );
+
+  assert.equal(next.projections.has(sessionSummary.session.id), false);
+  assert.equal(next.selectedSessionId, "another-session");
 });

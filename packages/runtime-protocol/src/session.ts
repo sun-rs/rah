@@ -22,6 +22,24 @@ export interface SessionInputAttachment {
   size: number;
 }
 
+export type SessionInputAnnotationSourceRole = "assistant" | "user";
+
+/**
+ * Text selected from an earlier response and carried as structured context for
+ * the next input. `source` is audit/UI metadata; providers receive only the
+ * selected text and optional annotation comment.
+ */
+export interface SessionInputAnnotation {
+  id: string;
+  text: string;
+  annotation?: string;
+  source?: {
+    sessionId: string;
+    entryKey?: string;
+    role?: SessionInputAnnotationSourceRole;
+  };
+}
+
 export type SessionLaunchSource = "web";
 export type SessionLiveBackend =
   | "structured"
@@ -337,6 +355,7 @@ export interface SessionQueuedInput {
   clientTurnId?: string;
   text: string;
   attachments?: SessionInputAttachment[];
+  annotations?: SessionInputAnnotation[];
   queuedAt: string;
   position: number;
   state?: SessionQueuedInputState;

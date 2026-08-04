@@ -2,7 +2,11 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { OVERLAY_SCROLL_AREA_LAYOUT } from "./components/OverlayScrollArea";
-import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
+import {
+  SIDEBAR_LAYOUT,
+  SIDEBAR_VISUAL_PROTOCOL,
+  SIDEBAR_VISUAL_STYLE,
+} from "./sidebar-layout-contract";
 import {
   SEGMENTED_CONTROL_ACTIVE_CLASS,
   SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS,
@@ -58,30 +62,76 @@ describe("sidebar layout contract", () => {
     assert.match(OVERLAY_SCROLL_AREA_LAYOUT.thumbClassName, /\bw-1\b/);
     assert.match(OVERLAY_SCROLL_AREA_LAYOUT.thumbClassName, /\bcursor-grab\b/);
     assert.match(SIDEBAR_LAYOUT.sidebarScrollClassName, /\bh-full\b/);
-    assert.match(SIDEBAR_LAYOUT.sidebarScrollClassName, /\bpr-0\.5\b/);
+    assert.match(SIDEBAR_LAYOUT.sidebarScrollClassName, /\brah-sidebar-scroll\b/);
   });
 
-  test("locks trailing action rails and row heights", () => {
-    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bml-auto\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bw-16\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bmd:w-14\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bml-auto\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bflex\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\bshrink-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /\bw-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /group-hover\/session:w-8/);
-    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /md:group-hover\/session:w-7/);
-    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /group-hover\/session:w-16/);
-    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /md:group-hover\/session:w-14/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /\bw-8\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /\bh-8\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /md:w-7/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionCellClassName, /md:h-7/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionActionButtonClassName, /\babsolute\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /\bh-8\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /\bw-8\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /md:h-7/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionButtonClassName, /md:w-7/);
+  test("locks one Codex-compact geometry for desktop and PWA", () => {
+    const cssSource = readSource("./styles.css");
+    const shellSource = readSource(
+      "./components/workbench/shells/WorkbenchSidebarShell.tsx",
+    );
+
+    assert.deepEqual(SIDEBAR_VISUAL_PROTOCOL, {
+      id: "codex-compact-v1",
+      inlineInsetPx: 8,
+      headerHeightPx: 40,
+      headerControlSizePx: 32,
+      headerControlGapPx: 8,
+      headerTitleFontSizePx: 16,
+      headerTitleLineHeightPx: 20,
+      headerTitleFontWeight: 600,
+      navigationTopGapPx: 4,
+      navigationBottomGapPx: 8,
+      navigationRowHeightPx: 32,
+      navigationRowGapPx: 2,
+      navigationItemGapPx: 10,
+      navigationIconSlotPx: 20,
+      navigationIconPx: 18,
+      navigationFontSizePx: 15,
+      navigationLineHeightPx: 20,
+      navigationFontWeight: 500,
+      scrollTopPaddingPx: 4,
+      sectionLabelFontSizePx: 13,
+      sectionLabelLineHeightPx: 18,
+      sectionLabelFontWeight: 550,
+      sectionLabelRowGapPx: 2,
+      sectionGapPx: 12,
+      toolbarHeightPx: 28,
+      toolbarBottomGapPx: 4,
+      workspaceGroupGapPx: 6,
+      rowHeightPx: 30,
+      rowGapPx: 2,
+      rowRadiusPx: 10,
+      rowContentInsetPx: 4,
+      rowIconSlotPx: 20,
+      rowIconPx: 16,
+      rowTitleInsetPx: 2,
+      workspaceFontSizePx: 14,
+      workspaceLineHeightPx: 20,
+      workspaceFontWeight: 500,
+      sessionFontSizePx: 14,
+      sessionLineHeightPx: 20,
+      sessionFontWeight: 450,
+      nestedSessionIndentPx: 20,
+      actionSizePx: 28,
+      actionIconPx: 14,
+    });
+    assert.equal(SIDEBAR_VISUAL_STYLE["--rah-sidebar-row-height"], "30px");
+    assert.equal(SIDEBAR_VISUAL_STYLE["--rah-sidebar-action-size"], "28px");
+    assert.equal(SIDEBAR_VISUAL_STYLE["--rah-sidebar-navigation-row-height"], "32px");
+    assert.match(shellSource, /data-sidebar-surface="desktop"/);
+    assert.match(shellSource, /"data-sidebar-surface": "pwa"/);
+    assert.equal((shellSource.match(/SIDEBAR_VISUAL_STYLE/g) ?? []).length, 3);
+    assert.doesNotMatch(
+      [
+        SIDEBAR_LAYOUT.toolbarClassName,
+        SIDEBAR_LAYOUT.workspaceHeaderClassName,
+        SIDEBAR_LAYOUT.sessionRowBaseClassName,
+        SIDEBAR_LAYOUT.sessionActionCellClassName,
+        SIDEBAR_LAYOUT.sessionActionButtonClassName,
+      ].join(" "),
+      /(?:sm|md|lg):/,
+    );
     assert.equal(
       SIDEBAR_LAYOUT.workspaceActionButtonClassName,
       SIDEBAR_LAYOUT.sessionActionButtonClassName,
@@ -90,18 +140,18 @@ describe("sidebar layout contract", () => {
       SIDEBAR_LAYOUT.toolbarIconButtonClassName,
       SIDEBAR_LAYOUT.sessionActionButtonClassName,
     );
-    assert.match(SIDEBAR_LAYOUT.toolbarActionsClassName, /\bw-16\b/);
-    assert.match(SIDEBAR_LAYOUT.toolbarClassName, /min-h-\[34px\]/);
-    assert.match(SIDEBAR_LAYOUT.toolbarClassName, /md:min-h-\[28px\]/);
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\brelative\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /min-h-\[34px\]/);
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /md:min-h-\[28px\]/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /min-h-\[34px\]/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /md:min-h-\[28px\]/);
+    assert.match(cssSource, /\.rah-sidebar-item-row\s*\{[\s\S]*height:\s*var\(--rah-sidebar-row-height\)/);
+    assert.match(cssSource, /\.rah-sidebar-action-cell[\s\S]*width:\s*var\(--rah-sidebar-action-size\)/);
+    assert.match(
+      cssSource,
+      /@media \(hover: none\), \(pointer: coarse\)[\s\S]*width:\s*var\(--rah-sidebar-action-size\)/,
+    );
+    assert.doesNotMatch(cssSource, /@media[^}]*[\s\S]{0,500}\.rah-sidebar-item-row[^}]*height:/);
   });
 
   test("keeps blocked workspace removal inert without retargeting the tap", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
+    const stylesSource = readSource("./styles.css");
 
     assert.match(sidebarSource, /aria-disabled=\{workspaceRemovalBlocked\}/);
     assert.match(
@@ -113,28 +163,33 @@ describe("sidebar layout contract", () => {
       sidebarSource,
       /disabled=\{props\.workspace\.hasBlockingRunningSessions\}/,
     );
-    assert.match(SIDEBAR_LAYOUT.workspaceActionDisabledClassName, /cursor-not-allowed/);
-    assert.match(SIDEBAR_LAYOUT.workspaceActionDisabledClassName, /opacity-30/);
+    assert.equal(SIDEBAR_LAYOUT.workspaceActionDisabledClassName, "rah-sidebar-action-disabled");
+    assert.match(stylesSource, /\.rah-sidebar-action-disabled\s*\{[\s\S]*cursor:\s*not-allowed;[\s\S]*opacity:\s*0\.3;/);
   });
 
   test("uses a fixed header and vertical desktop navigation", () => {
-    const cssSource = readSource("./index.css");
+    const indexSource = readSource("./index.css");
+    const stylesSource = readSource("./styles.css");
     const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
     const navigationSource = readSource("./components/workbench/actions/WorkbenchSidebarNavigation.tsx");
     const sidebarSource = readSource("./SessionSidebar.tsx");
 
-    assert.match(shellSource, /rah-sidebar-header/);
+    assert.match(shellSource, /desktopHeaderClassName/);
     assert.match(
       shellSource,
       /aria-label=\{props\.sidebarOpen \? "Collapse sidebar" : "Expand sidebar"\}/,
     );
     assert.match(shellSource, /fixed left-2 top-2 z-40 hidden md:inline-flex/);
     assert.match(shellSource, />RAH<\/span>/);
+    assert.equal(SIDEBAR_LAYOUT.headerTitleClassName, "rah-sidebar-header-title");
+    assert.match(stylesSource, /\.rah-sidebar-header-title\s*\{[\s\S]*font-size:\s*var\(--rah-sidebar-header-title-size\);[\s\S]*font-weight:\s*var\(--rah-sidebar-header-title-weight\);[\s\S]*line-height:\s*var\(--rah-sidebar-header-title-line\)/);
     assert.match(navigationSource, /aria-label="Primary navigation"/);
+    assert.match(navigationSource, /className=\{SIDEBAR_LAYOUT\.navigationClassName\}/);
     assert.match(navigationSource, />New task<\/span>/);
     assert.match(navigationSource, />Council<\/span>/);
+    assert.match(navigationSource, /SquarePen size=\{SIDEBAR_VISUAL_PROTOCOL\.navigationIconPx\} strokeWidth=\{1\.75\}/);
+    assert.match(navigationSource, /Columns3 size=\{SIDEBAR_VISUAL_PROTOCOL\.navigationIconPx\} strokeWidth=\{1\.75\}/);
     assert.match(navigationSource, />Canvas<\/span>/);
-    assert.match(navigationSource, /px-2 py-1/);
     assert.match(navigationSource, />Chats<\/span>/);
     assert.match(navigationSource, />Settings<\/span>/);
     assert.equal((shellSource.match(/<WorkbenchSidebarNavigation/g) ?? []).length, 2);
@@ -145,6 +200,9 @@ describe("sidebar layout contract", () => {
     assert.match(shellSource, /closeLabel="Collapse sidebar"/);
     assert.match(shellSource, /initialFocus="content"/);
     assert.match(shellSource, /viewportClassName="md:!hidden"/);
+    assert.match(shellSource, /headerClassName=\{SIDEBAR_LAYOUT\.sheetHeaderClassName\}/);
+    assert.match(shellSource, /headerTitleClassName=\{SIDEBAR_LAYOUT\.headerTitleClassName\}/);
+    assert.match(shellSource, /contentClassName=\{SIDEBAR_LAYOUT\.protocolClassName\}/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bh-8\b/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bw-8\b/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bshrink-0\b/);
@@ -153,11 +211,13 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_LAYOUT.rootClassName, /rah-sidebar-content/);
     assert.match(sidebarSource, /toolbarLabelFullClassName/);
     assert.match(sidebarSource, /toolbarLabelShortClassName/);
-    assert.doesNotMatch(cssSource, /--rah-sidebar-header-gap/);
-    assert.doesNotMatch(cssSource, /@container rah-sidebar-header \(max-width: 224px\)/);
-    assert.match(cssSource, /@container rah-sidebar-content \(max-width: 212px\)/);
-    assert.match(cssSource, /\.rah-sidebar-workspaces-label-full/);
-    assert.match(cssSource, /\.rah-sidebar-workspaces-label-short/);
+    assert.match(stylesSource, /\.rah-sidebar-sheet-header\s*\{[\s\S]*height:\s*var\(--rah-sidebar-header-height\) !important;[\s\S]*border-bottom:\s*0 !important;/);
+    assert.match(stylesSource, /\.rah-sidebar-primary-navigation\s*\{[\s\S]*gap:\s*var\(--rah-sidebar-navigation-row-gap\)/);
+    assert.match(stylesSource, /\.rah-sidebar-navigation-item\s*\{[\s\S]*height:\s*var\(--rah-sidebar-navigation-row-height\);[\s\S]*align-items:\s*center;/);
+    assert.doesNotMatch(indexSource, /@container rah-sidebar-header \(max-width: 224px\)/);
+    assert.match(indexSource, /@container rah-sidebar-content \(max-width: 212px\)/);
+    assert.match(indexSource, /\.rah-sidebar-workspaces-label-full/);
+    assert.match(indexSource, /\.rah-sidebar-workspaces-label-short/);
   });
 
   test("keeps sidebar resizing out of the React render hot path", () => {
@@ -171,8 +231,13 @@ describe("sidebar layout contract", () => {
     );
     assert.match(chromeStateSource, /SIDEBAR_WIDTH_CSS_VAR = "--rah-sidebar-width"/);
     assert.match(chromeStateSource, /SIDEBAR_MIN_WIDTH = 208/);
+    assert.match(chromeStateSource, /SIDEBAR_DEFAULT_WIDTH = 272/);
     assert.match(chromeStateSource, /requestAnimationFrame/);
     assert.match(chromeStateSource, /applySidebarWidthCss\(nextWidth\)|pendingSidebarWidthRef/);
+    assert.match(shellSource, /onDoubleClick=\{props\.onResizeReset\}/);
+    assert.match(chromeStateSource, /const resetSidebarWidth = \(\) =>/);
+    assert.match(chromeStateSource, /setSidebarWidth\(SIDEBAR_DEFAULT_WIDTH\)/);
+    assert.match(chromeStateSource, /localStorage\.setItem\("rah-sidebar-width", String\(SIDEBAR_DEFAULT_WIDTH\)\)/);
     assert.doesNotMatch(
       chromeStateSource,
       /setSidebarWidth\(Math\.max\(200,\s*Math\.min\(480,\s*event\.clientX\)\)\)/,
@@ -203,6 +268,7 @@ describe("sidebar layout contract", () => {
     assert.match(sidePanelSource, /max-\[899px\]:!hidden min-\[900px\]:!flex/);
     assert.match(inspectorShellSource, /mobileFullScreen: true/);
     assert.match(inspectorShellSource, /mobileFloatingClose: false/);
+    assert.match(inspectorShellSource, /props\.showDesktop \|\|/);
     assert.doesNotMatch(inspectorShellSource, /props\.contained \|\|/);
     assert.match(appSource, /rightOpen=\{rightOpen\}/);
     assert.match(appSource, /onRightOpenChange=\{setRightOpen\}/);
@@ -297,6 +363,7 @@ describe("sidebar layout contract", () => {
   });
 
   test("routes turn changes through shared review and file preview paths", () => {
+    const appSource = readSource("./App.tsx");
     const cardSource = readSource("./components/chat/ConversationFileChangesCard.tsx");
     const threadSource = readSource("./components/chat/ChatThread.tsx");
 
@@ -319,6 +386,19 @@ describe("sidebar layout contract", () => {
       /onOpenFile:\s*\(path:\s*string\)\s*=>\s*props\.onOpenTurnFileChange\?\.\(row\.turnId,\s*path\)/,
     );
     assert.match(threadSource, /<ReviewDialog[\s\S]*?scope=\{reviewScope\}/);
+    assert.match(
+      appSource,
+      /resolveTurnFileOpenSurface\(viewportTier\) === "transient-viewer"/,
+    );
+    assert.match(appSource, /setTransientTurnFileOpenRequest\(request\)/);
+    assert.match(
+      appSource,
+      /setTransientTurnFileOpenRequest\(request\)[\s\S]*?setRightSidebarOpen\(false\)[\s\S]*?setRightOpen\(false\)/,
+    );
+    assert.match(
+      appSource,
+      /transientTurnFileOpenRequest[\s\S]*?<InspectorFileDetailDialog[\s\S]*?source: "turn_changes"/,
+    );
   });
 
   test("keeps the Inspector file viewer nonmodal, persistent, resizable, and horizontally scrollable", () => {
@@ -423,62 +503,56 @@ describe("sidebar layout contract", () => {
   });
 
   test("locks sidebar indentation and meta width tokens", () => {
-    assert.equal(SIDEBAR_LAYOUT.pinnedListClassName, "space-y-px");
-    assert.equal(SIDEBAR_LAYOUT.councilListClassName, "space-y-px");
-    assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "space-y-px pt-px");
-    assert.equal(
-      SIDEBAR_LAYOUT.sessionStatusSlotClassName,
-      SIDEBAR_LAYOUT.sessionActionCellClassName,
-    );
-    assert.match(SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName, /\bflex\b/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionTitleOnlySelectButtonClassName, /grid-cols/);
+    const stylesSource = readSource("./styles.css");
+
+    assert.equal(SIDEBAR_LAYOUT.pinnedListClassName, "rah-sidebar-row-list");
+    assert.equal(SIDEBAR_LAYOUT.councilListClassName, "rah-sidebar-row-list");
+    assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "rah-sidebar-row-list");
+    assert.equal(SIDEBAR_LAYOUT.workspaceListClassName, "rah-sidebar-workspace-list");
+    assert.equal(SIDEBAR_LAYOUT.rootClassName, "rah-sidebar-content");
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.inlineInsetPx, 8);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.rowContentInsetPx, 4);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.rowGapPx, 2);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.workspaceGroupGapPx, 6);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.sectionGapPx, 12);
+    assert.match(stylesSource, /\.rah-sidebar-scroll\s*\{[\s\S]*var\(--rah-sidebar-inline-inset\)/);
+    assert.match(stylesSource, /\.rah-sidebar-row-list,[\s\S]*gap:\s*var\(--rah-sidebar-row-gap\)/);
+    assert.match(stylesSource, /\.rah-sidebar-workspace-list\s*\{[\s\S]*gap:\s*var\(--rah-sidebar-workspace-group-gap\)/);
+    assert.match(stylesSource, /\.rah-sidebar-section\s*\{[\s\S]*margin-bottom:\s*var\(--rah-sidebar-section-gap\)/);
   });
 
-  test("uses matched workspace and session icon slots for aligned titles", () => {
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /\bflex-1\b/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /\bpr-14\b/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /active:bg/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /focus-visible:ring/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureIconClassName, /\bh-7\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureIconClassName, /\bw-7\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionIconSlotClassName, /\bh-7\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionIconSlotClassName, /\bw-7\b/);
-    assert.equal(SIDEBAR_LAYOUT.sessionIconClassName, "h-3.5 w-3.5");
-    assert.match(SIDEBAR_LAYOUT.sessionTitleClassName, /overflow-hidden/);
-    assert.match(SIDEBAR_LAYOUT.sessionTitleClassName, /whitespace-nowrap/);
-    assert.match(SIDEBAR_LAYOUT.sessionTitleClassName, /\bpl-0\.5\b/);
+  test("uses a 20px icon slot and only shows non-Codex session provider icons", () => {
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+    const stylesSource = readSource("./styles.css");
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.rowIconSlotPx, 20);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.rowIconPx, 16);
+    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /rah-sidebar-workspace-disclosure/);
+    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureIconClassName, /rah-sidebar-row-icon/);
+    assert.match(sidebarSource, /FolderOpen size=\{SIDEBAR_VISUAL_PROTOCOL\.rowIconPx\} strokeWidth=\{1\.75\}/);
+    assert.match(sidebarSource, /Folder size=\{SIDEBAR_VISUAL_PROTOCOL\.rowIconPx\} strokeWidth=\{1\.75\}/);
+    assert.match(sidebarSource, /import \{ ProviderLogo \}/);
     assert.match(
-      SIDEBAR_LAYOUT.sessionTitleClassName,
-      /\bfont-normal\b/,
+      sidebarSource,
+      /props\.session\.provider === "claude" \|\| props\.session\.provider === "opencode"/,
     );
-    assert.match(
-      SIDEBAR_LAYOUT.sessionTitleClassName,
-      /var\(--app-fg\)_76%/,
-    );
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionTitleClassName, /\btruncate\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /overflow-hidden/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /whitespace-nowrap/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\bpl-0\.5\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\bfont-semibold\b/);
-    assert.match(
-      SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName,
-      /var\(--app-fg\)_94%/,
-    );
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureTitleClassName, /\btruncate\b/);
+    assert.match(sidebarSource, /SIDEBAR_LAYOUT\.sessionProviderIconSlotClassName/);
+    assert.doesNotMatch(sidebarSource, /props\.session\.provider === "codex"[\s\S]{0,160}<ProviderLogo/);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.nestedSessionIndentPx, 20);
+    assert.match(sidebarSource, /props\.nested \? SIDEBAR_LAYOUT\.sessionNestedSelectButtonClassName/);
+    assert.match(stylesSource, /\.rah-sidebar-row-icon\s*\{[\s\S]*width:\s*var\(--rah-sidebar-row-icon-slot\);[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*center;/);
+    assert.match(stylesSource, /\.rah-sidebar-row-title\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*padding-left:\s*var\(--rah-sidebar-row-title-inset\);[\s\S]*white-space:\s*nowrap;/);
+    assert.match(stylesSource, /\.rah-sidebar-workspace-title\s*\{[\s\S]*font-weight:\s*var\(--rah-sidebar-workspace-font-weight\)/);
+    assert.match(stylesSource, /\.rah-sidebar-session-title\s*\{[\s\S]*font-weight:\s*var\(--rah-sidebar-session-font-weight\)/);
   });
 
   test("uses one full-width hover shell for pinned, Council, workspace, and session rows", () => {
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\bpl-1\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\bpr-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bw-full\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bpl-1\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bpr-0\b/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.pinnedListClassName, /\bpl-/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.councilListClassName, /\bpl-/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionListClassName, /\bpl-/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.pinnedListClassName, /\bpr-/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.councilListClassName, /\bpr-/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionListClassName, /\bpr-/);
+    const stylesSource = readSource("./styles.css");
+
+    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /rah-sidebar-item-row/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /rah-sidebar-item-row/);
+    assert.match(stylesSource, /\.rah-sidebar-item-row\s*\{[\s\S]*width:\s*100%;[\s\S]*border-radius:\s*var\(--rah-sidebar-row-radius\);[\s\S]*padding-right:\s*0;[\s\S]*padding-left:\s*var\(--rah-sidebar-row-content-inset\)/);
+    assert.equal(SIDEBAR_LAYOUT.pinnedListClassName, SIDEBAR_LAYOUT.sessionListClassName);
+    assert.equal(SIDEBAR_LAYOUT.councilListClassName, SIDEBAR_LAYOUT.sessionListClassName);
   });
 
   test("makes the whole workspace label region the disclosure control", () => {
@@ -497,13 +571,10 @@ describe("sidebar layout contract", () => {
     const stylesSource = readSource("./styles.css");
 
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\brah-sidebar-row\b/);
-    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /hover:bg-\[var\(--rah-sidebar-row-hover-bg\)\]/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceHeaderClassName, /focus-within:bg-/);
     assert.match(
       stylesSource,
-      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)\s*\{[\s\S]*background:\s*var\(--rah-sidebar-row-hover-bg\)/,
+      /\.rah-sidebar-row:hover,[\s\S]*\.rah-sidebar-row-selected,[\s\S]*\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)[\s\S]*background:\s*var\(--rah-sidebar-row-hover-bg\)/,
     );
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceDisclosureButtonClassName, /(?:hover|focus|active):bg-/);
     assert.doesNotMatch(sidebarSource, /workspaceHeaderSelectedClassName/);
     assert.doesNotMatch(sidebarSource, /workspaceTitleSelectedClassName/);
   });
@@ -513,7 +584,7 @@ describe("sidebar layout contract", () => {
     const appSource = readSource("./App.tsx");
 
     assert.match(sidebarSource, /aria-label="New task in workspace"/);
-    assert.match(sidebarSource, /<SquarePen size=\{14\} \/>/);
+    assert.match(sidebarSource, /<SquarePen size=\{SIDEBAR_VISUAL_PROTOCOL\.actionIconPx\} \/>/);
     assert.match(sidebarSource, /props\.onNewTaskInWorkspace\(\)/);
     assert.match(
       appSource,
@@ -523,15 +594,29 @@ describe("sidebar layout contract", () => {
   });
 
   test("keeps selected sessions at the same neutral depth as ordinary hover", () => {
-    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /bg-\[var\(--rah-sidebar-row-hover-bg\)\]/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /font-medium/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /hover:bg-/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /shadow-none/);
+    const stylesSource = readSource("./styles.css");
+
+    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /rah-sidebar-row-selected/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /emerald/);
     assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /inset_3px_0_0_0/);
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\brah-sidebar-row\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /hover:bg-\[var\(--rah-sidebar-row-hover-bg\)\]/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowIdleClassName, /active:bg-/);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.rowHeightPx, 30);
+    assert.equal(SIDEBAR_VISUAL_PROTOCOL.rowRadiusPx, 10);
+    assert.match(stylesSource, /\.rah-sidebar-row:hover,[\s\S]*\.rah-sidebar-row-selected,[\s\S]*background:\s*var\(--rah-sidebar-row-hover-bg\)/);
+  });
+
+  test("uses the session hover surface for primary navigation hover and selection", () => {
+    const navigationSource = readSource(
+      "./components/workbench/actions/WorkbenchSidebarNavigation.tsx",
+    );
+
+    const stylesSource = readSource("./styles.css");
+
+    assert.match(navigationSource, /SIDEBAR_LAYOUT\.navigationItemClassName/);
+    assert.match(navigationSource, /SIDEBAR_LAYOUT\.navigationItemActiveClassName/);
+    assert.match(SIDEBAR_LAYOUT.navigationItemClassName, /rah-sidebar-row/);
+    assert.equal(SIDEBAR_LAYOUT.navigationItemActiveClassName, "rah-sidebar-row-selected");
+    assert.match(stylesSource, /\.rah-sidebar-navigation-item\s*\{[\s\S]*outline:\s*none;/);
   });
 
   test("renders running Councils as an independent unpinned section", () => {
@@ -612,11 +697,11 @@ describe("sidebar layout contract", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
     const stylesSource = readSource("./styles.css");
 
-    assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /pointer-events-none/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /pointer-events-none/);
-    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /\bw-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /\bw-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /\brelative\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /rah-sidebar-workspace-actions-hidden/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /rah-sidebar-session-action-hidden/);
+    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /rah-sidebar-session-actions-single/);
+    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /rah-sidebar-session-actions-dual/);
+    assert.match(SIDEBAR_LAYOUT.sessionActionSlotClassName, /rah-sidebar-session-action-rail/);
     assert.match(
       SIDEBAR_LAYOUT.sessionActionGroupBaseClassName,
       /rah-sidebar-session-hover-actions/,
@@ -631,13 +716,33 @@ describe("sidebar layout contract", () => {
     );
     assert.match(
       stylesSource,
-      /\.rah-sidebar-session-hover-actions\s*\{[\s\S]*background:\s*var\(--rah-sidebar-row-hover-bg\)/,
+      /\.rah-sidebar-session-hover-actions\s*\{[\s\S]*width:\s*0;[\s\S]*background:\s*transparent;/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-session-hover-actions\s*\{[\s\S]*box-shadow:\s*none;/,
     );
     assert.doesNotMatch(
       stylesSource,
       /\.rah-sidebar-session-hover-actions\s*\{[^}]*backdrop-filter:/,
     );
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionActionButtonClassName, /(?:hover|focus-visible|active):bg-(?!transparent)/);
+    assert.match(
+      SIDEBAR_LAYOUT.sessionStatusSlotClassName,
+      /rah-sidebar-session-status/,
+    );
+    assert.match(sidebarSource, /data-sidebar-has-actions="true"/);
+    assert.match(
+      sidebarSource,
+      /data-sidebar-archive-armed=\{archiveArmed \? "true" : undefined\}/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-row:hover[\s\S]*data-sidebar-has-actions="true"[\s\S]*\.rah-sidebar-session-status[\s\S]*opacity:\s*0;/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-workspace-actions-hidden,[\s\S]*\.rah-sidebar-session-action-hidden\s*\{[\s\S]*pointer-events:\s*none;[\s\S]*opacity:\s*0;/,
+    );
     assert.doesNotMatch(
       sidebarSource,
       /props\.session\.pinned\s*\?\s*props\.session\.archivable/,
@@ -646,31 +751,54 @@ describe("sidebar layout contract", () => {
       sidebarSource,
       /sessionActionButtonClassName\} \$\{SIDEBAR_LAYOUT\.sessionActionButtonHiddenClassName\}/,
     );
-    assert.doesNotMatch(
-      SIDEBAR_LAYOUT.sessionPinSelectedToneClassName,
-      /opacity-100|pointer-events-auto/,
+    assert.equal(SIDEBAR_LAYOUT.sessionPinSelectedToneClassName, "rah-sidebar-action-selected");
+  });
+
+  test("owns one session tooltip for the whole sidebar and clears stale pointer state", () => {
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+    const controllerSource = readSource("./useSidebarSessionTooltipController.ts");
+    const stateSource = readSource("./sidebar-session-tooltip-state.ts");
+
+    assert.match(controllerSource, /SIDEBAR_SESSION_TOOLTIP_HOVER_DELAY_MS = 160/);
+    assert.match(controllerSource, /function useSidebarSessionTooltipController/);
+    assert.match(stateSource, /phase: "idle"/);
+    assert.match(stateSource, /phase: "pending"/);
+    assert.match(stateSource, /phase: "open"/);
+    assert.match(stateSource, /state\.epoch !== event\.epoch/);
+    assert.doesNotMatch(sidebarSource, /const \[tooltipOpen, setTooltipOpen\]/);
+    assert.doesNotMatch(sidebarSource, /setTimeout\([^)]*tooltip/i);
+    assert.match(sidebarSource, /data-sidebar-session-tooltip-key=\{props\.tooltipKey\}/);
+    assert.equal((sidebarSource.match(/<SessionRowTooltip/g) ?? []).length, 1);
+    assert.match(controllerSource, /anchor\.isConnected && anchor\.matches\(":hover"\)/);
+    assert.match(controllerSource, /new MutationObserver\(closeIfAnchorWasRemoved\)/);
+    assert.match(sidebarSource, /onPointerOver=\{tooltipController\.onPointerOver\}/);
+    assert.match(sidebarSource, /onPointerOut=\{tooltipController\.onPointerOut\}/);
+    assert.match(sidebarSource, /onDragStartCapture=\{tooltipController\.reset\}/);
+    assert.match(
+      controllerSource,
+      /event\.target\.matches\(":focus-visible"\)/,
     );
+    assert.doesNotMatch(controllerSource, /addEventListener\("pointermove"/);
+    assert.match(controllerSource, /document\.addEventListener\("pointerdown", close, true\)/);
+    assert.match(controllerSource, /document\.addEventListener\("focusin", closeOnFocusOutsideSession, true\)/);
+    assert.match(controllerSource, /window\.addEventListener\("scroll", close, true\)/);
+    assert.match(controllerSource, /window\.addEventListener\("blur", close\)/);
+    assert.match(controllerSource, /document\.addEventListener\("visibilitychange", closeWhenHidden\)/);
   });
 
   test("reveals hover-only actions for keyboard focus and coarse pointers", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
     const stylesSource = readSource("./styles.css");
 
-    assert.doesNotMatch(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /group-focus-within/);
     assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /coarse-pointer-action-visible/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /group-focus-within/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /group-focus-within/);
-    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /group-focus-within/);
     assert.match(SIDEBAR_LAYOUT.sessionActionButtonHiddenClassName, /coarse-pointer-action-visible/);
-    assert.match(SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName, /coarse-pointer-session-actions-single/);
-    assert.match(SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName, /coarse-pointer-session-actions-dual/);
     assert.match(
       stylesSource,
-      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)[\s\S]*\.coarse-pointer-action-visible\s*\{[\s\S]*opacity:\s*1;[\s\S]*pointer-events:\s*auto;/,
+      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)[\s\S]*\.rah-sidebar-session-action-hidden[\s\S]*pointer-events:\s*auto;[\s\S]*opacity:\s*1;/,
     );
     assert.match(
       stylesSource,
-      /\.rah-sidebar-row:not\(\[data-sidebar-pointer-focus\]\):has\(:focus-visible\)[\s\S]*\.coarse-pointer-session-actions-dual\s*\{[\s\S]*width:\s*4rem;/,
+      /@media \(hover: none\), \(pointer: coarse\)[\s\S]*\.rah-sidebar-session-actions-dual\s*\{[\s\S]*width:\s*calc\(var\(--rah-sidebar-action-size\) \+ var\(--rah-sidebar-action-size\)\);/,
     );
     assert.match(
       sidebarSource,
@@ -691,28 +819,47 @@ describe("sidebar layout contract", () => {
     );
   });
 
-  test("keeps archive and pin in separate slots and confirms archive before mutation", () => {
+  test("arms sidebar archive before direct mutation and resets destructive actions", () => {
     const sidebarSource = readSource("./SessionSidebar.tsx");
     const appSource = readSource("./App.tsx");
     const stylesSource = readSource("./styles.css");
 
     assert.match(
       sidebarSource,
-      /sessionActionSlotClassName[\s\S]*aria-label=\{props\.session\.pinned[\s\S]*aria-label="Archive session"/,
+      /sessionActionSlotClassName[\s\S]*aria-label=\{props\.session\.pinned[\s\S]*Click again to archive session/,
     );
     assert.doesNotMatch(sidebarSource, /props\.session\.running \? \(\s*<button[\s\S]*Unpin session/);
     assert.match(sidebarSource, /sessionTitleOnlySelectButtonClassName/);
+    assert.equal(
+      (sidebarSource.match(/SIDEBAR_DESTRUCTIVE_ACTION_ARM_TIMEOUT_MS/g) ?? []).length,
+      3,
+    );
+    assert.match(sidebarSource, /const \[archiveArmed, setArchiveArmed\] = useState\(false\)/);
+    assert.match(
+      sidebarSource,
+      /const transition = advanceSidebarDestructiveAction\(archiveArmed\);\s*setArchiveArmed\(transition\.armed\);\s*if \(transition\.execute\) \{\s*props\.onArchive\(\);\s*\}/,
+    );
+    assert.match(sidebarSource, /data-sidebar-archive-armed=\{archiveArmed \? "true" : "false"\}/);
+    assert.match(sidebarSource, /aria-pressed=\{archiveArmed\}/);
+    assert.match(SIDEBAR_LAYOUT.sessionArchiveArmedGroupClassName, /rah-sidebar-session-actions-armed/);
+    assert.equal(SIDEBAR_LAYOUT.sessionActionButtonArmedClassName, "rah-sidebar-session-action-armed");
+    assert.equal(SIDEBAR_LAYOUT.sessionActionDangerClassName, "rah-sidebar-action-danger");
+    assert.equal(SIDEBAR_LAYOUT.workspaceActionDangerClassName, "rah-sidebar-action-danger");
+    assert.match(
+      appSource,
+      /onArchiveRunningSession=\{\(sessionId\) => \{\s*void archiveSessionAndClearCanvasTargets\(sessionId\)/,
+    );
+    assert.match(
+      appSource,
+      /onArchiveStoredSession=\{\(session\) => \{\s*void archiveHistorySessionAndClearCanvasTargets\(session\)/,
+    );
     assert.match(appSource, /open=\{archiveConfirmTarget !== null\}/);
     assert.match(appSource, /title="Archive session\?"/);
     assert.match(appSource, /Nothing will be deleted\. You can browse or restore it from Chats → Archived\./);
-    assert.match(appSource, /onArchiveRunningSession=\{\(sessionId\) => \{\s*requestArchiveRuntimeSession\(sessionId\)/);
     assert.match(appSource, /onArchiveHistorySession=\{requestArchiveHistorySession\}/);
-    assert.match(stylesSource, /\.coarse-pointer-action-target\s*\{[\s\S]*min-height:\s*2rem;[\s\S]*min-width:\s*2rem;/);
-    assert.match(stylesSource, /\.coarse-pointer-action-cell\s*\{[\s\S]*height:\s*2rem !important;[\s\S]*width:\s*2rem !important;/);
-    assert.match(stylesSource, /\.coarse-pointer-session-actions-single\s*\{[\s\S]*width:\s*2rem !important;/);
-    assert.match(stylesSource, /\.coarse-pointer-session-actions-dual\s*\{[\s\S]*width:\s*4rem !important;/);
-    assert.doesNotMatch(stylesSource, /width:\s*1\.75rem !important/);
-    assert.doesNotMatch(stylesSource, /width:\s*3\.5rem !important/);
+    assert.match(stylesSource, /\.rah-sidebar-action-button,[\s\S]*\.coarse-pointer-action-target\s*\{[\s\S]*width:\s*var\(--rah-sidebar-action-size\);[\s\S]*height:\s*var\(--rah-sidebar-action-size\)/);
+    assert.doesNotMatch(stylesSource, /\.coarse-pointer-action-(?:target|cell)[^{]*\{[^}]*!important/);
+    assert.doesNotMatch(stylesSource, /@media[^}]*[\s\S]{0,500}--rah-sidebar-row-height/);
   });
 
   test("routes session and council pages through shared conversation chrome", () => {
@@ -804,11 +951,13 @@ describe("sidebar layout contract", () => {
     for (const source of [
       headerSource,
       emptyPaneSource,
-      canvasSource,
       sideDockSource,
     ]) {
       assert.match(source, /MobileSidebarToggleButton/);
     }
+    assert.match(canvasSource, /<ConversationHeader/);
+    assert.match(canvasSource, /onOpenLeft=\{props\.onOpenLeft\}/);
+    assert.match(canvasSource, /onExpandSidebar=\{props\.onExpandSidebar\}/);
     assert.match(mobileToggleSource, /fixed left-2 top-\[calc\(env\(safe-area-inset-top,0px\)\+0\.5rem\)\] z-40/);
 
     assert.doesNotMatch(sidePanelSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
@@ -1004,7 +1153,8 @@ describe("sidebar layout contract", () => {
     assert.match(emptyPaneSource, /<NewSessionComposer/);
     assert.doesNotMatch(newComposerSource, /NewSessionWorkspaceContext/);
     assert.match(newComposerSource, /<WorkspacePicker/);
-    assert.match(newComposerSource, /iconOnlyWorkspace/);
+    assert.match(newComposerSource, /rah-new-task-workspace-strip/);
+    assert.doesNotMatch(newComposerSource, /iconOnlyWorkspace/);
     assert.match(newComposerSource, /providerSelectorMode/);
     assert.doesNotMatch(emptyPaneSource, /providerSelectorMode="auto"/);
     assert.match(newComposerSource, /max-w-\[min\(42rem,100%\)\]/);
@@ -1022,6 +1172,9 @@ describe("sidebar layout contract", () => {
     );
     const canvasSessionPaneSource = readSource(
       "./components/workbench/canvas/CanvasSessionPane.tsx",
+    );
+    const conversationHeaderSource = readSource(
+      "./components/workbench/shells/ConversationHeader.tsx",
     );
 
     assert.match(
@@ -1048,8 +1201,9 @@ describe("sidebar layout contract", () => {
     assert.match(appSource, /const effectiveCanvasMaximizedPaneId = canvasMaximizedPaneId;/);
     assert.match(appSource, /layoutEditingDisabled=\{mobileCanvasLayoutOnly\}/);
     assert.match(appSource, /mobileCanvasLayoutOnly \? setMobileCanvasLayout : setCanvasLayout/);
-    assert.match(canvasWorkbenchSource, /onOpen=\{props\.onOpenLeft\}/);
-    assert.match(canvasWorkbenchSource, /min-\[700px\]:hidden/);
+    assert.match(canvasWorkbenchSource, /onOpenLeft=\{props\.onOpenLeft\}/);
+    assert.match(canvasWorkbenchSource, /showLeftSidebarControls=\{props\.showLeftSidebarControls\}/);
+    assert.match(conversationHeaderSource, /className="md:hidden"/);
     assert.match(canvasWorkbenchSource, /max-\[699px\]:hidden/);
     assert.match(canvasWorkbenchSource, /paneCount > 1/);
     assert.match(canvasSessionPaneSource, /showLeftSidebarControls=\{false\}/);
@@ -1159,23 +1313,26 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(CONVERSATION_STATE_META_BADGE_LABEL_CLASS, /w-full/);
     assert.doesNotMatch(CONVERSATION_STATE_META_BADGE_LABEL_CLASS, /text-center/);
     assert.match(sessionSource, /ConversationHeaderMetaList/);
-    assert.match(sessionSource, /ConversationStateMetaBadge state=\{sessionHeaderState\} appearance="inline"/);
-    assert.match(sessionSource, /ConversationHeaderMetaList items=\{sessionHeaderMetaItems\} appearance="inline"/);
+    assert.doesNotMatch(sessionSource, /ConversationStateMetaBadge/);
+    assert.match(sessionSource, /ComposerContextIndicator/);
+    assert.match(sessionSource, /conic-gradient\(var\(--app-hint\)/);
     assert.doesNotMatch(sessionSource, /CONVERSATION_META_BADGE_PWA_CLASS/);
     assert.doesNotMatch(sessionSource, /sessionMetaBadgeClassName/);
     assert.match(councilSource, /ConversationHeaderMetaList/);
     assert.match(councilSource, /ConversationHeaderMetaList items=\{selectedCouncilHeaderMetaItems\} appearance="inline"/);
     assert.doesNotMatch(councilSource, /CONVERSATION_META_BADGE_PWA_CLASS/);
     assert.doesNotMatch(councilSource, /councilMetaBadgeClassName/);
-    assert.match(councilSource, /Start or open a Council to coordinate agents\./);
-    assert.match(headerSource, /presentation === "page" \? "h-14" : "h-12"/);
+    assert.doesNotMatch(councilSource, /Start or open a Council to coordinate agents\./);
+    assert.match(headerSource, /WORKBENCH_HEADER_LAYOUT\.heightClassName/);
+    assert.match(headerSource, /data-workbench-header=""/);
     assert.match(headerSource, /data-presentation=\{presentation\}/);
-    assert.match(headerSource, /flex h-4 min-w-0 items-center overflow-hidden/);
+    assert.match(headerSource, /flex h-4 min-w-0 shrink items-center overflow-hidden/);
+    assert.match(headerSource, /flex min-w-0 flex-1 items-center gap-1\.5 overflow-hidden/);
     assert.match(councilSource, /const compactCouncilMeta = isPwaDisplayMode \|\| !isCouncilWide;/);
     assert.match(councilSource, /presentation=\{selectedCouncil \? "conversation" : "page"\}/);
-    assert.match(councilSource, /identity=\{selectedCouncil \? <CouncilLogo className="h-6 w-6" \/> : undefined\}/);
+    assert.match(councilSource, /identity=\{<CouncilLogo className="h-6 w-6" \/>\}/);
     assert.match(councilSource, /icon=\{<Bot className="h-3\.5 w-3\.5" aria-hidden="true" \/>\}/);
-    assert.match(councilSource, /ConversationStateMetaBadge[\s\S]*appearance="inline"/);
+    assert.doesNotMatch(councilSource, /ConversationStateMetaBadge/);
     assert.match(councilSource, /label=\{compactCouncilMeta \? selectedCouncil\.agents\.length : selectedCouncilAgentCountLabel\}/);
     assert.doesNotMatch(sessionSource, /function ConversationHeaderStateIconView/);
     assert.doesNotMatch(councilSource, /function ConversationHeaderStateIconView/);
@@ -1201,12 +1358,15 @@ describe("sidebar layout contract", () => {
     assert.match(councilLogoSource, /h-full w-full text-current/);
     assert.doesNotMatch(councilLogoSource, /h-full w-full text-black\/90/);
     assert.match(councilLogoSource, /h-full w-full text-orange-700\/90/);
-    assert.match(navigationSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
-    assert.match(sidebarSource, /<CouncilLogo className=\{SIDEBAR_LAYOUT\.sessionIconClassName\} tone="black" variant="bare" \/>/);
+    assert.match(
+      navigationSource,
+      /<CouncilLogo[\s\S]*className=\{SIDEBAR_LAYOUT\.navigationCouncilIconClassName\}[\s\S]*tone="black"[\s\S]*variant="bare"/,
+    );
+    assert.match(sidebarSource, /<CouncilLogo className=\{SIDEBAR_LAYOUT\.councilIconClassName\} tone="black" variant="bare" \/>/);
     assert.match(emptyPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
     assert.match(canvasNewPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
     assert.doesNotMatch(councilSource, /COUNCIL_HEADER_ICON_CLASSNAME/);
-    assert.match(councilSource, /identity=\{selectedCouncil \? <CouncilLogo className="h-6 w-6" \/> : undefined\}/);
+    assert.match(councilSource, /identity=\{<CouncilLogo className="h-6 w-6" \/>\}/);
     assert.doesNotMatch(appSource, /CouncilLogo/);
     assert.doesNotMatch(appSource, /renderPaneToolbar/);
     assert.doesNotMatch(canvasSource, /CouncilLogo/);

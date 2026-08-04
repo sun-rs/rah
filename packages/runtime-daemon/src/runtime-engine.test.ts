@@ -736,6 +736,8 @@ class SnapshotPagingAdapter implements ProviderAdapter {
   readonly providers: Array<"codex"> = ["codex"];
   readonly historyBySessionId = new Map<string, RahEvent[]>();
   readonly summaryBySessionId = new Map<string, ConversationEvidencePage>();
+  readonly sourceRevisionBySessionId = new Map<string, string>();
+  summaryPageCalls = 0;
 
   startSession(_request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse> {
     throw new Error("not implemented");
@@ -813,7 +815,12 @@ class SnapshotPagingAdapter implements ProviderAdapter {
   getConversationSummaryEvidencePage(
     sessionId: string,
   ): ConversationEvidencePage | undefined {
+    this.summaryPageCalls += 1;
     return this.summaryBySessionId.get(sessionId);
+  }
+
+  getSessionConversationSourceRevision(sessionId: string): string | undefined {
+    return this.sourceRevisionBySessionId.get(sessionId);
   }
 
   getContextUsage(_sessionId: string): ContextUsage | undefined {
@@ -967,7 +974,7 @@ class FrozenPagingAdapter implements ProviderAdapter {
 }
 
 describe("RuntimeEngine", () => {
-  test("restores frozen turn changes from provider identity after a daemon restart", async () => {
+  test("restores only frozen turn artifacts and rejects unbacked history summaries", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-turn-history-restart-"));
     const previousRahHome = process.env.RAH_HOME;
     process.env.RAH_HOME = path.join(tempDir, "rah-home");
@@ -1031,6 +1038,7 @@ describe("RuntimeEngine", () => {
     let firstEngine: RuntimeEngine | undefined;
     let secondEngine: RuntimeEngine | undefined;
     let thirdEngine: RuntimeEngine | undefined;
+    let unbackedEngine: RuntimeEngine | undefined;
     try {
       const firstAdapter = new SnapshotPagingAdapter();
       firstEngine = new RuntimeEngine([firstAdapter]);
@@ -1097,14 +1105,34 @@ describe("RuntimeEngine", () => {
         { limit: 10 },
       );
       assert.deepEqual(nativePage.turns[0]?.fileChanges, {
-        files: [{ path: "src/demo.ts", additions: 4, deletions: 2 }],
-        totalAdditions: 4,
-        totalDeletions: 2,
+        files: [{ path: "src/demo.ts", additions: 1, deletions: 1 }],
+        totalAdditions: 1,
+        totalDeletions: 1,
       });
+
+      const unbackedAdapter = new SnapshotPagingAdapter();
+      unbackedEngine = new RuntimeEngine([unbackedAdapter]);
+      const unbackedState = unbackedEngine.sessionStore.createManagedSession({
+        provider: "codex",
+        providerSessionId: `${providerSessionId}-without-artifact`,
+        launchSource: "web",
+        cwd: tempDir,
+        rootDir: tempDir,
+      });
+      unbackedAdapter.historyBySessionId.set(
+        unbackedState.session.id,
+        historyEvents(unbackedState.session.id, { providerChanges: true }),
+      );
+      const unbackedPage = await unbackedEngine.getSessionConversationTurns(
+        unbackedState.session.id,
+        { limit: 10 },
+      );
+      assert.equal(unbackedPage.turns[0]?.fileChanges, undefined);
     } finally {
       await firstEngine?.shutdown();
       await secondEngine?.shutdown();
       await thirdEngine?.shutdown();
+      await unbackedEngine?.shutdown();
       if (previousRahHome === undefined) {
         delete process.env.RAH_HOME;
       } else {
@@ -2315,6 +2343,68 @@ describe("RuntimeEngine", () => {
       assert.equal(response.turns[0]?.providerTurnId, providerTurnId);
       assert.equal(response.turns[0]?.itemsView, "summary");
       assert.equal(response.turns[0]?.processDetailsAvailable, false);
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
+  test("conversation pages reuse an exact daemon hot baseline across browser reload reads", async () => {
+    const adapter = new SnapshotPagingAdapter();
+    const source = {
+      provider: "codex" as const,
+      channel: "structured_persisted" as const,
+      authority: "authoritative" as const,
+    };
+    const summaryPage = (revision: string, text: string): ConversationEvidencePage => ({
+      sessionId: "replay-1",
+      sourceRevision: revision,
+      detailMode: "summary",
+      events: [
+        {
+          ...historyEvent("replay-1", 1, "2026-08-04T00:00:00.000Z", text),
+          turnId: "turn-1",
+        },
+        {
+          id: `completed-${revision}`,
+          seq: 2,
+          ts: "2026-08-04T00:00:01.000Z",
+          sessionId: "replay-1",
+          turnId: "turn-1",
+          type: "turn.completed",
+          source,
+          payload: {},
+        },
+      ],
+    });
+    adapter.sourceRevisionBySessionId.set("replay-1", "revision-1");
+    adapter.summaryBySessionId.set(
+      "replay-1",
+      summaryPage("private-worker-boundary-1", "cached answer"),
+    );
+    const engine = new RuntimeEngine([adapter]);
+    try {
+      const resumed = await engine.resumeSession({
+        provider: "codex",
+        providerSessionId: "provider-1",
+        preferStoredReplay: true,
+      });
+      const sessionId = resumed.session.session.id;
+
+      const first = await engine.getSessionConversationTurns(sessionId, { limit: 8 });
+      const afterReload = await engine.getSessionConversationTurns(sessionId, { limit: 8 });
+      assert.equal(adapter.summaryPageCalls, 1);
+      assert.equal(first.sourceRevision, "revision-1");
+      assert.equal(afterReload, first);
+
+      adapter.sourceRevisionBySessionId.set("replay-1", "revision-2");
+      adapter.summaryBySessionId.set(
+        "replay-1",
+        summaryPage("private-worker-boundary-2", "new answer"),
+      );
+      const refreshed = await engine.getSessionConversationTurns(sessionId, { limit: 8 });
+      assert.equal(adapter.summaryPageCalls, 2);
+      assert.equal(refreshed.sourceRevision, "revision-2");
+      assert.notEqual(refreshed, first);
     } finally {
       await engine.shutdown();
     }

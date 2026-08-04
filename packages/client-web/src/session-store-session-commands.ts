@@ -2,6 +2,7 @@ import type {
   AttachSessionRequest,
   PermissionResponseRequest,
   SessionInputAttachment,
+  SessionInputAnnotation,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -284,6 +285,7 @@ export async function sendInputCommand(args: {
   sessionId: string;
   text: string;
   attachments?: SessionInputAttachment[];
+  annotations?: SessionInputAnnotation[];
   clientMessageId?: string;
   clientTurnId?: string;
   skipOptimisticQueue?: boolean;
@@ -338,6 +340,7 @@ export async function sendInputCommand(args: {
               clientTurnId,
               text: args.text,
               ...(args.attachments?.length ? { attachments: args.attachments } : {}),
+              ...(args.annotations?.length ? { annotations: args.annotations } : {}),
               queuedAt: now,
               position: currentInputQueue.length + 1,
             },
@@ -381,6 +384,7 @@ export async function sendInputCommand(args: {
         clientId: args.get().clientId,
         text: args.text,
         ...(args.attachments?.length ? { attachments: args.attachments } : {}),
+        ...(args.annotations?.length ? { annotations: args.annotations } : {}),
         clientMessageId,
         clientTurnId,
       }),

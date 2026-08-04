@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { PanelRight, X } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useRef, type CSSProperties, type ReactNode } from "react";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
@@ -23,7 +23,12 @@ export function Sheet(props: {
   floatingClose?: "panel" | "x";
   floatingCloseLabel?: string;
   viewportClassName?: string;
+  contentClassName?: string;
+  contentStyle?: CSSProperties;
+  contentDataAttributes?: Record<`data-${string}`, string>;
   bodyClassName?: string;
+  headerClassName?: string;
+  headerTitleClassName?: string;
   fullScreen?: boolean;
 }) {
   const closePlacement = props.closePlacement ?? "end";
@@ -47,7 +52,9 @@ export function Sheet(props: {
       <Dialog.Portal>
         <Dialog.Overlay className={`fixed inset-0 bg-black/40 z-50 ${props.viewportClassName ?? ""}`} />
         <Dialog.Content
+          {...props.contentDataAttributes}
           ref={contentRef}
+          style={props.contentStyle}
           tabIndex={props.initialFocus === "content" ? -1 : undefined}
           onOpenAutoFocus={
             props.initialFocus === "content"
@@ -67,7 +74,7 @@ export function Sheet(props: {
                     ? "left-0 border-r bg-[var(--app-subtle-bg)]"
                     : "right-0 border-l bg-[var(--app-bg)]"
                 }`
-          } flex flex-col ${props.viewportClassName ?? ""}`}
+          } flex flex-col ${props.viewportClassName ?? ""} ${props.contentClassName ?? ""}`}
         >
           <Dialog.Description className="sr-only">
             {props.side === "left"
@@ -95,9 +102,14 @@ export function Sheet(props: {
               ) : null}
             </>
           ) : props.headerLayout === "inline" ? (
-            <div className="flex shrink-0 items-center gap-1 border-b border-[var(--app-border)] px-2 py-2">
+            <div className={`flex shrink-0 items-center gap-1 border-b border-[var(--app-border)] px-2 py-2 ${props.headerClassName ?? ""}`}>
               {closePlacement === "start" ? closeButton : null}
-              <Dialog.Title className="shrink-0 text-sm font-semibold text-[var(--app-fg)]">
+              <Dialog.Title
+                className={
+                  props.headerTitleClassName ??
+                  "shrink-0 text-sm font-semibold text-[var(--app-fg)]"
+                }
+              >
                 {props.title}
               </Dialog.Title>
               {props.headerRight ? (

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import type {
   ConversationTurnDirectoryResponse,
-  ConversationTurnFileChangesProjection,
 } from "@rah/runtime-protocol";
 import type { CodexAppServerTurnsPage } from "./codex-app-server-turns-page";
 import {
@@ -142,26 +141,8 @@ export class CodexTurnDirectoryStore {
     const snapshot = await this.getSnapshot(record);
     const item =
       snapshot.items.find((candidate) => candidate.id === turnId) ??
-      (await this.lookupTurns(record, [turnId], false))[0];
+      (await this.lookupTurns(record, [turnId]))[0];
     return item ? { startOffset: item.startOffset, endOffset: item.endOffset } : null;
-  }
-
-  async getFileChangesByTurnIds(
-    record: CodexStoredSessionRecord,
-    turnIds: readonly string[],
-  ): Promise<Map<string, ConversationTurnFileChangesProjection>> {
-    if (turnIds.length === 0) {
-      return new Map();
-    }
-    await this.getSnapshot(record);
-    const lookups = await this.lookupTurns(record, turnIds, true);
-    return new Map(
-      lookups.flatMap((item) =>
-        item.fileChanges
-          ? [[item.id, item.fileChanges] as const]
-          : [],
-      ),
-    );
   }
 
   async getSummaryPage(
@@ -222,7 +203,6 @@ export class CodexTurnDirectoryStore {
         startedAt: isoToEpochSeconds(item.startedAt),
         completedAt: item.completedAt ? isoToEpochSeconds(item.completedAt) : null,
         durationMs: item.durationMs ?? null,
-        ...(item.fileChanges ? { fileChanges: item.fileChanges } : {}),
       };
     });
     const oldest = selected.at(-1);
@@ -428,7 +408,6 @@ export class CodexTurnDirectoryStore {
   private runLookupWorker(
     record: CodexStoredSessionRecord,
     turnIds: readonly string[],
-    includeFileChanges: boolean,
     signal: AbortSignal,
   ): Promise<CodexIndexedTurn[]> {
     return runBackgroundIpcTask<
@@ -436,7 +415,6 @@ export class CodexTurnDirectoryStore {
         kind: "codex-turn-lookup";
         cachePath: string;
         turnIds: string[];
-        includeFileChanges: boolean;
       },
       CodexTurnDirectoryWorkerResponse
     >({
@@ -445,7 +423,6 @@ export class CodexTurnDirectoryStore {
         kind: "codex-turn-lookup",
         cachePath: directoryCachePath(record.ref.providerSessionId),
         turnIds: [...turnIds],
-        includeFileChanges,
       },
       label: "Codex turn lookup worker",
       signal,
@@ -473,7 +450,6 @@ export class CodexTurnDirectoryStore {
   private lookupTurns(
     record: CodexStoredSessionRecord,
     turnIds: readonly string[],
-    includeFileChanges: boolean,
   ): Promise<CodexIndexedTurn[]> {
     const controller = new AbortController();
     this.scanAbortControllers.add(controller);
@@ -483,7 +459,6 @@ export class CodexTurnDirectoryStore {
           this.runLookupWorker(
             record,
             turnIds,
-            includeFileChanges,
             signal,
           ),
         {

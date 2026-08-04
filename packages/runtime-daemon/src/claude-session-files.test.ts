@@ -1147,6 +1147,49 @@ describe("Claude session files", () => {
     );
   });
 
+  test("keeps response annotation transport context out of Claude history", () => {
+    writeClaudeSession("session-response-annotation.jsonl", [
+      {
+        type: "user",
+        uuid: "user-response-annotation",
+        cwd: workDir,
+        sessionId: "session-response-annotation",
+        timestamp: "2025-07-19T22:36:00.000Z",
+        message: {
+          content: `# Response annotations:
+Each item contains selected response text.
+<response-annotations>
+[{"text":"Selected benchmark result"}]
+</response-annotations>
+
+Explain the tradeoff.`,
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir).find(
+      (session) => session.ref.providerSessionId === "session-response-annotation",
+    );
+    assert.ok(record);
+    assert.equal(record.ref.preview, "Explain the tradeoff.");
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+    const user = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message",
+    );
+    assert.equal(
+      user?.type === "timeline.item.added" && user.payload.item.kind === "user_message"
+        ? user.payload.item.text
+        : null,
+      "Explain the tradeoff.",
+    );
+  });
+
   test("filters Claude no-response placeholders without creating chat notices", () => {
     writeClaudeSession("session-no-response.jsonl", [
       {

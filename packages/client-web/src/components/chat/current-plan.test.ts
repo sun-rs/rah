@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, test } from "node:test";
@@ -161,14 +162,20 @@ describe("current plan", () => {
     );
 
     assert.match(html, /aria-label="Task summary"/);
-    assert.match(html, />Task summary</);
-    assert.match(html, /Working · 1\/2/);
+    assert.doesNotMatch(html, />Task summary</);
+    assert.doesNotMatch(html, /Working/);
+    assert.match(html, />1\/2</);
+    assert.match(html, /Run 2 commands/);
     assert.match(html, /chat-task-summary relative/);
     assert.match(html, /data-testid="task-summary-overlay"/);
     assert.match(html, /absolute bottom-\[calc\(100%-1px\)\]/);
     assert.match(html, /group-hover:visible/);
+    assert.match(html, /group-focus-within:visible/);
+    assert.match(html, /h-8 max-w-full/);
     assert.doesNotMatch(html, /chat-task-summary[^"]*border-t/);
     assert.doesNotMatch(html, /Current plan/);
+    assert.doesNotMatch(html, /Updated the plan/);
+    assert.doesNotMatch(html, /lucide-chevron/);
   });
 
   test("offers the active turn file changes from the task overlay", () => {
@@ -179,6 +186,24 @@ describe("current plan", () => {
       totalAdditions: 9,
       totalDeletions: 2,
     };
+    turn.activities = [
+      {
+        kind: "file_read",
+        totalCount: 11,
+        runningCount: 0,
+        interruptedCount: 0,
+        failureCount: 0,
+        issueCount: 0,
+      },
+      {
+        kind: "plan",
+        totalCount: 3,
+        runningCount: 1,
+        interruptedCount: 0,
+        failureCount: 0,
+        issueCount: 0,
+      },
+    ];
     const html = renderToStaticMarkup(
       createElement(TaskSummaryDock, {
         plan: latestCurrentPlan([turn])!,
@@ -187,8 +212,49 @@ describe("current plan", () => {
     );
 
     assert.match(html, /aria-label="Review files changed by this turn"/);
-    assert.match(html, /1 file changed/);
+    assert.match(html, /Read 11 files/);
+    assert.match(html, /Changed 1 file/);
     assert.match(html, />\+9</);
     assert.match(html, />-2</);
+    assert.ok(
+      html.indexOf("Changed 1 file") < html.indexOf("Read 11 files"),
+      "Changed files must be the first and leftmost task detail",
+    );
+    assert.doesNotMatch(html, /Updated the plan/);
+    assert.doesNotMatch(html, /Updating the plan/);
+    assert.match(html, /flex-nowrap/);
+    assert.match(html, /whitespace-nowrap/);
+  });
+
+  test("omits the changed-files task detail when the turn has no changes", () => {
+    const item = planItem("plan-1", "turn-1", 1);
+    const turn = conversationTurn("turn-1", [item], "in_progress");
+    turn.activities = [{
+      kind: "command",
+      totalCount: 1,
+      runningCount: 0,
+      interruptedCount: 0,
+      failureCount: 0,
+      issueCount: 0,
+    }];
+    const html = renderToStaticMarkup(
+      createElement(TaskSummaryDock, {
+        plan: latestCurrentPlan([turn])!,
+        onReviewChanges: () => undefined,
+      }),
+    );
+
+    assert.match(html, /Run 1 command/);
+    assert.doesNotMatch(html, /Review files changed by this turn|Changed \d+ files?/);
+  });
+
+  test("uses hover disclosure on desktop and tap/outside dismissal in PWA", () => {
+    const source = readFileSync(new URL("./TaskSummaryDock.tsx", import.meta.url), "utf8");
+
+    assert.match(source, /data-task-summary-disclosure=\{isPwaDisplayMode \? "tap" : "hover"\}/);
+    assert.match(source, /if \(!isPwaDisplayMode\) \{\s*event\.preventDefault\(\)/);
+    assert.match(source, /setExpanded\(\(value\) => !value\)/);
+    assert.match(source, /document\.addEventListener\("pointerdown", dismissOutside\)/);
+    assert.match(source, /!dockRef\.current\?\.contains\(event\.target as Node\)/);
   });
 });

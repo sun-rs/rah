@@ -20,7 +20,7 @@ resume     -> displayed history + resident live overlay
 canonical turns：
 
 ```text
-GET /api/sessions/:sessionId/conversation/turns?limit=20
+GET /api/sessions/:sessionId/conversation/turns?limit=8
 ```
 
 规则：
@@ -28,7 +28,8 @@ GET /api/sessions/:sessionId/conversation/turns?limit=20
 - 请求期间保留 shell，不白屏、不跳 New。
 - 新建 live session 可使用 `liveOnly=true`，不触发 provider 历史扫描。
 - summary page 不携带大工具输出。
-- 首屏响应携带它实际覆盖的 provider `sourceRevision`；客户端必须先把该 revision 作为 freshness
+- 首屏响应携带可与轻量 revision probe 直接比较的 provider `sourceRevision`；pager 内部 frozen
+  boundary 不得冒充另一种 freshness token。客户端必须先把该 revision 作为 freshness
   baseline 写入 projection，不能在 `phase=loading` 时启动 revision probe。
 - rollout 在首屏扫描期间继续增长时，响应 revision 只覆盖已经扫描完成的 byte boundary；下一次 probe
   只触发从该 boundary 开始的增量追赶，不能取消并重发仍在进行的首屏请求。
@@ -150,6 +151,11 @@ Codex Desktop 把多种产品表面写在同一个 `~/.codex/sessions` 树中。
 - 删除、归档和按 workspace 批量删除在执行前等待权威 catalog；普通启动、Resume、Chat 浏览和
   Recent 请求不得隐式等待完整 catalog。
 - resident settled turns 默认有界。
+- daemon 对已经投影完成的 canonical page 维护独立内存 LRU，服务浏览器 reload：地址为
+  `Runtime Session + cursor + limit`，命中还必须同时匹配 provider `sourceRevision` 与 resident
+  `liveRevision`。单条最多 1 MiB、全局最多 128 条 / 32 MiB、最长 30 分钟；工作中 turn、pending/
+  running item 不缓存。任何 revision 不一致都直接失效，不能 stale-while-merge，也不能让浏览器
+  IndexedDB 成为 Conversation owner。
 - raw auxiliary feed 默认 900 条触发压缩，目标约 650 条。
 - directory preview 有长度上限。
 - tool output 只按需读取。

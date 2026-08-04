@@ -3,8 +3,6 @@ import type {
   ResumeSessionResponse,
   ConversationEvidencePage,
   ConversationTurnDirectoryResponse,
-  ConversationTurnFileChangesProjection,
-  RahEvent,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
@@ -34,7 +32,6 @@ import { CodexTurnDirectoryStore } from "./codex-turn-directory";
 import { CodexTurnPageCache } from "./codex-turn-page-cache";
 import {
   readCodexConversationItemDetail,
-  readCodexConversationTurnFileDiff,
   readCodexConversationTurnDetail,
 } from "./codex-turn-history";
 import { createCodexAppServerClient } from "./codex-app-server-client";
@@ -47,7 +44,6 @@ import {
   type CodexAppServerTurnsPage,
   reconcileCodexTrailingTurnLiveness,
 } from "./codex-app-server-turns-page";
-import { approximateJsonByteLength } from "./bounded-json-size";
 import { isSafeCodexVisualArtifactId } from "./codex-visual-artifacts";
 import {
   resolveCodexVisualArtifactPath,
@@ -292,21 +288,11 @@ export class CodexStoredHistoryAdapter
           });
         },
       });
-      return await this.appendIndexedTurnFileChanges(
-        record,
-        materializeCodexAppServerTurnsPage({
-          sessionId,
-          providerSessionId: record.ref.providerSessionId,
-          page,
-        }),
-        page.data.flatMap((turn) => {
-          if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
-            return [];
-          }
-          const id = (turn as Record<string, unknown>).id;
-          return typeof id === "string" ? [id] : [];
-        }),
-      );
+      return materializeCodexAppServerTurnsPage({
+        sessionId,
+        providerSessionId: record.ref.providerSessionId,
+        page,
+      });
     } catch (error) {
       if (isUnsupportedExperimentalListError(error)) {
         this.turnsListSupport = "unavailable";
@@ -337,15 +323,11 @@ export class CodexStoredHistoryAdapter
     options: { cursor?: string; limit: number; sourceSettled: boolean },
   ): Promise<ConversationEvidencePage> {
     const page = await this.turnDirectories.getSummaryPage(record, options);
-    return this.appendProvidedTurnFileChanges(
-      record,
-      materializeCodexAppServerTurnsPage({
-        sessionId,
-        providerSessionId: record.ref.providerSessionId,
-        page,
-      }),
-      page.data,
-    );
+    return materializeCodexAppServerTurnsPage({
+      sessionId,
+      providerSessionId: record.ref.providerSessionId,
+      page,
+    });
   }
 
   async getSessionConversationItemDetail(
@@ -404,52 +386,20 @@ export class CodexStoredHistoryAdapter
     }
     const nativeItems = await this.listNativeTurnItems(record, options.providerTurnId);
     if (nativeItems !== undefined) {
-      return await this.appendIndexedTurnFileChanges(
-        record,
-        materializeCodexAppServerTurnItems({
-          sessionId,
-          providerSessionId: record.ref.providerSessionId,
-          providerTurnId: options.providerTurnId,
-          items: nativeItems,
-        }),
-        [options.providerTurnId],
-      );
+      return materializeCodexAppServerTurnItems({
+        sessionId,
+        providerSessionId: record.ref.providerSessionId,
+        providerTurnId: options.providerTurnId,
+        items: nativeItems,
+      });
     }
     const range = await this.turnDirectories.getTurnRange(record, options.providerTurnId);
     if (!range) {
       return undefined;
     }
-    return await this.appendIndexedTurnFileChanges(
-      record,
-      await readCodexConversationTurnDetail({
-        sessionId,
-        turnId: options.providerTurnId,
-        record,
-        range,
-      }),
-      [options.providerTurnId],
-    );
-  }
-
-  async getSessionConversationTurnFileDiff(
-    sessionId: string,
-    options: { providerTurnId: string; path: string },
-  ) {
-    const record = this.findRecordForRuntimeSession(sessionId);
-    if (!record) {
-      return undefined;
-    }
-    const range = await this.turnDirectories.getTurnRange(
-      record,
-      options.providerTurnId,
-    );
-    if (!range) {
-      return undefined;
-    }
-    return await readCodexConversationTurnFileDiff({
+    return await readCodexConversationTurnDetail({
       sessionId,
       turnId: options.providerTurnId,
-      path: options.path,
       record,
       range,
     });
@@ -468,99 +418,6 @@ export class CodexStoredHistoryAdapter
     } catch {
       return undefined;
     }
-  }
-
-  private async appendIndexedTurnFileChanges(
-    record: CodexStoredSessionRecord,
-    page: ConversationEvidencePage,
-    providerTurnIds: readonly string[],
-  ): Promise<ConversationEvidencePage> {
-    const summaries = await this.turnDirectories.getFileChangesByTurnIds(
-      record,
-      providerTurnIds,
-    );
-    return this.appendTurnFileChanges(record, page, providerTurnIds, summaries);
-  }
-
-  private appendProvidedTurnFileChanges(
-    record: CodexStoredSessionRecord,
-    page: ConversationEvidencePage,
-    turns: readonly unknown[],
-  ): ConversationEvidencePage {
-    const providerTurnIds: string[] = [];
-    const summaries =
-      new Map<string, ConversationTurnFileChangesProjection>();
-    for (const turn of turns) {
-      if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
-        continue;
-      }
-      const turnRecord = turn as Record<string, unknown>;
-      const id = turnRecord.id;
-      if (typeof id !== "string") {
-        continue;
-      }
-      providerTurnIds.push(id);
-      if (
-        turnRecord.fileChanges &&
-        typeof turnRecord.fileChanges === "object"
-      ) {
-        summaries.set(
-          id,
-          turnRecord.fileChanges as ConversationTurnFileChangesProjection,
-        );
-      }
-    }
-    return this.appendTurnFileChanges(record, page, providerTurnIds, summaries);
-  }
-
-  private appendTurnFileChanges(
-    record: CodexStoredSessionRecord,
-    page: ConversationEvidencePage,
-    providerTurnIds: readonly string[],
-    summaries: ReadonlyMap<string, ConversationTurnFileChangesProjection>,
-  ): ConversationEvidencePage {
-    if (summaries.size === 0) {
-      return page;
-    }
-    let nextSeq = page.events.reduce(
-      (maximum, event) => Math.max(maximum, event.seq),
-      0,
-    );
-    const events = [...page.events];
-    for (const providerTurnId of providerTurnIds) {
-      const fileChanges = summaries.get(providerTurnId);
-      if (!fileChanges) {
-        continue;
-      }
-      const turnEvents = page.events.filter(
-        (event) => event.turnId === providerTurnId,
-      );
-      const timestamp =
-        [...turnEvents].reverse().find((event) => event.type === "turn.completed")
-          ?.ts ??
-        turnEvents.at(-1)?.ts ??
-        "1970-01-01T00:00:00.000Z";
-      events.push({
-        id: `codex-turn-file-changes:${record.ref.providerSessionId}:${providerTurnId}`,
-        seq: ++nextSeq,
-        ts: timestamp,
-        sessionId: page.sessionId,
-        turnId: providerTurnId,
-        type: "turn.file_changes.updated",
-        source: {
-          provider: "codex",
-          channel: "structured_persisted",
-          authority: "authoritative",
-        },
-        payload: { fileChanges },
-      } satisfies RahEvent);
-    }
-    const response: ConversationEvidencePage = {
-      ...page,
-      events,
-    };
-    response.approximateBytes = approximateJsonByteLength(response);
-    return response;
   }
 
   createFrozenHistoryPageLoader(sessionId: string) {

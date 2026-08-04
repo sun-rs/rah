@@ -4,18 +4,16 @@ import { Suspense, lazy, useState } from "react";
 import { CouncilLogo } from "../../CouncilLogo";
 import type { WorkspaceSortMode } from "../../../session-browser";
 import { importWithStaleReload } from "../../../lazy-module-reload";
+import {
+  SIDEBAR_LAYOUT,
+  SIDEBAR_VISUAL_PROTOCOL,
+} from "../../../sidebar-layout-contract";
 
 const loadSessionHistoryDialog = () =>
   importWithStaleReload(() => import("../../SessionHistoryDialog"));
 const SessionHistoryDialog = lazy(async () => ({
   default: (await loadSessionHistoryDialog()).SessionHistoryDialog,
 }));
-
-const NAV_ITEM_CLASS =
-  "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[14px] font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60";
-const NAV_ITEM_ACTIVE_CLASS =
-  "bg-[color:color-mix(in_oklab,var(--app-bg)_76%,var(--app-border)_24%)]";
-const NAV_ICON_CLASS = "inline-flex h-5 w-5 shrink-0 items-center justify-center";
 
 export function WorkbenchSidebarNavigation(props: {
   storedSessions: StoredSessionRef[];
@@ -50,48 +48,64 @@ export function WorkbenchSidebarNavigation(props: {
   const chatsButton = (
     <button
       type="button"
-      className={NAV_ITEM_CLASS}
+      className={SIDEBAR_LAYOUT.navigationItemClassName}
       aria-label="Chats"
       aria-expanded={chatsOpen}
       onClick={() => setChatsOpen(true)}
     >
-      <span className={NAV_ICON_CLASS}><MessageCircleMore size={16} /></span>
+      <span className={SIDEBAR_LAYOUT.navigationIconClassName}>
+        <MessageCircleMore size={SIDEBAR_VISUAL_PROTOCOL.navigationIconPx} strokeWidth={1.75} />
+      </span>
       <span>Chats</span>
     </button>
   );
   return (
-    <nav className="shrink-0 space-y-0.5 px-2 pb-2" aria-label="Primary navigation">
+    <nav className={SIDEBAR_LAYOUT.navigationClassName} aria-label="Primary navigation">
       <button
         type="button"
         aria-label="New task"
         onClick={props.onHome}
-        className={`${NAV_ITEM_CLASS} ${props.homeActive ? NAV_ITEM_ACTIVE_CLASS : ""}`}
+        className={`${SIDEBAR_LAYOUT.navigationItemClassName} ${
+          props.homeActive ? SIDEBAR_LAYOUT.navigationItemActiveClassName : ""
+        }`}
       >
-        <span className={NAV_ICON_CLASS}><SquarePen size={16} /></span>
+        <span className={SIDEBAR_LAYOUT.navigationIconClassName}>
+          <SquarePen size={SIDEBAR_VISUAL_PROTOCOL.navigationIconPx} strokeWidth={1.75} />
+        </span>
         <span>New task</span>
       </button>
       <button
         type="button"
         aria-label="Council"
-        className={`${NAV_ITEM_CLASS} ${props.councilActive ? NAV_ITEM_ACTIVE_CLASS : ""}`}
+        className={`${SIDEBAR_LAYOUT.navigationItemClassName} ${
+          props.councilActive ? SIDEBAR_LAYOUT.navigationItemActiveClassName : ""
+        }`}
         onClick={props.onOpenCouncil}
       >
-        <span className={NAV_ICON_CLASS}>
-          <CouncilLogo className="h-4 w-4" tone="black" variant="bare" />
+        <span className={SIDEBAR_LAYOUT.navigationIconClassName}>
+          <CouncilLogo
+            className={SIDEBAR_LAYOUT.navigationCouncilIconClassName}
+            tone="black"
+            variant="bare"
+          />
         </span>
         <span>Council</span>
       </button>
       <button
         type="button"
         aria-label="Canvas"
-        className={`${NAV_ITEM_CLASS} ${props.canvasActive ? NAV_ITEM_ACTIVE_CLASS : ""} ${
+        className={`${SIDEBAR_LAYOUT.navigationItemClassName} ${
+          props.canvasActive ? SIDEBAR_LAYOUT.navigationItemActiveClassName : ""
+        } ${
           canvasEnabled ? "" : "cursor-not-allowed opacity-35 hover:bg-transparent"
         }`}
         onClick={canvasEnabled ? props.onToggleCanvas : undefined}
         disabled={!canvasEnabled}
         title={canvasEnabled ? undefined : "Canvas needs a wider screen"}
       >
-        <span className={NAV_ICON_CLASS}><Columns3 size={16} /></span>
+        <span className={SIDEBAR_LAYOUT.navigationIconClassName}>
+          <Columns3 size={SIDEBAR_VISUAL_PROTOCOL.navigationIconPx} strokeWidth={1.75} />
+        </span>
         <span>Canvas</span>
       </button>
       {chatsOpen ? (
@@ -131,14 +145,16 @@ export function WorkbenchSidebarSettingsAction(props: {
   onOpenSettings: () => void;
 }) {
   return (
-    <div className="shrink-0 border-t border-[var(--app-border)] px-2 py-1">
+    <div className={SIDEBAR_LAYOUT.settingsClassName}>
       <button
         type="button"
-        className={NAV_ITEM_CLASS}
+        className={SIDEBAR_LAYOUT.navigationItemClassName}
         aria-label="Settings"
         onClick={props.onOpenSettings}
       >
-        <span className={NAV_ICON_CLASS}><Settings size={16} /></span>
+        <span className={SIDEBAR_LAYOUT.navigationIconClassName}>
+          <Settings size={SIDEBAR_VISUAL_PROTOCOL.navigationIconPx} strokeWidth={1.75} />
+        </span>
         <span>Settings</span>
       </button>
     </div>

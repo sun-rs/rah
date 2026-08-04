@@ -138,6 +138,77 @@ function storedReplayCapabilities(provider: StoredSessionRef["provider"]): Sessi
   };
 }
 
+function storedReplayRuntime(): NonNullable<SessionSummary["session"]["runtime"]> {
+  return {
+    kind: "stored_history",
+    protocolStability: "project_native",
+    liveSource: "provider_history",
+    tuiRole: "none",
+    structuredLiveEvents: false,
+    tuiContinuity: false,
+    features: {
+      structuredLiveEvents: "unsupported",
+      structuredControl: "unsupported",
+      historyBackfill: "available",
+      tuiClientContinuity: "unsupported",
+      crossClientSync: "unsupported",
+      prelaunchConfig: "unsupported",
+      runtimeConfig: "unsupported",
+      interrupt: "unsupported",
+      stopLifecycle: "unsupported",
+    },
+  };
+}
+
+function wasLiveBeforeClose(summary: SessionSummary): boolean {
+  return Boolean(
+    summary.session.providerSessionId &&
+      summary.session.status === "running" &&
+      (summary.session.capabilities.liveAttach ||
+        summary.session.capabilities.steerInput ||
+        summary.session.capabilities.livePermissions),
+  );
+}
+
+/**
+ * Keep the already-rendered transcript when a selected live runtime stops.
+ * The runtime identity remains stable only until navigation; capabilities are
+ * downgraded atomically so the same composer becomes Resume-on-send.
+ */
+export function createStoppedReplayProjection(
+  projection: SessionProjection,
+  closedSummary: SessionSummary = projection.summary,
+): SessionProjection {
+  const session = {
+    ...projection.summary.session,
+    status: "stopped" as const,
+    phase: "ended" as const,
+    runtimeState: "stopped" as const,
+    runtime: storedReplayRuntime(),
+    capabilities: storedReplayCapabilities(closedSummary.session.provider),
+    updatedAt: closedSummary.session.updatedAt,
+  };
+  delete session.liveBackend;
+  delete session.runtimeDiagnostics;
+  delete session.nativeTui;
+  delete session.inputQueue;
+  delete session.inputQueuePolicy;
+  delete session.mux;
+  delete session.pid;
+
+  const next: SessionProjection = {
+    ...projection,
+    summary: {
+      session,
+      attachedClients: [],
+      controlLease: { sessionId: session.id },
+    },
+  };
+  delete next.currentRuntimeStatus;
+  delete next.pendingInterrupt;
+  return next;
+}
+
 export function createPendingStoredReplayProjection(ref: StoredSessionRef): SessionProjection {
   const now = new Date().toISOString();
   const sessionId = storedReplayPlaceholderSessionId(ref);
@@ -157,25 +228,7 @@ export function createPendingStoredReplayProjection(ref: StoredSessionRef): Sess
         cwd,
         rootDir,
         runtimeState: "stopped",
-        runtime: {
-          kind: "stored_history",
-          protocolStability: "project_native",
-          liveSource: "provider_history",
-          tuiRole: "none",
-          structuredLiveEvents: false,
-          tuiContinuity: false,
-          features: {
-            structuredLiveEvents: "unsupported",
-            structuredControl: "unsupported",
-            historyBackfill: "available",
-            tuiClientContinuity: "unsupported",
-            crossClientSync: "unsupported",
-            prelaunchConfig: "unsupported",
-            runtimeConfig: "unsupported",
-            interrupt: "unsupported",
-            stopLifecycle: "unsupported",
-          },
-        },
+        runtime: storedReplayRuntime(),
         ptyId: sessionId,
         ...(ref.title ? { title: ref.title } : {}),
         ...(ref.preview ? { preview: ref.preview } : {}),
@@ -392,6 +445,10 @@ export function applyResumedHistorySessionState(
   ref: Pick<StoredSessionRef, "rootDir" | "cwd">,
   projections: Map<string, SessionProjection>,
 ): Partial<LifecycleState> {
+  const resumedSessionId = responseSession.session.id;
+  const selectionFollowsResume =
+    current.selectedSessionId === sessionId ||
+    current.selectedSessionId === resumedSessionId;
   const workspacePlacement = applySessionWorkspacePlacement(
     current,
     responseSession.session.rootDir,
@@ -401,11 +458,11 @@ export function applyResumedHistorySessionState(
   );
   projections.delete(sessionId);
   projections.set(
-    responseSession.session.id,
+    resumedSessionId,
     mergeResumedHistoryProjection(
       responseSession,
       preservedProjection,
-      projections.get(responseSession.session.id),
+      projections.get(resumedSessionId),
     ),
   );
   return {
@@ -413,12 +470,15 @@ export function applyResumedHistorySessionState(
     unreadSessionIds: new Set(
       [...current.unreadSessionIds].filter(
         (sessionIdValue) =>
-          sessionIdValue !== sessionId && sessionIdValue !== responseSession.session.id,
+          sessionIdValue !== sessionId &&
+          (!selectionFollowsResume || sessionIdValue !== resumedSessionId),
       ),
     ),
     ...workspacePlacement,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
-    selectedSessionId: responseSession.session.id,
+    selectedSessionId: selectionFollowsResume
+      ? resumedSessionId
+      : current.selectedSessionId,
     pendingSessionAction: null,
     pendingSessionTransition: null,
     error: null,
@@ -430,31 +490,45 @@ export function applyClosedSessionState(
   sessionId: string,
   summary: SessionSummary | null,
 ): LifecycleState {
+  const projection = current.projections.get(sessionId);
+  const closingSummary = summary ?? projection?.summary ?? null;
+  const preserveSelectedReplay = Boolean(
+    projection &&
+      closingSummary &&
+      current.selectedSessionId === sessionId &&
+      wasLiveBeforeClose(closingSummary),
+  );
+  const projections = new Map(current.projections);
+  if (preserveSelectedReplay && projection && closingSummary) {
+    projections.set(sessionId, createStoppedReplayProjection(projection, closingSummary));
+  } else {
+    projections.delete(sessionId);
+  }
   const nextState: Partial<LifecycleState> = {
-    projections: new Map(
-      [...current.projections.entries()].filter(([id]) => id !== sessionId),
-    ),
+    projections,
     unreadSessionIds: new Set(
       [...current.unreadSessionIds].filter((id) => id !== sessionId),
     ),
-    selectedSessionId: current.selectedSessionId === sessionId ? null : current.selectedSessionId,
+    selectedSessionId:
+      current.selectedSessionId === sessionId && !preserveSelectedReplay
+        ? null
+        : current.selectedSessionId,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
     error: null,
   };
-  const providerSessionId = summary?.session.providerSessionId;
-  if (summary && providerSessionId) {
-    const projection = current.projections.get(sessionId);
+  const providerSessionId = closingSummary?.session.providerSessionId;
+  if (closingSummary && providerSessionId) {
     const activityAt = projection
       ? deriveSessionConversationActivityAt(projection)
-      : summary.session.updatedAt;
+      : closingSummary.session.updatedAt;
     const remembered = {
-      provider: summary.session.provider,
+      provider: closingSummary.session.provider,
       providerSessionId,
-      ...(summary.session.cwd ? { cwd: summary.session.cwd } : {}),
-      ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
-      ...(summary.session.title ? { title: summary.session.title } : {}),
-      ...(summary.session.preview ? { preview: summary.session.preview } : {}),
-      createdAt: summary.session.createdAt,
+      ...(closingSummary.session.cwd ? { cwd: closingSummary.session.cwd } : {}),
+      ...(closingSummary.session.rootDir ? { rootDir: closingSummary.session.rootDir } : {}),
+      ...(closingSummary.session.title ? { title: closingSummary.session.title } : {}),
+      ...(closingSummary.session.preview ? { preview: closingSummary.session.preview } : {}),
+      createdAt: closingSummary.session.createdAt,
       updatedAt: activityAt,
       lastUsedAt: activityAt,
       source: "previous_running" as const,

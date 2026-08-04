@@ -8,6 +8,7 @@ import {
   HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
 } from "../header-button-styles";
 import { MobileSidebarToggleButton } from "./MobileSidebarToggleButton";
+import { WORKBENCH_HEADER_LAYOUT } from "../workbench-header-contract";
 
 export function ConversationHeader(props: {
   title: ReactNode;
@@ -40,13 +41,12 @@ export function ConversationHeader(props: {
       : "truncate text-sm font-medium leading-5 text-[var(--app-fg)]";
   const metaClassName =
     presentation === "page"
-      ? "min-w-0 overflow-hidden text-xs text-[var(--app-hint)]"
-      : "flex h-4 min-w-0 items-center overflow-hidden text-[11px] text-[var(--app-hint)]";
-  const headerHeightClassName = presentation === "page" ? "h-14" : "h-12";
-
+      ? "min-w-0 shrink overflow-hidden text-xs text-[var(--app-hint)]"
+      : "flex h-4 min-w-0 shrink items-center overflow-hidden text-[11px] text-[var(--app-hint)]";
   return (
     <header
-      className={`relative z-20 flex ${headerHeightClassName} shrink-0 items-center justify-between gap-2 border-b border-[var(--app-border)] ${props.backgroundClassName ?? "bg-[var(--app-bg)]/80"} px-2 backdrop-blur-sm ${props.className ?? ""}`}
+      className={`relative z-20 flex ${WORKBENCH_HEADER_LAYOUT.heightClassName} shrink-0 items-center justify-between gap-2 border-b border-[var(--app-border)] ${props.backgroundClassName ?? "bg-[var(--app-bg)]/80"} px-2 backdrop-blur-sm ${props.className ?? ""}`}
+      data-workbench-header=""
       data-presentation={presentation}
     >
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -62,8 +62,8 @@ export function ConversationHeader(props: {
         {props.identity ? (
           <span className={HEADER_IDENTITY_SLOT_CLASS}>{props.identity}</span>
         ) : null}
-        <div className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden">
-          <div className={titleClassName} title={props.titleText}>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          <div className={`${titleClassName} min-w-0 shrink`} title={props.titleText}>
             {props.title}
           </div>
           {props.meta ? (

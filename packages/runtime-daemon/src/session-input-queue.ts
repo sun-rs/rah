@@ -44,6 +44,14 @@ export function projectSessionInputQueue(
     ...(item.clientTurnId ? { clientTurnId: item.clientTurnId } : {}),
     text: item.text,
     ...(item.attachments?.length ? { attachments: item.attachments.map((attachment) => ({ ...attachment })) } : {}),
+    ...(item.annotations?.length
+      ? {
+          annotations: item.annotations.map((annotation) => ({
+            ...annotation,
+            ...(annotation.source ? { source: { ...annotation.source } } : {}),
+          })),
+        }
+      : {}),
     queuedAt: item.queuedAt,
     position: index + 1,
     state: item.state,

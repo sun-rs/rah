@@ -1,4 +1,5 @@
 import {
+  Children,
   isValidElement,
   memo,
   useEffect,
@@ -41,6 +42,27 @@ function textFromNode(node: ReactNode): string {
   return "";
 }
 
+type SelectionLike = Pick<Selection, "isCollapsed" | "rangeCount" | "getRangeAt">;
+
+export function selectionIntersectsNode(
+  selection: SelectionLike | null,
+  node: Node,
+): boolean {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return false;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      if (selection.getRangeAt(index).intersectsNode(node)) {
+        return true;
+      }
+    } catch {
+      // A stale browser range must not block normal file opening.
+    }
+  }
+  return false;
+}
+
 function languageFromNode(node: ReactNode): string | null {
   const child = Array.isArray(node) ? node[0] : node;
   if (!isValidElement<{ className?: string }>(child)) {
@@ -54,6 +76,53 @@ function languageFromNode(node: ReactNode): string | null {
 type MarkdownExtraProps = {
   node?: unknown;
 };
+
+const MARKDOWN_IMAGE_LINE_PATTERN =
+  /^\s*!\[[^\]\n]*\]\(\s*(?:<[^>\n]+>|(?:\\.|[^\\)\n])*)\s*(?:(?:"[^"\n]*"|'[^'\n]*'|\([^\)\n]*\)))?\s*\)\s*$/;
+
+export function isImageOnlyMarkdownBlock(block: string): boolean {
+  const lines = block
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+  return (
+    lines.length > 0 &&
+    lines.every((line) => MARKDOWN_IMAGE_LINE_PATTERN.test(line))
+  );
+}
+
+export function coalesceMarkdownImageBlocks(blocks: string[]): string[] {
+  const coalesced: string[] = [];
+  for (const block of blocks) {
+    if (
+      isImageOnlyMarkdownBlock(block) &&
+      coalesced.length > 0 &&
+      isImageOnlyMarkdownBlock(coalesced[coalesced.length - 1] ?? "")
+    ) {
+      coalesced[coalesced.length - 1] = `${coalesced[coalesced.length - 1]}\n${block}`;
+      continue;
+    }
+    coalesced.push(block);
+  }
+  return coalesced;
+}
+
+function imageOnlyChildren(children: ReactNode, imageComponent: unknown) {
+  const candidates = Children.toArray(children).filter(
+    (child) =>
+      !(typeof child === "string" && child.trim().length === 0) &&
+      !(isValidElement(child) && child.type === "br"),
+  );
+  if (candidates.length === 0) {
+    return null;
+  }
+  for (const candidate of candidates) {
+    if (!isValidElement(candidate) || candidate.type !== imageComponent) {
+      return null;
+    }
+  }
+  return candidates;
+}
 
 function useHighlightedCodeHtml(code: string, language: string | null): string | null {
   const { colorScheme } = useTheme();
@@ -154,18 +223,46 @@ function MarkdownPre({
 export function createMarkdownComponents(
   onOpenLocalFile: ((path: string) => void) | undefined,
 ): Components {
+  const MarkdownImage: NonNullable<Components["img"]> = ({
+    node: _node,
+    src,
+    alt,
+  }) => {
+    const imageSource = typeof src === "string" ? src : undefined;
+    const localFilePath = resolveLocalFileLinkPath(imageSource);
+    return (
+      <LocalImageResource
+        mode="inline"
+        {...(localFilePath ? { path: localFilePath } : {})}
+        {...(!localFilePath && imageSource ? { url: imageSource } : {})}
+        {...(alt ? { alt } : {})}
+        {...(onOpenLocalFile ? { onOpenLocalFile } : {})}
+      />
+    );
+  };
+
   return {
-    img({ node: _node, src, alt }) {
-      const imageSource = typeof src === "string" ? src : undefined;
-      const localFilePath = resolveLocalFileLinkPath(imageSource);
+    img: MarkdownImage,
+    p({ node: _node, children, className, ...paragraphProps }) {
+      const images = imageOnlyChildren(children, MarkdownImage);
+      if (images) {
+        const isGrid = images.length > 1;
+        return (
+          <p
+            {...paragraphProps}
+            className={`prose-chat-media-paragraph${
+              isGrid ? " prose-chat-media-grid" : ""
+            }${className ? ` ${className}` : ""}`}
+            data-markdown-image-grid={isGrid ? "true" : undefined}
+          >
+            {children}
+          </p>
+        );
+      }
       return (
-        <LocalImageResource
-          mode="inline"
-          {...(localFilePath ? { path: localFilePath } : {})}
-          {...(!localFilePath && imageSource ? { url: imageSource } : {})}
-          {...(alt ? { alt } : {})}
-          {...(onOpenLocalFile ? { onOpenLocalFile } : {})}
-        />
+        <p {...paragraphProps} className={className}>
+          {children}
+        </p>
       );
     },
     a({ node: _node, href, children, ...anchorProps }) {
@@ -189,10 +286,17 @@ export function createMarkdownComponents(
           <button
             type="button"
             className="prose-chat-local-file-link"
+            data-selectable-conversation-text="true"
             title={`Open in Inspector: ${localFilePath}`}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
+              if (
+                event.detail > 0 &&
+                selectionIntersectsNode(window.getSelection(), event.currentTarget)
+              ) {
+                return;
+              }
               onOpenLocalFile(localFilePath);
             }}
           >
@@ -232,10 +336,17 @@ export function createMarkdownComponents(
           <button
             type="button"
             className="prose-chat-local-file-code"
+            data-selectable-conversation-text="true"
             title={`Open in Inspector: ${localFilePath}`}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
+              if (
+                event.detail > 0 &&
+                selectionIntersectsNode(window.getSelection(), event.currentTarget)
+              ) {
+                return;
+              }
               onOpenLocalFile(localFilePath);
             }}
           >
@@ -282,7 +393,7 @@ export function MarkdownRenderer(props: {
   onOpenLocalFile?: (path: string) => void;
 }) {
   const blocks = useMemo(
-    () => splitMarkdownBlocks(props.content),
+    () => coalesceMarkdownImageBlocks(splitMarkdownBlocks(props.content)),
     [props.content],
   );
   const components = useMemo(

@@ -23,6 +23,9 @@ export function deriveRuntimeCompatibilityDescriptor(
       `This page is Web generation ${shortBuildId(browserGeneration)}, but daemon ` +
       `${runtimeIdentity.pid} is still running ${daemonGenerationLabel}. ` +
       "Restart RAH, then reload this page.",
+    compactTitle: "Restart RAH to update",
+    compactBody: "Restart it on the host, then retry.",
+    compactPrimaryLabel: "Retry",
     primaryAction: "refresh",
     primaryLabel: "Check again",
   };

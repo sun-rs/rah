@@ -138,7 +138,7 @@ provider 文件并产生同一种 canonical delta。前端不轮询原始历史�
 
 历史读取采用 tail-first：
 
-- 首屏默认 20 turns，最大 100。
+- 首屏默认 8 turns，向上分页默认 20 turns，单次最大 100。
 - `nextCursor` 只加载更早 turns。
 - summary page 不携带大工具输出。
 - 展开 Worked 时按 turn 请求 full detail。
@@ -158,6 +158,14 @@ provider 文件并产生同一种 canonical delta。前端不轮询原始历史�
 - `lastError`
 
 旧 `HistorySyncState` 已删除。
+
+浏览器内存仍是 Session A→B→A 的第一层热状态；整页 reload 后由仍在运行的 daemon 提供第二层
+有界热页。daemon 只缓存已经完成 materialization 的 canonical page，单条最多 1 MiB、全局最多
+128 条 / 32 MiB、30 分钟 LRU。复用必须同时满足同一 Runtime Session、cursor/limit、provider
+`sourceRevision` 和 resident `liveRevision`；含 `in_progress` turn 或 pending/running item 的页面绝不
+进入缓存。任一 revision 变化就删除旧项并重新读取 Provider，不能把旧页与新 baseline 猜测合并。
+这层只存在于 daemon 内存：刷新浏览器可复用，重启 daemon 后自然冷读；浏览器不把 Conversation
+正文写入 localStorage/IndexedDB，也不建立第二份持久化真相。
 
 ## 7. Turn Directory
 

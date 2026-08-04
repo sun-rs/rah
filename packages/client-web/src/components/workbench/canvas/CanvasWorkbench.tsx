@@ -8,7 +8,6 @@ import {
   Minus,
   Minimize2,
   Rows2,
-  X,
 } from "lucide-react";
 import {
   canvasLayoutPaneCount,
@@ -26,16 +25,14 @@ import {
   type CanvasSplitJunctionDirections,
 } from "../../../canvas-layout";
 import {
-  HEADER_ACTION_GROUP_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
   HEADER_SEGMENTED_LABEL_CLASS,
-  HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
-import { MobileSidebarToggleButton } from "../shells/MobileSidebarToggleButton";
+import { ConversationHeader } from "../shells/ConversationHeader";
 import { CanvasLayoutDesigner, CanvasPaneSplitButton } from "./CanvasLayoutControls";
 
 export type CanvasPaneView = {
@@ -344,73 +341,63 @@ export function CanvasWorkbench(props: {
       data-canvas-pane-count={paneCount}
       className="flex h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)]"
     >
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-2 backdrop-blur-sm">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-          {props.showLeftSidebarControls ? (
-            <MobileSidebarToggleButton
-              className="min-[700px]:hidden"
-              onOpen={props.onOpenLeft}
-            />
-          ) : null}
-          {props.showLeftSidebarControls && !props.sidebarOpen ? (
-            <span className="hidden h-8 w-8 shrink-0 min-[700px]:block" aria-hidden="true" />
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold text-[var(--app-fg)]">Canvas</div>
-            <div className="truncate text-xs text-[var(--app-hint)]">
-              Arrange sessions, history, and Councils without stopping work.
+      <ConversationHeader
+        sidebarOpen={props.sidebarOpen}
+        showLeftSidebarControls={props.showLeftSidebarControls}
+        onOpenLeft={props.onOpenLeft}
+        onExpandSidebar={props.onExpandSidebar}
+        backgroundClassName="bg-[var(--app-bg)]/85"
+        presentation="page"
+        identity={<Grid2X2 size={18} strokeWidth={1.7} aria-hidden="true" />}
+        title="Canvas"
+        titleText="Canvas"
+        actions={
+          <>
+            <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
+              {layoutOptions.map((layout) => {
+                const Icon = layout.icon;
+                return (
+                  <button
+                    key={layout.id}
+                    type="button"
+                    className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 max-[699px]:gap-0 ${
+                      activePreset === layout.id && !props.maximizedPaneId
+                        ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
+                        : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
+                    }`}
+                    onClick={() => props.onLayoutChange(createCanvasPresetLayout(layout.id))}
+                    title={layout.title}
+                  >
+                    <Icon size={14} />
+                    <span className={`${HEADER_SEGMENTED_LABEL_CLASS} max-[699px]:hidden`}>
+                      {layout.label}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          </div>
-        </div>
-        <div className={HEADER_ACTION_GROUP_CLASS}>
-          <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
-            {layoutOptions.map((layout) => {
-              const Icon = layout.icon;
-              return (
-                <button
-                  key={layout.id}
-                  type="button"
-                  className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 max-[699px]:gap-0 ${
-                    activePreset === layout.id && !props.maximizedPaneId
-                      ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
-                      : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
-                  }`}
-                  onClick={() => props.onLayoutChange(createCanvasPresetLayout(layout.id))}
-                  title={layout.title}
-                >
-                  <Icon size={14} />
-                  <span className={`${HEADER_SEGMENTED_LABEL_CLASS} max-[699px]:hidden`}>
-                    {layout.label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {!props.layoutEditingDisabled ? (
-            <CanvasLayoutDesigner layout={props.layout} onSelect={selectGrid} />
-          ) : null}
-          <button
-            type="button"
-            className={HEADER_ICON_BUTTON_CLASS}
-            onClick={props.onClearAllPanes}
-            disabled={props.clearAllPanesDisabled}
-            aria-label="Clear all canvas panes"
-            title="Clear all panes"
-          >
-            <Eraser size={14} />
-          </button>
-          <button
-            type="button"
-            className={HEADER_TEXT_BUTTON_CLASS}
-            onClick={props.onExitCanvas}
-            aria-label="Close canvas view"
-            title="Close canvas view"
-          >
-            <X size={14} className="min-[900px]:mr-1" />
-            <span className="hidden min-[900px]:inline">Close</span>
-          </button>
-        </div>
-      </header>
+            {!props.layoutEditingDisabled ? (
+              <CanvasLayoutDesigner layout={props.layout} onSelect={selectGrid} />
+            ) : null}
+            <button
+              type="button"
+              className={HEADER_ICON_BUTTON_CLASS}
+              onClick={props.onClearAllPanes}
+              disabled={props.clearAllPanesDisabled}
+              aria-label="Clear all canvas panes"
+              title="Clear all panes"
+            >
+              <Eraser size={14} />
+            </button>
+          </>
+        }
+        closeAction={{
+          ariaLabel: "Close canvas view",
+          title: "Close canvas view",
+          label: "Close",
+          onClick: props.onExitCanvas,
+        }}
+      />
 
       <div className="flex min-h-0 flex-1 overflow-hidden p-2 max-[699px]:p-1">
         {props.maximizedPaneId && props.panes[0]

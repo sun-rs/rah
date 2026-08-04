@@ -45,8 +45,12 @@
 @layer base {
   :root {
     --radius: 0.75rem;
-    /* Codex Desktop's Electron surface uses the variable SF system font at 445. */
+    /* Native controls keep the slightly firmer app weight; conversation copy
+       follows Codex Desktop's 430 normal-text axis independently. */
     --app-font-weight: 445;
+    --rah-ui-font-size: 14px;
+    --rah-code-font-size: 12px;
+    --chat-font-weight: 430;
 
     /* Light mode (default) */
     --background: #ffffff;
@@ -107,9 +111,9 @@
     --app-danger: #dc2626;
     --app-warning-bg: #fff4db;
     --app-danger-bg: #fee7e7;
-    --chat-font-size: 14px;
+    --chat-font-size: var(--rah-ui-font-size);
     --chat-line-height: calc(var(--chat-font-size) + 8px);
-    --chat-code-font-size: 12px;
+    --chat-code-font-size: var(--rah-code-font-size);
     --terminal-font-family: "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", "Noto Sans Mono CJK SC", "Microsoft YaHei UI", ui-monospace, monospace;
     --terminal-bg: #ffffff;
     --terminal-fg: #18181b;
@@ -354,14 +358,6 @@
       var(--diff-empty-stripe) 7px,
       var(--diff-empty-stripe) 9px
     );
-  }
-
-  .rah-sidebar-header {
-    container: rah-sidebar-header / inline-size;
-  }
-
-  .rah-sidebar-content {
-    container: rah-sidebar-content / inline-size;
   }
 
   .canvas-conversation-surface,

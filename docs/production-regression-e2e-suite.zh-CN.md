@@ -55,6 +55,9 @@
 | `HISTORY-CATALOG-001` | Chats 目录增量 | 启动只取有界 Recent；首次打开 All 取一次权威目录；干净重开不再全量下载 |
 | `HISTORY-BOUNDED-001` | 超大历史首屏 | 首屏只下载有界 turn 页，不下载完整 provider transcript；PWA 不加载桌面 turn 导航目录 |
 | `HISTORY-RESUME-001` | history resume | replay 转 live 不重排、不重复 |
+| `HISTORY-RESUME-SEND-001` | stopped 首次发送 | 无输入激活已在途时再按 Send，问题先乐观出现、只创建一个 runtime，并向恢复后的 Runtime ID 恰好发送一次 |
+| `STOP-STAYS-IN-CHAT-001` | Session stop 导航 | 显式 Stop 与 `session.closed` 竞态下都保留当前 transcript 并原地变为 stopped replay；catalog refresh 后仍停留在该 Chat，可直接继续输入恢复 |
+| `BACKGROUND-RESUME-NAVIGATION-001` | 后台 resume 导航 | 对 stopped A 提交后切到 B，A 继续启动和发送，但成功、回滚及迟到控制刷新均不得抢回当前页面 |
 | `CODEX-EVENT-001` | Codex 非 chat event | `thread/goal/cleared` 等不变成吓人的红色 chat Event |
 | `CLAUDE-ABORT-CONTEXT-001` | Claude aborted context | `<turn_aborted>` 不进入可见消息正文 |
 | `CLAUDE-TMUX-001` | Claude tmux | Chat/TUI/local terminal surface 切换互斥且可恢复 |
@@ -68,8 +71,17 @@
 | `WORKSPACE-PROJECTION-001` | Session 可见性投影 | Session 只归属最具体的已注册工作区；移除工作区后同一渲染周期内消失，不依赖刷新 |
 | `WORKSPACE-EMPTY-RECOVERY-001` | 空列表恢复 | Workspaces 为 0 时添加入口仍可用，添加后恰好出现一行且刷新后保留 |
 | `WORKSPACE-NEW-TASK-001` | 工作区新建联动 | 点击工作区行的新建按钮后，New task composer 精确选择该工作区 |
-| `PWA-COMPOSER-WORKSPACE-PILL-001` | PWA workspace pill | iOS standalone 模式保留 88px 文字 pill；长名称跑马灯工作，且不与发送按钮重叠或产生横向溢出 |
-| `PWA-CONVERSATION-DENSITY-001` | PWA 对话阅读密度 | 正文使用 16/24、用户气泡 75%、普通 turn gap 12px，隐藏动作不占行，commentary 使用无卡片白底正文 |
+| `PWA-COMPOSER-WORKSPACE-PILL-001` | PWA workspace accessory | workspace selector 为 40px 附属条，顶部 8px 被 composer 覆盖、实际露出 32px，内部按钮 28px；超过 18 字符才跑马，不与 agent 配置或发送按钮重叠，不产生横向溢出；provider 为 36px 无边框单层条，PWA 以 600 字重和蓝色 `20×2px` 图标标记唯一当前项，Desktop 使用文字等宽蓝线，整组 hover 移开即隐藏 |
+| `PWA-CONVERSATION-DENSITY-001` | PWA 对话阅读密度 | Session/Council 正文读取 12–20px Appearance token；隐藏动作不占行，commentary 使用无卡片白底正文 |
+| `PWA-GLOBAL-NOTICE-001` | 全局恢复提示 | PWA 锚定在顶部安全区控制行下方，390×844 下不超过 72px且不覆盖 composer；与 Wide Desktop 共享低对比橙色混色、无投影 surface，四角不被宿主裁切；Session Chat/Council/Canvas 共用 40px 单行标题栏且提示始终位于分割线以下；Wide Desktop 为最大 24rem 的紧凑横向 toast，右/下边距各 16px且不受底部浮动锚点影响 |
+| `PWA-TURN-CHANGE-PREVIEW-001` | PWA 本轮文件查看 | 回复卡片的单文件入口使用独立临时查看器，关闭后直接回到 Chat；回复审查与 Task 明细的 `Changed files` 共用不修改 Inspector 状态的 Review 路径，任何关闭动作都不能暴露全屏 Inspector；Wide Desktop 仍保留 Inspector 工作流 |
+| `COMPOSER-UNIFIED-SURFACE-001` | 统一 composer surface | New task 与 Chat 共用白底、细边框、24px 圆角、轻阴影和同一 ghost toolbar；能力 catalog 无需点击即可加载，权限/Plan/完整模型与默认 effort 立即可见；Plan 激活态清晰；Session 的 model/effort 按 provider session 身份跨刷新、Stop、Resume 保存；stopped -> starting -> live 全程三个控制都保持挂载；`+` 固定最左，模型紧贴 Send/Stop；provider 当前项无灰块；Chat PWA 聚焦或菜单打开时保持展开；New task 窄屏自动双行且 workspace 位于 surface 外；Stop/Send 共用一个黑白主动作槽 |
+| `RESPONSE-ANNOTATION-001` | 回复选区注释 | 单条 assistant response 选区显示操作浮层；注释 pill 可预览，更多详情补可编辑 draft，协议/queue/provider/history 全链路不泄漏 transport envelope |
+| `DESKTOP-CONVERSATION-DENSITY-001` | Desktop 对话阅读密度 | 默认正文使用 14/22、约 430 字重、代码 12px；Appearance 只调 Session/Council 正文且范围为 12–20px，代码自动按 11–16px 联动；用户 Copy 悬浮显示但不占永久空白行，commentary 使用无卡片白底正文 |
+| `CHAT-MARKDOWN-IMAGES-001` | 回复图片缩略图组 | 连续纯图片段落以 12px gap 并排并自动换行；本地缩略图最高 160px、远程最高 200px，点击预览保持可用 |
+| `TURN-CHANGES-AUTHORITY-001` | 本轮文件变更权威性 | 列表与点击详情必须来自同一冻结 turn artifact；`patch_apply_end`、当前 workspace 与无 artifact 的历史摘要均不能生成卡片 |
+
+P1 视觉/交互契约 `TASK-SUMMARY-DENSITY-001` 另外锁定 active task dock：32px 胶囊仅保留图标、进度与当前步骤；详情统计删除重复 plan activity，并把 command/read/change 维持在单行。Desktop 使用 hover/focus 且点击不锁定，standalone PWA 使用点击切换与点外部关闭。
 
 完整 case 列表可执行：
 
@@ -92,12 +104,17 @@ npm run test:p0:browser
 2. `Codex Desktop` 与 `codex_work_desktop` 创建的用户根会话都可见；显式 internal subagent 仍被排除。
 3. 父工作区拥有嵌套 session；显式添加子工作区后，嵌套 session 原子地迁移到最具体工作区。
 4. 工作区行 `New task` 精确选择该工作区。
-5. 在 `390 x 844`、`navigator.standalone=true` 的 PWA 上下文中，New task workspace control 保持 88px pill，长名称跑马灯运行，不与 Start session 重叠且没有页面横向溢出。
-6. 同一 PWA 上下文打开真实历史 Session 后，正文计算样式为 16/24、用户气泡上限 75%、隐藏 Copy action 为 `display:none`、用户 turn gap 为 12px；展开 Worked 后 commentary 容器为透明且无 padding。
+5. 在 `390 x 844`、`navigator.standalone=true` 的 PWA 上下文中，New task workspace control 位于 composer 外部，短名称不重复滚动、超过 18 字符才跑马；permission/Plan/完整 model/effort 无需点击即可显示，Plan 激活时有蓝色文字、轻底与 2px 标记，窄屏配置自动双行且没有页面横向溢出，聚焦前后 surface 几何与强调不变。该上下文同时制造 generation mismatch，断言顶部提示为低对比橙色混色、无投影且不遮挡 New task；Council、Canvas、Session Chat 共用 40px 单行标题栏。
+6. 同一 PWA 上下文打开带冻结 turn artifact 的真实历史 Session 后，点击回复卡片的单个 Changed file 只出现一份临时文件查看器，关闭后 Chat 仍可见且页面中不存在 Inspector；打开并关闭共用的本轮 Review 后结果相同。随后断言 Session/Council 正文读取所选 12–20px token、隐藏 Copy action 不占行、commentary 透明且无 padding。Chat composer 失焦为单行 pill；聚焦或 permission/model 菜单打开后保持展开并显示完整配置与有界多行文本，model 不得越过主动作；菜单关闭并失焦后恢复原始 inset。
 7. 刷新前后工作区数量、顺序、唯一性和 session 归属不变。
 8. 移除父工作区时，其 session 立即消失，但显式注册的子工作区及其 session 保留。
 9. 移除最后一个工作区后列表立即清空，且仍能再次添加并在刷新后保留。
-10. 全流程不得产生浏览器 page error，并保存 workspace pill 与 conversation density 截图。
+10. 全流程不得产生浏览器 page error，并保存 workspace context、sidebar density 与 conversation 截图。
+11. 分别打开 Home New task 与一个可输入 Session，断言两者都只有一个白色 composer surface 和一个共享 toolbar，placeholder 为 `Work with Rah`；权限、Plan、完整 model/effort 默认加载，顺序为 `+ / permission / Plan … model / Send|Stop`，workspace 只在 New task surface 外的上下文行中出现。Plan 开启后必须出现蓝色文字、轻底和 2px 内嵌标记；给 stopped Session 选择非默认 effort 后刷新页面，再 Stop/Resume，模型、effort 与 optionValues 均保持。ghost 控件静止态透明，provider 当前项没有灰色块。working Session 的 Stop/Send 共用一个无动画黑白槽。standalone 390px 下 New task 配置双行且 focus 几何不变；Chat 按“单行折叠—focus 或菜单打开保持展开—失焦折叠”转换，页面不得横向溢出。
+12. 在一条 assistant response 内选择多行文本，浮层必须锚在第一行左上方且不越出 viewport；蓝色本地文件链接的文件名也必须能拖选复制，拖选结束不能误打开 Inspector；点击 `添加到任务` 后 textarea 保持可编辑、pill hover 展示完整选文、单独注释不能发送；点击 `更多详情` 后当前 draft 只补一条解释请求。
+13. Wide Desktop 打开包含两张 640×360 本地 Markdown 图片的历史回复，断言只有一个 `flex-wrap` 图组、gap 为 12px、两张图同排且图像高度不超过 160px；回复正文默认计算样式为 14/22/约430。随后进入 Appearance，确认只有 12–20px Conversation text size，改为 18 后 Session/Council 正文即时成为 18/26、代码成为 16px，同时 Sidebar/菜单字号保持不变，再恢复 14。
+
+本轮 sidebar 密度另由 `SIDEBAR-DENSITY-001` 锁定：Desktop 与 PWA Sheet 必须声明并消费同一个 `codex-compact-v1`，RAH header 下都没有分割线，40px header 到首个 New task 行均为 4px；新设备默认 272px、双击 divider 恢复 272px，标题/导航/分组/workspace/session 使用 `16/15/13/14/14px` 与 `600/500/550/500/450`，行高 30px、pill 圆角 10px、同组/工作区组/大分区间距 2/6/12px、动作槽 28px。Codex session 不显示左侧 provider 图标，Claude/OpenCode 各显示 16px bare logo，且不能改变行高或标题垂直中心。浏览器门禁逐项比较两种 surface 的字体、图标、左右 8px 内容 inset 与标题中心偏差 0；PWA 滚动区不得预留 gutter。New task、Council、Canvas 的 hover/选中态必须精确复用 Session hover surface，不得出现独立白底、阴影或鼠标点击残留的 focus 轮廓。Desktop Session hover 另断言 pin/archive 两项同时可见、action rail 计算底色完全透明、`box-shadow: none` 且整行 hover surface 仍存在；状态点在操作期间隐藏，不能形成图标叠层。Session 信息 tooltip 必须由 sidebar 唯一的 `idle / pending / open` 状态机与单一 Portal layer 管理，Session 行不得持有自己的 timer 或 open state；侧栏根节点通过 `pointerover/out` 委托处理跨行 hover，document/window 只发送统一 cancel。纯状态测试锁定 pending cancel、旧 epoch、跨行替换、无效/脱离 anchor 与 keyboard focus；真实浏览器回归依次验证移到 Chat 立即消失、等待期 pointerdown 后不得迟到弹出、跨两行切换始终只有一张卡片。显示前仍须复核原行连接且处于 `:hover`，MutationObserver 必须在列表刷新移除 anchor 时关闭浮层。
 
 正式浏览器 release gate：
 
@@ -247,6 +264,6 @@ npm run test:smoke:opencode-browser
 ## 当前自动化缺口
 
 1. 部分 P0 已有 unit 覆盖，但缺 DOM 级 fake browser 断言。
-2. Chromium standalone PWA 已覆盖 workspace pill 与对话密度；真实 iOS 输入法、WebKit 字体栅格化和 safe-area 仍需要真机补充。
+2. Chromium standalone PWA 已覆盖 workspace context、Chat disclosure 与对话密度；真实 iOS 输入法、WebKit 字体栅格化和 safe-area 仍需要真机补充。
 3. Codex/OpenCode native server 多客户端同步需要继续扩大真实 provider smoke。
 4. Council UI 目前是 P2，暂不进入核心 release gate，但要复用同一套 provider/model/mode 控件测试。

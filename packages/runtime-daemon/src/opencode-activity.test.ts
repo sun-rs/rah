@@ -784,6 +784,78 @@ describe("translateOpenCodeEvent", () => {
     }
   });
 
+  test("keeps response annotation transport context out of OpenCode user messages", () => {
+    const providerText = `# Response annotations:
+Each item contains selected response text.
+<response-annotations>
+[{"text":"Selected benchmark result"}]
+</response-annotations>
+
+Explain the tradeoff.`;
+    const historyState = createOpenCodeActivityState("session-history", {
+      origin: "history",
+    });
+    const history = translateOpenCodeMessage(historyState, {
+      info: {
+        id: "msg-history-user",
+        sessionID: "session-history",
+        role: "user",
+      },
+      parts: [
+        {
+          id: "part-history-user",
+          sessionID: "session-history",
+          messageID: "msg-history-user",
+          type: "text",
+          text: providerText,
+        },
+      ],
+    });
+    const historyUser = history.find(
+      (activity) => activity.type === "timeline_item" && activity.item.kind === "user_message",
+    );
+    assert.equal(
+      historyUser?.type === "timeline_item" && historyUser.item.kind === "user_message"
+        ? historyUser.item.text
+        : null,
+      "Explain the tradeoff.",
+    );
+
+    const liveState = createOpenCodeActivityState("session-live");
+    const turnId = "11111111-1111-4111-8111-111111111111";
+    startOpenCodeTurn(liveState, turnId);
+    recordOpenCodeSubmittedUserMessage(liveState, {
+      text: "Explain the tradeoff.",
+      turnId,
+      providerMessageId: "msg-live-user",
+    });
+    const live = translateOpenCodeMessage(liveState, {
+      info: {
+        id: "msg-live-user",
+        sessionID: "session-live",
+        role: "user",
+      },
+      parts: [
+        {
+          id: "part-live-user",
+          sessionID: "session-live",
+          messageID: "msg-live-user",
+          type: "text",
+          text: providerText,
+        },
+      ],
+    });
+    const liveUser = live.find(
+      (activity) => activity.type === "timeline_item" && activity.item.kind === "user_message",
+    );
+    assert.equal(
+      liveUser?.type === "timeline_item" && liveUser.item.kind === "user_message"
+        ? liveUser.item.text
+        : null,
+      "Explain the tradeoff.",
+    );
+  });
+
   test("keeps late interrupted output bound to its preallocated provider message turn", () => {
     const state = createOpenCodeActivityState("session-1", {
       userMessagesStartTurns: false,

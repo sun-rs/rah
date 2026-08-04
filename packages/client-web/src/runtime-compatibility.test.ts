@@ -34,6 +34,9 @@ test("reports only exact Web and daemon generation mismatches", () => {
   );
   assert.equal(mismatch?.title, "RAH daemon restart required");
   assert.equal(mismatch?.primaryLabel, "Check again");
+  assert.equal(mismatch?.compactTitle, "Restart RAH to update");
+  assert.equal(mismatch?.compactBody, "Restart it on the host, then retry.");
+  assert.equal(mismatch?.compactPrimaryLabel, "Retry");
   assert.match(mismatch?.body ?? "", /daemon 42/);
   assert.match(mismatch?.body ?? "", /browser-/);
   assert.match(mismatch?.body ?? "", /daemon-g/);

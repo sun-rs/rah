@@ -1,8 +1,38 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Shield } from "lucide-react";
+import {
+  BadgeCheck,
+  Check,
+  ChevronDown,
+  Hand,
+  ListTodo,
+  Settings2,
+  Shield,
+  ShieldAlert,
+} from "lucide-react";
 import type { SessionModeChoice } from "../session-mode-ui";
 import { OverlayScrollArea } from "./OverlayScrollArea";
+
+function isElevatedAccessMode(mode: SessionModeChoice | undefined): boolean {
+  if (!mode) return false;
+  const identity = `${mode.id} ${mode.label}`.toLowerCase();
+  return (
+    identity.includes("danger-full-access") ||
+    identity.includes("full access") ||
+    identity.includes("bypass") ||
+    identity.includes("yolo")
+  );
+}
+
+function isAutomaticAccessMode(mode: SessionModeChoice): boolean {
+  const identity = `${mode.id} ${mode.label}`.toLowerCase();
+  return identity.includes("auto") || identity.includes("guardian");
+}
+
+function isCustomAccessMode(mode: SessionModeChoice): boolean {
+  const identity = `${mode.id} ${mode.label}`.toLowerCase();
+  return identity.includes("custom") || identity.includes("config.toml");
+}
 
 export function SessionModeControls(props: {
   accessModes: SessionModeChoice[];
@@ -12,7 +42,7 @@ export function SessionModeControls(props: {
   disabled?: boolean;
   compact?: boolean;
   iconOnly?: boolean;
-  variant?: "compact" | "toolbar";
+  variant?: "compact" | "toolbar" | "composer";
   onOpen?: (() => void) | undefined;
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
@@ -24,6 +54,7 @@ export function SessionModeControls(props: {
   const [accessPanelStyle, setAccessPanelStyle] = useState<CSSProperties>({});
   const variant = props.variant ?? (props.compact ? "compact" : "toolbar");
   const compact = variant === "compact";
+  const composer = variant === "composer";
 
   useEffect(() => {
     if (!accessOpen) return;
@@ -54,7 +85,7 @@ export function SessionModeControls(props: {
     const gap = 6;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const width = Math.min(Math.max(rect.width, 220), viewportWidth - pad * 2);
+    const width = Math.min(Math.max(rect.width, composer ? 320 : 220), viewportWidth - pad * 2);
     const left = Math.max(pad, Math.min(rect.left, viewportWidth - width - pad));
     const spaceBelow = viewportHeight - rect.bottom - pad - gap;
     const spaceAbove = rect.top - pad - gap;
@@ -68,11 +99,11 @@ export function SessionModeControls(props: {
         : { bottom: viewportHeight - rect.top + gap }),
       left,
       width,
-      height: Math.min(320, availableHeight, desiredHeight),
+      height: Math.min(composer ? 420 : 320, availableHeight, desiredHeight),
     });
-  }, [accessOpen, props.accessModes.length, variant]);
+  }, [accessOpen, composer, props.accessModes.length, variant]);
 
-  if (props.accessModes.length === 0 && !props.planModeAvailable) {
+  if (!composer && props.accessModes.length === 0 && !props.planModeAvailable) {
     return null;
   }
   const compactControlClassName =
@@ -80,10 +111,21 @@ export function SessionModeControls(props: {
   const toolbarAccessClassName = props.iconOnly
     ? "icon-click-feedback relative inline-flex h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[11px] text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
     : "relative inline-flex h-10 min-[700px]:h-9 lg:h-8 w-10 min-[700px]:w-[7.25rem] shrink-0 items-center justify-center min-[700px]:justify-start gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 px-0 min-[700px]:px-2.5 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
-  const showAccessSelect = props.accessModes.length > 0;
-  const selectedAccessLabel =
-    props.accessModes.find((mode) => mode.id === props.selectedAccessModeId)?.label ?? "Mode";
+  const showAccessSelect = props.accessModes.length > 0 || composer;
+  const selectedAccessMode =
+    props.accessModes.find((mode) => mode.id === props.selectedAccessModeId);
+  const selectedAccessLabel = selectedAccessMode?.label ?? "Permissions";
   const selectedAccessDisplayLabel = selectedAccessLabel.split(" · ")[0] ?? selectedAccessLabel;
+  const elevatedAccess = isElevatedAccessMode(selectedAccessMode);
+  const composerAccessClassName = `icon-click-feedback relative inline-flex h-10 md:h-8 lg:h-7 min-w-0 shrink items-center gap-1 md:gap-0.5 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
+    props.iconOnly
+      ? "w-10 justify-center px-0 md:w-8 lg:w-7"
+      : "max-w-[9.5rem] justify-start px-2 md:px-1.5"
+  } ${
+    elevatedAccess
+      ? "text-orange-600 dark:text-orange-400"
+      : "text-[var(--app-fg)]"
+  }`;
   const toggleAccessOpen = () => {
     setAccessOpen((current) => {
       if (!current) {
@@ -96,7 +138,13 @@ export function SessionModeControls(props: {
   return (
     <div
       ref={accessMenuRef}
-      className={compact ? "flex w-full items-center gap-1.5" : "flex items-center gap-1.5 min-h-8 md:min-h-9"}
+      className={
+        compact
+          ? "flex w-full items-center gap-1.5"
+          : composer
+            ? "rah-composer-mode-controls flex min-w-0 items-center gap-0.5"
+            : "flex items-center gap-1.5 min-h-8 md:min-h-9"
+      }
     >
       {showAccessSelect ? (
         variant === "compact" ? (
@@ -135,6 +183,40 @@ export function SessionModeControls(props: {
               />
             </button>
           )
+        ) : composer ? (
+          <div className="relative min-w-0 shrink-0">
+            <button
+              ref={accessButtonRef}
+              type="button"
+              className={composerAccessClassName}
+              title={selectedAccessLabel}
+              disabled={props.disabled}
+              onClick={toggleAccessOpen}
+              aria-haspopup="listbox"
+              aria-expanded={accessOpen}
+              data-composer-control="permissions"
+            >
+              <span className="sr-only">Session mode</span>
+              {elevatedAccess ? (
+                <ShieldAlert
+                  size={15}
+                  strokeWidth={1.8}
+                  className="h-[15px] w-[15px] shrink-0 md:h-3.5 md:w-3.5"
+                />
+              ) : (
+                <Shield
+                  size={15}
+                  strokeWidth={1.8}
+                  className="h-[15px] w-[15px] shrink-0 text-[var(--app-hint)] md:h-3.5 md:w-3.5"
+                />
+              )}
+              {props.iconOnly ? null : (
+                <span className="min-w-0 truncate text-left">
+                  {selectedAccessDisplayLabel}
+                </span>
+              )}
+            </button>
+          </div>
         ) : (
           <div className="relative shrink-0">
             <button
@@ -166,54 +248,85 @@ export function SessionModeControls(props: {
           </div>
         )
       ) : null}
-      {accessOpen && props.accessModes.length > 0
+      {accessOpen
         ? createPortal(
             <div
               ref={accessPanelRef}
               data-session-access-panel="true"
-              className="rah-popover-panel fixed z-[60] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none"
+              className="rah-popover-panel fixed z-[60] flex flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-xl focus:outline-none"
               style={accessPanelStyle}
               role="listbox"
               aria-label="Session mode"
             >
               <OverlayScrollArea
-                className="h-full"
+                className="min-h-0 flex-1"
                 viewportClassName="h-full"
-                contentClassName="p-1.5"
+                contentClassName="space-y-1 p-1.5"
                 scrollAriaLabel="Session mode"
               >
-                {props.accessModes.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => {
-                      props.onAccessModeChange(mode.id);
-                      setAccessOpen(false);
-                    }}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
-                      mode.id === props.selectedAccessModeId
-                        ? "bg-[var(--app-subtle-bg)] font-medium text-[var(--app-fg)]"
-                        : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/70"
-                    }`}
-                    role="option"
-                    aria-selected={mode.id === props.selectedAccessModeId}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{mode.label}</span>
-                    {mode.id === props.selectedAccessModeId ? (
-                      <Check size={14} className="shrink-0 text-[var(--app-success)]" />
-                    ) : null}
-                  </button>
-                ))}
+                {props.accessModes.length > 0 ? props.accessModes.map((mode) => {
+                  const selected = mode.id === props.selectedAccessModeId;
+                  const elevated = isElevatedAccessMode(mode);
+                  const ModeIcon = elevated
+                    ? ShieldAlert
+                    : isCustomAccessMode(mode)
+                      ? Settings2
+                      : isAutomaticAccessMode(mode)
+                        ? BadgeCheck
+                        : Hand;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => {
+                        props.onAccessModeChange(mode.id);
+                        setAccessOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm transition-colors ${
+                        selected
+                          ? "bg-[var(--app-subtle-bg)] font-medium"
+                          : "hover:bg-[var(--app-subtle-bg)]/70"
+                      } ${
+                        elevated
+                          ? "text-orange-600 dark:text-orange-400"
+                          : "text-[var(--app-fg)]"
+                      }`}
+                      role="option"
+                      aria-selected={selected}
+                    >
+                      <ModeIcon
+                        size={16}
+                        strokeWidth={1.8}
+                        className={`mt-0.5 shrink-0 ${
+                          elevated ? "" : "text-[var(--app-hint)]"
+                        }`}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{mode.label}</span>
+                      {selected ? (
+                        <Check
+                          size={15}
+                          className={`mt-0.5 shrink-0 ${
+                            elevated ? "" : "text-[var(--app-success)]"
+                          }`}
+                        />
+                      ) : null}
+                    </button>
+                  );
+                }) : (
+                  <div className="px-2.5 py-2 text-sm text-[var(--app-hint)]">
+                    Loading permissions…
+                  </div>
+                )}
               </OverlayScrollArea>
             </div>,
             document.body,
           )
         : null}
-      {props.planModeAvailable ? (
+      {props.planModeAvailable || composer ? (
         variant === "compact" ? (
           <button
             type="button"
-            disabled={props.disabled}
+            disabled={props.disabled || !props.planModeAvailable}
             onClick={() => props.onPlanModeToggle(!props.planModeEnabled)}
             className={`${compactControlClassName} inline-flex ${
               showAccessSelect ? "w-[4.75rem]" : "w-full"
@@ -225,6 +338,28 @@ export function SessionModeControls(props: {
             aria-pressed={props.planModeEnabled}
             title="Toggle plan mode"
           >
+            <span>Plan</span>
+          </button>
+        ) : composer ? (
+          <button
+            type="button"
+            disabled={props.disabled || !props.planModeAvailable}
+            onClick={() => props.onPlanModeToggle(!props.planModeEnabled)}
+            className={`rah-composer-plan-toggle inline-flex h-10 md:h-8 lg:h-7 shrink-0 items-center justify-center gap-1 rounded-full border border-transparent bg-transparent px-2 text-[13px] leading-[18px] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 md:px-1.5 ${
+              props.planModeEnabled
+                ? "font-semibold"
+                : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+            }`}
+            aria-pressed={props.planModeEnabled}
+            title="Toggle plan mode"
+            data-composer-control="plan"
+            data-plan-active={props.planModeEnabled ? "true" : "false"}
+          >
+            <ListTodo
+              size={14}
+              strokeWidth={1.8}
+              className="h-3.5 w-3.5 shrink-0 md:h-[13px] md:w-[13px]"
+            />
             <span>Plan</span>
           </button>
         ) : (

@@ -5,6 +5,7 @@ import type {
   ResumeSessionRequest,
   SessionConfigValue,
   SessionInputAttachment,
+  SessionInputAnnotation,
   SessionSummary,
   StartSessionRequest,
   StoredSessionRef,
@@ -64,6 +65,7 @@ type StartSessionOptions = {
   liveBackend?: StartSessionRequest["liveBackend"];
   initialInput?: string;
   initialAttachments?: SessionInputAttachment[];
+  initialAnnotations?: SessionInputAnnotation[];
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   onSessionCreated?: (sessionId: string) => void;
 };
@@ -127,9 +129,10 @@ type SessionStartupDeps = {
     text: string,
     attachments?: SessionInputAttachment[],
     identity?: {
-      clientMessageId: string;
-      clientTurnId: string;
+      clientMessageId?: string;
+      clientTurnId?: string;
       skipOptimisticQueue?: boolean;
+      annotations?: SessionInputAnnotation[];
     },
   ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
@@ -386,6 +389,7 @@ export async function startSessionCommand(
     }
     const initialInput = options?.initialInput?.trim();
     const initialAttachments = options?.initialAttachments ?? [];
+    const initialAnnotations = options?.initialAnnotations ?? [];
     const title = options?.title ?? `${providerLabel(provider)} session`;
     const clientMessageId = createClientSideId("client-message");
     const clientTurnId = createClientSideId("client-turn");
@@ -394,7 +398,7 @@ export async function startSessionCommand(
       cwd,
       ...(options?.title ? { title: options.title } : {}),
     });
-    if (initialInput || initialAttachments.length > 0) {
+    if (initialInput || initialAttachments.length > 0 || initialAnnotations.length > 0) {
       provisionalSessionId = createClientSideId("starting-session");
       const provisionalProjection = createPendingLiveSessionProjection({
         sessionId: provisionalSessionId,
@@ -510,7 +514,7 @@ export async function startSessionCommand(
       };
     });
     options?.onSessionCreated?.(session.session.id);
-    if (initialInput || initialAttachments.length > 0) {
+    if (initialInput || initialAttachments.length > 0 || initialAnnotations.length > 0) {
       void deps.initializeLiveConversationProjection(session.session.id).catch(() => undefined);
       initialInputRollback = {
         sessionId: session.session.id,
@@ -522,7 +526,12 @@ export async function startSessionCommand(
         session.session.id,
         initialInput ?? "",
         initialAttachments,
-        { clientMessageId, clientTurnId, skipOptimisticQueue: true },
+        {
+          clientMessageId,
+          clientTurnId,
+          skipOptimisticQueue: true,
+          ...(initialAnnotations.length ? { annotations: initialAnnotations } : {}),
+        },
       );
     } else {
       await deps.initializeLiveConversationProjection(session.session.id);
@@ -883,9 +892,148 @@ type ResumeHistorySessionOptions = {
   reasoningId?: string | null;
   initialInput?: string;
   initialAttachments?: SessionInputAttachment[];
+  initialAnnotations?: SessionInputAnnotation[];
 };
 
-const resumeHistoryOperations = new Map<string, Promise<string | null>>();
+type ResumeHistoryInitialInput = {
+  text: string;
+  attachments: SessionInputAttachment[];
+  annotations: SessionInputAnnotation[];
+  hasInput: boolean;
+  clientMessageId: string;
+  clientTurnId: string;
+};
+
+type ResumeHistoryOperation = {
+  promise: Promise<string | null>;
+  carriesInitialInput: boolean;
+};
+
+const resumeHistoryOperations = new Map<string, ResumeHistoryOperation>();
+
+function createResumeHistoryInitialInput(
+  options: ResumeHistorySessionOptions | undefined,
+): ResumeHistoryInitialInput {
+  const text = options?.initialInput ?? "";
+  const attachments = options?.initialAttachments ?? [];
+  const annotations = options?.initialAnnotations ?? [];
+  return {
+    text,
+    attachments,
+    annotations,
+    hasInput: Boolean(text.trim() || attachments.length > 0 || annotations.length > 0),
+    clientMessageId: createClientSideId("client-message"),
+    clientTurnId: createClientSideId("client-turn"),
+  };
+}
+
+function stageResumeHistoryInitialInput(
+  deps: SessionStartupDeps,
+  sessionId: string,
+  previousProjection: SessionProjection | undefined,
+  input: ResumeHistoryInitialInput,
+): void {
+  if (!input.hasInput || !previousProjection) {
+    return;
+  }
+  const now = new Date().toISOString();
+  const imageCount = input.attachments.filter(
+    (attachment) => attachment.kind === "image",
+  ).length;
+  const optimistic = appendOptimisticUserMessage(previousProjection, input.text, {
+    clientMessageId: input.clientMessageId,
+    clientTurnId: input.clientTurnId,
+    ...(input.attachments.length ? { attachments: input.attachments } : {}),
+    imageCount,
+  });
+  deps.set((state) => {
+    const projections = new Map(state.projections);
+    projections.set(sessionId, {
+      ...optimistic,
+      currentRuntimeStatus: "thinking",
+      summary: {
+        ...optimistic.summary,
+        session: {
+          ...optimistic.summary.session,
+          status: "running",
+          phase: "starting",
+          runtimeState: "starting",
+          capabilities: {
+            ...optimistic.summary.session.capabilities,
+            structuredControl: true,
+            livePermissions: true,
+            steerInput: true,
+            queuedInput: optimistic.summary.session.provider !== "claude",
+            actions: {
+              ...optimistic.summary.session.capabilities.actions,
+              stop: true,
+            },
+          },
+          updatedAt: now,
+        },
+        attachedClients: [
+          ...optimistic.summary.attachedClients.filter(
+            (client) => client.id !== state.clientId,
+          ),
+          {
+            id: state.clientId,
+            kind: "web",
+            sessionId,
+            connectionId: state.connectionId,
+            attachMode: "interactive",
+            focus: true,
+            lastSeenAt: now,
+          },
+        ],
+        controlLease: {
+          sessionId,
+          holderClientId: state.clientId,
+          holderKind: "web",
+          grantedAt: now,
+        },
+      },
+    });
+    return { projections, error: null };
+  });
+}
+
+async function sendResumeHistoryInitialInput(
+  deps: SessionStartupDeps,
+  resumedSessionId: string,
+  input: ResumeHistoryInitialInput,
+): Promise<void> {
+  if (!input.hasInput) {
+    return;
+  }
+  await deps.sendInput(resumedSessionId, input.text, input.attachments, {
+    clientMessageId: input.clientMessageId,
+    clientTurnId: input.clientTurnId,
+    skipOptimisticQueue: true,
+    ...(input.annotations.length ? { annotations: input.annotations } : {}),
+  });
+}
+
+function rollbackResumeHistoryInitialInput(
+  deps: SessionStartupDeps,
+  resumedSessionId: string,
+  input: ResumeHistoryInitialInput,
+  baselineSeq: number | undefined,
+): void {
+  deps.set((state) => {
+    const projection = state.projections.get(resumedSessionId);
+    if (!projection) return state;
+    const projections = new Map(state.projections);
+    projections.set(
+      resumedSessionId,
+      rollbackImmediateUserInput(projection, {
+        text: input.text,
+        clientMessageId: input.clientMessageId,
+        baselineSeq,
+      }),
+    );
+    return { projections };
+  });
+}
 
 function resumeHistoryOperationKey(deps: SessionStartupDeps, sessionId: string): string {
   const session = deps.get().projections.get(sessionId)?.summary.session;
@@ -900,78 +1048,59 @@ export function resumeHistorySessionCommand(
   options?: ResumeHistorySessionOptions,
 ): Promise<string | null> {
   const operationKey = resumeHistoryOperationKey(deps, sessionId);
+  const initial = createResumeHistoryInitialInput(options);
   const existing = resumeHistoryOperations.get(operationKey);
   if (existing) {
-    return existing;
+    if (!initial.hasInput || existing.carriesInitialInput) {
+      return existing.promise;
+    }
+    const previousProjection = deps.get().projections.get(sessionId);
+    stageResumeHistoryInitialInput(deps, sessionId, previousProjection, initial);
+    let resumedSessionId: string | null = null;
+    let resumedInputBaselineSeq: number | undefined;
+    return existing.promise
+      .then(async (nextSessionId) => {
+        resumedSessionId = nextSessionId;
+        if (!nextSessionId) {
+          if (previousProjection) {
+            deps.set((state) => {
+              const projections = new Map(state.projections);
+              projections.set(sessionId, previousProjection);
+              return { projections };
+            });
+          }
+          return null;
+        }
+        resumedInputBaselineSeq = deps.get().projections.get(nextSessionId)?.lastSeq;
+        await sendResumeHistoryInitialInput(
+          deps,
+          nextSessionId,
+          initial,
+        );
+        return nextSessionId;
+      })
+      .catch((error) => {
+        if (resumedSessionId) {
+          rollbackResumeHistoryInitialInput(
+            deps,
+            resumedSessionId,
+            initial,
+            resumedInputBaselineSeq,
+          );
+        } else if (previousProjection) {
+          deps.set((state) => {
+            const projections = new Map(state.projections);
+            projections.set(sessionId, previousProjection);
+            return { projections };
+          });
+        }
+        throw error;
+      });
   }
 
-  const initialInput = options?.initialInput ?? "";
-  const initialAttachments = options?.initialAttachments ?? [];
-  const hasInitialInput = Boolean(initialInput.trim() || initialAttachments.length > 0);
-  const clientMessageId = createClientSideId("client-message");
-  const clientTurnId = createClientSideId("client-turn");
+  const hasInitialInput = initial.hasInput;
   const previousProjection = deps.get().projections.get(sessionId);
-  if (hasInitialInput && previousProjection) {
-    const now = new Date().toISOString();
-    const imageCount = initialAttachments.filter(
-      (attachment) => attachment.kind === "image",
-    ).length;
-    const optimistic = appendOptimisticUserMessage(previousProjection, initialInput, {
-      clientMessageId,
-      clientTurnId,
-      ...(initialAttachments.length ? { attachments: initialAttachments } : {}),
-      imageCount,
-    });
-    deps.set((state) => {
-      const projections = new Map(state.projections);
-      projections.set(sessionId, {
-        ...optimistic,
-        currentRuntimeStatus: "thinking",
-        summary: {
-          ...optimistic.summary,
-          session: {
-            ...optimistic.summary.session,
-            status: "running",
-            phase: "starting",
-            runtimeState: "starting",
-            capabilities: {
-              ...optimistic.summary.session.capabilities,
-              structuredControl: true,
-              livePermissions: true,
-              steerInput: true,
-              queuedInput: optimistic.summary.session.provider !== "claude",
-              actions: {
-                ...optimistic.summary.session.capabilities.actions,
-                stop: true,
-              },
-            },
-            updatedAt: now,
-          },
-          attachedClients: [
-            ...optimistic.summary.attachedClients.filter(
-              (client) => client.id !== state.clientId,
-            ),
-            {
-              id: state.clientId,
-              kind: "web",
-              sessionId,
-              connectionId: state.connectionId,
-              attachMode: "interactive",
-              focus: true,
-              lastSeenAt: now,
-            },
-          ],
-          controlLease: {
-            sessionId,
-            holderClientId: state.clientId,
-            holderKind: "web",
-            grantedAt: now,
-          },
-        },
-      });
-      return { projections, error: null };
-    });
-  }
+  stageResumeHistoryInitialInput(deps, sessionId, previousProjection, initial);
 
   let resumedSessionId: string | null = null;
   let resumedInputBaselineSeq: number | undefined;
@@ -990,7 +1119,10 @@ export function resumeHistorySessionCommand(
             if (previousProjection) projections.set(sessionId, previousProjection);
             return {
               projections,
-              selectedSessionId: previousProjection ? sessionId : state.selectedSessionId,
+              selectedSessionId:
+                previousProjection && state.selectedSessionId === nextSessionId
+                  ? sessionId
+                  : state.selectedSessionId,
               pendingSessionAction: null,
               pendingSessionTransition: null,
               sessionTopologyVersion: state.sessionTopologyVersion + 1,
@@ -1002,11 +1134,10 @@ export function resumeHistorySessionCommand(
       }
       if (nextSessionId && hasInitialInput) {
         resumedInputBaselineSeq = deps.get().projections.get(nextSessionId)?.lastSeq;
-        await deps.sendInput(
+        await sendResumeHistoryInitialInput(
+          deps,
           nextSessionId,
-          initialInput,
-          initialAttachments,
-          { clientMessageId, clientTurnId, skipOptimisticQueue: true },
+          initial,
         );
       }
       return nextSessionId;
@@ -1021,29 +1152,24 @@ export function resumeHistorySessionCommand(
           return { projections };
         });
       } else if (resumedSessionId !== null && hasInitialInput) {
-        deps.set((state) => {
-          const projection = state.projections.get(resumedSessionId!);
-          if (!projection) return state;
-          const projections = new Map(state.projections);
-          projections.set(
-            resumedSessionId!,
-            rollbackImmediateUserInput(projection, {
-              text: initialInput,
-              clientMessageId,
-              baselineSeq: resumedInputBaselineSeq,
-            }),
-          );
-          return { projections };
-        });
+        rollbackResumeHistoryInitialInput(
+          deps,
+          resumedSessionId,
+          initial,
+          resumedInputBaselineSeq,
+        );
       }
       throw error;
     })
     .finally(() => {
-      if (resumeHistoryOperations.get(operationKey) === operation) {
+      if (resumeHistoryOperations.get(operationKey)?.promise === operation) {
         resumeHistoryOperations.delete(operationKey);
       }
     });
-  resumeHistoryOperations.set(operationKey, operation);
+  resumeHistoryOperations.set(operationKey, {
+    promise: operation,
+    carriesInitialInput: hasInitialInput,
+  });
   return operation;
 }
 
@@ -1127,6 +1253,9 @@ async function resumeHistorySessionCommandInternal(
         };
       }
       const existingProjection = next.get(resumedSession.session.id);
+      const selectionFollowsResume =
+        current.selectedSessionId === sessionId ||
+        current.selectedSessionId === resumedSession.session.id;
       next.set(
         resumedSession.session.id,
         mergeResumedHistoryProjection(resumedSession, sourceProjection, existingProjection),
@@ -1141,10 +1270,13 @@ async function resumeHistorySessionCommandInternal(
           [...current.unreadSessionIds].filter(
             (sessionIdValue) =>
               sessionIdValue !== sessionId &&
-              sessionIdValue !== resumedSession.session.id,
+              (!selectionFollowsResume ||
+                sessionIdValue !== resumedSession.session.id),
           ),
         ),
-        selectedSessionId: resumedSession.session.id,
+        selectedSessionId: selectionFollowsResume
+          ? resumedSession.session.id
+          : current.selectedSessionId,
         sessionTopologyVersion: current.sessionTopologyVersion + 1,
         pendingSessionAction: null,
         pendingSessionTransition: null,
@@ -1159,7 +1291,6 @@ async function resumeHistorySessionCommandInternal(
         updateSessionSummaryInProjectionMap(current.projections, resumedSession),
         deps.takePendingEventsForSessions(new Set([resumedSession.session.id])),
       ),
-      selectedSessionId: resumedSession.session.id,
       pendingSessionAction: null,
       pendingSessionTransition: null,
       error: null,

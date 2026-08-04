@@ -9,6 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { FeedEntry } from "../../types";
+import type { SelectedConversationText } from "../../composer-annotations";
 import type {
   ConversationTurnProjection,
   ConversationTurnFileChangesProjection,
@@ -49,6 +50,10 @@ import { Reasoning } from "./Reasoning";
 import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
+import {
+  SelectedTextOverlay,
+  type SelectedTextOverlayState,
+} from "./SelectedTextOverlay";
 import {
   defaultAssistantProcessGroupExpanded,
   type ChatDisplayRow,
@@ -96,6 +101,7 @@ const BOTTOM_FOREGROUND_SETTLE_FRAMES = 4;
 const BOTTOM_USER_JUMP_SETTLE_FRAMES = 8;
 const NO_COPYABLE_ASSISTANT_KEYS: ReadonlySet<string> = new Set();
 const PROCESS_TO_FINAL_ROW_GAP_PX = 10;
+const DESKTOP_CHAT_DISPLAY_ROW_GAP_PX = 14;
 const PWA_CHAT_DISPLAY_ROW_GAP_PX = 12;
 
 function isDocumentHidden(): boolean {
@@ -222,6 +228,7 @@ function renderTimelineItem(item: TimelineItem, options: {
           content={item.text}
           {...(item.content ? { contentParts: item.content } : {})}
           {...(options.sessionId ? { sessionId: options.sessionId } : {})}
+          {...(options.entryKey ? { entryKey: options.entryKey } : {})}
           variant={
             item.phase === "final_answer" || options.canCopyAssistant
               ? "final"
@@ -523,6 +530,8 @@ export const ChatThread = memo(function ChatThread(props: {
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
   onOpenTurnFileChange?: (turnId: string, path: string) => void;
+  onAddSelectedText?: (selection: SelectedConversationText) => void;
+  onSelectedTextMoreDetails?: (selection: SelectedConversationText) => void;
 }) {
   type PrependAnchor = {
     scrollHeight: number;
@@ -575,6 +584,9 @@ export const ChatThread = memo(function ChatThread(props: {
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0, contentTopOffset: 0 });
   const [textSelectionDragActive, setTextSelectionDragActive] = useState(false);
+  const [selectedTextOverlay, setSelectedTextOverlay] =
+    useState<SelectedTextOverlayState | null>(null);
+  const selectionCaptureRafRef = useRef<number | null>(null);
   const [processGroupExpansionOverrides, setProcessGroupExpansionOverrides] = useState(
     () => new Map<string, boolean>(),
   );
@@ -593,7 +605,7 @@ export const ChatThread = memo(function ChatThread(props: {
         rows,
         isPwaDisplayMode
           ? PWA_CHAT_DISPLAY_ROW_GAP_PX
-          : VIRTUAL_FEED_ROW_GAP_PX,
+          : DESKTOP_CHAT_DISPLAY_ROW_GAP_PX,
       ),
     [isPwaDisplayMode],
   );
@@ -1276,12 +1288,15 @@ export const ChatThread = memo(function ChatThread(props: {
     if (event.button !== 0 || event.defaultPrevented) {
       return;
     }
+    setSelectedTextOverlay(null);
     const target = event.target as HTMLElement | null;
-    if (
-      target?.closest(
-        "button,a,input,textarea,select,summary,[role='button'],[contenteditable='true']",
-      )
-    ) {
+    const interactiveTarget = target?.closest(
+      "button,a,input,textarea,select,summary,[role='button'],[contenteditable='true']",
+    );
+    const selectableInteractiveText = target?.closest(
+      "[data-selectable-conversation-text='true']",
+    );
+    if (interactiveTarget && !selectableInteractiveText) {
       return;
     }
 
@@ -1313,6 +1328,106 @@ export const ChatThread = memo(function ChatThread(props: {
     document.addEventListener("mouseup", finishTextSelectionDrag);
     window.addEventListener("blur", finishTextSelectionDrag);
   }, [finishTextSelectionDrag]);
+
+  const captureSelectedText = useCallback(() => {
+    selectionCaptureRafRef.current = null;
+    if (!props.onAddSelectedText && !props.onSelectedTextMoreDetails) {
+      return;
+    }
+    const selection = window.getSelection();
+    const contentNode = contentRef.current;
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !contentNode) {
+      setSelectedTextOverlay(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (
+      !contentNode.contains(range.startContainer) ||
+      !contentNode.contains(range.endContainer)
+    ) {
+      setSelectedTextOverlay(null);
+      return;
+    }
+    const sourceForNode = (node: Node) =>
+      (node.nodeType === Node.ELEMENT_NODE
+        ? (node as Element)
+        : node.parentElement
+      )?.closest<HTMLElement>("[data-selection-source='conversation-message']") ?? null;
+    const startSource = sourceForNode(range.startContainer);
+    const endSource = sourceForNode(range.endContainer);
+    if (!startSource || startSource !== endSource) {
+      setSelectedTextOverlay(null);
+      return;
+    }
+    const text = selection.toString().trim();
+    const rect = range.getClientRects().item(0) ?? range.getBoundingClientRect();
+    if (!text || (rect.width <= 0 && rect.height <= 0)) {
+      setSelectedTextOverlay(null);
+      return;
+    }
+    const role = startSource.dataset.selectionRole;
+    setSelectedTextOverlay({
+      selection: {
+        text,
+        source: {
+          sessionId: props.sessionId,
+          ...(startSource.dataset.selectionEntryKey
+            ? { entryKey: startSource.dataset.selectionEntryKey }
+            : {}),
+          ...(role === "assistant" || role === "user" ? { role } : {}),
+        },
+      },
+      anchor: { left: rect.left, top: rect.top, bottom: rect.bottom },
+    });
+  }, [props.onAddSelectedText, props.onSelectedTextMoreDetails, props.sessionId]);
+
+  const handlePotentialTextSelectionEnd = useCallback(() => {
+    if (selectionCaptureRafRef.current !== null) {
+      cancelAnimationFrame(selectionCaptureRafRef.current);
+    }
+    selectionCaptureRafRef.current = requestAnimationFrame(captureSelectedText);
+  }, [captureSelectedText]);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) {
+      return;
+    }
+    const dismiss = () => setSelectedTextOverlay(null);
+    node.addEventListener("scroll", dismiss, { passive: true });
+    window.addEventListener("resize", dismiss);
+    return () => {
+      node.removeEventListener("scroll", dismiss);
+      window.removeEventListener("resize", dismiss);
+      if (selectionCaptureRafRef.current !== null) {
+        cancelAnimationFrame(selectionCaptureRafRef.current);
+        selectionCaptureRafRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setSelectedTextOverlay(null);
+    window.getSelection()?.removeAllRanges();
+  }, [props.sessionId]);
+
+  useEffect(() => {
+    if (!selectedTextOverlay) {
+      return;
+    }
+    const dismissOutsideOverlay = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("[data-selected-text-overlay='true']")
+      ) {
+        return;
+      }
+      setSelectedTextOverlay(null);
+    };
+    document.addEventListener("pointerdown", dismissOutsideOverlay, true);
+    return () => document.removeEventListener("pointerdown", dismissOutsideOverlay, true);
+  }, [selectedTextOverlay]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -1859,7 +1974,7 @@ export const ChatThread = memo(function ChatThread(props: {
     <div
       className="chat-thread-shell relative flex min-h-0 flex-1 flex-col"
       data-conversation-source="canonical"
-      data-chat-density={isPwaDisplayMode ? "mobile" : "default"}
+      data-chat-density={isPwaDisplayMode ? "mobile" : "desktop"}
       data-turn-navigation={isPwaDisplayMode ? "hidden" : "visible"}
     >
       <div className="relative min-h-0 flex-1">
@@ -1868,6 +1983,7 @@ export const ChatThread = memo(function ChatThread(props: {
           data-testid="chat-thread-scroll-container"
           className="chat-thread-scroll-container h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
           onMouseDownCapture={handlePotentialTextSelectionStart}
+          onMouseUpCapture={handlePotentialTextSelectionEnd}
         >
           <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
           {props.historyError ? (
@@ -2037,6 +2153,14 @@ export const ChatThread = memo(function ChatThread(props: {
           </div>
         ) : null}
       </div>
+      {selectedTextOverlay && props.onAddSelectedText && props.onSelectedTextMoreDetails ? (
+        <SelectedTextOverlay
+          state={selectedTextOverlay}
+          onAddToTask={props.onAddSelectedText}
+          onMoreDetails={props.onSelectedTextMoreDetails}
+          onDismiss={() => setSelectedTextOverlay(null)}
+        />
+      ) : null}
       {currentPlan ? (
         <TaskSummaryDock
           key={currentPlan.key}

@@ -88,6 +88,7 @@ import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import { nativeTuiInputText } from "./session-input-attachments";
 import { projectConversation } from "./conversation-projector";
 import { ConversationProjectionStore } from "./conversation-projection-store";
+import { ConversationPageHotCache } from "./conversation-page-hot-cache";
 import { ConversationResourceIndexStore } from "./conversation-resource-index";
 import { summarizeConversationTurnsForTransport } from "./conversation-transport-summary";
 import { buildConversationTurnDirectory } from "./conversation-turn-directory";
@@ -329,6 +330,7 @@ export class RuntimeEngine {
   readonly sessionLibrary: StoredSessionLibraryStore;
   readonly historySnapshots: HistorySnapshotStore;
   readonly turnArtifacts: TurnArtifactStore;
+  private readonly conversationPages = new ConversationPageHotCache();
   private readonly conversationResourceIndexes = new ConversationResourceIndexStore();
   private rememberedSessions: StoredSessionRef[];
   private rememberedRecentSessions: StoredSessionRef[];
@@ -1056,6 +1058,13 @@ export class RuntimeEngine {
       clientId?: string;
     },
   ): Promise<ListSessionsResponse> {
+    // Archive is an identity mutation, so reconcile this provider before the
+    // response is allowed to replace the Sidebar catalog. This prevents a
+    // last-good startup snapshot from backfilling already removed or archived
+    // provider sessions when the archived row vacates a Recent slot.
+    if (this.storedSessionCatalog && isStoredSessionCatalogProvider(provider)) {
+      await this.refreshStoredSessionsCatalog({ provider });
+    }
     await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
     let stoppedRuntimeRef: StoredSessionRef | null = null;
     let managedRuntime: StoredSessionState | undefined;
@@ -2266,26 +2275,12 @@ export class RuntimeEngine {
       sessionId,
       this.sessionStore.getSession(sessionId)?.session,
     );
-    try {
-      return await this.turnArtifacts.getTurnFileDiff(
-        ownerId,
-        turnId,
-        filePath,
-        sessionId,
-      );
-    } catch (artifactError) {
-      const restored =
-        await this.storedHistoryAdapterForSession(
-          sessionId,
-        )?.getSessionConversationTurnFileDiff?.(sessionId, {
-          providerTurnId: turnId,
-          path: filePath,
-        });
-      if (restored) {
-        return restored;
-      }
-      throw artifactError;
-    }
+    return await this.turnArtifacts.getTurnFileDiff(
+      ownerId,
+      turnId,
+      filePath,
+      sessionId,
+    );
   }
 
   private async restorePersistedTurnFileChanges(
@@ -2297,13 +2292,11 @@ export class RuntimeEngine {
       this.sessionStore.getSession(sessionId)?.session,
     );
     return await Promise.all(turns.map(async (turn) => {
-      // A provider-native per-turn summary is the protocol authority when it
-      // exists (for Codex this mirrors patch_apply_end accounting). Persisted
-      // RAH snapshots are the cross-restart fallback for providers or older
-      // turns that do not expose that history.
-      if (turn.fileChanges !== undefined) {
-        return turn;
-      }
+      // The card summary and the clicked file content must be two views of the
+      // same frozen artifact. Never retain an unbacked history projection:
+      // rollout patch activity is not an aggregate turn diff, and current
+      // workspace state is not historical evidence.
+      const { fileChanges: _unbackedFileChanges, ...turnWithoutFileChanges } = turn;
       const artifactTurnIds = [
         turn.providerTurnId,
         turn.id,
@@ -2319,12 +2312,12 @@ export class RuntimeEngine {
         );
         if (persisted) {
           return {
-            ...turn,
+            ...turnWithoutFileChanges,
             fileChanges: persisted.fileChanges,
           };
         }
       }
-      return turn;
+      return turnWithoutFileChanges;
     }));
   }
 
@@ -2519,6 +2512,23 @@ export class RuntimeEngine {
     }
     const historyEventLimit = Math.min(500, Math.max(100, turnLimit * 40));
     const adapter = this.storedHistoryAdapterForSession(sessionId);
+    const liveRevisionAtRequest = this.conversationStore.snapshot(sessionId).liveRevision;
+    const sourceRevisionAtRequest =
+      await adapter?.getSessionConversationSourceRevision?.(sessionId);
+    const cacheAddress = {
+      sessionId,
+      ...(options?.cursor ? { cursor: options.cursor } : {}),
+      limit: turnLimit,
+    };
+    if (sourceRevisionAtRequest) {
+      const cached = this.conversationPages.get(cacheAddress, {
+        sourceRevision: sourceRevisionAtRequest,
+        liveRevision: liveRevisionAtRequest,
+      });
+      if (cached) {
+        return cached;
+      }
+    }
     const nativeTurnPage = await adapter?.getConversationSummaryEvidencePage?.(sessionId, {
       ...(options?.cursor ? { cursor: options.cursor } : {}),
       limit: turnLimit,
@@ -2586,11 +2596,19 @@ export class RuntimeEngine {
       ? responseProjection.turns
       : responseProjection.turns.slice(-turnLimit),
     );
+    // The client compares this token with the lightweight provider revision
+    // endpoint. Prefer that same token family over a pager's private frozen
+    // boundary; mixing the two makes an unchanged source look stale forever.
+    // The pre-read token is intentionally conservative if the source grows
+    // during materialization: the next lightweight probe will schedule one
+    // more canonical refresh instead of falsely declaring the page current.
+    const responseSourceRevision =
+      sourceRevisionAtRequest ?? historyPage.sourceRevision;
     const response: ConversationTurnsPageResponse = {
       ...responseProjection,
       liveRevision,
-      ...(historyPage.sourceRevision
-        ? { sourceRevision: historyPage.sourceRevision }
+      ...(responseSourceRevision
+        ? { sourceRevision: responseSourceRevision }
         : {}),
       // A native page owns its cursor boundary. A live turn may be appended on
       // top of that page, so trimming it again could create a pagination gap.
@@ -2600,6 +2618,16 @@ export class RuntimeEngine {
         : {}),
     };
     response.approximateBytes = approximateJsonByteLength(response);
+    if (response.sourceRevision) {
+      this.conversationPages.set(
+        cacheAddress,
+        {
+          sourceRevision: response.sourceRevision,
+          liveRevision,
+        },
+        response,
+      );
+    }
     return response;
   }
 
@@ -3409,6 +3437,7 @@ export class RuntimeEngine {
   ): void {
     let next = [...this.lastDiscoveredStoredSessions];
     let changedProvider = false;
+    let rememberedStateChanged = false;
     for (const result of results) {
       if (!result.records) {
         console.warn("[rah] stored-session catalog refresh failed", {
@@ -3439,12 +3468,33 @@ export class RuntimeEngine {
       this.storedHistoryAdaptersByProvider
         .get(result.provider)
         ?.hydrateStoredSessionsCatalog?.(providerRecords);
+      if (result.complete === true) {
+        const retainedProviderSessionIds = new Set(
+          providerRecords.map((record) => record.ref.providerSessionId),
+        );
+        for (const state of this.sessionStore.listSessions()) {
+          if (
+            state.session.provider === result.provider &&
+            state.session.providerSessionId
+          ) {
+            retainedProviderSessionIds.add(state.session.providerSessionId);
+          }
+        }
+        rememberedStateChanged =
+          this.workbenchState.pruneMissingProviderSessions(
+            result.provider,
+            retainedProviderSessionIds,
+          ) || rememberedStateChanged;
+      }
       next = [
         ...next.filter((session) => session.provider !== result.provider),
         ...providerRecords.map((record) => record.ref),
       ];
     }
     if (changedProvider) {
+      if (rememberedStateChanged) {
+        this.refreshRememberedState();
+      }
       this.persistStoredSessionCatalogRecords();
       this.updateStoredSessionsCache(next, { publish: options?.publish ?? false });
     }

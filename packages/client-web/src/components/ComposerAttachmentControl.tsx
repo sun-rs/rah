@@ -74,7 +74,18 @@ export function ComposerAttachmentControl(props: {
         aria-label={uploadInProgress ? "Uploading attachments" : "Add a reference or attachment"}
         aria-busy={uploadInProgress}
       >
-        {uploadInProgress ? <LoaderCircle size={18} className="animate-spin" /> : <Plus size={18} />}
+        {uploadInProgress ? (
+          <LoaderCircle
+            size={18}
+            className="h-[18px] w-[18px] animate-spin md:h-4 md:w-4"
+          />
+        ) : (
+          <Plus
+            size={20}
+            strokeWidth={1.75}
+            className="h-5 w-5 md:h-[18px] md:w-[18px]"
+          />
+        )}
       </button>
 
       <input

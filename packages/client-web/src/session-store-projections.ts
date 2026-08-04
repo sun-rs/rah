@@ -209,6 +209,32 @@ function preservePendingStoredReplayProjections(
   return result;
 }
 
+function preserveSelectedReadOnlyReplayProjection(
+  next: Map<string, SessionProjection>,
+  current: Map<string, SessionProjection>,
+  selectedSessionId: string | null,
+): Map<string, SessionProjection> {
+  if (!selectedSessionId || next.has(selectedSessionId)) {
+    return next;
+  }
+  const selected = current.get(selectedSessionId);
+  if (!selected || !isReadOnlyReplay(selected.summary)) {
+    return next;
+  }
+  const selectedProviderSessionKey = providerSessionKey(selected.summary);
+  if (
+    selectedProviderSessionKey &&
+    [...next.values()].some(
+      (projection) => providerSessionKey(projection.summary) === selectedProviderSessionKey,
+    )
+  ) {
+    return next;
+  }
+  const result = new Map(next);
+  result.set(selectedSessionId, selected);
+  return result;
+}
+
 function isInteractiveRunningProjection(projection: SessionProjection): boolean {
   return projection.summary.session.status === "running" && !isReadOnlyReplay(projection.summary);
 }
@@ -478,7 +504,11 @@ export function applySessionsResponse(
   workspaceDirs: string[];
   pinnedSidebarItems: WorkbenchPinnedItemRef[];
 } {
-  const projections = mergeSessionsIntoProjections(state.projections, sessionsResponse, replay);
+  const projections = preserveSelectedReadOnlyReplayProjection(
+    mergeSessionsIntoProjections(state.projections, sessionsResponse, replay),
+    state.projections,
+    state.selectedSessionId,
+  );
   const hiddenWorkspaceDirs = resolveHiddenWorkspaceDirsFromSessionsResponse({
     currentHiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
     currentWorkspaceVisibilityVersion: state.workspaceVisibilityVersion,
@@ -549,9 +579,13 @@ export function replaceSessionsResponse(
     hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
   });
   const sessionMap = createSessionMap(sessionsResponse);
-  const projections = preservePendingStoredReplayProjections(
-    reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
+  const projections = preserveSelectedReadOnlyReplayProjection(
+    preservePendingStoredReplayProjections(
+      reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
+      state.projections,
+    ),
     state.projections,
+    state.selectedSessionId,
   );
   const workspaceDirs = deriveVisibleWorkspaceDirs({
     explicitWorkspaceDirs: sessionsResponse.workspaceDirs,

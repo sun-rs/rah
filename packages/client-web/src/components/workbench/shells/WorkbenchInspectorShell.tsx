@@ -10,7 +10,9 @@ export function WorkbenchInspectorShell(props: {
   contained?: boolean;
 }) {
   const mobileProps =
-    props.rightOpen === undefined || !props.onRightOpenChange
+    props.showDesktop ||
+    props.rightOpen === undefined ||
+    !props.onRightOpenChange
       ? {}
       : {
           mobileOpen: props.rightOpen,

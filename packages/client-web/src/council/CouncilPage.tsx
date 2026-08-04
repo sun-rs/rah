@@ -56,12 +56,8 @@ import {
 import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
-  ConversationStateMetaBadge,
   type ConversationHeaderMetaItem,
 } from "../components/workbench/ConversationMetaBadge";
-import {
-  resolveConversationHeaderState,
-} from "../components/workbench/conversation-header-meta";
 import {
   councilAgentDraftToConfig,
   normalizeCouncilAgentDraftForCatalog,
@@ -158,7 +154,7 @@ function CouncilMessageContent(props: { role: CouncilMessage["role"]; text: stri
   const collapsed = canCollapse && !expanded;
   const content = props.role === "agent" ? (
     <MarkdownRenderer
-      className="prose-chat max-w-none text-sm leading-relaxed"
+      className="prose-chat max-w-none"
       content={props.text}
     />
   ) : (
@@ -1437,28 +1433,13 @@ export function CouncilPage(props: {
     }
     return [{ id: agent.id, terminalId, label: agent.label }];
   });
-  const selectedCouncilHeaderState = selectedCouncil
-    ? resolveConversationHeaderState({
-        status: selectedCouncil.status,
-        phase: selectedCouncil.phase,
-      })
-    : null;
   const selectedCouncilAgentCountLabel = selectedCouncil
     ? `${selectedCouncil.agents.length} agent${selectedCouncil.agents.length === 1 ? "" : "s"}`
     : null;
   const compactCouncilMeta = isPwaDisplayMode || !isCouncilWide;
   const selectedCouncilHeaderMetaItems: ConversationHeaderMetaItem[] =
-    selectedCouncil && selectedCouncilHeaderState && selectedCouncilAgentCountLabel
+    selectedCouncil && selectedCouncilAgentCountLabel
       ? [
-          {
-            slot: "status",
-            node: (
-              <ConversationStateMetaBadge
-                state={selectedCouncilHeaderState}
-                appearance="inline"
-              />
-            ),
-          },
           {
             slot: "count",
             node: (
@@ -1485,11 +1466,7 @@ export function CouncilPage(props: {
   const showCouncilOverflowMenu = selectedCouncil !== null || isCouncilHeaderCompact;
   const councilHeaderMeta = selectedCouncil ? (
     <ConversationHeaderMetaList items={selectedCouncilHeaderMetaItems} appearance="inline" />
-  ) : (
-    <span className="block min-w-0 truncate">
-      Start or open a Council to coordinate agents.
-    </span>
-  );
+  ) : undefined;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
@@ -1507,7 +1484,7 @@ export function CouncilPage(props: {
             compactCloseAction={isPwaDisplayMode}
             backgroundClassName="bg-[var(--app-bg)]/85"
             presentation={selectedCouncil ? "conversation" : "page"}
-            identity={selectedCouncil ? <CouncilLogo className="h-6 w-6" /> : undefined}
+            identity={<CouncilLogo className="h-6 w-6" />}
             title={selectedCouncil?.title ?? "Council"}
             titleText={selectedCouncil?.title ?? "Council"}
             meta={councilHeaderMeta}
@@ -1729,7 +1706,7 @@ export function CouncilPage(props: {
                 return (
                   <div
                     key={message.id}
-                    className={`w-fit max-w-[92%] rounded-2xl border px-3 py-2 text-sm sm:max-w-[82%] ${
+                    className={`rah-conversation-text w-fit max-w-[92%] rounded-2xl border px-3 py-2 sm:max-w-[82%] ${
                       message.role === "user"
                         ? "ml-auto border-[var(--app-border)] bg-white text-zinc-950 shadow-sm"
                         : `mr-auto ${theme?.bubble ?? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"}`

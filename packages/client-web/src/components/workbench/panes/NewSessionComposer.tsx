@@ -9,7 +9,6 @@ import {
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { ArrowUp, ChevronDown, Folder, FolderPlus, Plus } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
-import { SessionControlPopover } from "../../SessionControlPopover";
 import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
@@ -18,12 +17,15 @@ import { WorkspacePicker } from "../../WorkspacePicker";
 import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { ComposerAttachmentBadge } from "../../ComposerAttachmentBadge";
 import { ComposerAttachmentControl } from "../../ComposerAttachmentControl";
+import {
+  UnifiedComposerSurface,
+  UnifiedComposerToolbar,
+} from "../../UnifiedComposerSurface";
 import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import {
+  COMPOSER_LAYOUT,
+  COMPOSER_PLACEHOLDER,
   EMPTY_STATE_COMPOSER_LAYOUT,
-  shouldCompactEmptyStateSessionControls,
-  shouldHideEmptyStateSessionControl,
-  shouldUseIconOnlyEmptyStateWorkspace,
 } from "../../../composer-contract";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
@@ -93,19 +95,11 @@ export function NewSessionComposer(props: {
   onPlanModeToggle: (enabled: boolean) => void;
   footer?: ReactNode;
 }) {
-  const controlsRowRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const [controlsRowWidth, setControlsRowWidth] = useState<number | null>(null);
   const [surfaceWidth, setSurfaceWidth] = useState<number | null>(null);
   const [addWorkspacePickerOpen, setAddWorkspacePickerOpen] = useState(false);
   const isPwaDisplayMode = usePwaDisplayMode();
   const draftAttachments = props.draftAttachments ?? [];
-  const compactSessionControls =
-    shouldCompactEmptyStateSessionControls(controlsRowWidth);
-  const hideSessionControl =
-    shouldHideEmptyStateSessionControl(controlsRowWidth);
-  const iconOnlyWorkspace =
-    shouldUseIconOnlyEmptyStateWorkspace(controlsRowWidth, isPwaDisplayMode);
   const providerSelectorMode =
     props.providerSelectorMode === "auto"
       ? surfaceWidth !== null && surfaceWidth < 560
@@ -115,13 +109,10 @@ export function NewSessionComposer(props: {
   const workspaceLabel = props.availableWorkspaceDir
     ? workspaceBasename(props.availableWorkspaceDir)
     : "Workspace";
-  const workspaceShouldMarquee = workspaceLabel.length > 6;
+  const workspaceShouldMarquee = workspaceLabel.length > 18;
 
   useLayoutEffect(() => {
-    const nodes = [
-      { node: controlsRowRef.current, setWidth: setControlsRowWidth },
-      { node: surfaceRef.current, setWidth: setSurfaceWidth },
-    ];
+    const nodes = [{ node: surfaceRef.current, setWidth: setSurfaceWidth }];
     const observers: ResizeObserver[] = [];
     const cleanupListeners: Array<() => void> = [];
 
@@ -196,28 +187,31 @@ export function NewSessionComposer(props: {
           What would you like to build?
         </h1>
 
-        <div className="relative">
+        <div className="rah-new-task-composer-stack">
+          <UnifiedComposerSurface
+            surface="new-task"
+            isPwa={isPwaDisplayMode}
+            className={COMPOSER_LAYOUT.composeGridClassName}
+          >
           <ComposerAttachmentBadge
             items={draftAttachments}
             onRemove={props.onRemoveDraftAttachment}
             layout={
               isPwaDisplayMode && draftAttachments.length > 1 ? "stack" : "row"
             }
-            className="pointer-events-auto absolute left-4 top-3 z-20 md:left-5 md:top-4"
+            className="pointer-events-auto px-1"
           />
           <TokenizedTextarea
             ref={props.composerRef}
             wrapperClassName={
               EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName
             }
-            textareaClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName} ${
-              draftAttachments.length > 0 ? "pt-16 md:pt-[4.5rem]" : ""
-            }`}
+            textareaClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName}
             contentClassName={
               EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName
             }
-            placeholder="Message…"
-            rows={3}
+            placeholder={COMPOSER_PLACEHOLDER}
+            rows={1}
             value={props.draft}
             scopeKey={`new-session:${props.availableWorkspaceDir}:${props.provider}`}
             onChange={props.onDraftChange}
@@ -239,202 +233,165 @@ export function NewSessionComposer(props: {
             }}
           />
 
-          <div
-            ref={controlsRowRef}
-            className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}
-          >
-            <div className={EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName}>
-              {props.onOpenFileReference && props.onUploadFiles ? (
-                <ComposerAttachmentControl
-                  buttonClassName={
-                    EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
-                  }
-                  onReferenceWorkspaceFile={props.onOpenFileReference}
-                  onUploadFiles={props.onUploadFiles}
-                  {...(props.attachmentUploadPending !== undefined
-                    ? { uploadPending: props.attachmentUploadPending }
-                    : {})}
-                />
-              ) : props.onOpenFileReference ? (
-                <button
-                  type="button"
-                  className={EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName}
-                  onClick={props.onOpenFileReference}
-                  aria-label="Reference workspace file"
-                  title="Reference workspace file"
-                >
-                  <Plus size={18} />
-                </button>
-              ) : null}
+          <div className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}>
+            <UnifiedComposerToolbar
+              leadingClassName={EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName}
+              trailingClassName={EMPTY_STATE_COMPOSER_LAYOUT.rightControlsClassName}
+              leading={
+                <>
+                  {props.onOpenFileReference && props.onUploadFiles ? (
+                    <ComposerAttachmentControl
+                      buttonClassName={
+                        EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
+                      }
+                      onReferenceWorkspaceFile={props.onOpenFileReference}
+                      onUploadFiles={props.onUploadFiles}
+                      {...(props.attachmentUploadPending !== undefined
+                        ? { uploadPending: props.attachmentUploadPending }
+                        : {})}
+                    />
+                  ) : props.onOpenFileReference ? (
+                    <button
+                      type="button"
+                      className={EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName}
+                      onClick={props.onOpenFileReference}
+                      aria-label="Reference workspace file"
+                      title="Reference workspace file"
+                    >
+                      <Plus
+                        size={20}
+                        strokeWidth={1.75}
+                        className="h-5 w-5 md:h-[18px] md:w-[18px]"
+                      />
+                    </button>
+                  ) : null}
 
-              {props.workspaceDirs.length === 0 ? (
-                <WorkspacePicker
-                  currentDir={props.availableWorkspaceDir}
-                  triggerLabel={
-                    iconOnlyWorkspace
-                      ? ""
-                      : props.availableWorkspaceDir
-                        ? workspaceLabel
-                        : "Workspace"
-                  }
-                  triggerIcon={
-                    <FolderPlus size={iconOnlyWorkspace ? 18 : 12} />
-                  }
-                  triggerAriaLabel="Select workspace"
-                  triggerClassName={
-                    iconOnlyWorkspace
-                      ? EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
-                      : EMPTY_STATE_COMPOSER_LAYOUT.pillClassName
-                  }
-                  onSelect={props.onChooseNewWorkspace}
-                />
-              ) : (
-                <div
-                  className="relative shrink-0"
-                  ref={props.workspacePickerRef}
-                >
+                  <div className="rah-new-task-composer-secondary min-w-0">
+                    <SessionModeControls
+                      variant="composer"
+                      accessModes={props.accessModes}
+                      selectedAccessModeId={props.selectedAccessModeId}
+                      planModeAvailable={props.planModeAvailable}
+                      planModeEnabled={props.planModeEnabled}
+                      onOpen={props.onRequestCatalogRefresh}
+                      onAccessModeChange={props.onAccessModeChange}
+                      onPlanModeToggle={props.onPlanModeToggle}
+                    />
+                  </div>
+                </>
+              }
+              trailing={
+                <>
+                  <div className="rah-new-task-composer-secondary min-w-0">
+                    <SessionModelControls
+                      appearance="composer"
+                      catalog={props.modelCatalog}
+                      selectedModelId={props.selectedModelId}
+                      selectedReasoningId={props.selectedReasoningId}
+                      loading={props.modelCatalogLoading}
+                      allowProviderDefault
+                      onOpen={props.onRequestCatalogRefresh}
+                      onModelChange={props.onModelChange}
+                      onReasoningChange={props.onReasoningChange}
+                    />
+                  </div>
+
                   <button
                     type="button"
-                    onClick={props.onToggleWorkspacePicker}
-                    aria-label="Select workspace"
-                    className={
-                      iconOnlyWorkspace
-                        ? EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
-                        : EMPTY_STATE_COMPOSER_LAYOUT.pillClassName
-                    }
-                    title={props.availableWorkspaceDir || "Workspace"}
+                    disabled={!props.canSend}
+                    onClick={submit}
+                    aria-label="Start session"
+                    title={props.sendPending ? "Starting…" : "Start session"}
+                    className={EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName}
                   >
-                    <Folder size={iconOnlyWorkspace ? 18 : 12} />
-                    {iconOnlyWorkspace ? null : (
-                      <>
-                        <MarqueeText
-                          text={workspaceLabel}
-                          shouldMarquee={workspaceShouldMarquee}
-                        />
-                        <ChevronDown
-                          size={11}
-                          className={`shrink-0 transition-transform ${
-                            props.workspacePickerOpen ? "rotate-180" : ""
-                          }`}
-                        />
-                      </>
-                    )}
+                    <ArrowUp className="h-[18px] w-[18px] md:h-4 md:w-4" />
                   </button>
-                  {props.workspacePickerOpen ? (
-                    <div className="rah-popover-panel absolute bottom-full left-0 z-50 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg">
-                      <OverlayScrollArea
-                        className="max-h-[min(18rem,calc(100dvh-12rem))]"
-                        viewportClassName="max-h-[min(18rem,calc(100dvh-12rem))]"
-                        contentClassName="p-1.5"
-                        scrollAriaLabel="Workspaces"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAddWorkspacePickerOpen(true);
-                            props.onToggleWorkspacePicker();
-                          }}
-                          className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                        >
-                          <FolderPlus
-                            size={13}
-                            className="shrink-0 text-[var(--app-hint)]"
-                          />
-                          <span className="truncate">Add workspace…</span>
-                        </button>
-                        <div className="my-1 h-px bg-[var(--app-border)]" />
-                        {props.workspaceDirs.map((dir) => (
-                          <button
-                            key={dir}
-                            type="button"
-                            onClick={() => props.onSelectWorkspace(dir)}
-                            title={dir}
-                            className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
-                              dir === props.availableWorkspaceDir
-                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                            }`}
-                          >
-                            <Folder
-                              size={13}
-                              className="shrink-0 text-[var(--app-hint)]"
-                            />
-                            <MarqueeText
-                              text={dir}
-                              shouldMarquee={dir.length > 34}
-                            />
-                            {dir === props.availableWorkspaceDir ? (
-                              <span className="shrink-0 text-[10px] text-[var(--app-hint)]">
-                                ●
-                              </span>
-                            ) : null}
-                          </button>
-                        ))}
-                      </OverlayScrollArea>
-                    </div>
-                  ) : null}
-                </div>
-              )}
+                </>
+              }
+            />
+          </div>
+          </UnifiedComposerSurface>
 
-              <SessionControlPopover
-                accessModes={props.accessModes}
-                selectedAccessModeId={props.selectedAccessModeId}
-                planModeAvailable={props.planModeAvailable}
-                planModeEnabled={props.planModeEnabled}
-                modelCatalog={props.modelCatalog}
-                modelCatalogLoading={props.modelCatalogLoading}
-                selectedModelId={props.selectedModelId}
-                selectedReasoningId={props.selectedReasoningId}
-                allowProviderDefault
-                showModel
-                buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} ${
-                  compactSessionControls && !hideSessionControl ? "" : "hidden"
-                }`}
-                onOpen={props.onRequestCatalogRefresh}
-                onAccessModeChange={props.onAccessModeChange}
-                onPlanModeToggle={props.onPlanModeToggle}
-                onModelChange={props.onModelChange}
-                onReasoningChange={props.onReasoningChange}
-              />
-
-              <div
-                className={`items-center gap-2 ${
-                  compactSessionControls ? "hidden" : "flex"
-                }`}
+          <div className="rah-new-task-workspace-strip">
+          <span className="shrink-0 pl-0.5 text-[11px] font-medium leading-[18px] text-[var(--app-hint)]">
+            Workspace
+          </span>
+          {props.workspaceDirs.length === 0 ? (
+            <WorkspacePicker
+              currentDir={props.availableWorkspaceDir}
+              triggerLabel={props.availableWorkspaceDir ? workspaceLabel : "Choose workspace"}
+              triggerIcon={<FolderPlus size={14} strokeWidth={1.8} />}
+              triggerAriaLabel="Select workspace"
+              triggerClassName={EMPTY_STATE_COMPOSER_LAYOUT.workspaceButtonClassName}
+              onSelect={props.onChooseNewWorkspace}
+            />
+          ) : (
+            <div className="relative min-w-0" ref={props.workspacePickerRef}>
+              <button
+                type="button"
+                onClick={props.onToggleWorkspacePicker}
+                aria-label="Select workspace"
+                aria-expanded={props.workspacePickerOpen}
+                className={EMPTY_STATE_COMPOSER_LAYOUT.workspaceButtonClassName}
+                title={props.availableWorkspaceDir || "Workspace"}
               >
-                <SessionModeControls
-                  variant="toolbar"
-                  accessModes={props.accessModes}
-                  selectedAccessModeId={props.selectedAccessModeId}
-                  planModeAvailable={props.planModeAvailable}
-                  planModeEnabled={props.planModeEnabled}
-                  onAccessModeChange={props.onAccessModeChange}
-                  onPlanModeToggle={props.onPlanModeToggle}
+                <Folder size={14} strokeWidth={1.8} />
+                <MarqueeText
+                  text={workspaceLabel}
+                  shouldMarquee={workspaceShouldMarquee}
                 />
-                <SessionModelControls
-                  catalog={props.modelCatalog}
-                  selectedModelId={props.selectedModelId}
-                  selectedReasoningId={props.selectedReasoningId}
-                  loading={props.modelCatalogLoading}
-                  allowProviderDefault
-                  mobileIconOnly
-                  onOpen={props.onRequestCatalogRefresh}
-                  onModelChange={props.onModelChange}
-                  onReasoningChange={props.onReasoningChange}
+                <ChevronDown
+                  size={12}
+                  strokeWidth={1.8}
+                  className={`shrink-0 transition-transform ${
+                    props.workspacePickerOpen ? "rotate-180" : ""
+                  }`}
                 />
-              </div>
+              </button>
+              {props.workspacePickerOpen ? (
+                <div className="rah-popover-panel absolute bottom-full left-0 z-50 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg">
+                  <OverlayScrollArea
+                    className="max-h-[min(18rem,calc(100dvh-12rem))]"
+                    viewportClassName="max-h-[min(18rem,calc(100dvh-12rem))]"
+                    contentClassName="p-1.5"
+                    scrollAriaLabel="Workspaces"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddWorkspacePickerOpen(true);
+                        props.onToggleWorkspacePicker();
+                      }}
+                      className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    >
+                      <FolderPlus size={13} className="shrink-0 text-[var(--app-hint)]" />
+                      <span className="truncate">Add workspace…</span>
+                    </button>
+                    <div className="my-1 h-px bg-[var(--app-border)]" />
+                    {props.workspaceDirs.map((dir) => (
+                      <button
+                        key={dir}
+                        type="button"
+                        onClick={() => props.onSelectWorkspace(dir)}
+                        title={dir}
+                        className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                          dir === props.availableWorkspaceDir
+                            ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
+                            : "text-[var(--app-fg)] hover:bg-[var(--app-bg)]/80"
+                        }`}
+                      >
+                        <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
+                        <MarqueeText text={dir} shouldMarquee={dir.length > 34} />
+                        {dir === props.availableWorkspaceDir ? (
+                          <span className="shrink-0 text-[10px] text-[var(--app-hint)]">●</span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </OverlayScrollArea>
+                </div>
+              ) : null}
             </div>
-
-            <button
-              type="button"
-              disabled={!props.canSend}
-              onClick={submit}
-              aria-label="Start session"
-              title={props.sendPending ? "Starting…" : "Start session"}
-              className={EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName}
-            >
-              <ArrowUp size={18} />
-            </button>
+          )}
           </div>
         </div>
 

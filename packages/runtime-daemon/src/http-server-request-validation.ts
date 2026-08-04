@@ -27,6 +27,7 @@ import type {
   ResumeSessionRequest,
   SessionConfigValue,
   SessionInputAttachment,
+  SessionInputAnnotation,
   SessionInputRequest,
   SetInputQueuePolicyRequest,
   SetSessionModelRequest,
@@ -210,6 +211,7 @@ export function parseSessionInputRequest(body: unknown): SessionInputRequest {
   const clientMessageId = optionalString(record, "clientMessageId");
   const clientTurnId = optionalString(record, "clientTurnId");
   const attachments = optionalSessionInputAttachments(record, "attachments");
+  const annotations = optionalSessionInputAnnotations(record, "annotations");
   if (clientMessageId !== undefined) {
     request.clientMessageId = clientMessageId;
   }
@@ -219,8 +221,11 @@ export function parseSessionInputRequest(body: unknown): SessionInputRequest {
   if (attachments !== undefined) {
     request.attachments = attachments;
   }
-  if (!request.text.trim() && !request.attachments?.length) {
-    throw badRequest("session input requires text or at least one attachment.");
+  if (annotations !== undefined) {
+    request.annotations = annotations;
+  }
+  if (!request.text.trim() && !request.attachments?.length && !request.annotations?.length) {
+    throw badRequest("session input requires text, an attachment, or an annotation.");
   }
   return request;
 }
@@ -782,6 +787,60 @@ function optionalSessionInputAttachments(
       throw badRequest(`${key}[${index}].size must be a positive integer.`);
     }
     return { id, kind, name, mediaType, size };
+  });
+}
+
+function optionalSessionInputAnnotations(
+  record: JsonRecord,
+  key: string,
+): SessionInputAnnotation[] | undefined {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw badRequest(`${key} must be an array.`);
+  }
+  if (value.length > 20) {
+    throw badRequest(`${key} cannot contain more than 20 selections.`);
+  }
+  const ids = new Set<string>();
+  return value.map((entry, index) => {
+    const annotationRecord = requireObject(entry, `${key}[${index}]`);
+    const id = requireString(annotationRecord, "id");
+    if (ids.has(id)) {
+      throw badRequest(`${key} contains duplicate annotation ids.`);
+    }
+    ids.add(id);
+    const text = requireString(annotationRecord, "text").trim();
+    if (!text) {
+      throw badRequest(`${key}[${index}].text cannot be empty.`);
+    }
+    if (text.length > 20_000) {
+      throw badRequest(`${key}[${index}].text is too long.`);
+    }
+    const annotation = optionalString(annotationRecord, "annotation")?.trim();
+    if (annotation && annotation.length > 20_000) {
+      throw badRequest(`${key}[${index}].annotation is too long.`);
+    }
+    const sourceRecord = optionalObject(annotationRecord, "source");
+    const entryKey = sourceRecord ? optionalString(sourceRecord, "entryKey") : undefined;
+    const role = sourceRecord
+      ? optionalEnum(sourceRecord, "role", ["assistant", "user"])
+      : undefined;
+    const source = sourceRecord
+      ? {
+          sessionId: requireString(sourceRecord, "sessionId"),
+          ...(entryKey !== undefined ? { entryKey } : {}),
+          ...(role !== undefined ? { role } : {}),
+        }
+      : undefined;
+    return {
+      id,
+      text,
+      ...(annotation ? { annotation } : {}),
+      ...(source ? { source } : {}),
+    };
   });
 }
 

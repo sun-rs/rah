@@ -3,6 +3,7 @@ export const MEDIUM_MIN_WIDTH_PX = 700;
 export const WIDE_MIN_WIDTH_PX = 900;
 
 export type ResponsiveTier = "compact" | "medium" | "wide";
+export type TurnFileOpenSurface = "transient-viewer" | "inspector";
 
 export function resolveResponsiveTier(viewportWidthPx: number): ResponsiveTier {
   if (!Number.isFinite(viewportWidthPx) || viewportWidthPx >= WIDE_MIN_WIDTH_PX) {
@@ -25,4 +26,10 @@ export function resolveSidePanelOpenForTier(
   breakpoint: "medium" | "wide" = "medium",
 ): boolean {
   return isInlinePanelTier(tier, breakpoint) ? inlineOpen : overlayOpen;
+}
+
+export function resolveTurnFileOpenSurface(
+  tier: ResponsiveTier,
+): TurnFileOpenSurface {
+  return tier === "wide" ? "inspector" : "transient-viewer";
 }
