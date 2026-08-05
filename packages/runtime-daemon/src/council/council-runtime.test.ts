@@ -251,6 +251,8 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.match(codexPrompt, /只能处理 rah_council 工具返回的 recent_messages 或 msg/);
     assert.match(codexPrompt, /@all 表示全体 agent 都应参与讨论/);
     assert.match(codexPrompt, /channel_post 是最终答复通道/);
+    assert.match(codexPrompt, /channel_post\(content="<完整最终答复>"\)/);
+    assert.match(codexPrompt, /答复参数名必须是 content/);
     assert.match(codexPrompt, /禁止发布思考过程、工具调用说明、执行进度/);
     assert.match(codexPrompt, /只用 channel_set_status 更新简短状态/);
     assert.doesNotMatch(codexPrompt, /@council/);

@@ -2,6 +2,8 @@ import type { StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
   clearLastHistorySelection,
+  readLastHistorySelection,
+  type HistorySelection,
 } from "./history-selection";
 import {
   appendVisibleWorkspaceDir,
@@ -86,25 +88,87 @@ export function beginSessionStoreInit(): boolean {
 
 export function resetSessionStoreInit() {
   initialized = false;
+  attemptedStoredHistoryRestore = false;
+}
+
+export function resolveHistorySelectionRestoreTarget(
+  selection: HistorySelection,
+  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+):
+  | { kind: "live"; sessionId: string; workspaceDir?: string }
+  | { kind: "stored"; ref: StoredSessionRef; workspaceDir?: string }
+  | null {
+  const matchingLiveSession = sessionsResponse.sessions.find(
+    (summary) =>
+      summary.session.provider === selection.provider &&
+      summary.session.providerSessionId === selection.providerSessionId,
+  );
+  if (matchingLiveSession) {
+    const workspaceDir =
+      selection.workspaceDir ||
+      matchingLiveSession.session.rootDir ||
+      matchingLiveSession.session.cwd;
+    return {
+      kind: "live",
+      sessionId: matchingLiveSession.session.id,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    };
+  }
+
+  const matchingStoredSession = [
+    ...sessionsResponse.recentSessions,
+    ...sessionsResponse.storedSessions,
+  ].find(
+    (ref) =>
+      ref.provider === selection.provider &&
+      ref.providerSessionId === selection.providerSessionId,
+  );
+  if (!matchingStoredSession) {
+    return null;
+  }
+  const workspaceDir =
+    selection.workspaceDir ||
+    matchingStoredSession.rootDir ||
+    matchingStoredSession.cwd;
+  return {
+    kind: "stored",
+    ref: matchingStoredSession,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  };
 }
 
 export async function maybeRestoreLastHistorySelection(args: {
   isInitialLoaded: boolean;
   sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>;
   revealWorkspaceSelection: (workspaceDir: string) => void;
+  selectSession: (sessionId: string) => void;
   resumeStoredSession: (
     ref: StoredSessionRef,
     options?: { preferStoredReplay?: boolean; historyReplay?: "include" | "skip" },
   ) => Promise<void>;
 }) {
-  void args;
   if (attemptedStoredHistoryRestore) return;
   attemptedStoredHistoryRestore = true;
-  // Do not reopen a historical session on page load. A stale history
-  // selection makes RAH look like it launched into an arbitrary old chat after
-  // daemon restart; the workbench home/new-session composer is the safer
-  // default, and history remains explicitly reachable from Sessions.
-  clearLastHistorySelection();
+  const selection = readLastHistorySelection();
+  if (!selection) {
+    return;
+  }
+  const target = resolveHistorySelectionRestoreTarget(selection, args.sessionsResponse);
+  if (!target) {
+    clearLastHistorySelection();
+    return;
+  }
+  if (target.workspaceDir) {
+    args.revealWorkspaceSelection(target.workspaceDir);
+  }
+  if (target.kind === "live") {
+    args.selectSession(target.sessionId);
+    return;
+  }
+  await args.resumeStoredSession(target.ref, {
+    preferStoredReplay: true,
+    historyReplay: "include",
+  });
 }
 
 export function revealStoredHistoryWorkspace(args: {

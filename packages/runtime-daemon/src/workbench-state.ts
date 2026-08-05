@@ -731,15 +731,20 @@ export class WorkbenchStateStore {
   }
 
   hideSession(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): void {
-    const key = sessionKey(session);
+    this.hideSessions([session]);
+  }
+
+  hideSessions(sessions: readonly Pick<StoredSessionRef, "provider" | "providerSessionId">[]): void {
+    const keys = new Set(sessions.map(sessionKey));
+    if (keys.size === 0) return;
     const nextOverrides = { ...this.state.sessionTitleOverrides };
-    delete nextOverrides[key];
+    for (const key of keys) delete nextOverrides[key];
     this.state = {
       ...this.state,
-      hiddenSessionKeys: uniqueStringsInOrder([...this.state.hiddenSessionKeys, key]),
+      hiddenSessionKeys: uniqueStringsInOrder([...this.state.hiddenSessionKeys, ...keys]),
       sessionTitleOverrides: nextOverrides,
-      sessions: this.state.sessions.filter((entry) => sessionKey(entry) !== key),
-      recentSessions: this.state.recentSessions.filter((entry) => sessionKey(entry) !== key),
+      sessions: this.state.sessions.filter((entry) => !keys.has(sessionKey(entry))),
+      recentSessions: this.state.recentSessions.filter((entry) => !keys.has(sessionKey(entry))),
       tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
       pinnedSidebarItems: this.state.pinnedSidebarItems,
     };

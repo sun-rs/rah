@@ -165,7 +165,10 @@ provider 文件并产生同一种 canonical delta。前端不轮询原始历史�
 `sourceRevision` 和 resident `liveRevision`；含 `in_progress` turn 或 pending/running item 的页面绝不
 进入缓存。任一 revision 变化就删除旧项并重新读取 Provider，不能把旧页与新 baseline 猜测合并。
 这层只存在于 daemon 内存：刷新浏览器可复用，重启 daemon 后自然冷读；浏览器不把 Conversation
-正文写入 localStorage/IndexedDB，也不建立第二份持久化真相。
+正文写入 localStorage/IndexedDB，也不建立第二份持久化真相。当前 tab 只在 `sessionStorage` 保存
+最后选中 Session 的 provider 身份和 workspace；reload 后用该身份解析当前 live 或 stored 对象，再从
+daemon 请求上述 canonical page。显式导航到 New task/Workspace/Council 会清除选择身份；失效身份也会
+被丢弃，绝不把旧 Runtime Session id 当作正文缓存键。
 
 ## 7. Turn Directory
 

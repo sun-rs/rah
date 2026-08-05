@@ -216,6 +216,7 @@ Session 和 Council 共享同一套用户可见生命周期协议，协议入口
 - `SessionActionCapabilities.actions.stop` 表示这个 running session 能否被 RAH 停止；runtime feature 使用 `stopLifecycle`。`archive/restore` 只描述 stored-history/library 动作，不能作为运行体生命周期字段。
 - 前端 selector、sidebar、history dialog、Canvas pane、session info、Councils browser 都只用 `status/phase` 做用户可见判断。
 - Stop/Close 是关闭 running 执行体；Archive/Restore 改变会话库位置；删除历史走 provider stored-session remove/trash 语义。三者不能和 `stopped` 混为一谈。完整事务见 [Session Library 与 Archive 重构方案](./session-library-archive-refactor.zh-CN.md)。
+- 删除 stopped Council 属于 Council 历史删除，不会把其 agent provider history 重新解释为用户 Session。RuntimeEngine 在 Council record 消失前收集 agent 的稳定 `providerSessionIds`，删除成功后把它们写入 workbench hidden-session tombstone；因此后续 provider catalog refresh、页面刷新和 daemon 重启都不能把 `Council <model>` 子 Session 投影进 Workspace/Recent。
 - CLI 用户入口使用 `rah close <rahSessionId>` 关闭 running session；旧 `rah archive` 只能作为兼容 alias，不出现在新文档和提示里。
 - 启动中的 Council 只有在当前 daemon 进程确实有 pending launch 任务时，才可以暂时显示为 `running/starting` 且没有活终端；daemon 重启后遗留的 stale starting council 如果没有 live agent，必须投影或 reconcile 为 `stopped/ended`。
 
@@ -242,6 +243,7 @@ Inspector `Changes` 默认以当前 checkout 分支的 HEAD 为 baseline，展�
 Canvas pane 的持久化语义是固定槽位与可变布局树模型：
 
 - Canvas 最多有 8 个固定 pane，内部 ID 固定为 `canvas-1` 到 `canvas-8`。
+- remembered target 的 provider identity 恢复属于 pane 本地操作：恢复失败写入该 target 的本地错误卡片，不得写入全局 workbench error。这样即使用户在异步恢复结束前切到 Council、Chat 或 New，也不会在新页面看到与当前页面无关的陈旧 Session notice。
 - Pane 外层标题只表达固定槽位身份，显示为 `Pane 1` 到 `Pane 8`；编号必须从固定 pane ID 推导，不能根据当前可见数组下标重新编号，因此最大化 `canvas-2` 依然显示 `Pane 2`。session / Council 的真实标题、状态、操作只由内部对象标题栏负责。
 - 布局是持久化的二叉 split tree。每个 split 只记录横向或纵向轴、稳定 ID、比例和两个子节点；pane target 不属于布局树，因此改变布局不会重建会话状态。
 - 顶部快捷按钮保留常用的双列、双行、三列和 `2 x 2`；布局设计器可以直接选择规则网格，包括 `2 x 3` 和 `4 x 2`。每个 pane 还可以局部 `Split right` 或 `Split below`，因此双列可以扩展成等宽三列，也可以只把左列拆成上下两个形成 `2 + 1`。
@@ -314,7 +316,7 @@ Structured test running 的保留决策：
 - 主 Session、Canvas pane 等所有 surface 通过同一条 resume command 工作；同一个 provider thread 的并发首次提交共享一个在途操作，不能双击或跨 surface 创建两个 runtime。无输入激活已经在途时，后到的 Send 必须加入该操作、保留乐观消息，并在 Resume 完成后恰好发送一次，不能直接返回旧 Promise 而丢弃问题。
 - Resume A 的完成只能在用户仍选中 A 的 history replay 或 A 已 claim 的 runtime 时改写选择。若等待期间用户已经打开 B，A 仍须在后台完成 projection 迁移、控制参数刷新和输入发送，但任何成功、失败回滚或迟到的 model/mode/permission 更新都不能把当前页面抢回 A。
 - Resume 复用页面已经显示的 resident history projection，并使用 `historyReplay: "skip"` 避免重新读取同一段大历史；新 runtime 只补充恢复后的 revision/delta。Archived session 保持只读且不能隐式恢复。
-- 显式 Stop 当前 Session 后，客户端把 resident live projection 原地降级为 stopped/read-only replay：保留 feed、conversation page 和 turn directory，清除 live lease、runtime diagnostics 与可写能力，并继续选中同一个 Chat。随后列表/catalog refresh 只校准 metadata，不能删除这个当前可见 replay 或导航到 New task。
+- 显式 Stop 当前 Session 后，客户端把 resident live projection 原地降级为 stopped/read-only replay：保留 feed、conversation page 和 turn directory，清除 live lease、runtime diagnostics 与可写能力，并继续选中同一个 Chat。Close event 先于 HTTP response 到达时，命令持有的原 projection 只在用户仍选中同一 Session 时作为降级 fallback；实时流、恢复或 event replay 重复投递同一个 `session.closed` 时，该降级必须保持幂等。随后列表/catalog refresh 只校准 metadata，不能删除这个当前可见 replay 或导航到 New task。
 - client detach、浏览器 reload、PWA 切后台只应影响 attach 状态，不能隐式 stop/close/kill session。
 
 ## 5. Provider 当前实现
@@ -459,7 +461,10 @@ JSONL、rollout 或 SQLite。
 - 浏览器内存负责同一页面生命周期内的 A→B→A；整页 reload 只通过 daemon 内存中的有界 canonical
   hot page 加速。命中必须同时匹配 Runtime Session、cursor/limit、provider source revision 与 live
   revision，且不缓存任何工作中状态。浏览器不持久化 Conversation 正文；revision 变化时旧热页直接
-  失效并重读，不能与新 baseline 混合。
+  失效并重读，不能与新 baseline 混合。浏览器仅在当前 tab 的 `sessionStorage` 保存最后选中对象的
+  稳定 provider identity；reload 后按 live catalog、再按 Recent/Stored 解析它并复用 daemon canonical
+  hot page。正文、turn 和 Runtime Session id 都不进入浏览器持久化缓存，显式回到 New task、Workspace
+  或 Council 时清除该选择。
 
 ### 7.1 Council 列表与消息同步
 
@@ -479,6 +484,8 @@ Council 使用“摘要目录 + 显式消息窗口 + 单条实时增量”，不
 - WebSocket client 会把 session/event filter 放在 upgrade URL 中，daemon 在发送首次 replay 前即应用过滤；连接建立后的相同 subscription frame 不触发第二次 replay。
 
 Council 的创建、改名、增删 agent 等显式 mutation 是低频、用户触发的事务响应，但 store/runtime 内部仍优先返回轻量摘要；如果页面需要消息窗口，应通过选中 Council 的分页接口单独 hydrate，不能把完整 transcript 扩展到持续列表或消息广播。
+
+Council MCP 的 `channel_post` canonical 参数为 `content`，工具 schema 与 bootstrap prompt 都必须明确该参数。daemon 边界同时接受历史 `text` 和常见 `message` 别名，避免 agent 已完成任务却因为参数名差异丢失最终答复并退出监听。
 
 Council 对话的用户可见消息协议是“当前生命周期 + 最终答复”：同一个 agent 的 `sent -> joined -> listening` 是单调推进的状态机，前端只保留一个稳定状态行，并在原时间线位置依次更新为 `sent -> joined -> ready`；不得为每个阶段追加独立消息。不同 agent 各自保留一行；只过滤已知的 `channel_wait_new` timeout transport noise。bootstrap 初始化指令只进入受管 agent session，不写入 Council 对话。agent 工作过程使用 `channel_set_status`，`channel_post` 只发布一次面向用户的最终答复，禁止思考过程、工具旁白、进度和阶段性草稿。最终答复继续使用 agent/provider 对应的 Council 气泡视觉，不把多个 agent 的输出合并成匿名正文。
 
@@ -518,7 +525,7 @@ Conversation 正文。生产 daemon 的目录发现必须遵循：
 因此 Recent 的“快”不以牺牲一致性为代价，All 的“准”也不能成为启动、Resume 或 Chat 首屏的
 串行依赖。
 
-用户选中 Session 后的读取顺序同样固定为 `Chat -> Changes/Files -> Outputs/Sources`。后两阶段
+用户选中 Session 后的读取顺序同样固定为 `Chat -> Changes/Files -> Outputs/Sources`；每个可见 Canvas Session pane 也必须为这条共享预载链建立 owner，不能只依赖全局 selected Session，否则 pane 内 Inspector 会永久等待未启动的 cache fill。浏览器刷新后，历史占位 id 可能不在 daemon 的 live Session registry；Changes 仅在 Session Git 接口明确返回 `Unknown session …` 时回退到同一已授权 workspace 的 Git 接口，其他网络、权限或 Git 错误必须继续显示，Outputs/Sources 仍使用原历史 identity。后两阶段
 在 Chat 可读后按顺序启动但并发完成，Inspector tab 只消费共享缓存。前端最多保留 40 条不含正文
 的本地阶段计时，并发布 `rah:session-view-performance` 供回归诊断；这些诊断不持久化、不上传，
 也不进入 RAH 会话协议。

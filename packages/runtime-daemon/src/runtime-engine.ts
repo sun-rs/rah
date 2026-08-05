@@ -922,9 +922,9 @@ export class RuntimeEngine {
   async stopCouncil(councilId: string): Promise<void> {
     await this.council.stopCouncil(councilId);
   }
-
   deleteCouncil(councilId: string): void {
-    this.council.deleteCouncil(councilId);
+    this.workbenchState.hideSessions(this.council.deleteCouncil(councilId));
+    this.refreshRememberedState();
   }
 
   async getCouncilAgentTui(

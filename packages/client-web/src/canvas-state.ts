@@ -312,7 +312,7 @@ export function resolveCanvasVisibleSessionId(
   projections: Map<string, SessionProjection>,
 ): string | null {
   if (target.kind === "session") {
-    return resolveCanvasTargetProjection(target, projections)?.summary.session.id ?? target.sessionId;
+    return resolveCanvasTargetProjection(target, projections)?.summary.session.id ?? null;
   }
   if (target.kind === "stored") {
     return resolveCanvasTargetProjection(target, projections)?.summary.session.id ?? null;

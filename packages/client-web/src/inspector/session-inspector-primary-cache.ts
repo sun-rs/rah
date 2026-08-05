@@ -2,6 +2,7 @@ import type { GitStatusResponse } from "@rah/runtime-protocol";
 import {
   listDirectory,
   readGitStatus,
+  readWorkspaceGitStatus,
   type DirectoryListingResponse,
 } from "../api";
 import { waitForSharedRequest } from "../shared-cache-request";
@@ -18,7 +19,15 @@ export type SessionInspectorPrimarySnapshot = {
 type SessionInspectorPrimaryDependencies = {
   readGitStatus: (
     sessionId: string,
-    options: { scopeRoot: string; signal?: AbortSignal },
+    options: {
+      scopeRoot: string;
+      baseBranch?: string;
+      signal?: AbortSignal;
+    },
+  ) => Promise<GitStatusResponse>;
+  readWorkspaceGitStatus: (
+    workspaceRoot: string,
+    options?: { baseBranch?: string; signal?: AbortSignal },
   ) => Promise<GitStatusResponse>;
   listDirectory: (
     path: string,
@@ -44,6 +53,7 @@ const primaryListeners = new Map<string, Set<SessionInspectorPrimaryListener>>()
 
 const defaultDependencies: SessionInspectorPrimaryDependencies = {
   readGitStatus,
+  readWorkspaceGitStatus,
   listDirectory,
 };
 
@@ -53,6 +63,44 @@ function cacheKey(sessionId: string, workspaceRoot: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isUnknownSessionError(error: unknown): boolean {
+  return error instanceof Error && /^Unknown session(?:\s|:)/i.test(error.message);
+}
+
+/**
+ * Reads Changes through the session-scoped route when possible. Historical
+ * browser-only session placeholders are intentionally absent from the live
+ * daemon registry after a restart, so only that precise 404 falls back to the
+ * equally authorized workspace-scoped Git route. Other failures remain visible.
+ */
+export async function readSessionInspectorGitStatus(args: {
+  sessionId: string;
+  workspaceRoot: string;
+  baseBranch?: string;
+  signal?: AbortSignal;
+  dependencies?: Pick<
+    SessionInspectorPrimaryDependencies,
+    "readGitStatus" | "readWorkspaceGitStatus"
+  >;
+}): Promise<GitStatusResponse> {
+  const dependencies = args.dependencies ?? defaultDependencies;
+  try {
+    return await dependencies.readGitStatus(args.sessionId, {
+      scopeRoot: args.workspaceRoot,
+      ...(args.baseBranch ? { baseBranch: args.baseBranch } : {}),
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+  } catch (error) {
+    if (!isUnknownSessionError(error)) {
+      throw error;
+    }
+    return dependencies.readWorkspaceGitStatus(args.workspaceRoot, {
+      ...(args.baseBranch ? { baseBranch: args.baseBranch } : {}),
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+  }
 }
 
 function sortDirectoryEntries(entries: readonly DirectoryEntry[]): DirectoryEntry[] {
@@ -199,9 +247,11 @@ export async function loadCachedSessionInspectorPrimary(args: {
     notify(key, activeEntry.snapshot);
 
     const request = Promise.allSettled([
-      dependencies.readGitStatus(args.sessionId, {
-        scopeRoot: args.workspaceRoot,
+      readSessionInspectorGitStatus({
+        sessionId: args.sessionId,
+        workspaceRoot: args.workspaceRoot,
         signal: controller.signal,
+        dependencies,
       }),
       dependencies.listDirectory(
         args.workspaceRoot,

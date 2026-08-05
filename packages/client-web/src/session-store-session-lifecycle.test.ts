@@ -158,3 +158,33 @@ test("removes a stopped live projection when it was not the selected chat", () =
   assert.equal(next.projections.has(sessionSummary.session.id), false);
   assert.equal(next.selectedSessionId, "another-session");
 });
+
+test("keeps the selected stopped chat when the close event removed it before the HTTP response", () => {
+  const sessionSummary = summary();
+  const originalProjection = projection(sessionSummary);
+  const next = applyClosedSessionState(
+    {
+      projections: new Map(),
+      unreadSessionIds: new Set(),
+      hiddenWorkspaceDirs: new Set(),
+      workspaceDirs: ["/workspace/rah"],
+      workspaceVisibilityVersion: 0,
+      sessionTopologyVersion: 1,
+      workspaceDir: "/workspace/rah",
+      selectedSessionId: sessionSummary.session.id,
+      newSessionProvider: "codex",
+      error: null,
+      pendingSessionTransition: null,
+      pendingSessionAction: null,
+      storedSessions: [],
+      recentSessions: [],
+    },
+    sessionSummary.session.id,
+    sessionSummary,
+    originalProjection,
+  );
+
+  assert.equal(next.selectedSessionId, sessionSummary.session.id);
+  assert.equal(next.projections.get(sessionSummary.session.id)?.summary.session.status, "stopped");
+  assert.equal(next.projections.get(sessionSummary.session.id)?.feed[0]?.key, "assistant:answer");
+});

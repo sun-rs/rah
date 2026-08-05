@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { clearLastHistorySelection } from "../history-selection";
 
 export type WorkbenchMode = "single" | "canvas" | "council";
 
@@ -47,6 +48,7 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
   ]);
 
   const openWorkspace = useCallback((workspaceDir: string) => {
+    clearLastHistorySelection();
     setMode("single");
     options.setSelectedWorkspaceOnlyDir(workspaceDir);
     options.setSelectedSessionId(null);
@@ -62,6 +64,7 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
   ]);
 
   const openCouncil = useCallback((_workspaceDir: string, councilId: string) => {
+    clearLastHistorySelection();
     options.setSelectedWorkspaceOnlyDir(null);
     options.setSelectedSessionId(null);
     options.setSelectedCouncilId(councilId);
@@ -77,6 +80,7 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
   ]);
 
   const openCouncilLanding = useCallback((councilId: string | null) => {
+    clearLastHistorySelection();
     options.setSelectedCouncilId(councilId);
     setMode("council");
     closeRightPanels();
@@ -108,6 +112,7 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
   }, [options.setSelectedCouncilId, options.setSelectedSessionId]);
 
   const hideCouncil = useCallback(() => {
+    clearLastHistorySelection();
     options.setSelectedCouncilId(null);
     setMode("single");
     closeRightPanels();
@@ -115,6 +120,7 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
   }, [closeRightPanels, options.setLeftOpen, options.setSelectedCouncilId]);
 
   const goHome = useCallback(() => {
+    clearLastHistorySelection();
     setMode("single");
     options.setSelectedWorkspaceOnlyDir(null);
     options.setSelectedSessionId(null);

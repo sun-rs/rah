@@ -407,9 +407,9 @@ export function NewCouncilDialog(props: {
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
                 New Council
               </Dialog.Title>
-              <div className="truncate text-xs text-[var(--app-hint)]">
+              <Dialog.Description className="truncate text-xs text-[var(--app-hint)]">
                 Configure agents before starting the Council.
-              </div>
+              </Dialog.Description>
             </div>
             <Dialog.Close asChild>
               <button

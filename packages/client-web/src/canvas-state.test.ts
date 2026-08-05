@@ -605,6 +605,16 @@ test("canvas stored refs expose the resolved session as a visible session", () =
   );
 });
 
+test("canvas never exposes an unresolved remembered runtime id as visible", () => {
+  assert.equal(
+    resolveCanvasVisibleSessionId(
+      { kind: "session", sessionId: "deleted-runtime" },
+      projections(),
+    ),
+    null,
+  );
+});
+
 test("canvas resume resolution prefers a live projection over a read-only history id", () => {
   const history = summary({
     id: "history-1",

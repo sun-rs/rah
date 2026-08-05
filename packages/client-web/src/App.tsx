@@ -12,7 +12,6 @@ import { useShallow } from "zustand/react/shallow";
 import type { CouncilSnapshot, PermissionResponseRequest, SessionQueuedInput, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
-import type { SessionProjection } from "./types";
 import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
 import { readErrorMessage } from "./session-store-bootstrap";
 import { deriveRuntimeCompatibilityDescriptor } from "./runtime-compatibility";
@@ -47,6 +46,7 @@ import { initializeTheme } from "./hooks/useTheme";
 import { initializeAppearancePreferences } from "./hooks/useAppearancePreferences";
 import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
 import { useCanvasController } from "./hooks/useCanvasController";
+import { useVisibleCanvasSessionPreload } from "./hooks/useVisibleCanvasSessionPreload";
 import {
   useForegroundSessionRecovery,
   useForegroundWakeRecovery,
@@ -82,6 +82,7 @@ import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
   isSessionAttachedToClient,
+  projectionHasLatestTurnError,
 } from "./workbench-selectors";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
@@ -103,6 +104,7 @@ import {
   readSessionModelPreference,
   rememberSessionModelPreference,
 } from "./session-model-preferences";
+import { startSessionAndRememberModel } from "./session-start-model-preferences";
 import {
   CANVAS_PANE_IDS,
   canvasPaneLabel,
@@ -149,33 +151,6 @@ import {
 } from "./new-session-drafts";
 
 type BranchOperationKind = "fork" | "side";
-
-function projectionHasLatestTurnError(projection: SessionProjection): boolean {
-  let latestAt = "";
-  let failed = false;
-  for (const turn of projection.conversation?.turns ?? []) {
-    const at = turn.completedAt ?? turn.startedAt ?? "";
-    if (at >= latestAt) {
-      latestAt = at;
-      failed = turn.status === "failed";
-    }
-  }
-  for (const event of projection.events) {
-    if (
-      event.type !== "turn.started" &&
-      event.type !== "turn.completed" &&
-      event.type !== "turn.failed" &&
-      event.type !== "turn.canceled"
-    ) {
-      continue;
-    }
-    if (event.ts >= latestAt) {
-      latestAt = event.ts;
-      failed = event.type === "turn.failed";
-    }
-  }
-  return failed;
-}
 
 type ArchiveConfirmationTarget =
   | {
@@ -404,6 +379,11 @@ export function App() {
       setResumeModelDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
     },
     [projections],
+  );
+  const startSessionWithRememberedModel = useCallback(
+    (options?: Parameters<typeof startSession>[0]) =>
+      startSessionAndRememberModel(startSession, updateResumeModelDraft, options),
+    [startSession, updateResumeModelDraft],
   );
 
   useEffect(() => {
@@ -1307,7 +1287,10 @@ export function App() {
         const activationKey = `${restorableRef.provider}:${restorableRef.providerSessionId}`;
         if (!canvasStoredActivationInFlightRef.current.has(activationKey)) {
           canvasStoredActivationInFlightRef.current.add(activationKey);
-          void activateHistorySession(restorableRef, { confirmCreateMissingWorkspace })
+          void activateHistorySession(restorableRef, {
+            confirmCreateMissingWorkspace,
+            suppressGlobalError: true,
+          })
             .catch((error) => {
               reportCanvasRestoreError(target, readErrorMessage(error));
             })
@@ -1383,6 +1366,15 @@ export function App() {
   const sidebarWorkspaceDir = workspaceDirs.length > 0
     ? newTaskWorkspaceDir || workspaceDirs[0] || ""
     : "";
+  useVisibleCanvasSessionPreload({
+    active: workbenchMode === "canvas",
+    paneIds: visibleCanvasPaneIds,
+    paneKey: visibleCanvasPaneKey,
+    paneTargets: canvasPaneTargets,
+    projections,
+    fallbackWorkspaceRoot: sidebarWorkspaceDir,
+    ensureConversationLoaded,
+  });
   const emptyStateAvailableWorkspaceDir =
     pendingNewSessionWorkspaceDir ?? sidebarWorkspaceDir;
   const currentProvider = newSessionProvider as ProviderChoice;
@@ -1601,7 +1593,7 @@ export function App() {
     confirmCreateMissingWorkspace,
     sendInput: sendSelectedInput,
     startSession: async (options) => {
-      const result = await startSession(options);
+      const result = await startSessionWithRememberedModel(options);
       if (result && options?.cwd) {
         setNewTaskWorkspaceDir(options.cwd);
       }
@@ -2680,7 +2672,7 @@ export function App() {
                           selectedWorkspaceDir,
                           initialAttachments,
                         ) => {
-                          await startSession({
+                          await startSessionWithRememberedModel({
                             provider: paneProvider,
                             cwd: selectedWorkspaceDir,
                             title: initialInput.slice(0, 50),

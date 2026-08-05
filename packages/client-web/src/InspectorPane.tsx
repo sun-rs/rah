@@ -3,7 +3,6 @@ import type { TurnFileChangesResponse } from "@rah/runtime-protocol";
 import {
   listDirectory,
   readSessionConversationResourceIndex,
-  readGitStatus,
   readTurnFileChanges,
   readWorkspaceGitStatus,
   searchSessionFiles,
@@ -29,6 +28,7 @@ import {
   loadCachedSessionInspectorPrimary,
   normalizeInspectorGitStatus,
   readCachedSessionInspectorPrimary,
+  readSessionInspectorGitStatus,
   subscribeSessionInspectorPrimary,
   type SessionInspectorPrimarySnapshot,
 } from "./inspector/session-inspector-primary-cache";
@@ -176,9 +176,10 @@ export function InspectorPane(props: {
         };
       });
     });
-    // Historical indexing is owned by the selected-session preload pipeline.
-    // This component only observes its cache, so opening a tab cannot launch a
-    // lower-priority scan ahead of Chat or Changes/Files.
+    // Historical indexing is owned by the session-view preload coordinators
+    // for the selected Chat and visible Canvas panes. This component only
+    // observes its cache, so opening a tab cannot launch a lower-priority scan
+    // ahead of Chat or Changes/Files.
   }, [props.sessionId]);
 
   const retryResourceIndex = () => {
@@ -262,8 +263,9 @@ export function InspectorPane(props: {
         return;
       }
       const response = sessionId
-        ? await readGitStatus(sessionId, {
-            ...(workspaceRoot ? { scopeRoot: workspaceRoot } : {}),
+        ? await readSessionInspectorGitStatus({
+            sessionId,
+            workspaceRoot,
             ...(baseBranch ? { baseBranch } : {}),
           })
         : await readWorkspaceGitStatus(workspaceRoot, {

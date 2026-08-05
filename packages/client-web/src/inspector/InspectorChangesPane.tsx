@@ -61,6 +61,12 @@ export function InspectorChangesPane(props: {
   const branchOptions = props.gitStatus?.branchOptions ?? [];
   const changeCount = props.gitStatus?.totalBranch ?? files.length;
   const baselineBranch = props.gitStatus?.baseBranch ?? props.gitStatus?.branch;
+  const hasGitRepository = Boolean(
+    props.gitStatus?.branch ||
+      props.gitStatus?.baseBranch ||
+      props.gitStatus?.comparisonMode ||
+      branchOptions.length,
+  );
   const isCurrentBranch =
     Boolean(baselineBranch) && baselineBranch === props.gitStatus?.branch;
   const comparisonMode = props.gitStatus?.comparisonMode;
@@ -85,11 +91,15 @@ export function InspectorChangesPane(props: {
     [baselineBranch, comparisonMode, isUncommitted, matchingFiles, props.onOpenFile],
   );
 
-  const scopeDescription = isUncommitted
-    ? "Staged, unstaged, and untracked files"
-    : comparisonMode === "merge_base"
-      ? `Committed since the shared ancestor with ${baselineBranch}, plus local changes`
-      : `Current workspace snapshot compared directly with ${baselineBranch}`;
+  const scopeDescription = !hasGitRepository
+    ? "Git changes are unavailable at this workspace root"
+    : isUncommitted
+      ? "Staged, unstaged, and untracked files"
+      : comparisonMode === "merge_base"
+        ? `Committed since the shared ancestor with ${baselineBranch}, plus local changes`
+        : baselineBranch
+          ? `Current workspace snapshot compared directly with ${baselineBranch}`
+          : "Current workspace snapshot";
 
   return (
     <div className="space-y-2">
@@ -107,10 +117,18 @@ export function InspectorChangesPane(props: {
           ) : null}
           <div
             className={`flex h-7 min-w-0 items-center gap-1.5 ${COMPARISON_VALUE_TEXT_CLASS}`}
-            title={`Current branch: ${props.gitStatus?.branch ?? "detached HEAD"}`}
+            title={
+              hasGitRepository
+                ? `Current branch: ${props.gitStatus?.branch ?? "detached HEAD"}`
+                : "No Git repository at this workspace root"
+            }
           >
             <GitBranch size={14} className="shrink-0" />
-            <span className="truncate">{props.gitStatus?.branch ?? "detached HEAD"}</span>
+            <span className="truncate">
+              {hasGitRepository
+                ? (props.gitStatus?.branch ?? "detached HEAD")
+                : "No Git repository"}
+            </span>
           </div>
           {showBaselineSelector && baselineBranch ? (
             <div className="relative min-w-0">
@@ -175,6 +193,10 @@ export function InspectorChangesPane(props: {
       ) : props.error ? (
         <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-warning-bg)] p-3 text-xs text-[var(--app-hint)]">
           {props.error}
+        </div>
+      ) : !hasGitRepository ? (
+        <div className="py-3 text-sm text-[var(--app-hint)]">
+          No Git repository at this workspace root.
         </div>
       ) : changeCount === 0 ? (
         <div className="py-3 text-sm text-[var(--app-hint)]">

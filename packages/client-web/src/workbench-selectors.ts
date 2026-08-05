@@ -69,6 +69,33 @@ export function isSessionAttachedToClient(summary: SessionSummary, clientId: str
   return summary.attachedClients.some((client) => client.id === clientId);
 }
 
+export function projectionHasLatestTurnError(projection: SessionProjection): boolean {
+  let latestAt = "";
+  let failed = false;
+  for (const turn of projection.conversation?.turns ?? []) {
+    const at = turn.completedAt ?? turn.startedAt ?? "";
+    if (at >= latestAt) {
+      latestAt = at;
+      failed = turn.status === "failed";
+    }
+  }
+  for (const event of projection.events) {
+    if (
+      event.type !== "turn.started" &&
+      event.type !== "turn.completed" &&
+      event.type !== "turn.failed" &&
+      event.type !== "turn.canceled"
+    ) {
+      continue;
+    }
+    if (event.ts >= latestAt) {
+      latestAt = event.ts;
+      failed = event.type === "turn.failed";
+    }
+  }
+  return failed;
+}
+
 function isControlledByClient(summary: SessionSummary, clientId: string): boolean {
   return (
     summary.controlLease.holderClientId === clientId &&

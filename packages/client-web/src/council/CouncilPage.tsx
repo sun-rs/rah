@@ -2087,9 +2087,9 @@ export function CouncilPage(props: {
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
                   Add agents
                 </Dialog.Title>
-                <div className="truncate text-xs text-[var(--app-hint)]">
+                <Dialog.Description className="truncate text-xs text-[var(--app-hint)]">
                   {selectedCouncil ? `Add to ${selectedCouncil.title}` : "Select a running Council first."}
-                </div>
+                </Dialog.Description>
               </div>
               <Dialog.Close asChild>
                 <button
@@ -2241,9 +2241,9 @@ export function CouncilPage(props: {
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
                   Council Chat Info
                 </Dialog.Title>
-                <div className="truncate text-xs text-[var(--app-hint)]">
+                <Dialog.Description className="truncate text-xs text-[var(--app-hint)]">
                   Internal identifiers and agent startup configuration.
-                </div>
+                </Dialog.Description>
               </div>
               <Dialog.Close asChild>
                 <button

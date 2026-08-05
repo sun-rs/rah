@@ -135,7 +135,9 @@ export function handleCouncilMcpRequest(
       };
     }
     case "channel_post": {
-      const content = stringArg(args, "content") ?? stringArg(args, "text");
+      const content = stringArg(args, "content") ??
+        stringArg(args, "text") ??
+        stringArg(args, "message");
       if (!content) {
         throw new Error("channel_post requires content.");
       }

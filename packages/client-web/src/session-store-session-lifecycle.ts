@@ -501,8 +501,9 @@ export function applyClosedSessionState(
   current: LifecycleState,
   sessionId: string,
   summary: SessionSummary | null,
+  fallbackProjection?: SessionProjection,
 ): LifecycleState {
-  const projection = current.projections.get(sessionId);
+  const projection = current.projections.get(sessionId) ?? fallbackProjection;
   const closingSummary = summary ?? projection?.summary ?? null;
   const preserveSelectedReplay = Boolean(
     projection &&

@@ -69,6 +69,14 @@ import {
   takePendingEventsForSessions,
 } from "./session-store-pending-events";
 import { syncHistorySelectionSubscription } from "./session-store-history-selection-sync";
+import { clearLastHistorySelection } from "./history-selection";
+import type {
+  ProviderChoice,
+  ResumeHistorySessionOptions,
+  ResumeStoredSessionOptions,
+  StartSessionOptions,
+  StoredHistoryActivationOptions,
+} from "./session-store-options";
 import {
   applyConversationDeltasToProjectionMap,
   ensureConversationLoadedCommand,
@@ -104,7 +112,9 @@ import {
   hideWorkspace,
   isHiddenWorkspace,
   revealWorkspace,
+  restoreWorkspaceRemovalSelection,
   sameWorkspaceDirectory,
+  workspaceRemovalSelection,
 } from "./session-store-workspace";
 import {
   type SessionProjection,
@@ -124,35 +134,8 @@ export {
   sameWorkspaceDirectory,
 } from "./session-store-workspace";
 
-type ProviderChoice = "codex" | "claude" | "opencode";
 type StoredSessionsMode = "all" | "cached" | "recent";
 const RECENT_STORED_SESSION_LIMIT = 15;
-
-interface StartSessionOptions {
-  provider?: ProviderChoice;
-  cwd?: string;
-  title?: string;
-  model?: string;
-  optionValues?: Record<string, SessionConfigValue>;
-  reasoningId?: string;
-  modeId?: string;
-  initialInput?: string;
-  initialAttachments?: SessionInputAttachment[];
-  initialAnnotations?: SessionInputAnnotation[];
-  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
-  onSessionCreated?: (sessionId: string) => void;
-}
-
-interface ResumeHistorySessionOptions {
-  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
-  modeId?: string;
-  modelId?: string;
-  optionValues?: Record<string, SessionConfigValue>;
-  reasoningId?: string | null;
-  initialInput?: string;
-  initialAttachments?: SessionInputAttachment[];
-  initialAnnotations?: SessionInputAnnotation[];
-}
 
 type ModelCatalogLoadState = {
   catalog: ProviderModelCatalog | null;
@@ -242,16 +225,9 @@ interface SessionState {
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
   activateHistorySession: (
     ref: StoredSessionRef,
-    options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
+    options?: StoredHistoryActivationOptions,
   ) => Promise<void>;
-  resumeStoredSession: (
-    ref: StoredSessionRef,
-    options?: {
-      preferStoredReplay?: boolean;
-      historyReplay?: "include" | "skip";
-      confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
-    },
-  ) => Promise<void>;
+  resumeStoredSession: (ref: StoredSessionRef, options?: ResumeStoredSessionOptions) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
@@ -923,6 +899,9 @@ async function maybeRestoreLastHistorySelection(
         }),
       );
     },
+    selectSession: (sessionId) => {
+      useSessionStore.setState({ selectedSessionId: sessionId });
+    },
     resumeStoredSession: (ref, options) => useSessionStore.getState().resumeStoredSession(ref, options),
   });
 }
@@ -1073,6 +1052,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
   removeWorkspace: async (dir) => {
+    const removalSelection = workspaceRemovalSelection(get(), dir);
     try {
       set((state) => ({
         hiddenWorkspaceDirs: hideWorkspace(state.hiddenWorkspaceDirs, dir),
@@ -1080,6 +1060,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           (workspaceDir) => !sameWorkspaceDirectory(workspaceDir, dir),
         ),
         workspaceDir: sameWorkspaceDirectory(state.workspaceDir, dir) ? "" : state.workspaceDir,
+        selectedSessionId: removalSelection.removesSelectedSession ? null : state.selectedSessionId,
         workspaceVisibilityVersion: state.workspaceVisibilityVersion + 1,
         error: null,
       }));
@@ -1089,6 +1070,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         { dir },
         { storedSessions: storedSessionsMode },
       );
+      if (removalSelection.removesSelectedSession) {
+        clearLastHistorySelection();
+      }
       set((state) => ({
         ...applySessionsResponse(
           {
@@ -1111,12 +1095,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const sessionsResponse = await api.listSessions({
           storedSessions: storedSessionsModeForState(get()),
         });
-        set((state) => ({
-          ...applySessionsResponse(state, sessionsResponse, {
+        set((state) => {
+          const next = applySessionsResponse(state, sessionsResponse, {
             workspaceVisibilityVersionAtRequest,
-          }),
-          error: readErrorMessage(error),
-        }));
+          });
+          return {
+            ...next,
+            selectedSessionId: restoreWorkspaceRemovalSelection(
+              removalSelection,
+              next.projections,
+              next.selectedSessionId,
+            ),
+            error: readErrorMessage(error),
+          };
+        });
       } catch {
         set((state) => ({
           hiddenWorkspaceDirs: revealWorkspace(state.hiddenWorkspaceDirs, dir),
@@ -1521,7 +1513,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   activateHistorySession: async (
     ref,
-    options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
+    options?: StoredHistoryActivationOptions,
   ) => {
     await activateHistorySessionCommand(createStartupDeps(get, set, options), ref, options);
   },

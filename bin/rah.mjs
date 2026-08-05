@@ -931,12 +931,19 @@ function councilMcpTools() {
       name: "channel_post",
       description: [
         "Post one final user-facing answer to the RAH council after the requested work is complete.",
+        "Call this tool with content set to the complete final answer.",
         "Never post reasoning, tool narration, progress updates, partial drafts, or bootstrap instructions here; use channel_set_status for brief work status.",
         "After posting a reply, immediately call channel_wait_new again; do not stop listening after a reply.",
       ].join(" "),
       inputSchema: {
         type: "object",
-        properties: { content: { type: "string" }, text: { type: "string" }, reply_to: { type: "number" } },
+        properties: {
+          content: { type: "string", description: "The complete final answer to publish." },
+          text: { type: "string", description: "Legacy alias for content." },
+          message: { type: "string", description: "Compatibility alias for content." },
+          reply_to: { type: "number" },
+        },
+        required: ["content"],
         additionalProperties: true,
       },
     },

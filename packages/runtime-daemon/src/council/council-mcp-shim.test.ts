@@ -44,13 +44,23 @@ test("Council MCP shim handles join, post, history, wait, and status tools", asy
     assert.equal(posted.result.message.client_id, "client-a");
     assert.equal(posted.result.message.content, "agent message");
 
+    const compatiblePost = handleCouncilMcpRequest(store, {
+      councilId: council.id,
+      actorId: agentA,
+      clientId: "client-a",
+      tool: "channel_post",
+      arguments: { message: "agent compatibility message" },
+    }) as { ok: true; result: { msg_id: number; message: { content: string } } };
+    assert.equal(compatiblePost.result.msg_id, 2);
+    assert.equal(compatiblePost.result.message.content, "agent compatibility message");
+
     const history = handleCouncilMcpRequest(store, {
       councilId: council.id,
       actorId: agentA,
       tool: "channel_history",
       arguments: { limit: 10 },
     }) as { ok: true; result: { messages: unknown[] } };
-    assert.equal(history.result.messages.length, 1);
+    assert.equal(history.result.messages.length, 2);
 
     const wait = await handleCouncilMcpRequest(store, {
       councilId: council.id,

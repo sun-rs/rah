@@ -2161,6 +2161,39 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "resumed");
   });
 
+  test("Canvas history recovery keeps a stale provider error local to its pane", async () => {
+    const ref: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "missing-canvas-thread",
+      cwd: "/tmp/rah",
+      rootDir: "/tmp/rah",
+      createdAt: "2026-04-29T00:00:00.000Z",
+    };
+    const deps = startupDeps();
+    installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return new Response(JSON.stringify({ error: "Unknown Codex session" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await assert.rejects(
+      resumeStoredSessionCommand(deps, ref, {
+        preferStoredReplay: true,
+        suppressGlobalError: true,
+      }),
+      /Unknown Codex session/,
+    );
+    assert.equal(deps.get().error, null);
+    assert.equal(
+      deps.get().projections.get(storedReplayPlaceholderSessionId(ref))?.conversation?.lastError,
+      "Unknown Codex session",
+    );
+  });
+
   test("resuming history takes control when the provider session is already running", async () => {
     const historySummary = summary({
       id: "history",

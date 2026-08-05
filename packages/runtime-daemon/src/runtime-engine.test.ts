@@ -700,8 +700,8 @@ class CouncilManagedSessionAdapter extends CountingStoredSessionsAdapter {
   engine: RuntimeEngine | undefined;
   readonly startedSessionIds: string[] = [];
 
-  constructor() {
-    super([]);
+  constructor(storedSessions: StoredSessionRef[] = []) {
+    super(storedSessions);
   }
 
   override startSession(request: StartSessionRequest): StartSessionResponse {
@@ -726,6 +726,10 @@ class CouncilManagedSessionAdapter extends CountingStoredSessionsAdapter {
 
   override sendInput(_sessionId: string, _request: SessionInputRequest): void {
     // Council bootstrap input is not relevant to this origin metadata test.
+  }
+
+  destroySession(_sessionId: string): void {
+    // RuntimeEngine owns SessionStore removal after the provider confirms close.
   }
 }
 
@@ -1392,6 +1396,53 @@ describe("RuntimeEngine", () => {
     assert.equal(
       engine.sessionStore.getSession(sessionId)?.session.origin?.councilTitle,
       "Renamed Council",
+    );
+    await engine.shutdown();
+  });
+
+  test("deleting a stopped Council keeps its provider sessions hidden from ordinary history", async () => {
+    const providerSessionId = "council-agent-1";
+    const adapter = new CouncilManagedSessionAdapter([{
+      provider: "codex",
+      providerSessionId,
+      cwd: workDir,
+      rootDir: workDir,
+      title: "Council gpt-5.6-sol-Ultra",
+      preview: "Council child transcript",
+      updatedAt: "2026-08-05T00:00:00.000Z",
+      source: "provider_history",
+    }]);
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    const created = await engine.createCouncil({
+      title: "Disposable Council",
+      workspace: workDir,
+      agents: [{ provider: "codex", label: "Codex Agent" }],
+    });
+    await waitFor(() => assert.equal(adapter.startedSessionIds.length, 1));
+    await engine.stopCouncil(created.council.id);
+    await engine.refreshStoredSessionsCatalog({ publish: false });
+
+    assert.equal(
+      engine.listSessions({ storedSessionsMode: "all" }).storedSessions.some(
+        (session) => session.providerSessionId === providerSessionId,
+      ),
+      false,
+    );
+
+    engine.deleteCouncil(created.council.id);
+
+    assert.equal(
+      engine.listSessions({ storedSessionsMode: "all" }).storedSessions.some(
+        (session) => session.providerSessionId === providerSessionId,
+      ),
+      false,
+    );
+    assert.ok(
+      engine.workbenchState.snapshot().hiddenSessionKeys.includes(
+        `codex:${providerSessionId}`,
+      ),
     );
     await engine.shutdown();
   });

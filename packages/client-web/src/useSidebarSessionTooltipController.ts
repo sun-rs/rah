@@ -103,6 +103,31 @@ export function useSidebarSessionTooltipController(): SidebarSessionTooltipContr
   }, [reset, state]);
 
   useEffect(() => {
+    if (
+      state.phase === "idle" ||
+      (state.phase === "open" && state.source === "keyboard")
+    ) {
+      return;
+    }
+    const closeWhenPointerLeavesAnchor = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse") {
+        return;
+      }
+      const hit = document.elementFromPoint(event.clientX, event.clientY);
+      // A direct A -> B move is resolved by the delegated pointerover/out
+      // state machine. The capture guard only owns the browser/Portal gap
+      // where no Session row is under the pointer at all.
+      if (!closestSessionRow(hit)) {
+        reset();
+      }
+    };
+    document.addEventListener("pointermove", closeWhenPointerLeavesAnchor, true);
+    return () => {
+      document.removeEventListener("pointermove", closeWhenPointerLeavesAnchor, true);
+    };
+  }, [reset, state]);
+
+  useEffect(() => {
     const close = () => reset();
     const closeOnKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {

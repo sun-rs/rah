@@ -348,7 +348,7 @@ function selectedResumedReplayClosedByEvents(
     : null;
 }
 
-function selectedLiveSessionClosedByEvents(
+function selectedSessionClosedByEvents(
   state: SessionSyncState,
   events: readonly RahEvent[],
 ): SessionProjection | null {
@@ -358,10 +358,25 @@ function selectedLiveSessionClosedByEvents(
     : undefined;
   if (
     !selectedProjection ||
-    selectedProjection.summary.session.status !== "running" ||
-    !selectedProjection.summary.session.providerSessionId ||
-    isReadOnlyReplay(selectedProjection.summary)
+    !selectedProjection.summary.session.providerSessionId
   ) {
+    return null;
+  }
+
+  // A stopped replay can be produced by an earlier copy of the same close
+  // event. Keep it selected until the explicit close command (when the user is
+  // deleting a history replay) applies its HTTP result. Without this branch, a
+  // duplicated/replayed session.closed event deletes the projection and makes
+  // an explicitly stopped chat fall back to New Task.
+  if (isReadOnlyReplay(selectedProjection.summary)) {
+    return events.some(
+      (event) =>
+        event.type === "session.closed" && event.sessionId === selectedSessionId,
+    )
+      ? selectedProjection
+      : null;
+  }
+  if (selectedProjection.summary.session.status !== "running") {
     return null;
   }
 
@@ -421,7 +436,7 @@ export function applyProjectionEventsToSyncState(args: {
   const resumedReplay = selectedResumedReplayClosedByEvents(args.state, args.events);
   const stoppedReplay = resumedReplay
     ? null
-    : selectedLiveSessionClosedByEvents(args.state, args.events);
+    : selectedSessionClosedByEvents(args.state, args.events);
   const projections = args.applyEventsToMap(args.state.projections, args.events);
   const sessionTopologyVersion = eventsMayChangeSessionTopology(args.events)
     ? args.state.sessionTopologyVersion + 1

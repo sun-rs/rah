@@ -457,6 +457,11 @@ describe("sidebar layout contract", () => {
       /<span className=\{COMPARISON_LABEL_CLASS\}>Current workspace<\/span>[\s\S]*?<span className=\{COMPARISON_LABEL_CLASS\}>Against<\/span>/,
     );
     assert.match(changesSource, /HEAD · uncommitted changes/);
+    assert.match(changesSource, /No Git repository at this workspace root/);
+    assert.match(
+      changesSource,
+      /: baselineBranch\s*\? `Current workspace snapshot compared directly with \$\{baselineBranch\}`\s*: "Current workspace snapshot"/,
+    );
     assert.match(changesSource, /merge_base/);
     assert.match(changesSource, /Uncommitted changes/);
     assert.match(changesSource, /defaultExpanded/);
@@ -480,6 +485,7 @@ describe("sidebar layout contract", () => {
     const headerSource = readSource("./inspector/InspectorHeader.tsx");
     const resourcesSource = readSource("./inspector/InspectorResourcesPane.tsx");
     const preloadSource = readSource("./session-view-preload.ts");
+    const canvasPreloadSource = readSource("./hooks/useVisibleCanvasSessionPreload.ts");
 
     assert.match(appSource, /preloadSelectedSessionView/);
     assert.match(
@@ -488,7 +494,12 @@ describe("sidebar layout contract", () => {
     );
     assert.match(inspectorSource, /subscribeSessionInspectorPrimary/);
     assert.match(inspectorSource, /subscribeConversationResourceIndex/);
-    assert.match(inspectorSource, /Historical indexing is owned by the selected-session preload pipeline/);
+    assert.match(appSource, /useVisibleCanvasSessionPreload/);
+    assert.match(
+      canvasPreloadSource,
+      /resolveCanvasTargetProjection[\s\S]*?preloadSelectedSessionView\(\{[\s\S]*?sessionId: target\.sessionId/,
+    );
+    assert.match(inspectorSource, /Historical indexing is owned by the session-view preload coordinators/);
     assert.doesNotMatch(inspectorSource, /activeTab !== "outputs" && activeTab !== "sources"/);
     assert.doesNotMatch(inspectorSource, /onLoadConversationTurnDetail/);
     assert.match(indexSource, /dependencies\.readIndex\(args\.sessionId/);
@@ -778,7 +789,10 @@ describe("sidebar layout contract", () => {
       controllerSource,
       /event\.target\.matches\(":focus-visible"\)/,
     );
-    assert.doesNotMatch(controllerSource, /addEventListener\("pointermove"/);
+    assert.match(
+      controllerSource,
+      /document\.addEventListener\("pointermove", closeWhenPointerLeavesAnchor, true\)/,
+    );
     assert.match(controllerSource, /document\.addEventListener\("pointerdown", close, true\)/);
     assert.match(controllerSource, /document\.addEventListener\("focusin", closeOnFocusOutsideSession, true\)/);
     assert.match(controllerSource, /window\.addEventListener\("scroll", close, true\)/);

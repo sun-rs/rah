@@ -23,6 +23,42 @@ export function sameWorkspaceDirectory(a: string | undefined, b: string | undefi
   return left !== null && right !== null && left === right;
 }
 
+export type WorkspaceRemovalSelection = {
+  selectedSessionId: string | null;
+  removesSelectedSession: boolean;
+};
+
+export function workspaceRemovalSelection(
+  state: {
+    selectedSessionId: string | null;
+    projections: ReadonlyMap<string, SessionProjection>;
+  },
+  dir: string,
+): WorkspaceRemovalSelection {
+  const projection = state.selectedSessionId
+    ? state.projections.get(state.selectedSessionId)
+    : undefined;
+  const selectedWorkspaceDir = projection?.summary.session.rootDir || projection?.summary.session.cwd;
+  return {
+    selectedSessionId: state.selectedSessionId,
+    removesSelectedSession: Boolean(
+      selectedWorkspaceDir && sameWorkspaceDirectory(selectedWorkspaceDir, dir),
+    ),
+  };
+}
+
+export function restoreWorkspaceRemovalSelection(
+  selection: WorkspaceRemovalSelection,
+  projections: ReadonlyMap<string, SessionProjection>,
+  fallback: string | null,
+): string | null {
+  return selection.removesSelectedSession &&
+    selection.selectedSessionId &&
+    projections.has(selection.selectedSessionId)
+    ? selection.selectedSessionId
+    : fallback;
+}
+
 export function isHiddenWorkspace(
   hiddenWorkspaceDirs: ReadonlySet<string>,
   dir: string | undefined,

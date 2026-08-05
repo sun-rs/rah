@@ -226,7 +226,10 @@ Timeline 主 identity 来自：
   hot cache 加速。该 cache 仅接受 terminal page，按 Runtime Session/cursor/limit、provider
   `sourceRevision` 与 resident `liveRevision` 精确命中，并受 1 MiB/条、128 条、32 MiB、30 分钟
   LRU 约束。任一 revision 变化即失效；不得把 Conversation 正文放进 localStorage/IndexedDB，
-  也不得把旧热页与新 baseline 合并。
+  也不得把旧热页与新 baseline 合并。当前 tab 只在 `sessionStorage` 保存最后选中 Session 的
+  `{provider, providerSessionId, workspaceDir}` 轻量身份；reload 后先按 live catalog、再按 Recent/Stored
+  解析该身份并请求 canonical page。用户显式回到 New task、Workspace 或 Council 时立即清除此身份，
+  不允许持久化 transcript 或用过期 Runtime Session id 复活页面。
 
 ### 6.2 历史目录必须权威、稳定
 
@@ -262,6 +265,8 @@ Timeline 主 identity 来自：
 
 - **Pinned**：普通 Session 可置顶；支持拖拽排序。
 - **Council**：独立区域，只展示 running Council；Council 不再混入 Workspace session，也没有 pin 能力；支持区域内拖拽排序。
+- Council agent 的最终答复通过 `channel_post(content="...")` 发布；MCP schema 与 bootstrap prompt 都显式声明 `content`，daemon 同时兼容 `text/message` 别名，不能因模型使用常见 `message` 参数而丢失已生成的答复并终止监听。
+- 删除 stopped Council 时，daemon 必须先保留其全部 `providerSessionIds`，再把这些 agent history identity 写入 workbench hidden-session tombstone；删除 Council 不能让原本隔离的 agent 子 Session 回落成普通 Workspace/Recent 行。
 - **Workspaces**：注册的 workspace + 其非 archive sessions。
 
 Chats 的 Council tab 另按 Running / Stopped 分组；左侧 Council 区域只负责当前运行对象。
@@ -321,7 +326,9 @@ Chats 的 Council tab 另按 Running / Stopped 分组；左侧 Council 区域只
 
 后两组有优先级，但不能互相形成 completion barrier。大型 Git workspace 不能阻塞资源索引，资源索引也不能阻塞 Chat。
 
-Inspector tab 只能消费 cache。禁止“用户点击 tab 才开始扫描”，也禁止打开 tab 时创建第二条请求。
+Inspector tab 只能消费 cache。主 Chat 与每个可见 Canvas Session pane 都必须为同一条 `session-view-preload` 建立 owner；否则 Canvas 中已挂载的 Inspector 会永远停在 `Loading changes…`。禁止“用户点击 tab 才开始扫描”，也禁止打开 tab 时创建第二条请求。
+
+历史浏览占位 id 在浏览器刷新后不一定仍存在于 daemon 的 live Session registry。Changes 首选带 Session scope 的接口；只有该接口明确返回 `Unknown session …` 时，才允许复用同一已授权 workspace scope 的 Git 状态作为回退。权限、网络、Git 和其他错误必须原样保留，不能用 workspace 回退掩盖。Outputs / Sources 仍绑定原历史 Session identity，不能因 Changes 回退而丢失资源索引。
 
 ### 8.2 共享 Cache 生命周期
 
@@ -531,10 +538,11 @@ Changed files 权威性收敛包括：
 - assistant response 原生选区浮层、composer 注释 pill 与 `更多详情` 的当前 Chat 适配；内置浏览器控制层不能可靠制造原生 `Selection`，因此浮层状态机与定位采用确定性 DOM/几何单测，视觉位置另做真实页面检查。
 - `SessionInputAnnotation` 的协议校验、FIFO 保存、Codex/Claude/OpenCode transport 序列化与历史可见文本恢复。
 - Sidebar 的视觉数值已从分散 Tailwind、`md:` 与 coarse-pointer 覆盖中移出，统一由 `codex-compact-v1` 提供。2026-08-04 deterministic Chromium 同时量测 Desktop 与 390×844 standalone PWA：40px header、4px New task 顶距、8px 双侧 inset、`16/15/13/14/14px` 字号、30px 行、10px 圆角、2/6px 列表间距、18/16px 图标、28px action 和 0px 标题中心偏差全部逐项相等；PWA 原生 stable scrollbar gutter 已移除，不能再单独挤窄 workspace/session 右侧。
-- Session 信息 tooltip 已从行级临时状态彻底改为 sidebar 级 `idle / pending / open` 状态机与唯一 Portal layer；Session 行只保留稳定 key 和 ARIA 关联，不再持有 timer、open state 或关闭监听。侧栏根节点以 `pointerover/out` 委托跨行 hover，document/window 只负责统一 cancel；每次状态转换携带 epoch，旧 timer 不能覆盖新状态，显示前仍复核原行连接与 `:hover`，MutationObserver 负责锚点被列表刷新移除时同步关闭。纯状态机测试覆盖 pending cancel、旧 epoch、跨行替换、无效 anchor 与 keyboard focus；真实 Chromium 覆盖跨行始终只有 1 个、移入 Chat 归零和点击后禁止迟到重开。Desktop workspace 组间距保持 6px，同工作区 session 行距保持 2px。
+- Session 信息 tooltip 已从行级临时状态彻底改为 sidebar 级 `idle / pending / open` 状态机与唯一 Portal layer；Session 行只保留稳定 key 和 ARIA 关联，不再持有 timer、open state 或关闭监听。侧栏根节点以 `pointerover/out` 委托跨行 hover，document/window 统一 cancel；pointer tooltip 打开或等待时另由 capture `pointermove + elementFromPoint` 复核指针仍命中某个 Session 行，离开全部行时立即关闭，A→B 跨行切换仍只交给状态机，避免 Portal/浏览器漏发 delegated leave 后残留或与跨行 enter 竞争。每次状态转换携带 epoch，旧 timer 不能覆盖新状态，显示前仍复核原行连接与 `:hover`，MutationObserver 负责锚点被列表刷新移除时同步关闭。纯状态机测试覆盖 pending cancel、旧 epoch、跨行替换、无效 anchor 与 keyboard focus；真实 Chromium 覆盖跨行始终只有 1 个、移入 Chat 归零和点击后禁止迟到重开。Desktop workspace 组间距保持 6px，同工作区 session 行距保持 2px。
 - history resume 完成不再无条件写 `selectedSessionId`；A 启动期间切到 B 后，A 的 projection、输入和控制刷新继续在后台收敛而不抢焦点。annotation 也已补齐 implicit resume forwarding。
-- Session Composer 的 model / effort / optionValues 现在以 `provider + providerSessionId` 为稳定身份写入有界浏览器配置（最多 256 项），刷新、Stop 与 Resume 都读取同一项；不再依赖只在 React 内存中的 `resumeModelDrafts`，也不会回退到 catalog 最后一档 effort。Plan 选中态使用资源蓝文字和更高字重，保持透明背景、无阴影的 ghost 控件结构；PWA 使用同一状态的加粗 `P`。
-- stopped Chat 的生命周期已改为原地降级：显式 Stop 与 `session.closed` event 都保留当前 resident feed/conversation/turn directory，清除 live lease 与 runtime-only 能力，再由 catalog refresh 校准 metadata；用户仍停留在 Chat。若无输入激活正在进行时又按 Send，输入加入同一 Resume 并只发送一次。composer 在 resume 配置、starting 与 live 配置之间保持同一控件树，默认 effort、权限和 Plan 不闪退；需要先显式 Resume/取得控制权的分支也直接展示这三项，不再折叠进设置弹层。Sidebar 的 provider 标识只给 Claude/OpenCode，Codex 保持纯标题。
+- Session Composer 的 model / effort / optionValues 现在以 `provider + providerSessionId` 为稳定身份写入有界浏览器配置（最多 256 项），刷新、Stop 与 Resume 都读取同一项；New task / Canvas New 在 daemon 创建真实 Session id 的同一回调就把启动 draft 绑定到该稳定身份，不再等用户二次点击。它不依赖只在 React 内存中的 `resumeModelDrafts`，也不会回退到 catalog 最后一档 effort。Plan 选中态使用资源蓝文字和更高字重，保持透明背景、无阴影的 ghost 控件结构；PWA 使用同一状态的加粗 `P`。
+- stopped Chat 的生命周期已改为原地降级：显式 Stop 与 `session.closed` event 都保留当前 resident feed/conversation/turn directory，清除 live lease 与 runtime-only 能力，再由 catalog refresh 校准 metadata；用户仍停留在 Chat。Close HTTP 与 event 竞态时，命令持有启动前 projection 作为仅限当前仍选中对象的 fallback；同一 `session.closed` 经实时流、恢复或重放重复到达时必须幂等保留该 replay，不能二次删除后跳回 New task。若无输入激活正在进行时又按 Send，输入加入同一 Resume 并只发送一次。composer 在 resume 配置、starting 与 live 配置之间保持同一控件树，默认 effort、权限和 Plan 不闪退；需要先显式 Resume/取得控制权的分支也直接展示这三项，不再折叠进设置弹层。Sidebar 的 provider 标识只给 Claude/OpenCode，Codex 保持纯标题。
+- Canvas remembered target 只把成功解析到当前 projection 的 id 交给 visible-session recovery。缺少稳定 provider ref 的旧 Runtime Session id 在初始 catalog 到达后直接清为空 pane；带 ref 的目标按 provider identity 恢复。未知 id 绝不能进入 conversation loader、Inspector 或全局错误提示；provider 已删除等恢复失败只归属该 pane 的 `Session unavailable` 状态，后台 Promise 即使在用户已切到 Council/Chat 后结束，也不能把错误泄漏到全局 notice。
 - Active task summary 已收敛为 32px 进度胶囊；1280×720 真实 working session 实测只显示 `3/5 · 当前步骤`，无固定标题、状态或箭头，Desktop 点击后不获得 focus、不会锁住浮层。详情行在存在本轮权威 artifact 时固定以可点击的 `Changed N files` 开头，不存在时完全省略；当前真实 running session 的 DOM 顺序为 `Changed 26 files`、`Used 11 tools`、`Run 70 commands`、`Read 58 files`。
 - PWA 本轮文件入口已与 Inspector panel state 解耦：390×844 standalone gate 使用真实冻结 artifact，依次验证“回复文件行 → 临时 viewer → 关闭 → Chat”和“共享 turn Review → 关闭 → Chat”，两条路径结束后可见 Inspector 数量都为 0。Wide Desktop 实测只挂载 1 份 viewer，关闭后保留右侧 Inspector，保持鼠标大屏工作流。
 - 蓝色本地文件链接和行内文件路径已恢复原生文本选择；真实会话 27 个文件按钮的计算样式均为 `user-select: text`，普通点击仍能打开 Inspector，选区相交时的点击由确定性单测锁定为不打开。

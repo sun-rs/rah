@@ -463,6 +463,53 @@ describe("session store recovery", () => {
     );
   });
 
+  test("keeps the selected stopped replay across duplicate close delivery", () => {
+    const live = summary({ id: "live-stop", providerSessionId: "thread-stop" });
+    const projection = createEmptySessionProjection(live);
+    projection.feed = [
+      {
+        key: "assistant:visible-before-stop",
+        kind: "timeline",
+        item: { kind: "assistant_message", text: "keep this transcript" },
+        ts: "2026-05-10T00:00:00.000Z",
+      },
+    ];
+    const baseState = {
+      projections: new Map([["live-stop", projection]]),
+      unreadSessionIds: new Set<string>(),
+      selectedSessionId: "live-stop",
+      workspaceVisibilityVersion: 0,
+      sessionTopologyVersion: 0,
+      eventStreamOpenRevision: 0,
+      pendingSessionAction: null,
+      pendingSessionTransition: null,
+      error: null,
+    };
+
+    const first = applyProjectionEventsToSyncState({
+      state: baseState,
+      events: [event(10, { type: "session.closed", payload: {} }, "live-stop")],
+      applyEventsToMap,
+    });
+    const duplicate = applyProjectionEventsToSyncState({
+      state: {
+        ...baseState,
+        projections: first.projections,
+        selectedSessionId: first.selectedSessionId,
+        sessionTopologyVersion: first.sessionTopologyVersion,
+      },
+      events: [event(10, { type: "session.closed", payload: {} }, "live-stop")],
+      applyEventsToMap,
+    });
+
+    assert.equal(duplicate.selectedSessionId, "live-stop");
+    assert.equal(duplicate.projections.get("live-stop")?.summary.session.status, "stopped");
+    assert.deepEqual(
+      duplicate.projections.get("live-stop")?.feed.map((entry) => entry.key),
+      ["assistant:visible-before-stop"],
+    );
+  });
+
   test("moves selected history projection to live session when resume live events arrive", () => {
     const history = summary({
       id: "history",

@@ -8,6 +8,7 @@ import {
   rememberSessionModelPreference,
   sessionModelPreferenceKey,
 } from "./session-model-preferences";
+import { startSessionAndRememberModel } from "./session-start-model-preferences";
 
 function memoryStorage() {
   const values = new Map<string, string>();
@@ -107,8 +108,30 @@ describe("session model preferences", () => {
     );
   });
 
+  test("remembers a new Session model before and after provider identity binding", async () => {
+    const remembered: Array<[string, unknown]> = [];
+    const sessionId = await startSessionAndRememberModel(
+      async (options) => {
+        options?.onSessionCreated?.("pending-session");
+        return "live-session";
+      },
+      (id, draft) => remembered.push([id, draft]),
+      { model: "gpt-5.6-sol", reasoningId: "medium" },
+    );
+
+    assert.equal(sessionId, "live-session");
+    assert.deepEqual(remembered, [
+      ["pending-session", { modelId: "gpt-5.6-sol", reasoningId: "medium" }],
+      ["live-session", { modelId: "gpt-5.6-sol", reasoningId: "medium" }],
+    ]);
+  });
+
   test("wires persisted preferences into every Session composer path", () => {
     const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    const startPreferenceSource = readFileSync(
+      new URL("./session-start-model-preferences.ts", import.meta.url),
+      "utf8",
+    );
 
     assert.match(appSource, /const modelDraftForSession = useCallback/);
     assert.match(appSource, /readSessionModelPreference\(/);
@@ -116,5 +139,8 @@ describe("session model preferences", () => {
     assert.match(appSource, /resumeModelDraft=\{modelDraftForSession\(summary\.session\.id\)\}/);
     assert.match(appSource, /onResumeModelDraftChange=\{updateResumeModelDraft\}/);
     assert.match(appSource, /updateResumeModelDraft\(selectedSummary\.session\.id, nextDraft\)/);
+    assert.match(appSource, /const startSessionWithRememberedModel = useCallback/);
+    assert.match(startPreferenceSource, /rememberStartedModel\(sessionId\)/);
+    assert.equal((appSource.match(/await startSessionWithRememberedModel\(/g) ?? []).length, 2);
   });
 });

@@ -2,7 +2,6 @@ import {
   clearLastHistorySelection,
   writeLastHistorySelection,
 } from "./history-selection";
-import { isReadOnlyReplay } from "./session-capabilities";
 import type { SessionProjection } from "./types";
 
 type HistorySelectionSyncState = {
@@ -24,7 +23,7 @@ export function syncHistorySelectionSubscription(args: {
     return;
   }
 
-  if (selectedSummary.session.providerSessionId && isReadOnlyReplay(selectedSummary)) {
+  if (selectedSummary.session.providerSessionId) {
     const historyWorkspaceDir =
       selectedSummary.session.rootDir || selectedSummary.session.cwd || args.state.workspaceDir;
     const nextKey = JSON.stringify({

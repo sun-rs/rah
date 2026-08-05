@@ -35,6 +35,9 @@ test("shares one Changes/Files request pair and publishes one complete snapshot"
       await new Promise((resolve) => setTimeout(resolve, 5));
       return status();
     },
+    readWorkspaceGitStatus: async () => {
+      throw new Error("unexpected workspace fallback");
+    },
     listDirectory: async () => {
       directoryRequests += 1;
       return {
@@ -83,6 +86,9 @@ test("keeps partial stage failures isolated instead of blocking resource preload
       readGitStatus: async () => {
         throw new Error("git unavailable");
       },
+      readWorkspaceGitStatus: async () => {
+        throw new Error("unexpected workspace fallback");
+      },
       listDirectory: async () => ({
         path: "/workspace",
         entries: [{ name: "src", type: "directory" }],
@@ -106,6 +112,9 @@ test("refresh failures preserve the last good Changes and Files snapshot", async
         throw new Error("git refresh unavailable");
       }
       return status();
+    },
+    readWorkspaceGitStatus: async () => {
+      throw new Error("unexpected workspace fallback");
     },
     listDirectory: async () => {
       if (failRefresh) {
@@ -158,6 +167,9 @@ test("a cancelled view stops waiting without cancelling the shared stage", async
       await gitGate;
       return status();
     },
+    readWorkspaceGitStatus: async () => {
+      throw new Error("unexpected workspace fallback");
+    },
     listDirectory: async () => ({
       path: "/workspace",
       entries: [],
@@ -182,5 +194,34 @@ test("a cancelled view stops waiting without cancelling the shared stage", async
 
   assert.equal(gitRequests, 1);
   assert.equal(result.gitStatus?.branch, "main");
+  resetSessionInspectorPrimaryCacheForTests();
+});
+
+test("falls back to workspace Changes only for a historical session missing from the daemon", async () => {
+  resetSessionInspectorPrimaryCacheForTests();
+  let workspaceRequests = 0;
+  const snapshot = await loadCachedSessionInspectorPrimary({
+    sessionId: "history:codex:thread-1",
+    workspaceRoot: "/workspace",
+    dependencies: {
+      readGitStatus: async () => {
+        throw new Error("Unknown session history:codex:thread-1");
+      },
+      readWorkspaceGitStatus: async (workspaceRoot) => {
+        workspaceRequests += 1;
+        assert.equal(workspaceRoot, "/workspace");
+        return status();
+      },
+      listDirectory: async () => ({
+        path: "/workspace",
+        entries: [],
+      }),
+    },
+  });
+
+  assert.equal(workspaceRequests, 1);
+  assert.equal(snapshot.complete, true);
+  assert.equal(snapshot.gitStatus?.branch, "main");
+  assert.equal(snapshot.gitStatusError, null);
   resetSessionInspectorPrimaryCacheForTests();
 });

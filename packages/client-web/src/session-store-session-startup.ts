@@ -49,6 +49,10 @@ import {
   createPendingSessionStartupConfiguration,
   type PendingSessionStartupConfiguration,
 } from "./session-startup-configuration";
+import type {
+  ResumeStoredSessionOptions,
+  StoredHistoryActivationOptions,
+} from "./session-store-options";
 import {
   appendOptimisticUserMessage,
   initialConversationSyncState,
@@ -141,14 +145,7 @@ type SessionStartupDeps = {
     },
   ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
-  resumeStoredSession: (
-    ref: StoredSessionRef,
-    options?: {
-      preferStoredReplay?: boolean;
-      historyReplay?: "include" | "skip";
-      confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
-    },
-  ) => Promise<void>;
+  resumeStoredSession: (ref: StoredSessionRef, options?: ResumeStoredSessionOptions) => Promise<void>;
   applySessionsResponse: (
     state: Pick<
       SessionStartupState,
@@ -718,7 +715,7 @@ export async function startScenarioCommand(
 export async function activateHistorySessionCommand(
   deps: SessionStartupDeps,
   ref: StoredSessionRef,
-  options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
+  options?: StoredHistoryActivationOptions,
 ) {
   const state = deps.get();
   const existingRunning = findDaemonRunningSessionForStoredRef(state.projections, ref);
@@ -740,17 +737,14 @@ export async function activateHistorySessionCommand(
     ...(options?.confirmCreateMissingWorkspace
       ? { confirmCreateMissingWorkspace: options.confirmCreateMissingWorkspace }
       : {}),
+    ...(options?.suppressGlobalError ? { suppressGlobalError: true } : {}),
   });
 }
 
 export async function resumeStoredSessionCommand(
   deps: SessionStartupDeps,
   ref: StoredSessionRef,
-  options?: {
-    preferStoredReplay?: boolean;
-    historyReplay?: "include" | "skip";
-    confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
-  },
+  options?: ResumeStoredSessionOptions,
 ) {
   const preferStoredReplay = options?.preferStoredReplay ?? true;
   const provisionalSessionId = preferStoredReplay
@@ -894,11 +888,17 @@ export async function resumeStoredSessionCommand(
     }
     deps.set((state) => {
       if (!provisionalSessionId) {
-        return { pendingSessionTransition: null, error: message };
+        return {
+          pendingSessionTransition: null,
+          ...(options?.suppressGlobalError ? {} : { error: message }),
+        };
       }
       const current = state.projections.get(provisionalSessionId);
       if (!current) {
-        return { pendingSessionTransition: null, error: message };
+        return {
+          pendingSessionTransition: null,
+          ...(options?.suppressGlobalError ? {} : { error: message }),
+        };
       }
       const next = new Map(state.projections);
       next.set(provisionalSessionId, {
@@ -910,7 +910,11 @@ export async function resumeStoredSessionCommand(
           lastError: message,
         },
       });
-      return { projections: next, pendingSessionTransition: null, error: message };
+      return {
+        projections: next,
+        pendingSessionTransition: null,
+        ...(options?.suppressGlobalError ? {} : { error: message }),
+      };
     });
     throw error;
   }

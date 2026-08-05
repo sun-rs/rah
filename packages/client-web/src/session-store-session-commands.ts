@@ -156,7 +156,9 @@ export async function closeSessionCommand(args: {
     await api.closeSession(args.sessionId, {
       clientId: args.get().clientId,
     });
-    args.set((state) => applyClosedSessionState(state, args.sessionId, summary));
+    args.set((state) =>
+      applyClosedSessionState(state, args.sessionId, summary, projection),
+    );
     void args.refreshWorkbenchState().catch((error) => {
       console.warn("[rah] stopped session metadata refresh failed", {
         sessionId: args.sessionId,
