@@ -90,6 +90,76 @@ function joinClassNames(...values: Array<string | false | null | undefined>): st
   return values.filter(Boolean).join(" ");
 }
 
+function ComposerModelLabel(props: {
+  modelLabel: string;
+  reasoningLabel: string | null;
+  marqueeOnOverflow: boolean;
+  className?: string;
+}) {
+  const viewportRef = useRef<HTMLSpanElement | null>(null);
+  const copyRef = useRef<HTMLSpanElement | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!props.marqueeOnOverflow) {
+      setOverflowing(false);
+      return;
+    }
+    const viewport = viewportRef.current;
+    const copy = copyRef.current;
+    if (!viewport || !copy) return;
+    const measure = () => {
+      setOverflowing(
+        Math.ceil(copy.getBoundingClientRect().width) >
+          Math.floor(viewport.getBoundingClientRect().width) + 1,
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(copy);
+    return () => observer.disconnect();
+  }, [props.marqueeOnOverflow, props.modelLabel, props.reasoningLabel]);
+
+  const renderCopy = (duplicate = false) => (
+    <span
+      ref={duplicate ? undefined : copyRef}
+      className="rah-composer-model-label-copy inline-flex shrink-0 items-center gap-1"
+      aria-hidden={duplicate ? "true" : undefined}
+    >
+      <span>{props.modelLabel}</span>
+      {props.reasoningLabel ? (
+        <span className="text-[var(--app-hint)]">{props.reasoningLabel}</span>
+      ) : null}
+    </span>
+  );
+
+  return (
+    <span
+      ref={viewportRef}
+      className={`rah-composer-model-label min-w-0 flex-1 text-left ${
+        props.marqueeOnOverflow ? "rah-marquee" : "overflow-hidden whitespace-nowrap"
+      } ${props.className ?? ""}`}
+      data-marquee={props.marqueeOnOverflow && overflowing ? "true" : "false"}
+    >
+      <span
+        className={
+          props.marqueeOnOverflow
+            ? "rah-marquee-track"
+            : "inline-flex min-w-max items-center"
+        }
+      >
+        {renderCopy()}
+        {props.marqueeOnOverflow && overflowing ? renderCopy(true) : null}
+      </span>
+    </span>
+  );
+}
+
 export function isManualSupplementModel(
   catalog: ProviderModelCatalog | null | undefined,
   modelId: string,
@@ -485,6 +555,7 @@ export function SessionModelControls(props: {
   compact?: boolean;
   iconOnly?: boolean;
   mobileIconOnly?: boolean;
+  marqueeOnOverflow?: boolean;
   appearance?: "default" | "composer";
   allowProviderDefault?: boolean;
   onOpen?: (() => void) | undefined;
@@ -656,7 +727,7 @@ export function SessionModelControls(props: {
 
   const pillBase =
     "inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
-  const composerTriggerClass = `icon-click-feedback inline-flex h-10 md:h-8 lg:h-7 min-w-0 shrink items-center gap-1 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
+  const composerTriggerClass = `rah-composer-model-trigger icon-click-feedback inline-flex h-10 md:h-8 lg:h-7 min-w-0 shrink items-center gap-1 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
     props.mobileIconOnly
       ? "w-10 justify-center px-0 min-[700px]:w-auto min-[700px]:max-w-[11rem] min-[700px]:justify-start min-[700px]:px-1.5 lg:w-auto"
       : "max-w-[13rem] justify-start px-2 md:px-1.5"
@@ -703,16 +774,12 @@ export function SessionModelControls(props: {
           />
         ) : null}
         {props.iconOnly ? null : composerAppearance ? (
-          <span
-            className={`flex min-w-0 items-center gap-1 ${
-              props.mobileIconOnly ? "hidden min-[700px]:flex" : ""
-            }`}
-          >
-            <span className="min-w-0 truncate">{modelLabel}</span>
-            {reasoningLabel ? (
-              <span className="shrink-0 text-[var(--app-hint)]">{reasoningLabel}</span>
-            ) : null}
-          </span>
+          <ComposerModelLabel
+            modelLabel={modelLabel}
+            reasoningLabel={reasoningLabel}
+            marqueeOnOverflow={props.marqueeOnOverflow ?? true}
+            className={props.mobileIconOnly ? "hidden min-[700px]:flex" : ""}
+          />
         ) : (
           <span
             className={`min-w-0 truncate ${

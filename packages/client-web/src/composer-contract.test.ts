@@ -420,7 +420,7 @@ describe("composer contract", () => {
     assert.doesNotMatch(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /absolute|bottom-/);
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingBottom,
-      "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
+      "max(calc(env(safe-area-inset-bottom, 0px) + 0.75rem), calc(var(--workbench-keyboard-inset, 0px) + 0.5rem))",
     );
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingLeft,
@@ -449,7 +449,7 @@ describe("composer contract", () => {
     );
   });
 
-  test("keeps provider, mode, plan, and model controls independently visible", () => {
+  test("keeps provider, mode, capability-driven plan, and model controls independently visible", () => {
     const source = readSource(
       "./components/workbench/panes/NewSessionComposer.tsx",
     );
@@ -473,14 +473,31 @@ describe("composer contract", () => {
     assert.match(modeSource, /data-composer-control="permissions"/);
     assert.match(modeSource, /data-composer-control="plan"/);
     assert.match(modeSource, /data-plan-active={props\.planModeEnabled \? "true" : "false"\}/);
+    assert.match(modeSource, /\{props\.planModeAvailable \? \(/);
+    assert.doesNotMatch(modeSource, /props\.planModeAvailable \|\| composer/);
+    assert.match(modeSource, /const SelectedAccessIcon = accessModeIcon\(selectedAccessMode\)/);
+    assert.match(modeSource, /isPlanningAccessMode/);
+    assert.match(modeSource, /rah-composer-permission-trigger/);
+    assert.match(modeSource, /rah-composer-control-label rah-composer-permission-label/);
+    assert.match(modeSource, /rah-composer-control-label rah-composer-plan-label/);
+    assert.match(modeSource, /rah-composer-plan-compact-glyph/);
     assert.match(modeSource, /border border-transparent bg-transparent/);
     assert.match(modelSource, /appearance\?: "default" \| "composer"/);
+    assert.match(modelSource, /marqueeOnOverflow\?: boolean/);
+    assert.match(modelSource, /function ComposerModelLabel/);
+    assert.match(modelSource, /new ResizeObserver\(measure\)/);
+    assert.match(modelSource, /marqueeOnOverflow=\{props\.marqueeOnOverflow \?\? true\}/);
+    assert.match(
+      modelSource,
+      /data-marquee=\{props\.marqueeOnOverflow && overflowing \? "true" : "false"\}/,
+    );
     assert.match(modelSource, /data-composer-control=\{composerAppearance \? "model"/);
     assert.match(modelSource, /border border-transparent bg-transparent/);
     assert.match(providerSource, /max-w-none[\s\S]*sm:max-w-\[24rem\]/);
     assert.doesNotMatch(providerSource, /selectedOptionIndex/);
     assert.doesNotMatch(providerSource, /translateX\(/);
-    assert.match(providerSource, /grid h-9[\s\S]*gap-0 p-0/);
+    assert.match(providerSource, /touch \? "h-12" : "h-9"/);
+    assert.match(providerSource, /data-touch=\{touch \? "true" : "false"\}/);
     assert.match(providerSource, /hidden whitespace-nowrap sm:inline-block/);
     assert.match(providerSource, /data-provider-selector="module"/);
     assert.match(providerSource, /provider-choice-option/);
@@ -513,32 +530,20 @@ describe("composer contract", () => {
     );
     assert.match(
       styles,
+      /\.provider-choice-module\[data-touch="true"\] \.provider-choice-option::after \{[\s\S]*width: 1\.5rem;/,
+    );
+    assert.match(
+      styles,
       /@media \(min-width: 43\.75rem\)[\s\S]*\.provider-choice-option-with-label::after[\s\S]*display: none;/,
     );
     assert.match(styles, /\.provider-choice-option:focus-visible[\s\S]*outline: none/);
   });
 
   test("keeps live working controls read only and history resume controls editable", () => {
-    const source = readSource("./components/SessionControlPopover.tsx");
     const selectedPaneSource = readSource(
       "./components/workbench/panes/WorkbenchSelectedPane.tsx",
     );
 
-    assert.match(source, /"Working configuration"/);
-    assert.match(source, /"Session control"/);
-    assert.match(source, /locked\s*\? "View working configuration"/);
-    assert.match(
-      source,
-      /disabled=\{locked \|\| props\.disabled \|\| \(props\.modeDisabled \?\? false\)\}/,
-    );
-    assert.match(
-      source,
-      /disabled=\{locked \|\| props\.disabled \|\| \(props\.modelDisabled \?\? false\)\}/,
-    );
-    assert.doesNotMatch(
-      source,
-      /Session controls are locked while this session is busy/,
-    );
     assert.match(
       selectedPaneSource,
       /const resumeSessionControlPending =\s*props\.resumeModePending \|\| props\.sendPending \|\| composerActionPending;/,
@@ -566,10 +571,6 @@ describe("composer contract", () => {
       /selectedModelId=\{[\s\S]*useResumeConfiguration[\s\S]*props\.selectedResumeModelId/,
     );
     assert.match(
-      source,
-      /props\.showModel && Boolean\(props\.modelCatalog \|\| props\.modelCatalogLoading \|\| props\.onOpen\)/,
-    );
-    assert.match(
       selectedPaneSource,
       /const useResumeConfiguration =[\s\S]*resumeOnSend \|\|[\s\S]*props\.resumeModePending/,
     );
@@ -590,7 +591,7 @@ describe("composer contract", () => {
     assert.doesNotMatch(selectedPaneSource, /lockedMessage=/);
   });
 
-  test("moves workspace selection below the composer while keeping agent controls unified", () => {
+  test("uses one width-responsive composer rail above the workspace accessory", () => {
     const appSource = readSource("./App.tsx");
     const source = readSource(
       "./components/workbench/panes/NewSessionComposer.tsx",
@@ -616,6 +617,10 @@ describe("composer contract", () => {
     assert.ok(workspaceControl > workspaceStrip);
     assert.match(source, /EMPTY_STATE_COMPOSER_LAYOUT\.workspaceButtonClassName/);
     assert.match(source, /rah-new-task-composer-stack/);
+    assert.match(
+      styles,
+      /\.rah-new-task-composer-stack > \.rah-unified-composer \{[\s\S]*z-index: 2;/,
+    );
     assert.match(styles, /\.rah-new-task-workspace-strip[\s\S]*margin: -0\.5rem 0\.75rem 0/);
     assert.match(styles, /\.rah-new-task-workspace-strip[\s\S]*height: 2\.5rem/);
     assert.doesNotMatch(source, /iconOnlyWorkspace|controlsRowWidth/);
@@ -632,9 +637,35 @@ describe("composer contract", () => {
     assert.match(source, /<SessionModelControls/);
     assert.doesNotMatch(source, /mobileIconOnly=\{isPwaDisplayMode\}/);
     assert.doesNotMatch(source, /iconOnly=\{isPwaDisplayMode\}/);
+    assert.doesNotMatch(source, /marqueeOnOverflow=\{isPwaDisplayMode\}/);
+    assert.match(source, /touch=\{isPwaDisplayMode\}/);
     assert.match(
       styles,
-      /data-surface="new-task"[\s\S]*\.rah-composer-toolbar[\s\S]*display: grid/,
+      /\.rah-unified-composer \{[\s\S]*container: rah-composer \/ inline-size;/,
+    );
+    assert.match(
+      styles,
+      /\.rah-composer-toolbar-trailing \{[\s\S]*flex: 0 1 auto;[\s\S]*margin-inline-start: auto;/,
+    );
+    assert.match(
+      styles,
+      /@container rah-composer \(max-width: 34rem\)[\s\S]*\.rah-composer-control-label \{[\s\S]*display: none;/,
+    );
+    assert.match(
+      styles,
+      /@container rah-composer \(max-width: 34rem\)[\s\S]*\.rah-composer-permission-trigger,[\s\S]*\.rah-composer-plan-toggle \{[\s\S]*justify-content: center;/,
+    );
+    assert.match(
+      styles,
+      /@container rah-composer \(max-width: 34rem\)[\s\S]*\.rah-composer-plan-icon \{[\s\S]*display: none;[\s\S]*\.rah-composer-plan-compact-glyph \{[\s\S]*display: inline-flex;/,
+    );
+    assert.match(
+      styles,
+      /@container rah-composer \(max-width: 34rem\)[\s\S]*rah-new-task-model-control[\s\S]*flex-basis: 8\.5rem;/,
+    );
+    assert.doesNotMatch(
+      styles,
+      /data-pwa="true"[\s\S]{0,200}rah-new-task-model-control/,
     );
     assert.match(styles, /\.rah-marquee\s*\{/);
     assert.doesNotMatch(styles, /rah-new-session-workspace-trigger/);
@@ -802,7 +833,11 @@ describe("composer contract", () => {
     );
     assert.match(
       styles,
-      /data-surface="chat"\]\[data-pwa="true"\]:not\(:focus-within\):not\(:has\(\[data-composer-control\]\[aria-expanded="true"\]\)\)[\s\S]*grid-template-rows: 2\.5rem/,
+      /data-surface="chat"\]\[data-pwa="true"\]:not\(:focus-within\):not\(:has\(\[data-composer-control\]\[aria-expanded="true"\]\)\)[\s\S]*grid-template-rows: 2\.25rem;[\s\S]*padding: 0\.375rem 0\.625rem/,
+    );
+    assert.match(
+      styles,
+      /:is\(\.rah-chat-composer-attach, \.rah-chat-composer-primary\)::after \{[\s\S]*inset: -0\.25rem/,
     );
     assert.match(styles, /\.rah-chat-composer-secondary/);
     assert.match(styles, /\.rah-composer-toolbar-leading/);
@@ -813,6 +848,15 @@ describe("composer contract", () => {
     assert.doesNotMatch(styles, /data-surface="new-task"[^\n]*:focus-within/);
     assert.match(selectedPaneSource, /rah-chat-composer-input/);
     assert.match(selectedPaneSource, /rah-chat-composer-context/);
+    assert.match(
+      selectedPaneSource,
+      /onPointerDownCapture=\{focusPwaComposerFromPointer\}/,
+    );
+    assert.match(selectedPaneSource, /textarea\.focus\(\{ preventScroll: true \}\)/);
+    assert.match(
+      selectedPaneSource,
+      /window\.addEventListener\("pointerdown", blurComposerOutside, true\)/,
+    );
   });
 
   test("allows native TUI Chat composer submission while the provider prompt is dirty", () => {

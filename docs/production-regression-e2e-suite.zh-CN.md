@@ -71,11 +71,11 @@
 | `WORKSPACE-PROJECTION-001` | Session 可见性投影 | Session 只归属最具体的已注册工作区；移除工作区后同一渲染周期内消失，不依赖刷新 |
 | `WORKSPACE-EMPTY-RECOVERY-001` | 空列表恢复 | Workspaces 为 0 时添加入口仍可用，添加后恰好出现一行且刷新后保留 |
 | `WORKSPACE-NEW-TASK-001` | 工作区新建联动 | 点击工作区行的新建按钮后，New task composer 精确选择该工作区 |
-| `PWA-COMPOSER-WORKSPACE-PILL-001` | PWA workspace accessory | workspace selector 为 40px 附属条，顶部 8px 被 composer 覆盖、实际露出 32px，内部按钮 28px；超过 18 字符才跑马，不与 agent 配置或发送按钮重叠，不产生横向溢出；provider 为 36px 无边框单层条，PWA 以 600 字重和蓝色 `20×2px` 图标标记唯一当前项，Desktop 使用文字等宽蓝线，整组 hover 移开即隐藏 |
+| `PWA-COMPOSER-WORKSPACE-PILL-001` | PWA workspace accessory | workspace selector 为 40px 附属条，顶部 8px 被 composer 覆盖、实际露出 32px，内部按钮 28px；超过 18 字符才跑马，不与 agent 配置或发送按钮重叠，不产生横向溢出；provider 为 36px 无边框单层条，PWA 以 600 字重和蓝色 `24×2px` 图标标记唯一当前项，Desktop 使用文字等宽蓝线，整组 hover 移开即隐藏 |
 | `PWA-CONVERSATION-DENSITY-001` | PWA 对话阅读密度 | Session/Council 正文读取 12–20px Appearance token；隐藏动作不占行，commentary 使用无卡片白底正文 |
 | `PWA-GLOBAL-NOTICE-001` | 全局恢复提示 | PWA 锚定在顶部安全区控制行下方，390×844 下不超过 72px且不覆盖 composer；与 Wide Desktop 共享低对比橙色混色、无投影 surface，四角不被宿主裁切；Session Chat/Council/Canvas 共用 40px 单行标题栏且提示始终位于分割线以下；Wide Desktop 为最大 24rem 的紧凑横向 toast，右/下边距各 16px且不受底部浮动锚点影响 |
 | `PWA-TURN-CHANGE-PREVIEW-001` | PWA 本轮文件查看 | 回复卡片的单文件入口使用独立临时查看器，关闭后直接回到 Chat；回复审查与 Task 明细的 `Changed files` 共用不修改 Inspector 状态的 Review 路径，任何关闭动作都不能暴露全屏 Inspector；Wide Desktop 仍保留 Inspector 工作流 |
-| `COMPOSER-UNIFIED-SURFACE-001` | 统一 composer surface | New task 与 Chat 共用白底、细边框、24px 圆角、轻阴影和同一 ghost toolbar；能力 catalog 无需点击即可加载，权限/Plan/完整模型与默认 effort 立即可见；Plan 激活态清晰；Session 的 model/effort 按 provider session 身份跨刷新、Stop、Resume 保存；stopped -> starting -> live 全程三个控制都保持挂载；`+` 固定最左，模型紧贴 Send/Stop；provider 当前项无灰块；Chat PWA 聚焦或菜单打开时保持展开；New task 窄屏自动双行且 workspace 位于 surface 外；Stop/Send 共用一个黑白主动作槽 |
+| `COMPOSER-UNIFIED-SURFACE-001` | 统一 composer surface | New task 与 Chat 共用白底、细边框、24px 圆角、轻阴影和同一 ghost toolbar；能力 catalog 无需点击即可加载，权限/Plan/完整模型与默认 effort 立即可见；Plan 激活态清晰；Session 的 model/effort 按 provider session 身份跨刷新、Stop、Resume 保存；stopped -> starting -> live 全程三个控制都保持挂载；`+` 固定最左，模型紧贴 Send/Stop；provider 当前项无灰块；Chat PWA 聚焦或菜单打开时保持展开；New task 窄屏复用同一响应式单行 rail、按宽度压缩标签且 workspace 位于 surface 外；Stop/Send 共用一个黑白主动作槽 |
 | `RESPONSE-ANNOTATION-001` | 回复选区注释 | 单条 assistant response 选区显示操作浮层；注释 pill 可预览，更多详情补可编辑 draft，协议/queue/provider/history 全链路不泄漏 transport envelope |
 | `DESKTOP-CONVERSATION-DENSITY-001` | Desktop 对话阅读密度 | 默认正文使用 14/22、约 430 字重、代码 12px；Appearance 只调 Session/Council 正文且范围为 12–20px，代码自动按 11–16px 联动；用户 Copy 悬浮显示但不占永久空白行，commentary 使用无卡片白底正文 |
 | `CHAT-MARKDOWN-IMAGES-001` | 回复图片缩略图组 | 连续纯图片段落以 12px gap 并排并自动换行；本地缩略图最高 160px、远程最高 200px，点击预览保持可用 |
@@ -104,13 +104,13 @@ npm run test:p0:browser
 2. `Codex Desktop` 与 `codex_work_desktop` 创建的用户根会话都可见；显式 internal subagent 仍被排除。
 3. 父工作区拥有嵌套 session；显式添加子工作区后，嵌套 session 原子地迁移到最具体工作区。
 4. 工作区行 `New task` 精确选择该工作区。
-5. 在 `390 x 844`、`navigator.standalone=true` 的 PWA 上下文中，New task workspace control 位于 composer 外部，短名称不重复滚动、超过 18 字符才跑马；permission/Plan/完整 model/effort 无需点击即可显示，Plan 激活时有蓝色文字、轻底与 2px 标记，窄屏配置自动双行且没有页面横向溢出，聚焦前后 surface 几何与强调不变。该上下文同时制造 generation mismatch，断言顶部提示为低对比橙色混色、无投影且不遮挡 New task；Council、Canvas、Session Chat 共用 40px 单行标题栏。
+5. 在 `390 x 844`、`navigator.standalone=true` 的 PWA 上下文中，New task workspace control 位于 composer 外部，短名称不重复滚动、超过 18 字符才跑马；permission/Plan/model/effort 无需点击即可访问，Plan 激活时使用蓝色文字与加粗 `P`、保持透明无阴影；窄屏继续复用单行响应式 rail，标签按空间压缩、模型紧贴主动作且没有页面横向溢出，聚焦前后 surface 几何与强调不变。该上下文同时制造 generation mismatch，断言顶部提示为低对比橙色混色、无投影且不遮挡 New task；Council、Canvas、Session Chat 共用 40px 单行标题栏。
 6. 同一 PWA 上下文打开带冻结 turn artifact 的真实历史 Session 后，点击回复卡片的单个 Changed file 只出现一份临时文件查看器，关闭后 Chat 仍可见且页面中不存在 Inspector；打开并关闭共用的本轮 Review 后结果相同。随后断言 Session/Council 正文读取所选 12–20px token、隐藏 Copy action 不占行、commentary 透明且无 padding。Chat composer 失焦为单行 pill；聚焦或 permission/model 菜单打开后保持展开并显示完整配置与有界多行文本，model 不得越过主动作；菜单关闭并失焦后恢复原始 inset。
 7. 刷新前后工作区数量、顺序、唯一性和 session 归属不变。
 8. 移除父工作区时，其 session 立即消失，但显式注册的子工作区及其 session 保留。
 9. 移除最后一个工作区后列表立即清空，且仍能再次添加并在刷新后保留。
 10. 全流程不得产生浏览器 page error，并保存 workspace context、sidebar density 与 conversation 截图。
-11. 分别打开 Home New task 与一个可输入 Session，断言两者都只有一个白色 composer surface 和一个共享 toolbar，placeholder 为 `Work with Rah`；权限、Plan、完整 model/effort 默认加载，顺序为 `+ / permission / Plan … model / Send|Stop`，workspace 只在 New task surface 外的上下文行中出现。Plan 开启后必须出现蓝色文字、轻底和 2px 内嵌标记；给 stopped Session 选择非默认 effort 后刷新页面，再 Stop/Resume，模型、effort 与 optionValues 均保持。ghost 控件静止态透明，provider 当前项没有灰色块。working Session 的 Stop/Send 共用一个无动画黑白槽。standalone 390px 下 New task 配置双行且 focus 几何不变；Chat 按“单行折叠—focus 或菜单打开保持展开—失焦折叠”转换，页面不得横向溢出。
+11. 分别打开 Home New task 与一个可输入 Session，断言两者都只有一个白色 composer surface 和一个共享 toolbar，placeholder 为 `Work with Rah`；权限、Plan、完整 model/effort 默认加载，顺序为 `+ / permission / Plan … model / Send|Stop`，workspace 只在 New task surface 外的上下文行中出现。Plan 开启后必须出现蓝色文字与更高字重，背景继续透明且无阴影；给 stopped Session 选择非默认 effort 后刷新页面，再 Stop/Resume，模型、effort 与 optionValues 均保持。ghost 控件静止态透明，provider 当前项没有灰色块。working Session 的 Stop/Send 共用一个无动画黑白槽。standalone 390px 下 New task 继续复用单行响应式 rail，permission/Plan 以图标压缩、模型紧贴主动作且 focus 几何不变；Chat 按“单行折叠—focus 或菜单打开保持展开—失焦折叠”转换，页面不得横向溢出。
 12. 在一条 assistant response 内选择多行文本，浮层必须锚在第一行左上方且不越出 viewport；蓝色本地文件链接的文件名也必须能拖选复制，拖选结束不能误打开 Inspector；点击 `添加到任务` 后 textarea 保持可编辑、pill hover 展示完整选文、单独注释不能发送；点击 `更多详情` 后当前 draft 只补一条解释请求。
 13. Wide Desktop 打开包含两张 640×360 本地 Markdown 图片的历史回复，断言只有一个 `flex-wrap` 图组、gap 为 12px、两张图同排且图像高度不超过 160px；回复正文默认计算样式为 14/22/约430。随后进入 Appearance，确认只有 12–20px Conversation text size，改为 18 后 Session/Council 正文即时成为 18/26、代码成为 16px，同时 Sidebar/菜单字号保持不变，再恢复 14。
 
@@ -189,7 +189,7 @@ runtime/TUI gate：
 
 ```bash
 npm run test:runtime
-npm run test:tmux-tui-auto
+npm run test:tui-mux-auto
 npm run test:smoke:stored-catalog-browser
 npm run test:regression:e2e-browser
 npm run test:smoke:native-browser

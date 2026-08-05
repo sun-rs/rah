@@ -1080,6 +1080,7 @@ describe("sidebar layout contract", () => {
     const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
     const openingPaneSource = readSource("./components/workbench/panes/WorkbenchOpeningPane.tsx");
     const boundarySource = readSource("./components/workbench/WorkbenchErrorBoundary.tsx");
+    const lazyRegistrySource = readSource("./app-lazy-components.ts");
 
     assert.doesNotMatch(sidePanelSource, /props\.onToggle/);
     assert.doesNotMatch(sidePanelSource, /SIDE_PANEL_TOGGLE_STYLE/);
@@ -1127,8 +1128,9 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(councilSource, /reserveRightPanelToggleSpace=/);
     assert.match(sidePanelSource, /desktopStorageKey/);
     assert.match(sidePanelSource, /aria-valuenow/);
-    assert.match(appSource, /loadInspectorPane/);
-    assert.match(appSource, /importWithStaleReload/);
+    assert.match(appSource, /from "\.\/app-lazy-components"/);
+    assert.match(lazyRegistrySource, /loadInspectorPane/);
+    assert.match(lazyRegistrySource, /importWithStaleReload/);
     assert.match(appSource, /FilePreviewDialogErrorBoundary/);
     assert.doesNotMatch(appSource, /loadInspectorFileDetailDialog/);
     assert.doesNotMatch(appSource, /FilePreviewDialogLoadingFallback/);

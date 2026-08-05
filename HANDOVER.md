@@ -1,6 +1,6 @@
 # RAH Agent Handover
 
-> 生成时间：2026-08-04（Asia/Shanghai）
+> 生成时间：2026-08-05（Asia/Shanghai）
 > 仓库：`/Users/sun/Code/repos/rah`
 > 用途：让下一位 Agent 在不依赖超长对话历史的情况下，快速理解 RAH 的架构、产品约束、当前工作区和接手顺序。
 > 注意：这是交接快照，不替代代码、协议测试和 [`docs/README.md`](./docs/README.md) 中列出的权威文档。
@@ -122,7 +122,7 @@ flowchart LR
 
 ### 3.2 关键运行对象
 
-- `RuntimeEngine`：daemon 主编排器。
+- `RuntimeEngine`：daemon API/生命周期主编排器；workspace/git/file inspection 已委托给 `RuntimeWorkspaceOperations`，不能重新吸收底层文件操作。
 - `SessionStore`：managed session truth。
 - `EventBus`：canonical event 分发。
 - `PtyHub` / `RuntimeTerminalCoordinator`：TUI surface 生命周期；Chat 浏览不应隐式 attach TUI。
@@ -131,6 +131,7 @@ flowchart LR
 - Turn artifact store：Provider 权威的 per-turn diff 冻结快照。
 - Conversation resource index：Outputs/Sources 的持久化稳定快照。
 - `useSessionStore`：前端 orchestration shell；具体迁移由 owner 模块负责。
+- `App`：workbench composition root；lazy page registry、New Session draft persistence、foreground Session recovery 与 file preview error boundary 分属独立 owner，不能再内联回 `App.tsx`。
 
 ### 3.3 网络与认证
 
@@ -409,7 +410,7 @@ Resource index 是 daemon-owned、持久化、带版本的派生数据：
 - Home New task workspace selector 已移出 composer，成为左右内收 12px 的低对比附属条；条高 40px，顶部 8px 被 composer 覆盖、实际露出 32px，内部按钮 28px。按钮保留文件夹、完整 workspace 名和下拉入口，名称超过 18 字符才启用共享跑马灯。它不能挤占权限、Plan、模型或发送动作，也不能造成横向溢出。
 - iOS standalone/PWA 的全局恢复提示固定在顶部 safe-area 控制行下方，390×844 下高度不超过 72px，不覆盖 composer；版本不一致时使用精简文案和同一行 Retry/关闭动作。PWA 与 Wide Desktop 共享低对比橙色混色：orange-500 仅以 8% 混入页面底色、18% 混入普通边框且不使用投影，主要橙色留给小图标，不能退回土黄色。Session Chat、Council、Canvas 与提示锚点共用 `WORKBENCH_HEADER_LAYOUT` 的 40px/2.5rem 单行 token，提示必须位于标题分割线以下。notice host 留有 4px 内边距，不能裁掉四角。Wide Desktop 使用最大 24rem 的横向紧凑 toast，固定右/下 16px，完全脱离 composer/floating anchor；当前 1280×720 实测单提示为 384×49px。
 - Sidebar 已收口为 `sidebar-layout-contract.ts` 的单一 `codex-compact-v1` 协议，Desktop 与 compact/PWA Sheet 都消费同一组 CSS variables，响应式只允许改变 action 可见时机。默认宽度 272px，双击 divider 恢复并持久化 272px；两种 surface 都是 40px 无下划线 header、首个 New task 顶距 4px、内容边界左右 8px。RAH/导航/分组/workspace/session 固定 `16/15/13/14/14px` 与 `600/500/550/500/450`；导航图标 18px、workspace 图标 20px 槽内 16px，workspace/session 行高 30px、pill 圆角 10px，同组/工作区组/大分区间距固定 2/6/12px，动作单元固定 28px。PWA 侧栏滚动不再预留 scrollbar gutter；Workspace/Session 标题垂直中心偏差为 0。New task、Council、Canvas、Chats 与 Session 共用浅灰 hover/选中 surface；Codex session 不显示左侧 provider 图标，Claude/OpenCode session 显示各自 16px bare logo，状态仍统一留在右侧；pin/archive rail 透明无投影。Session tooltip 为 160ms、sidebar 级单例。
-- Home New task 与 Session Chat 必须复用白底、细边框、24px 圆角、轻阴影的统一 composer surface 和 `UnifiedComposerToolbar`；placeholder 统一为 `Work with Rah`。能力 catalog 在页面/Session 可见时后台加载，与用户是否点击 composer、Session 是否 running 解耦；权限、Plan、完整模型 ID 与灰色 effort 默认都可见。工具栏采用 Codex Desktop 的 ghost 层级：静止态不画 pill 边框或独立底板，仅 hover/open/active 使用轻微底色；`+` 固定为最左侧 20px/1.75 细描边，权限与 Plan 随后，模型紧贴最右 Send/Stop。权限菜单只显示有间距的文字选项与必要图标/选中标记，不显示说明。provider selector 固定为 36px 单层选择条：没有常驻宿主灰底、外框、滑动块或单项底板；Desktop 当前项以 600 字重和与文字实际等宽的蓝色 2px 横线表示，PWA 隐藏文字时使用蓝色 `20×2px` 图标标记。pointer hover 的整组轻背景移开立即隐藏，只有键盘 `focus-visible` 期间允许继续保留。Chat 最右只保留一个黑白主动作槽：working 空白态为无动画 Stop，新文本或附件出现后同槽替换为 Send。PWA Chat 失焦时为左右各 16px inset 的单行 pill，长 draft 也折叠；聚焦或任一 composer 菜单保持展开时横向扩展、显示配置与有界多行文本，关闭/失焦后恢复。New task 聚焦前后几何与强调不变，窄屏配置区自动分成两行，所有能力仍默认可达。
+- Home New task 与 Session Chat 必须复用白底、细边框、24px 圆角、轻阴影的统一 composer surface 和 `UnifiedComposerToolbar`；placeholder 统一为 `Work with Rah`。能力 catalog 在页面/Session 可见时后台加载，与用户是否点击 composer、Session 是否 running 解耦；权限、Plan、完整模型 ID 与灰色 effort 默认都可见。工具栏采用 Codex Desktop 的 ghost 层级：静止态不画 pill 边框或独立底板，仅 hover/open 使用轻微底色；`+` 固定为最左侧 20px/1.75 细描边，权限与 Plan 随后，模型紧贴最右 Send/Stop。Plan 激活只使用资源蓝文字和更高字重，背景保持透明且无阴影；PWA 空间不足时同一控件压缩为加粗 `P`。权限菜单只显示有间距的文字选项与必要图标/选中标记，不显示说明。provider selector 固定为 36px 单层选择条：没有常驻宿主灰底、外框、滑动块或单项底板；Desktop 当前项以 600 字重和与文字实际等宽的蓝色 2px 横线表示，PWA 隐藏文字时使用蓝色 `24×2px` 图标标记。pointer hover 的整组轻背景移开立即隐藏，只有键盘 `focus-visible` 期间允许继续保留。Chat 最右只保留一个黑白主动作槽：working 空白态为无动画 Stop，新文本或附件出现后同槽替换为 Send。PWA Chat 失焦时为左右各 16px inset 的单行 pill，长 draft 也折叠；聚焦或任一 composer 菜单保持展开时横向扩展、显示配置与有界多行文本，关闭/失焦后恢复。New task 聚焦前后几何与强调不变，所有宽度复用同一条右对齐 toolbar rail；窄屏通过压缩 permission/Plan 标签和 model 宽度保持单行，不能建立独立移动布局。
 - Session/Council 标题不再重复显示 `Stopped` 等侧栏已表达的运行状态。若 Provider 提供 context usage，composer 在模型左侧显示圆环；Desktop hover、PWA 点击打开 token 详情。
 - assistant response 的单消息文本选区会显示 `添加到任务 / 更多详情`。蓝色本地文件链接仍必须允许原生拖选和复制；拖选期间使用同一 viewport 稳定机制，结束时不得误打开 Inspector。前者写入独立结构化注释并以 hover pill 预览，不能单独发送空白消息；后者还会加入一条可编辑解释请求。注释通过协议、queue 和 provider adapter 传递；历史回放必须剥离 transport envelope，已发送的注释不会被重建成 composer pill，未提交 pill 只属于当前客户端 draft。
 - Active task dock 为 32px 胶囊，只保留 plan 图标、`completed/total` 与当前步骤，不显示 `Task summary`、`Working` 或箭头。详情统计过滤重复的 plan activity，命令使用 `Run N commands`，活动与 `Changed N files` 强制单行；权威 Changed files 存在时必须作为可点击的最左侧第一项，不存在时不占位。Desktop hover/focus 展开且指针点击不锁定；standalone PWA 仅点击切换，并支持第二次点击、点外部或 Escape 关闭。
@@ -526,18 +527,20 @@ Changed files 权威性收敛包括：
 功能基线 `30a3df1` 另外增加：
 
 - assistant Markdown 图片已按 Codex Desktop 规则收敛为缩略图组：本地最高 160px、远程最高 200px，连续纯图片段落以 12px gap 并排并自动换行。Conversation 默认 14/22 与约 430 正文字重；Appearance 现在只提供 12–20px 的 Session/Council 对话字号并即时应用，不再改变菜单或暴露代码字号设置。
-- `UnifiedComposerSurface` 与 `UnifiedComposerToolbar` 供 Home New task 与 Session Chat 复用白色阴影 surface 和同一 action 排序；placeholder 统一为 `Work with Rah`。New task workspace 已移到独立附属条：左右内收 12px、40px 总高、顶部 8px 由 composer 覆盖、内部按钮 28px。权限、Plan、完整模型 ID/effort 无需点击即可显示；provider 已收敛为 36px 的无边框单层选择条，单项保持透明；Desktop 当前项为 600 字重和文字等宽蓝线，PWA 为蓝色 `20×2px` 图标标记，整组 pointer hover 移开即隐藏。2026-08-04 真页面复验：Desktop 实测 workspace overlap 8px、可见 32px，provider 当前项切换后选中态唯一转移；390×844 窄屏 New task 自动双行，`Full Access`、`Plan`、`gpt-5.6-sol Ultra` 均无重叠，workspace 不再出现短名称重复跑马。Chat 模型与权限菜单都可展开，权限菜单仅含文字选项；控制台 error 为 0。standalone PWA 的 Chat idle/展开协议由 `:focus-within` 与打开菜单的 `aria-expanded` 共同保持，模型菜单打开不会触发回缩。
+- `UnifiedComposerSurface` 与 `UnifiedComposerToolbar` 供 Home New task 与 Session Chat 复用白色阴影 surface 和同一 action 排序；placeholder 统一为 `Work with Rah`。New task workspace 已移到独立附属条：左右内收 12px、40px 总高、顶部 8px 由 composer 覆盖、内部按钮 28px。权限、Plan、完整模型 ID/effort 无需点击即可显示；provider 已收敛为 36px 的无边框单层选择条，单项保持透明；Desktop 当前项为 600 字重和文字等宽蓝线，PWA 为蓝色 `24×2px` 图标标记，整组 pointer hover 移开即隐藏。2026-08-05 真页面契约以统一响应式 toolbar rail 为准：Desktop 保持完整标签；390×844 窄屏把权限/Plan 压缩为图标、限制模型宽度并让模型紧贴主动作，仍保持单行且无横向溢出。workspace 不再出现短名称重复跑马。Chat 模型与权限菜单都可展开，权限菜单仅含文字选项；standalone PWA 的 Chat idle/展开协议由 `:focus-within` 与打开菜单的 `aria-expanded` 共同保持，模型菜单打开不会触发回缩。
 - assistant response 原生选区浮层、composer 注释 pill 与 `更多详情` 的当前 Chat 适配；内置浏览器控制层不能可靠制造原生 `Selection`，因此浮层状态机与定位采用确定性 DOM/几何单测，视觉位置另做真实页面检查。
 - `SessionInputAnnotation` 的协议校验、FIFO 保存、Codex/Claude/OpenCode transport 序列化与历史可见文本恢复。
 - Sidebar 的视觉数值已从分散 Tailwind、`md:` 与 coarse-pointer 覆盖中移出，统一由 `codex-compact-v1` 提供。2026-08-04 deterministic Chromium 同时量测 Desktop 与 390×844 standalone PWA：40px header、4px New task 顶距、8px 双侧 inset、`16/15/13/14/14px` 字号、30px 行、10px 圆角、2/6px 列表间距、18/16px 图标、28px action 和 0px 标题中心偏差全部逐项相等；PWA 原生 stable scrollbar gutter 已移除，不能再单独挤窄 workspace/session 右侧。
 - Session 信息 tooltip 已从行级临时状态彻底改为 sidebar 级 `idle / pending / open` 状态机与唯一 Portal layer；Session 行只保留稳定 key 和 ARIA 关联，不再持有 timer、open state 或关闭监听。侧栏根节点以 `pointerover/out` 委托跨行 hover，document/window 只负责统一 cancel；每次状态转换携带 epoch，旧 timer 不能覆盖新状态，显示前仍复核原行连接与 `:hover`，MutationObserver 负责锚点被列表刷新移除时同步关闭。纯状态机测试覆盖 pending cancel、旧 epoch、跨行替换、无效 anchor 与 keyboard focus；真实 Chromium 覆盖跨行始终只有 1 个、移入 Chat 归零和点击后禁止迟到重开。Desktop workspace 组间距保持 6px，同工作区 session 行距保持 2px。
 - history resume 完成不再无条件写 `selectedSessionId`；A 启动期间切到 B 后，A 的 projection、输入和控制刷新继续在后台收敛而不抢焦点。annotation 也已补齐 implicit resume forwarding。
-- Session Composer 的 model / effort / optionValues 现在以 `provider + providerSessionId` 为稳定身份写入有界浏览器配置（最多 256 项），刷新、Stop 与 Resume 都读取同一项；不再依赖只在 React 内存中的 `resumeModelDrafts`，也不会回退到 catalog 最后一档 effort。Plan 选中态使用资源蓝文字、11% 混色底和 2px 内嵌蓝线，保持 ghost 控件结构但能一眼辨认。
+- Session Composer 的 model / effort / optionValues 现在以 `provider + providerSessionId` 为稳定身份写入有界浏览器配置（最多 256 项），刷新、Stop 与 Resume 都读取同一项；不再依赖只在 React 内存中的 `resumeModelDrafts`，也不会回退到 catalog 最后一档 effort。Plan 选中态使用资源蓝文字和更高字重，保持透明背景、无阴影的 ghost 控件结构；PWA 使用同一状态的加粗 `P`。
 - stopped Chat 的生命周期已改为原地降级：显式 Stop 与 `session.closed` event 都保留当前 resident feed/conversation/turn directory，清除 live lease 与 runtime-only 能力，再由 catalog refresh 校准 metadata；用户仍停留在 Chat。若无输入激活正在进行时又按 Send，输入加入同一 Resume 并只发送一次。composer 在 resume 配置、starting 与 live 配置之间保持同一控件树，默认 effort、权限和 Plan 不闪退；需要先显式 Resume/取得控制权的分支也直接展示这三项，不再折叠进设置弹层。Sidebar 的 provider 标识只给 Claude/OpenCode，Codex 保持纯标题。
 - Active task summary 已收敛为 32px 进度胶囊；1280×720 真实 working session 实测只显示 `3/5 · 当前步骤`，无固定标题、状态或箭头，Desktop 点击后不获得 focus、不会锁住浮层。详情行在存在本轮权威 artifact 时固定以可点击的 `Changed N files` 开头，不存在时完全省略；当前真实 running session 的 DOM 顺序为 `Changed 26 files`、`Used 11 tools`、`Run 70 commands`、`Read 58 files`。
 - PWA 本轮文件入口已与 Inspector panel state 解耦：390×844 standalone gate 使用真实冻结 artifact，依次验证“回复文件行 → 临时 viewer → 关闭 → Chat”和“共享 turn Review → 关闭 → Chat”，两条路径结束后可见 Inspector 数量都为 0。Wide Desktop 实测只挂载 1 份 viewer，关闭后保留右侧 Inspector，保持鼠标大屏工作流。
 - 蓝色本地文件链接和行内文件路径已恢复原生文本选择；真实会话 27 个文件按钮的计算样式均为 `user-select: text`，普通点击仍能打开 Inspector，选区相交时的点击由确定性单测锁定为不打开。
 - 全局恢复提示已从完整 warning 底色/边框与重阴影收敛为低对比橙色混色、无投影 surface：orange-500 仅以 8% 混入页面底色、18% 混入普通边框。真页面量测：PWA 为 68px 高且不遮挡 New task；1280×720 Desktop 仍为 `384×49px`、右/下各 16px。Session Chat、Council、Canvas 现在共用单一 `WORKBENCH_HEADER_LAYOUT` 40px 单行标题栏协议，PWA gate 已跨三页断言标题高度一致且提示位于分割线下至少 4px。统一 composer 的 `+` 已收敛为正文色、20px/1.75 描边；权限/模型使用 15px/1.8 的 ghost 控件层级，PWA deterministic gate 与 Desktop 真页面均已核验。
+- 2026-08-05 零行为清理删除了没有生产 owner 的旧 `SessionControlPopover`、`ConversationOutputsCard`、`NativeTerminalProcess` 与 OpenCode ACP client/activity 整文件，并移除 `ProviderSelector` 已无 caller 的 rail/dialog 分支及配套 CSS；当前 OpenCode native local-server/API 路径、统一 composer 与资源卡片路径未改。新增 `check:source-reachability` 从三个 package 入口证明 409/411 个生产源码可达，另 2 个测试 helper 显式豁免；`check:repo-hygiene` 也会拒绝文档中失效的本地链接和 `npm run` 命令，避免后续重构再次形成无 owner 的代码或漂移文档。
+- 第二阶段把 `App.tsx` 的 lazy page registry、New Session draft persistence、foreground Session recovery 和 file preview error boundary 等价移入独立 owner，`App.tsx` 从 4,242 行降到 3,610 行；`RuntimeEngine` 的 workspace/git/file inspection 也移入 `RuntimeWorkspaceOperations`，HTTP/engine 公共签名仍原样转发。`check:source-architecture` 对普通生产文件采用 1,600 行上限，并把当前 12 个超限文件登记为只减不增的 debt budget；它还会拒绝把刚拆出的 owner 重新塞回 `App` 或 `RuntimeEngine`。
 - 聚焦回归、三包 TypeScript typecheck、Protocol/Web/Runtime 全量测试、生产构建、61 项 regression manifest、确定性 Chromium/PWA browser gate、repo hygiene 与依赖审计均已从头复跑通过。首次审计发现的 3 个传递依赖问题已用兼容补丁版本收敛到 `package-lock.json`；升级后再次完整执行 `npm run test:ci`，最终 `npm audit --omit=dev` 为 0。
 
 当前 checkout 最近一次已通过：
@@ -550,7 +553,7 @@ Changed files 权威性收敛包括：
 - 本轮 stopped/resume 与 composer 常驻控制修复后再次执行完整 `npm run test:web`、三包 `npm run typecheck`、生产 `npm run build:web` 和 `npm run test:p0:browser`，均通过；真实 stopped Codex Chat DOM 同时可见 permission、Plan 与 `gpt-5.6-sol Ultra`，Codex sidebar 行无 provider logo
 - E2E manifest：61 cases / 45 P0（含统一 composer、回复选区注释、Markdown 图片缩略图组、PWA 本轮文件临时查看、sidebar/task summary 密度、stopped Send 不丢输入、Stop 留在 Chat 与后台 resume 不抢焦点）
 - release gate contract：3/3
-- deterministic Workspace/PWA lifecycle 真浏览器 gate；Wide Desktop 断言 14/22/430 正文和图片缩略图组，并把 Appearance 扩展到 12–20px；standalone PWA 锁定 Chat 的单行 idle / 聚焦或菜单展开 / 失焦重折叠，并核验模型在主动作左侧。New task workspace 外置与窄屏双行配置由最新 composer contract 和 390×844 真页面复验覆盖。该 gate 还覆盖低对比 recovery toast、统一 40px 单行页面标题栏，以及本轮文件临时 viewer 关闭后直接返回 Chat。
+- deterministic Workspace/PWA lifecycle 真浏览器 gate；Wide Desktop 断言 14/22/430 正文和图片缩略图组，并把 Appearance 扩展到 12–20px；standalone PWA 锁定 Chat 的单行 idle / 聚焦或菜单展开 / 失焦重折叠，并核验模型在主动作左侧。New task workspace 外置与窄屏单行响应式 rail 由最新 composer contract 和 390×844 真页面复验覆盖。该 gate 还覆盖低对比 recovery toast、统一 40px 单行页面标题栏，以及本轮文件临时 viewer 关闭后直接返回 Chat。
 - PWA generation mismatch 手工真浏览器验证：`390 x 844` 下顶部 toast 高 68px，与 New task composer 无交叠；Retry/关闭可用，重启并 reload 后 notice 为 0；同一几何/底色边界现在也进入上述 deterministic gate
 - Desktop generation mismatch 真浏览器验证：`1280 x 720` 下 toast 为 `384 x 49px`，右边距与底边距均为 16px；不再读取 `--workbench-callout-anchor`
 - repo hygiene

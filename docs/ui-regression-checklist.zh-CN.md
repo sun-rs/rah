@@ -21,7 +21,7 @@ npm run build:web
 npm run test:p0:browser
 npm run test:smoke:terminal-browser
 npm run test:smoke:inspector-browser
-npm run test:smoke:history-long-browser
+npm run test:smoke:history-resume
 ```
 
 通过标准：
@@ -130,7 +130,7 @@ npm run test:smoke:history-long-browser
 
 - Home New task 的 workspace selector 位于 composer 外部的独立灰色上下文行，保留 Folder 图标和可读名称
 - 名称超过 18 个字符时向左跑马，短名称保持静止且不能出现重复文本轨道
-- workspace 上下文行不挤占 agent 配置；权限/Plan 与完整模型/effort 在 390px 下稳定分成两行，页面不存在横向滚动
+- workspace 上下文行不挤占 agent 配置；390px 下仍复用单行响应式 toolbar rail，权限/Plan 压缩为图标、模型紧贴主动作，页面不存在横向滚动
 - Session/Council 对话正文读取 12–20px Appearance 设置；默认 14px/22px，代码随正文在 11–16px 有界联动，且菜单、Sidebar、标题字号不随之改变
 - 用户气泡最大宽度为内容区 75%，不重新膨胀到 85%
 - 用户消息后的触屏 Copy 动作不占据空白行；消息到 `Working / Worked` 的普通 turn gap 为 12px

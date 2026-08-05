@@ -94,16 +94,6 @@ import { summarizeConversationTurnsForTransport } from "./conversation-transport
 import { buildConversationTurnDirectory } from "./conversation-turn-directory";
 import { conversationEventBelongsToLiveProjection } from "./conversation-live-policy";
 import { approximateJsonByteLength } from "./bounded-json-size";
-import {
-  applyWorkspaceGitFileActionAsync,
-  applyWorkspaceGitHunkActionAsync,
-  getWorkspaceGitDiffAsync,
-  getWorkspaceGitStatusAsync,
-  getWorkspaceSnapshot,
-  readHostFileDataAsync,
-  readWorkspaceFileFromDirectoryAsync,
-  searchWorkspaceFilesInDirectoryAsync,
-} from "./workspace-utils";
 import { EventBus } from "./event-bus";
 import { HistorySnapshotStore } from "./history-snapshots";
 import {
@@ -189,6 +179,7 @@ import {
   workspaceDirsFromState,
 } from "./workbench-directory-utils";
 import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
+import { RuntimeWorkspaceOperations } from "./runtime-workspace-operations";
 import { assertExistingWorkingDirectory } from "./provider-working-directory";
 import { cleanupRahNativeServerOrphans } from "./native-local-server-orphans";
 import { prepareProviderSessionResume } from "./provider-resume";
@@ -366,6 +357,7 @@ export class RuntimeEngine {
    */
   private readonly nativeTuiStoredSessionCatalog: StoredSessionCatalog;
   private readonly workspaceScopeAuthorizer: WorkspaceScopeAuthorizer;
+  private readonly workspaceOperations: RuntimeWorkspaceOperations;
   private readonly terminals: RuntimeTerminalCoordinator;
   private readonly sessionLifecycle: RuntimeSessionLifecycle;
   private readonly structuredProviders: RuntimeStructuredProviderCoordinator;
@@ -516,6 +508,14 @@ export class RuntimeEngine {
       this.workbenchState,
       this.sessionStore,
     );
+    this.workspaceOperations = new RuntimeWorkspaceOperations({
+      scopeAuthorizer: this.workspaceScopeAuthorizer,
+      requireManagedSession: (sessionId) => this.requireManagedSession(sessionId),
+      shouldUseStructuredInspection: (sessionId) =>
+        this.shouldUseStructuredWorkspaceInspection(sessionId),
+      requireStructuredInspectionAdapter: (sessionId) =>
+        this.requireStructuredWorkspaceInspectionAdapter(sessionId),
+    });
     this.terminals = new RuntimeTerminalCoordinator({
       eventBus: this.eventBus,
       ptyHub: this.ptyHub,
@@ -2143,76 +2143,14 @@ export class RuntimeEngine {
   }
 
   async getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
-    if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-        sessionId,
-        options?.scopeRoot,
-      );
-      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).getWorkspaceSnapshot(
-        sessionId,
-        {
-          ...(scopeRoot ? { scopeRoot } : {}),
-        },
-      );
-    }
-    const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-      sessionId,
-      options?.scopeRoot,
-    );
-    const snapshot = await getWorkspaceSnapshot(scopeRoot ?? session.cwd);
-    return {
-      sessionId,
-      cwd: snapshot.cwd,
-      nodes: snapshot.nodes,
-    };
+    return await this.workspaceOperations.getWorkspaceSnapshot(sessionId, options);
   }
 
   async getGitStatus(
     sessionId: string,
     options?: { scopeRoot?: string; baseBranch?: string },
   ) {
-    if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-        sessionId,
-        options?.scopeRoot,
-      );
-      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).getGitStatus(
-        sessionId,
-        {
-          ...(scopeRoot ? { scopeRoot } : {}),
-          ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
-        },
-      );
-    }
-    const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-      sessionId,
-      options?.scopeRoot,
-    );
-    const status = await getWorkspaceGitStatusAsync(session.cwd, {
-      ...(scopeRoot ? { scopeRoot } : {}),
-      ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
-    });
-    return {
-      sessionId,
-      ...(status.branch !== undefined ? { branch: status.branch } : {}),
-      ...(status.baseBranch !== undefined ? { baseBranch: status.baseBranch } : {}),
-      ...(status.comparisonMode !== undefined
-        ? { comparisonMode: status.comparisonMode }
-        : {}),
-      ...(status.comparisonBase !== undefined
-        ? { comparisonBase: status.comparisonBase }
-        : {}),
-      branchOptions: status.branchOptions ?? [],
-      branchFiles: status.branchFiles ?? [],
-      changedFiles: status.changedFiles,
-      ...(status.stagedFiles ? { stagedFiles: status.stagedFiles } : {}),
-      ...(status.unstagedFiles ? { unstagedFiles: status.unstagedFiles } : {}),
-      ...(status.totalBranch !== undefined ? { totalBranch: status.totalBranch } : {}),
-      ...(status.totalStaged !== undefined ? { totalStaged: status.totalStaged } : {}),
-      ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
-    };
+    return await this.workspaceOperations.getGitStatus(sessionId, options);
   }
 
   async getGitDiff(
@@ -2225,41 +2163,7 @@ export class RuntimeEngine {
       baseBranch?: string;
     },
   ) {
-    if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-        sessionId,
-        options?.scopeRoot,
-      );
-      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).getGitDiff(
-        sessionId,
-        path,
-        {
-          ...(options?.staged !== undefined ? { staged: options.staged } : {}),
-          ...(options?.ignoreWhitespace !== undefined
-            ? { ignoreWhitespace: options.ignoreWhitespace }
-            : {}),
-          ...(scopeRoot ? { scopeRoot } : {}),
-          ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
-        },
-      );
-    }
-    const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-      sessionId,
-      options?.scopeRoot,
-    );
-    return {
-      sessionId,
-      path,
-      diff: await getWorkspaceGitDiffAsync(session.cwd, path, {
-        ...(options?.staged !== undefined ? { staged: options.staged } : {}),
-        ...(options?.ignoreWhitespace !== undefined
-          ? { ignoreWhitespace: options.ignoreWhitespace }
-          : {}),
-        ...(scopeRoot ? { scopeRoot } : {}),
-        ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
-      }),
-    };
+    return await this.workspaceOperations.getGitDiff(sessionId, path, options);
   }
 
   async getTurnFileChanges(sessionId: string, turnId: string) {
@@ -2322,11 +2226,7 @@ export class RuntimeEngine {
   }
 
   async getWorkspaceGitStatus(dir: string, options?: { baseBranch?: string }) {
-    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
-    return await getWorkspaceGitStatusAsync(workspaceDir, {
-      scopeRoot: workspaceDir,
-      ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
-    });
+    return await this.workspaceOperations.getWorkspaceGitStatus(dir, options);
   }
 
   async getWorkspaceGitDiff(
@@ -2334,49 +2234,15 @@ export class RuntimeEngine {
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; baseBranch?: string },
   ) {
-    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
-    return {
-      sessionId: "",
-      path,
-      diff: await getWorkspaceGitDiffAsync(workspaceDir, path, {
-        ...options,
-        scopeRoot: workspaceDir,
-      }),
-    };
+    return await this.workspaceOperations.getWorkspaceGitDiff(dir, path, options);
   }
 
   async applyGitFileAction(sessionId: string, request: GitFileActionRequest) {
-    if (!this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const session = this.requireManagedSession(sessionId).session;
-      return {
-        ...(await applyWorkspaceGitFileActionAsync(session.cwd, request, {
-          scopeRoot: session.rootDir ?? session.cwd,
-        })),
-        sessionId,
-      };
-    }
-    const adapter = this.requireStructuredWorkspaceInspectionAdapter(sessionId);
-    if (!adapter.applyGitFileAction) {
-      throw new Error(`Provider ${adapter.id} does not support git file actions.`);
-    }
-    return await adapter.applyGitFileAction(sessionId, request);
+    return await this.workspaceOperations.applyGitFileAction(sessionId, request);
   }
 
   async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest) {
-    if (!this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const session = this.requireManagedSession(sessionId).session;
-      return {
-        ...(await applyWorkspaceGitHunkActionAsync(session.cwd, request, {
-          scopeRoot: session.rootDir ?? session.cwd,
-        })),
-        sessionId,
-      };
-    }
-    const adapter = this.requireStructuredWorkspaceInspectionAdapter(sessionId);
-    if (!adapter.applyGitHunkAction) {
-      throw new Error(`Provider ${adapter.id} does not support git hunk actions.`);
-    }
-    return await adapter.applyGitHunkAction(sessionId, request);
+    return await this.workspaceOperations.applyGitHunkAction(sessionId, request);
   }
 
   async readSessionFile(
@@ -2384,32 +2250,7 @@ export class RuntimeEngine {
     path: string,
     options?: { scopeRoot?: string; imagePreviewMode?: "bounded" | "full" },
   ) {
-    if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
-      const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-        sessionId,
-        options?.scopeRoot,
-      );
-      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).readSessionFile(
-        sessionId,
-        path,
-        {
-          ...(scopeRoot ? { scopeRoot } : {}),
-          ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
-        },
-      );
-    }
-    const session = this.requireManagedSession(sessionId).session;
-    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-      sessionId,
-      options?.scopeRoot,
-    );
-    return {
-      ...(await readWorkspaceFileFromDirectoryAsync(session.cwd, path, {
-        ...(scopeRoot ? { scopeRoot } : {}),
-        ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
-      })),
-      sessionId,
-    };
+    return await this.workspaceOperations.readSessionFile(sessionId, path, options);
   }
 
   async readWorkspaceFile(
@@ -2417,18 +2258,11 @@ export class RuntimeEngine {
     path: string,
     options?: { imagePreviewMode?: "bounded" | "full" },
   ) {
-    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
-    return await readWorkspaceFileFromDirectoryAsync(workspaceDir, path, {
-      scopeRoot: workspaceDir,
-      ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
-    });
+    return await this.workspaceOperations.readWorkspaceFile(dir, path, options);
   }
 
   async readHostFile(path: string, options?: { imagePreviewMode?: "bounded" | "full" }) {
-    return {
-      sessionId: "",
-      ...(await readHostFileDataAsync(path, options)),
-    };
+    return await this.workspaceOperations.readHostFile(path, options);
   }
 
   async searchSessionFiles(
@@ -2437,28 +2271,15 @@ export class RuntimeEngine {
     limit = 100,
     options?: { scopeRoot?: string },
   ): Promise<SessionFileSearchResponse> {
-    const session = this.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    const scopeRoot = await this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
-      sessionId,
-      options?.scopeRoot,
-    );
-    return {
-      sessionId,
-      query,
-      files: await searchWorkspaceFilesInDirectoryAsync(scopeRoot ?? session.cwd, query, limit),
-    };
+    return await this.workspaceOperations.searchSessionFiles(sessionId, query, limit, options);
   }
 
-  async searchWorkspaceFiles(dir: string, query: string, limit = 100): Promise<SessionFileSearchResponse> {
-    const workspaceDir = await this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
-    return {
-      sessionId: "",
-      query,
-      files: await searchWorkspaceFilesInDirectoryAsync(workspaceDir, query, limit),
-    };
+  async searchWorkspaceFiles(
+    dir: string,
+    query: string,
+    limit = 100,
+  ): Promise<SessionFileSearchResponse> {
+    return await this.workspaceOperations.searchWorkspaceFiles(dir, query, limit);
   }
 
   getConversationEvidencePage(

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -585,7 +585,7 @@ export function WorkbenchSelectedPane(props: {
     actionPending: boolean;
     onResume: () => void;
   }) => (
-    <div className="flex min-h-10 w-full flex-col gap-1 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 md:flex-row md:items-center md:justify-between md:gap-2 md:min-h-9 lg:min-h-8">
+    <div className="rah-responsive-composer-shell flex min-h-10 w-full flex-col gap-1 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 md:flex-row md:items-center md:justify-between md:gap-2 md:min-h-9 lg:min-h-8">
       <div className="min-w-0 flex-1 truncate px-1">
         <span className="text-sm font-medium text-[var(--app-fg)]">{args.title}</span>
         {!compactComposerPrompts ? (
@@ -688,6 +688,53 @@ export function WorkbenchSelectedPane(props: {
     observer.observe(node);
     return () => observer.disconnect();
   }, [props.onFloatingAnchorOffsetChange]);
+
+  const focusPwaComposerFromPointer = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isPwaDisplayMode) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (
+        target.closest(
+          "button,a,input,select,summary,[role='button'],[role='option'],[contenteditable='true']",
+        )
+      ) {
+        return;
+      }
+      const textarea = props.composerRef.current;
+      if (!textarea || textarea.disabled || document.activeElement === textarea) {
+        return;
+      }
+      // iOS only opens the software keyboard when focus occurs synchronously
+      // inside the trusted pointer gesture. Waiting for the expanded layout to
+      // render turns this into the familiar two-tap composer interaction.
+      textarea.focus({ preventScroll: true });
+    },
+    [isPwaDisplayMode, props.composerRef],
+  );
+
+  useEffect(() => {
+    if (!isPwaDisplayMode || !showComposer) {
+      return;
+    }
+    const blurComposerOutside = (event: PointerEvent) => {
+      const textarea = props.composerRef.current;
+      if (!textarea || document.activeElement !== textarea) {
+        return;
+      }
+      const target = event.target;
+      if (target instanceof Node && composerContainerRef.current?.contains(target)) {
+        return;
+      }
+      textarea.blur();
+    };
+    window.addEventListener("pointerdown", blurComposerOutside, true);
+    return () => window.removeEventListener("pointerdown", blurComposerOutside, true);
+  }, [isPwaDisplayMode, props.composerRef, showComposer]);
 
   useEffect(() => {
     if (!sessionMenuOpen) return;
@@ -1152,7 +1199,10 @@ export function WorkbenchSelectedPane(props: {
                 isPwa={isPwaDisplayMode}
                 className={COMPOSER_LAYOUT.composeGridClassName}
               >
-                <div className="rah-chat-composer-input relative flex min-w-0 flex-col">
+                <div
+                  className="rah-chat-composer-input relative flex min-w-0 flex-col"
+                  onPointerDownCapture={focusPwaComposerFromPointer}
+                >
                   {draftAnnotations.length > 0 || draftAttachments.length > 0 ? (
                     <div className="rah-chat-composer-context flex max-w-full flex-wrap items-start gap-2 px-1 pb-1.5">
                       <ComposerAnnotationBadge
@@ -1289,7 +1339,7 @@ export function WorkbenchSelectedPane(props: {
                         <ComposerContextIndicator display={contextUsageDisplay} />
                       ) : null}
                       {props.composerSurface.kind === "compose" ? (
-                        <div className="rah-chat-composer-secondary min-w-0">
+                        <div className="rah-chat-composer-secondary rah-chat-composer-model-control min-w-0">
                           <SessionModelControls
                             appearance="composer"
                             catalog={props.modelCatalog}

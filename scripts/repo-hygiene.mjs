@@ -112,15 +112,37 @@ function brokenMarkdownLinks(trackedFiles) {
   return findings;
 }
 
+function invalidMarkdownNpmScripts(trackedFiles) {
+  const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  const knownScripts = new Set(Object.keys(packageJson.scripts ?? {}));
+  const findings = [];
+  const scriptPattern = /\bnpm\s+run\s+([a-zA-Z0-9:_-]+)/g;
+  for (const relativePath of trackedFiles) {
+    if (!relativePath.endsWith(".md")) continue;
+    const absolutePath = path.join(root, relativePath);
+    if (!existsSync(absolutePath) || !lstatSync(absolutePath).isFile()) continue;
+    const source = readFileSync(absolutePath, "utf8");
+    for (const match of source.matchAll(scriptPattern)) {
+      const script = match[1];
+      if (knownScripts.has(script)) continue;
+      const line = source.slice(0, match.index ?? 0).split("\n").length;
+      findings.push(`${relativePath}:${line} -> npm run ${script}`);
+    }
+  }
+  return findings;
+}
+
 const trackedFiles = gitTrackedFiles();
 const trackedArtifacts = trackedFiles.filter(isForbiddenArtifact);
 const localJunk = walkForLocalJunk(root);
 const brokenLinks = brokenMarkdownLinks(trackedFiles);
+const invalidNpmScripts = invalidMarkdownNpmScripts(trackedFiles);
 
 const sections = [
   ["forbidden tracked artifacts", trackedArtifacts],
   ["local editor/OS junk", localJunk],
   ["broken local Markdown links", brokenLinks],
+  ["invalid Markdown npm script references", invalidNpmScripts],
 ];
 let failed = false;
 for (const [label, findings] of sections) {
@@ -135,6 +157,6 @@ if (failed) {
   process.exitCode = 1;
 } else {
   console.log(
-    `Repository hygiene passed: ${trackedFiles.length} tracked files, no junk artifacts, local Markdown links resolved.`,
+    `Repository hygiene passed: ${trackedFiles.length} tracked files, no junk artifacts, local Markdown links and npm scripts resolved.`,
   );
 }

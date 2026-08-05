@@ -266,7 +266,7 @@ export function NewSessionComposer(props: {
                     </button>
                   ) : null}
 
-                  <div className="rah-new-task-composer-secondary min-w-0">
+                  <div className="rah-new-task-composer-secondary rah-new-task-mode-control min-w-0">
                     <SessionModeControls
                       variant="composer"
                       accessModes={props.accessModes}
@@ -282,7 +282,7 @@ export function NewSessionComposer(props: {
               }
               trailing={
                 <>
-                  <div className="rah-new-task-composer-secondary min-w-0">
+                  <div className="rah-new-task-composer-secondary rah-new-task-model-control min-w-0">
                     <SessionModelControls
                       appearance="composer"
                       catalog={props.modelCatalog}
@@ -409,6 +409,7 @@ export function NewSessionComposer(props: {
             value={props.provider}
             onChange={props.onChangeProvider}
             mode={providerSelectorMode}
+            touch={isPwaDisplayMode}
           />
 
           {props.footer}

@@ -45,6 +45,11 @@ import {
 } from "./session-store-workspace";
 import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
 import {
+  applyPendingSessionStartupConfiguration,
+  createPendingSessionStartupConfiguration,
+  type PendingSessionStartupConfiguration,
+} from "./session-startup-configuration";
+import {
   appendOptimisticUserMessage,
   initialConversationSyncState,
   providerLabel,
@@ -242,9 +247,10 @@ function createPendingLiveSessionProjection(args: {
   attachments: SessionInputAttachment[];
   clientMessageId: string;
   clientTurnId: string;
+  startupConfiguration?: PendingSessionStartupConfiguration;
 }): SessionProjection {
   const now = new Date().toISOString();
-  const summary: SessionSummary = {
+  const summary = applyPendingSessionStartupConfiguration({
     session: {
       id: args.sessionId,
       provider: args.provider,
@@ -305,9 +311,15 @@ function createPendingLiveSessionProjection(args: {
       holderKind: "web",
       grantedAt: now,
     },
+  }, args.startupConfiguration);
+  const projection: SessionProjection = {
+    ...createEmptySessionProjection(summary),
+    ...(args.startupConfiguration
+      ? { pendingStartupConfiguration: args.startupConfiguration }
+      : {}),
   };
   return appendOptimisticUserMessage(
-    createEmptySessionProjection(summary),
+    projection,
     args.text,
     {
       clientMessageId: args.clientMessageId,
@@ -393,6 +405,16 @@ export async function startSessionCommand(
     const title = options?.title ?? `${providerLabel(provider)} session`;
     const clientMessageId = createClientSideId("client-message");
     const clientTurnId = createClientSideId("client-turn");
+    const startupConfiguration = createPendingSessionStartupConfiguration({
+      ...(options?.model ? { modelId: options.model } : {}),
+      ...(options?.reasoningId !== undefined
+        ? { reasoningId: options.reasoningId }
+        : {}),
+      ...(options?.optionValues !== undefined
+        ? { optionValues: options.optionValues }
+        : {}),
+      ...(options?.modeId ? { modeId: options.modeId } : {}),
+    });
     const pendingTransition = createPendingStartTransition({
       provider,
       cwd,
@@ -411,6 +433,7 @@ export async function startSessionCommand(
         attachments: initialAttachments,
         clientMessageId,
         clientTurnId,
+        ...(startupConfiguration ? { startupConfiguration } : {}),
       });
       deps.set((current) => {
         const projections = new Map(current.projections);
@@ -489,17 +512,25 @@ export async function startSessionCommand(
         : undefined;
       if (provisionalSessionId) next.delete(provisionalSessionId);
       const existingLiveProjection = next.get(session.session.id);
-      const startedState = applyStartedSessionState(current, session, {
+      const selectionFollowsStart = provisionalSessionId
+        ? current.selectedSessionId === provisionalSessionId
+        : current.selectedSessionId === null && state.selectedSessionId === null;
+      const configuredSession = applyPendingSessionStartupConfiguration(
+        session,
+        startupConfiguration,
+      );
+      const startedState = applyStartedSessionState(current, configuredSession, {
         cwd,
         provider,
         projections: next,
+        selectSession: selectionFollowsStart,
       });
       const startedProjections = startedState.projections ?? next;
       if (provisionalProjection) {
         startedProjections.set(
-          session.session.id,
+          configuredSession.session.id,
           mergeResumedHistoryProjection(
-            session,
+            configuredSession,
             provisionalProjection,
             existingLiveProjection,
           ),
@@ -509,7 +540,7 @@ export async function startSessionCommand(
         ...startedState,
         projections: deps.applyEventsToMap(
           startedProjections,
-          deps.takePendingEventsForSessions(new Set([session.session.id])),
+          deps.takePendingEventsForSessions(new Set([configuredSession.session.id])),
         ),
       };
     });
@@ -932,6 +963,7 @@ function stageResumeHistoryInitialInput(
   sessionId: string,
   previousProjection: SessionProjection | undefined,
   input: ResumeHistoryInitialInput,
+  startupConfiguration?: PendingSessionStartupConfiguration,
 ): void {
   if (!input.hasInput || !previousProjection) {
     return;
@@ -948,10 +980,8 @@ function stageResumeHistoryInitialInput(
   });
   deps.set((state) => {
     const projections = new Map(state.projections);
-    projections.set(sessionId, {
-      ...optimistic,
-      currentRuntimeStatus: "thinking",
-      summary: {
+    const summary = applyPendingSessionStartupConfiguration(
+      {
         ...optimistic.summary,
         session: {
           ...optimistic.summary.session,
@@ -992,6 +1022,13 @@ function stageResumeHistoryInitialInput(
           grantedAt: now,
         },
       },
+      startupConfiguration,
+    );
+    projections.set(sessionId, {
+      ...optimistic,
+      currentRuntimeStatus: "thinking",
+      summary,
+      ...(startupConfiguration ? { pendingStartupConfiguration: startupConfiguration } : {}),
     });
     return { projections, error: null };
   });
@@ -1049,13 +1086,29 @@ export function resumeHistorySessionCommand(
 ): Promise<string | null> {
   const operationKey = resumeHistoryOperationKey(deps, sessionId);
   const initial = createResumeHistoryInitialInput(options);
+  const startupConfiguration = createPendingSessionStartupConfiguration({
+    ...(options?.modelId ? { modelId: options.modelId } : {}),
+    ...(options?.reasoningId !== undefined
+      ? { reasoningId: options.reasoningId }
+      : {}),
+    ...(options?.optionValues !== undefined
+      ? { optionValues: options.optionValues }
+      : {}),
+    ...(options?.modeId ? { modeId: options.modeId } : {}),
+  });
   const existing = resumeHistoryOperations.get(operationKey);
   if (existing) {
     if (!initial.hasInput || existing.carriesInitialInput) {
       return existing.promise;
     }
     const previousProjection = deps.get().projections.get(sessionId);
-    stageResumeHistoryInitialInput(deps, sessionId, previousProjection, initial);
+    stageResumeHistoryInitialInput(
+      deps,
+      sessionId,
+      previousProjection,
+      initial,
+      startupConfiguration,
+    );
     let resumedSessionId: string | null = null;
     let resumedInputBaselineSeq: number | undefined;
     return existing.promise
@@ -1100,7 +1153,13 @@ export function resumeHistorySessionCommand(
 
   const hasInitialInput = initial.hasInput;
   const previousProjection = deps.get().projections.get(sessionId);
-  stageResumeHistoryInitialInput(deps, sessionId, previousProjection, initial);
+  stageResumeHistoryInitialInput(
+    deps,
+    sessionId,
+    previousProjection,
+    initial,
+    startupConfiguration,
+  );
 
   let resumedSessionId: string | null = null;
   let resumedInputBaselineSeq: number | undefined;
@@ -1227,14 +1286,28 @@ async function resumeHistorySessionCommandInternal(
     }
     void deps.ensureConversationLoaded(resumedSessionId).catch(() => undefined);
   };
+  const startupConfiguration = createPendingSessionStartupConfiguration({
+    ...(options?.modelId ? { modelId: options.modelId } : {}),
+    ...(options?.reasoningId !== undefined
+      ? { reasoningId: options.reasoningId }
+      : {}),
+    ...(options?.optionValues !== undefined
+      ? { optionValues: options.optionValues }
+      : {}),
+    ...(options?.modeId ? { modeId: options.modeId } : {}),
+  });
   const applyResumedSession = (resumedSession: SessionSummary) => {
+    const configuredSession = applyPendingSessionStartupConfiguration(
+      resumedSession,
+      startupConfiguration,
+    );
     deps.set((current) => {
       const next = new Map(current.projections);
       const sourceProjection = current.projections.get(sessionId) ?? preservedProjection;
       if (next.has(sessionId)) {
         const resumedState = applyResumedHistorySessionState(
           current,
-          resumedSession,
+          configuredSession,
           sessionId,
           sourceProjection,
           ref,
@@ -1242,7 +1315,7 @@ async function resumeHistorySessionCommandInternal(
         );
         pruneReadOnlyReplaysForResumedProviderSession(
           resumedState.projections ?? next,
-          resumedSession,
+          configuredSession,
         );
         return {
           ...resumedState,
@@ -1257,25 +1330,25 @@ async function resumeHistorySessionCommandInternal(
         current.selectedSessionId === sessionId ||
         current.selectedSessionId === resumedSession.session.id;
       next.set(
-        resumedSession.session.id,
-        mergeResumedHistoryProjection(resumedSession, sourceProjection, existingProjection),
+        configuredSession.session.id,
+        mergeResumedHistoryProjection(configuredSession, sourceProjection, existingProjection),
       );
-      pruneReadOnlyReplaysForResumedProviderSession(next, resumedSession);
+      pruneReadOnlyReplaysForResumedProviderSession(next, configuredSession);
       return {
         projections: deps.applyEventsToMap(
           next,
-          deps.takePendingEventsForSessions(new Set([resumedSession.session.id])),
+          deps.takePendingEventsForSessions(new Set([configuredSession.session.id])),
         ),
         unreadSessionIds: new Set(
           [...current.unreadSessionIds].filter(
             (sessionIdValue) =>
               sessionIdValue !== sessionId &&
               (!selectionFollowsResume ||
-                sessionIdValue !== resumedSession.session.id),
+                sessionIdValue !== configuredSession.session.id),
           ),
         ),
         selectedSessionId: selectionFollowsResume
-          ? resumedSession.session.id
+          ? configuredSession.session.id
           : current.selectedSessionId,
         sessionTopologyVersion: current.sessionTopologyVersion + 1,
         pendingSessionAction: null,
@@ -1283,13 +1356,17 @@ async function resumeHistorySessionCommandInternal(
         error: null,
       };
     });
-    ensureResumedConversationLoaded(resumedSession.session.id);
+    ensureResumedConversationLoaded(configuredSession.session.id);
   };
   const updateResumedSessionSummary = (resumedSession: SessionSummary) => {
+    const configuredSession = applyPendingSessionStartupConfiguration(
+      resumedSession,
+      startupConfiguration,
+    );
     deps.set((current) => ({
       projections: deps.applyEventsToMap(
-        updateSessionSummaryInProjectionMap(current.projections, resumedSession),
-        deps.takePendingEventsForSessions(new Set([resumedSession.session.id])),
+        updateSessionSummaryInProjectionMap(current.projections, configuredSession),
+        deps.takePendingEventsForSessions(new Set([configuredSession.session.id])),
       ),
       pendingSessionAction: null,
       pendingSessionTransition: null,
@@ -1313,6 +1390,47 @@ async function resumeHistorySessionCommandInternal(
     }
     return null;
   };
+  const applyRequestedResumeConfiguration = async (
+    currentSession: SessionSummary,
+  ): Promise<SessionSummary> => {
+    let configuredSession = currentSession;
+    try {
+      if (
+        options?.modeId &&
+        configuredSession.session.mode?.currentModeId !== options.modeId &&
+        configuredSession.session.mode?.mutable !== false &&
+        configuredSession.session.capabilities.structuredControl
+      ) {
+        configuredSession = await api.setSessionMode(configuredSession.session.id, {
+          modeId: options.modeId,
+        });
+        updateResumedSessionSummary(configuredSession);
+      }
+      if (
+        options?.modelId &&
+        configuredSession.session.model?.mutable !== false &&
+        configuredSession.session.capabilities.modelSwitch &&
+        (configuredSession.session.model?.currentModelId !== options.modelId ||
+          (options.reasoningId !== undefined &&
+            configuredSession.session.model?.currentReasoningId !== options.reasoningId))
+      ) {
+        configuredSession = await api.setSessionModel(configuredSession.session.id, {
+          modelId: options.modelId,
+          ...(options.optionValues !== undefined
+            ? { optionValues: options.optionValues }
+            : {}),
+        });
+        updateResumedSessionSummary(configuredSession);
+      }
+    } catch (configurationError) {
+      deps.set({
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: `Session was resumed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
+      });
+    }
+    return configuredSession;
+  };
   const resumeExistingRunning = async (
     running: SessionSummary,
   ): Promise<string> => {
@@ -1322,7 +1440,8 @@ async function resumeHistorySessionCommandInternal(
     });
     if (mode === "select") {
       applyResumedSession(running);
-      return running.session.id;
+      const configured = await applyRequestedResumeConfiguration(running);
+      return configured.session.id;
     }
     deps.set({
       pendingSessionAction: pendingResumeAction,
@@ -1335,7 +1454,8 @@ async function resumeHistorySessionCommandInternal(
         createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
       );
       applyResumedSession(attachResponse.session);
-      return attachResponse.session.session.id;
+      const configured = await applyRequestedResumeConfiguration(attachResponse.session);
+      return configured.session.id;
     } catch (attachError) {
       deps.set({
         pendingSessionAction: null,
@@ -1383,35 +1503,7 @@ async function resumeHistorySessionCommandInternal(
     const response = await api.resumeSession(request);
     let session = response.session;
     applyResumedSession(session);
-    try {
-      if (
-        options?.modeId &&
-        session.session.mode?.mutable &&
-        session.session.mode.currentModeId !== options.modeId
-      ) {
-        session = await api.setSessionMode(session.session.id, { modeId: options.modeId });
-        updateResumedSessionSummary(session);
-      }
-      if (
-        options?.modelId &&
-        session.session.model?.mutable &&
-        (session.session.model.currentModelId !== options.modelId ||
-          (options.reasoningId !== undefined &&
-            session.session.model.currentReasoningId !== options.reasoningId))
-      ) {
-        session = await api.setSessionModel(session.session.id, {
-          modelId: options.modelId,
-          ...(options.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
-        });
-        updateResumedSessionSummary(session);
-      }
-    } catch (configurationError) {
-      deps.set({
-        pendingSessionAction: null,
-        pendingSessionTransition: null,
-        error: `Session was resumed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
-      });
-    }
+    session = await applyRequestedResumeConfiguration(session);
     return session.session.id;
   } catch (error) {
     const message = readErrorMessage(error);

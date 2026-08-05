@@ -51,6 +51,14 @@ const LEGACY_ACCESS_MODE_LABELS: Record<string, string> = {
 };
 const CODEX_PLAN_MODE_ID_PREFIX = "plan:";
 
+function codexPlanAccessModeId(modeId: string | null | undefined): string | null {
+  if (!modeId?.startsWith(CODEX_PLAN_MODE_ID_PREFIX)) {
+    return null;
+  }
+  const accessModeId = modeId.slice(CODEX_PLAN_MODE_ID_PREFIX.length).trim();
+  return accessModeId || null;
+}
+
 export function codexPlanModeId(accessModeId: string | null): string | null {
   const trimmed = accessModeId?.trim();
   return trimmed ? `${CODEX_PLAN_MODE_ID_PREFIX}${trimmed}` : "plan";
@@ -194,17 +202,22 @@ export function resolveSessionModeControlState(args: {
     const planMode = extractPlanDescriptor(args.provider, descriptors);
     const planModeAvailable = Boolean(planMode);
     const currentModeId = args.summary.session.mode.currentModeId;
+    const currentPlanAccessModeId =
+      args.provider === "codex" ? codexPlanAccessModeId(currentModeId) : null;
     const currentModeIsSplitPlan =
       currentModeId !== null &&
       currentModeId !== undefined &&
-      descriptors.some((mode) => mode.id === currentModeId && isSplitPlanMode(args.provider, mode));
+      (currentPlanAccessModeId !== null ||
+        descriptors.some(
+          (mode) => mode.id === currentModeId && isSplitPlanMode(args.provider, mode),
+        ));
     const defaultAccessModeId = resolveDefaultAccessModeId(
       args.provider,
       descriptors,
       args.catalog?.defaultModeId,
     );
     const selectedAccessModeId = resolveSelectedAccessModeId({
-      currentModeId: currentModeIsSplitPlan ? null : currentModeId,
+      currentModeId: currentPlanAccessModeId ?? (currentModeIsSplitPlan ? null : currentModeId),
       draftModeId: args.draft?.accessModeId,
       defaultModeId: currentModeIsSplitPlan
         ? accessModes[0]?.id ?? defaultAccessModeId

@@ -34,6 +34,20 @@ function isCustomAccessMode(mode: SessionModeChoice): boolean {
   return identity.includes("custom") || identity.includes("config.toml");
 }
 
+function isPlanningAccessMode(mode: SessionModeChoice): boolean {
+  const identity = `${mode.id} ${mode.label}`.toLowerCase();
+  return identity.includes("plan");
+}
+
+function accessModeIcon(mode: SessionModeChoice | undefined) {
+  if (!mode) return Shield;
+  if (isElevatedAccessMode(mode)) return ShieldAlert;
+  if (isPlanningAccessMode(mode)) return ListTodo;
+  if (isCustomAccessMode(mode)) return Settings2;
+  if (isAutomaticAccessMode(mode)) return BadgeCheck;
+  return Hand;
+}
+
 export function SessionModeControls(props: {
   accessModes: SessionModeChoice[];
   selectedAccessModeId: string | null;
@@ -117,7 +131,8 @@ export function SessionModeControls(props: {
   const selectedAccessLabel = selectedAccessMode?.label ?? "Permissions";
   const selectedAccessDisplayLabel = selectedAccessLabel.split(" · ")[0] ?? selectedAccessLabel;
   const elevatedAccess = isElevatedAccessMode(selectedAccessMode);
-  const composerAccessClassName = `icon-click-feedback relative inline-flex h-10 md:h-8 lg:h-7 min-w-0 shrink items-center gap-1 md:gap-0.5 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
+  const SelectedAccessIcon = accessModeIcon(selectedAccessMode);
+  const composerAccessClassName = `rah-composer-permission-trigger icon-click-feedback relative inline-flex h-10 md:h-8 lg:h-7 min-w-0 shrink items-center gap-1 md:gap-0.5 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] transition-colors hover:bg-[var(--app-subtle-bg)] aria-expanded:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
     props.iconOnly
       ? "w-10 justify-center px-0 md:w-8 lg:w-7"
       : "max-w-[9.5rem] justify-start px-2 md:px-1.5"
@@ -145,6 +160,7 @@ export function SessionModeControls(props: {
             ? "rah-composer-mode-controls flex min-w-0 items-center gap-0.5"
             : "flex items-center gap-1.5 min-h-8 md:min-h-9"
       }
+      data-icon-only={composer && props.iconOnly ? "true" : "false"}
     >
       {showAccessSelect ? (
         variant === "compact" ? (
@@ -168,6 +184,7 @@ export function SessionModeControls(props: {
               type="button"
               className={`${compactControlClassName} inline-flex min-w-0 flex-1 items-center justify-start gap-2 transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-50`}
               title={selectedAccessLabel}
+              aria-label={`Session mode ${selectedAccessLabel}`}
               disabled={props.disabled}
               onClick={toggleAccessOpen}
               aria-haspopup="listbox"
@@ -197,21 +214,15 @@ export function SessionModeControls(props: {
               data-composer-control="permissions"
             >
               <span className="sr-only">Session mode</span>
-              {elevatedAccess ? (
-                <ShieldAlert
-                  size={15}
-                  strokeWidth={1.8}
-                  className="h-[15px] w-[15px] shrink-0 md:h-3.5 md:w-3.5"
-                />
-              ) : (
-                <Shield
-                  size={15}
-                  strokeWidth={1.8}
-                  className="h-[15px] w-[15px] shrink-0 text-[var(--app-hint)] md:h-3.5 md:w-3.5"
-                />
-              )}
+              <SelectedAccessIcon
+                size={15}
+                strokeWidth={1.8}
+                className={`h-[15px] w-[15px] shrink-0 md:h-3.5 md:w-3.5 ${
+                  elevatedAccess ? "" : "text-[var(--app-hint)]"
+                }`}
+              />
               {props.iconOnly ? null : (
-                <span className="min-w-0 truncate text-left">
+                <span className="rah-composer-control-label rah-composer-permission-label min-w-0 truncate text-left">
                   {selectedAccessDisplayLabel}
                 </span>
               )}
@@ -267,13 +278,7 @@ export function SessionModeControls(props: {
                 {props.accessModes.length > 0 ? props.accessModes.map((mode) => {
                   const selected = mode.id === props.selectedAccessModeId;
                   const elevated = isElevatedAccessMode(mode);
-                  const ModeIcon = elevated
-                    ? ShieldAlert
-                    : isCustomAccessMode(mode)
-                      ? Settings2
-                      : isAutomaticAccessMode(mode)
-                        ? BadgeCheck
-                        : Hand;
+                  const ModeIcon = accessModeIcon(mode);
                   return (
                     <button
                       key={mode.id}
@@ -322,7 +327,7 @@ export function SessionModeControls(props: {
             document.body,
           )
         : null}
-      {props.planModeAvailable || composer ? (
+      {props.planModeAvailable ? (
         variant === "compact" ? (
           <button
             type="button"
@@ -343,24 +348,34 @@ export function SessionModeControls(props: {
         ) : composer ? (
           <button
             type="button"
-            disabled={props.disabled || !props.planModeAvailable}
+            disabled={props.disabled}
             onClick={() => props.onPlanModeToggle(!props.planModeEnabled)}
-            className={`rah-composer-plan-toggle inline-flex h-10 md:h-8 lg:h-7 shrink-0 items-center justify-center gap-1 rounded-full border border-transparent bg-transparent px-2 text-[13px] leading-[18px] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 md:px-1.5 ${
+            className={`rah-composer-plan-toggle inline-flex h-10 md:h-8 lg:h-7 shrink-0 items-center justify-center gap-1 rounded-full border border-transparent bg-transparent text-[13px] leading-[18px] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:cursor-not-allowed disabled:opacity-40 ${
+              props.iconOnly ? "w-10 px-0" : "px-2 md:px-1.5"
+            } ${
               props.planModeEnabled
-                ? "font-semibold"
+                ? "font-semibold text-[var(--app-resource-link)]"
                 : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
             }`}
             aria-pressed={props.planModeEnabled}
-            title="Toggle plan mode"
+            title={props.planModeEnabled ? "Disable plan mode" : "Enable plan mode"}
+            aria-label="Plan mode"
             data-composer-control="plan"
             data-plan-active={props.planModeEnabled ? "true" : "false"}
           >
             <ListTodo
               size={14}
               strokeWidth={1.8}
-              className="h-3.5 w-3.5 shrink-0 md:h-[13px] md:w-[13px]"
+              className="rah-composer-plan-icon h-3.5 w-3.5 shrink-0 md:h-[13px] md:w-[13px]"
             />
-            <span>Plan</span>
+            <span className="rah-composer-plan-compact-glyph" aria-hidden="true">
+              P
+            </span>
+            {props.iconOnly ? (
+              <span className="sr-only">Plan</span>
+            ) : (
+              <span className="rah-composer-control-label rah-composer-plan-label">Plan</span>
+            )}
           </button>
         ) : (
           <button

@@ -740,6 +740,10 @@ def main() -> int:
                     '[data-provider-selector="module"]'
                   );
                   const selected = provider?.querySelector('[aria-checked="true"]');
+                  const mode = composer?.querySelector('[data-composer-control="permissions"]');
+                  const plan = composer?.querySelector('[data-composer-control="plan"]');
+                  const model = composer?.querySelector('[data-composer-control="model"]');
+                  const primary = composer?.querySelector('[aria-label="Start session"]');
                   if (!composer || !strip || !trigger || !provider || !selected) return null;
                   const composerRect = composer.getBoundingClientRect();
                   const stripRect = strip.getBoundingClientRect();
@@ -750,6 +754,16 @@ def main() -> int:
                   );
                   const markerStyle = selectedLabel
                     ? getComputedStyle(selectedLabel, '::after')
+                    : null;
+                  const modeLabel = mode?.querySelector('.rah-composer-permission-label');
+                  const planLabel = plan?.querySelector('.rah-composer-plan-label');
+                  const leadingControls = [mode, plan].filter(Boolean);
+                  const controls = [...leadingControls, model, primary].filter(Boolean);
+                  const controlRects = controls.map(node => node.getBoundingClientRect());
+                  const modelRect = model?.getBoundingClientRect() ?? null;
+                  const primaryRect = primary?.getBoundingClientRect() ?? null;
+                  const leadingRight = leadingControls.length > 0
+                    ? Math.max(...leadingControls.map(node => node.getBoundingClientRect().right))
                     : null;
                   return {
                     overlap: composerRect.bottom - stripRect.top,
@@ -771,6 +785,20 @@ def main() -> int:
                     ).display,
                     moduleBackground: getComputedStyle(provider).backgroundColor,
                     moduleBorderWidth: getComputedStyle(provider).borderTopWidth,
+                    selectedProvider: selected.getAttribute('aria-label'),
+                    planPresent: Boolean(plan),
+                    modeLabelDisplay: modeLabel ? getComputedStyle(modeLabel).display : null,
+                    planLabelDisplay: planLabel ? getComputedStyle(planLabel).display : null,
+                    controlsSameRow: controlRects.length >= 3 &&
+                      Math.max(...controlRects.map(rect => rect.top)) -
+                        Math.min(...controlRects.map(rect => rect.top)) <= 1,
+                    modelAfterLeading: Boolean(
+                      modelRect && leadingRight !== null && modelRect.left >= leadingRight
+                    ),
+                    modelToPrimaryGap:
+                      modelRect && primaryRect
+                        ? primaryRect.left - modelRect.right
+                        : null,
                   };
                 }
                 """
@@ -806,9 +834,18 @@ def main() -> int:
                 == "rgba(0, 0, 0, 0)"
                 or desktop_new_task_metrics["selectedButtonMarkerDisplay"] != "none"
                 or desktop_new_task_metrics["moduleBorderWidth"] != "0px"
+                or desktop_new_task_metrics["modeLabelDisplay"] == "none"
+                or (
+                    desktop_new_task_metrics["planPresent"]
+                    and desktop_new_task_metrics["planLabelDisplay"] == "none"
+                )
+                or not desktop_new_task_metrics["controlsSameRow"]
+                or not desktop_new_task_metrics["modelAfterLeading"]
+                or desktop_new_task_metrics["modelToPrimaryGap"] is None
+                or desktop_new_task_metrics["modelToPrimaryGap"] > 8
             ):
                 raise AssertionError(
-                    "Desktop provider selector is not a flat single-layer strip: "
+                    "Desktop provider/composer controls left the shared wide layout contract: "
                     f"{desktop_new_task_metrics!r}"
                 )
             desktop_provider_module.hover()
@@ -1035,6 +1072,38 @@ def main() -> int:
                     "PWA workspace accessory is not using the compact 40/28 geometry: "
                     f"strip={strip_box!r} trigger={trigger_box!r}"
                 )
+            workspace_layering = pwa_new_surface.evaluate(
+                """
+                element => {
+                  const strip = element.parentElement?.querySelector(
+                    '.rah-new-task-workspace-strip'
+                  );
+                  if (!strip) return null;
+                  const stripRect = strip.getBoundingClientRect();
+                  const surfaceStyle = getComputedStyle(element);
+                  const stripStyle = getComputedStyle(strip);
+                  const overlapOwner = document.elementFromPoint(
+                    stripRect.left + 18,
+                    stripRect.top + 4,
+                  );
+                  return {
+                    surfaceZ: surfaceStyle.zIndex,
+                    stripZ: stripStyle.zIndex,
+                    composerOwnsOverlap:
+                      overlapOwner === element || element.contains(overlapOwner),
+                  };
+                }
+                """
+            )
+            if workspace_layering != {
+                "surfaceZ": "2",
+                "stripZ": "auto",
+                "composerOwnsOverlap": True,
+            }:
+                raise AssertionError(
+                    "PWA workspace accessory paints over the composer instead of beneath it: "
+                    f"{workspace_layering!r}"
+                )
             pwa_provider_module = pwa_page.locator(
                 '[data-provider-selector="module"]:visible'
             )
@@ -1049,9 +1118,11 @@ def main() -> int:
                   const selectedLabel = selected.querySelector(
                     '.provider-choice-label-text'
                   );
+                  const selectedLogo = selected.querySelector('svg, img');
                   return {
                     selectedCount: element.querySelectorAll('[aria-checked="true"]').length,
                     moduleHeight: element.getBoundingClientRect().height,
+                    touch: element.getAttribute('data-touch'),
                     selectedBackground: selectedStyle.backgroundColor,
                     selectedBoxShadow: selectedStyle.boxShadow,
                     selectedFontWeight: selectedStyle.fontWeight,
@@ -1062,6 +1133,9 @@ def main() -> int:
                     selectedLabelDisplay: selectedLabel
                       ? getComputedStyle(selectedLabel).display
                       : null,
+                    selectedLogoWidth: selectedLogo
+                      ? selectedLogo.getBoundingClientRect().width
+                      : null,
                     moduleBorderWidth: getComputedStyle(element).borderTopWidth,
                   };
                 }
@@ -1070,17 +1144,19 @@ def main() -> int:
             if (
                 pwa_provider_metrics is None
                 or pwa_provider_metrics["selectedCount"] != 1
-                or abs(pwa_provider_metrics["moduleHeight"] - 36) > 1
+                or abs(pwa_provider_metrics["moduleHeight"] - 48) > 1
+                or pwa_provider_metrics["touch"] != "true"
                 or pwa_provider_metrics["selectedBackground"]
                 != "rgba(0, 0, 0, 0)"
                 or pwa_provider_metrics["selectedBoxShadow"] != "none"
                 or pwa_provider_metrics["selectedFontWeight"] != "600"
-                or pwa_provider_metrics["selectedMarkerWidth"] != "20px"
+                or pwa_provider_metrics["selectedMarkerWidth"] != "24px"
                 or pwa_provider_metrics["selectedMarkerHeight"] != "2px"
                 or pwa_provider_metrics["selectedMarkerOpacity"] != "1"
                 or pwa_provider_metrics["selectedMarkerBackground"]
                 == "rgba(0, 0, 0, 0)"
                 or pwa_provider_metrics["selectedLabelDisplay"] != "none"
+                or abs(pwa_provider_metrics["selectedLogoWidth"] - 22) > 1
                 or pwa_provider_metrics["moduleBorderWidth"] != "0px"
             ):
                 raise AssertionError(
@@ -1105,37 +1181,214 @@ def main() -> int:
                   const plan = element.querySelector('[data-composer-control="plan"]');
                   const model = element.querySelector('[data-composer-control="model"]');
                   const primary = element.querySelector('[aria-label="Start session"]');
-                  if (!mode || !plan || !model || !primary) return null;
-                  const boxes = [mode, plan, model, primary].map(node => node.getBoundingClientRect());
+                  const toolbar = element.querySelector('.rah-composer-toolbar');
+                  const modelMarquee = model?.querySelector('.rah-composer-model-label');
+                  const modeLabel = mode?.querySelector('.rah-composer-permission-label');
+                  const planLabel = plan?.querySelector('.rah-composer-plan-label');
+                  const modeIcon = mode?.querySelector('svg');
+                  const planIcon = plan?.querySelector('.rah-composer-plan-icon');
+                  const planGlyph = plan?.querySelector('.rah-composer-plan-compact-glyph');
+                  if (!mode || !model || !primary) return null;
+                  const leadingControls = [mode, plan].filter(Boolean);
+                  const controls = [...leadingControls, model, primary];
+                  const boxes = controls.map(node => node.getBoundingClientRect());
+                  const modelBox = model.getBoundingClientRect();
+                  const primaryBox = primary.getBoundingClientRect();
+                  const leadingRight = Math.max(
+                    ...leadingControls.map(node => node.getBoundingClientRect().right)
+                  );
                   const overlaps = (a, b) => !(
                     a.right <= b.left || b.right <= a.left ||
                     a.bottom <= b.top || b.bottom <= a.top
                   );
+                  const centerDelta = (control, content) => {
+                    if (!control || !content) return null;
+                    const controlRect = control.getBoundingClientRect();
+                    const contentRect = content.getBoundingClientRect();
+                    return [
+                      Math.abs(
+                        controlRect.left + controlRect.width / 2 -
+                          (contentRect.left + contentRect.width / 2)
+                      ),
+                      Math.abs(
+                        controlRect.top + controlRect.height / 2 -
+                          (contentRect.top + contentRect.height / 2)
+                      ),
+                    ];
+                  };
                   return {
-                    modeText: mode.textContent?.trim() || '',
-                    planText: plan.textContent?.trim() || '',
                     modelText: model.textContent?.trim() || '',
                     overlap: boxes.some((box, index) =>
                       boxes.slice(index + 1).some(other => overlaps(box, other))
                     ),
-                    modelBelowMode: boxes[2].top >= boxes[0].bottom - 1,
+                    sameRow:
+                      Math.max(...boxes.map(box => box.top)) -
+                        Math.min(...boxes.map(box => box.top)) <= 1,
+                    modeLabelDisplay: modeLabel ? getComputedStyle(modeLabel).display : null,
+                    planLabelDisplay: planLabel ? getComputedStyle(planLabel).display : null,
+                    modeIconClass: modeIcon?.getAttribute('class') || '',
+                    modeSize: [mode.getBoundingClientRect().width, mode.getBoundingClientRect().height],
+                    modeIconCenterDelta: centerDelta(mode, modeIcon),
+                    planSize: plan
+                      ? [plan.getBoundingClientRect().width, plan.getBoundingClientRect().height]
+                      : null,
+                    planIconDisplay: planIcon ? getComputedStyle(planIcon).display : null,
+                    planGlyphDisplay: planGlyph ? getComputedStyle(planGlyph).display : null,
+                    planGlyphText: planGlyph?.textContent?.trim() || '',
+                    planGlyphCenterDelta: centerDelta(plan, planGlyph),
+                    planPresent: Boolean(plan),
+                    toolbarDisplay: toolbar ? getComputedStyle(toolbar).display : null,
+                    modelAfterLeading: modelBox.left >= leadingRight,
+                    modelToPrimaryGap: primaryBox.left - modelBox.right,
+                    modelMarqueeState: modelMarquee?.getAttribute('data-marquee') ?? null,
+                    modelWhiteSpace: modelMarquee
+                      ? getComputedStyle(modelMarquee).whiteSpace
+                      : null,
                   };
                 }
                 """
             )
             if pwa_new_control_metrics is None:
                 raise AssertionError("PWA New task omitted an agent capability control")
-            if pwa_new_control_metrics["overlap"] or not pwa_new_control_metrics["modelBelowMode"]:
-                raise AssertionError(
-                    f"PWA New task controls are not a stable two-row layout: {pwa_new_control_metrics!r}"
-                )
-            if not all(
-                pwa_new_control_metrics[key]
-                for key in ("modeText", "planText", "modelText")
+            if (
+                pwa_new_control_metrics["overlap"]
+                or not pwa_new_control_metrics["sameRow"]
+                or pwa_new_control_metrics["toolbarDisplay"] != "flex"
             ):
                 raise AssertionError(
-                    f"PWA New task capability labels are incomplete: {pwa_new_control_metrics!r}"
+                    f"PWA New task controls are not a stable single row: {pwa_new_control_metrics!r}"
                 )
+            if (
+                pwa_new_control_metrics["modeLabelDisplay"] != "none"
+                or (
+                    pwa_new_control_metrics["planPresent"]
+                    and pwa_new_control_metrics["planLabelDisplay"] != "none"
+                )
+                or not pwa_new_control_metrics["modeIconClass"]
+                or (
+                    pwa_new_control_metrics["planPresent"]
+                    and (
+                        pwa_new_control_metrics["planIconDisplay"] != "none"
+                        or pwa_new_control_metrics["planGlyphDisplay"] not in {"flex", "inline-flex"}
+                        or pwa_new_control_metrics["planGlyphText"] != "P"
+                    )
+                )
+                or pwa_new_control_metrics["modeSize"] != [40, 40]
+                or (
+                    pwa_new_control_metrics["planPresent"]
+                    and pwa_new_control_metrics["planSize"] != [40, 40]
+                )
+                or any(
+                    delta > 1
+                    for delta in (pwa_new_control_metrics["modeIconCenterDelta"] or [])
+                )
+                or (
+                    pwa_new_control_metrics["planPresent"]
+                    and any(
+                        delta > 1
+                        for delta in (
+                            pwa_new_control_metrics["planGlyphCenterDelta"] or []
+                        )
+                    )
+                )
+                or not pwa_new_control_metrics["modelAfterLeading"]
+                or pwa_new_control_metrics["modelToPrimaryGap"] < 0
+                or pwa_new_control_metrics["modelToPrimaryGap"] > 6
+                or not pwa_new_control_metrics["modelText"]
+                or pwa_new_control_metrics["modelMarqueeState"] not in {"true", "false"}
+                or pwa_new_control_metrics["modelWhiteSpace"] != "nowrap"
+            ):
+                raise AssertionError(
+                    "PWA New task did not compress the shared right-anchored composer rail: "
+                    f"{pwa_new_control_metrics!r}"
+                )
+            pwa_plan_control = pwa_new_surface.locator(
+                '[data-composer-control="plan"]'
+            )
+            if pwa_new_control_metrics["planPresent"]:
+                if pwa_plan_control.get_attribute("aria-pressed") != "true":
+                    pwa_plan_control.click(timeout=10_000)
+                expect(pwa_plan_control).to_have_attribute("aria-pressed", "true")
+                pwa_page.mouse.move(0, 0)
+                pwa_page.wait_for_timeout(180)
+                pwa_plan_active_metrics = pwa_plan_control.evaluate(
+                    """
+                    element => {
+                      const probe = document.createElement('span');
+                      probe.style.color = 'var(--app-resource-link)';
+                      document.body.appendChild(probe);
+                      const linkColor = getComputedStyle(probe).color;
+                      probe.remove();
+                      return {
+                        color: getComputedStyle(element).color,
+                        linkColor,
+                        className: element.className,
+                        dataPlanActive: element.getAttribute('data-plan-active'),
+                        backgroundColor: getComputedStyle(element).backgroundColor,
+                        boxShadow: getComputedStyle(element).boxShadow,
+                        glyphWeight: getComputedStyle(
+                          element.querySelector('.rah-composer-plan-compact-glyph')
+                        ).fontWeight,
+                      };
+                    }
+                    """
+                )
+                if (
+                    int(pwa_plan_active_metrics["glyphWeight"]) < 700
+                    or pwa_plan_active_metrics["color"]
+                    != pwa_plan_active_metrics["linkColor"]
+                    or pwa_plan_active_metrics["backgroundColor"] != "rgba(0, 0, 0, 0)"
+                    or pwa_plan_active_metrics["boxShadow"] != "none"
+                ):
+                    raise AssertionError(
+                        "PWA Plan selection is not the compact desktop text treatment: "
+                        f"{pwa_plan_active_metrics!r}"
+                    )
+                pwa_plan_control.click(timeout=10_000)
+            pwa_model_trigger = pwa_new_surface.locator(
+                '[data-composer-control="model"]'
+            )
+            pwa_model_label = pwa_model_trigger.locator(
+                '.rah-composer-model-label'
+            )
+            pwa_model_trigger.evaluate(
+                "element => { element.style.maxWidth = '2.5rem'; }"
+            )
+            expect(pwa_model_label).to_have_attribute(
+                "data-marquee", "true", timeout=10_000
+            )
+            pwa_model_trigger.evaluate(
+                "element => { element.style.removeProperty('max-width'); }"
+            )
+            for provider_label in ("Claude", "OpenCode"):
+                provider_radio = pwa_page.get_by_role(
+                    "radio", name=provider_label, exact=True
+                )
+                provider_radio.click(timeout=10_000)
+                expect(provider_radio).to_have_attribute("aria-checked", "true")
+                expect(
+                    pwa_new_surface.locator(
+                        '[data-composer-control="plan"]'
+                    )
+                ).to_have_count(0)
+                expect(
+                    pwa_new_surface.locator(
+                        '[data-composer-control="permissions"]'
+                    )
+                ).to_have_count(1)
+                expect(
+                    pwa_new_surface.locator(
+                        '[data-composer-control="model"]'
+                    )
+                ).to_have_count(1)
+            codex_provider_radio = pwa_page.get_by_role(
+                "radio", name="Codex", exact=True
+            )
+            codex_provider_radio.click(timeout=10_000)
+            expect(codex_provider_radio).to_have_attribute("aria-checked", "true")
+            expect(
+                pwa_new_surface.locator('[data-composer-control="plan"]')
+            ).to_have_count(1, timeout=10_000)
             pwa_notice_metrics = pwa_notice.evaluate(
                 """
                 element => {
@@ -1575,11 +1828,16 @@ def main() -> int:
                       const textarea = element.querySelector('textarea');
                       const secondary = element.querySelector('.rah-chat-composer-secondary');
                       const toolbar = element.querySelector('.rah-composer-toolbar');
+                      const mode = element.querySelector('[data-composer-control="permissions"]');
+                      const plan = element.querySelector('[data-composer-control="plan"]');
                       const model = element.querySelector('[data-composer-control="model"]');
+                      const attach = element.querySelector('.rah-chat-composer-attach');
                       const primary = element.querySelector('.rah-chat-composer-primary');
-                      if (!textarea || !secondary || !toolbar || !primary) return null;
+                      if (!textarea || !secondary || !toolbar || !attach || !primary) return null;
                       const rect = element.getBoundingClientRect();
                       const textareaRect = textarea.getBoundingClientRect();
+                      const attachRect = attach.getBoundingClientRect();
+                      const primaryRect = primary.getBoundingClientRect();
                       const style = getComputedStyle(element);
                       const textareaStyle = getComputedStyle(textarea);
                       return {
@@ -1587,11 +1845,26 @@ def main() -> int:
                         height: rect.height,
                         left: rect.left,
                         borderColor: style.borderColor,
+                        boxShadow: style.boxShadow,
                         secondaryDisplay: getComputedStyle(secondary).display,
                         toolbarDisplay: getComputedStyle(toolbar).display,
                         modelBeforePrimary: model
                           ? model.getBoundingClientRect().right <= primary.getBoundingClientRect().left
                           : null,
+                        modelToPrimaryGap: model
+                          ? primary.getBoundingClientRect().left - model.getBoundingClientRect().right
+                          : null,
+                        modeLabelDisplay: mode?.querySelector('.rah-composer-permission-label')
+                          ? getComputedStyle(mode.querySelector('.rah-composer-permission-label')).display
+                          : null,
+                        planLabelDisplay: plan?.querySelector('.rah-composer-plan-label')
+                          ? getComputedStyle(plan.querySelector('.rah-composer-plan-label')).display
+                          : null,
+                        attachSize: [attachRect.width, attachRect.height],
+                        primarySize: [primaryRect.width, primaryRect.height],
+                        primaryHitWidth: Number.parseFloat(
+                          getComputedStyle(primary, '::after').width
+                        ),
                         textareaHeight: textareaRect.height,
                         textareaWhiteSpace: textareaStyle.whiteSpace,
                       };
@@ -1602,9 +1875,18 @@ def main() -> int:
             pwa_chat_idle = read_pwa_chat_composer_metrics()
             if pwa_chat_idle is None:
                 raise AssertionError("PWA Chat composer omitted required controls")
-            if not 54 <= pwa_chat_idle["height"] <= 62:
+            if not 48 <= pwa_chat_idle["height"] <= 52:
                 raise AssertionError(
                     f"PWA idle Chat composer is not a one-row pill: {pwa_chat_idle!r}"
+                )
+            if (
+                pwa_chat_idle["attachSize"] != [36, 36]
+                or pwa_chat_idle["primarySize"] != [36, 36]
+                or pwa_chat_idle["primaryHitWidth"] < 44
+            ):
+                raise AssertionError(
+                    "PWA idle Chat controls are not visually compact with a preserved hit area: "
+                    f"{pwa_chat_idle!r}"
                 )
             if pwa_chat_idle["secondaryDisplay"] != "none":
                 raise AssertionError(
@@ -1615,6 +1897,11 @@ def main() -> int:
                     f"PWA idle Chat draft is not folded to one line: {pwa_chat_idle!r}"
                 )
 
+            pwa_chat_input = pwa_chat_surface.locator(
+                ".rah-chat-composer-input"
+            )
+            pwa_chat_input.click(position={"x": 4, "y": 18}, timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             long_chat_draft = "First line remains in the task\nSecond line is revealed on focus\nThird line proves bounded growth"
             pwa_chat_textarea.fill(long_chat_draft)
             pwa_page.wait_for_timeout(260)
@@ -1644,11 +1931,66 @@ def main() -> int:
                     "PWA focused Chat model control is not immediately before the primary action: "
                     f"{pwa_chat_focused!r}"
                 )
-            if pwa_chat_focused["borderColor"] == pwa_chat_idle["borderColor"]:
+            if (
+                pwa_chat_focused["modelToPrimaryGap"] is None
+                or pwa_chat_focused["modelToPrimaryGap"] < 0
+                or pwa_chat_focused["modelToPrimaryGap"] > 6
+                or pwa_chat_focused["modeLabelDisplay"] != "none"
+                or pwa_chat_focused["planLabelDisplay"] != "none"
+            ):
                 raise AssertionError(
-                    "PWA focused Chat composer did not deepen its border: "
+                    "PWA focused Chat did not reuse the compact right-anchored control rail: "
+                    f"{pwa_chat_focused!r}"
+                )
+            if (
+                pwa_chat_focused["borderColor"] != pwa_chat_idle["borderColor"]
+                or pwa_chat_focused["boxShadow"] != pwa_chat_idle["boxShadow"]
+            ):
+                raise AssertionError(
+                    "PWA focused Chat composer changed its border or shadow emphasis: "
                     f"idle={pwa_chat_idle!r} focused={pwa_chat_focused!r}"
                 )
+            pwa_chat_surface.evaluate(
+                """
+                element => {
+                  const root = element.closest('[style*="--workbench-keyboard-inset"]');
+                  if (!root) throw new Error('Workbench keyboard inset owner is missing');
+                  root.style.setProperty('--workbench-keyboard-inset', '240px');
+                }
+                """
+            )
+            pwa_page.wait_for_timeout(120)
+            pwa_keyboard_safe_metrics = pwa_chat_surface.evaluate(
+                """
+                element => ({
+                  composerBottom: element.getBoundingClientRect().bottom,
+                  viewportHeight: window.innerHeight,
+                  activeElementIsTextarea:
+                    document.activeElement === element.querySelector('textarea'),
+                })
+                """
+            )
+            pwa_keyboard_gap = (
+                pwa_keyboard_safe_metrics["viewportHeight"]
+                - pwa_keyboard_safe_metrics["composerBottom"]
+            )
+            if (
+                pwa_keyboard_gap < 247
+                or pwa_keyboard_gap > 251
+                or not pwa_keyboard_safe_metrics["activeElementIsTextarea"]
+            ):
+                raise AssertionError(
+                    "PWA focused Chat composer is not held 8px above the visual keyboard inset: "
+                    f"{pwa_keyboard_safe_metrics!r}"
+                )
+            pwa_chat_surface.evaluate(
+                """
+                element => element
+                  .closest('[style*="--workbench-keyboard-inset"]')
+                  ?.style.setProperty('--workbench-keyboard-inset', '0px')
+                """
+            )
+            pwa_page.wait_for_timeout(120)
             save_browser_screenshot(
                 pwa_page,
                 artifact_dir,
@@ -1673,10 +2015,14 @@ def main() -> int:
                     f"focused={pwa_chat_focused!r} menu={pwa_chat_menu_open!r}"
                 )
             pwa_model_control.click(timeout=10_000)
-            pwa_page.evaluate(
-                "document.activeElement instanceof HTMLElement && document.activeElement.blur()"
-            )
+            pwa_page.mouse.click(4, 400)
             pwa_page.wait_for_timeout(260)
+            if pwa_chat_textarea.evaluate(
+                "element => document.activeElement === element"
+            ):
+                raise AssertionError(
+                    "PWA Chat composer kept the keyboard focus after an outside pointerdown"
+                )
             pwa_chat_blurred = read_pwa_chat_composer_metrics()
             if pwa_chat_blurred is None:
                 raise AssertionError("PWA blurred Chat composer metrics are unavailable")
@@ -1685,7 +2031,7 @@ def main() -> int:
                     "PWA Chat composer did not restore its idle inset: "
                     f"idle={pwa_chat_idle!r} blurred={pwa_chat_blurred!r}"
                 )
-            if pwa_chat_blurred["height"] > 62:
+            if pwa_chat_blurred["height"] > 52:
                 raise AssertionError(
                     "PWA blurred Chat composer did not fold a long draft: "
                     f"blurred={pwa_chat_blurred!r}"
@@ -1769,15 +2115,15 @@ def main() -> int:
                         "Desktop Session hover actions reuse the row surface without a separate background plate or shadow.",
                         "Desktop Session tooltips have one owner: cross-row hover replaces the active card, leaving clears it, and pending timers cannot reopen it after a page pointerdown.",
                         "Workspace New task selects that exact workspace in the composer.",
-                        "Desktop and iOS PWA New task tuck a compact 40px workspace accessory 8px beneath the composer, use a 28px trigger, and keep long-name marquee bounded.",
-                        "Desktop and touch New task provider modules stay borderless and item backgrounds stay transparent; Desktop selection uses a blue text-width marker, touch uses a blue 20x2 icon marker, and the single grouped pointer hover surface disappears after leave.",
+                        "Desktop and iOS PWA New task tuck a compact 40px workspace accessory 8px beneath the composer with the composer owning the overlap, use a 28px trigger, and keep long-name marquee bounded.",
+                        "Desktop and touch New task provider modules stay borderless and item backgrounds stay transparent; Desktop selection uses a blue text-width marker, touch uses 48px targets with a blue 24x2 icon marker, and the single grouped pointer hover surface disappears after leave.",
                         "iOS PWA recovery notice keeps a low-contrast orange tint, shadow-free corners, and clear composer separation.",
                         "iOS PWA primary navigation selection reuses the Session hover surface without a focus outline.",
                         "iOS PWA Session Chat, Council, and Canvas share one 40px single-line header and keep recovery notices below the divider.",
                         "iOS PWA turn-file and shared turn-review flows close directly back to Chat without exposing a full-screen Inspector.",
-                        "iOS PWA New task keeps fixed geometry and emphasis on focus while exposing session controls.",
+                        "Desktop and iOS PWA share one right-anchored composer rail: model/effort stays beside Send, narrow containers replace permission/Plan labels with icons, unsupported provider Plan toggles stay hidden, and overflowing models marquee.",
                         "iOS PWA conversation copy uses the shared 12-20px conversation setting, 75% user bubbles, 12px turn gaps, and flat process text.",
-                        "iOS PWA Chat folds idle drafts to one row, then stays expanded for focus or open model menus.",
+                        "iOS PWA Chat uses a 48–52px idle pill with 36px visible controls and a preserved 44px hit area, then stays expanded for focus or open model menus.",
                         "Desktop Markdown images wrap as a 12px-gap thumbnail gallery capped at 160px for local resources.",
                         "Appearance exposes only a persisted 12-20px Session/Council text setting, derives code size proportionally, updates conversation type immediately, and leaves navigation unchanged.",
                         "Reload preserves workspace count, order, and unique rows.",

@@ -21,6 +21,7 @@ import type {
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
+import type { PendingSessionStartupConfiguration } from "./session-startup-configuration";
 
 export type SessionsResponse = ListSessionsResponse;
 
@@ -115,6 +116,7 @@ export interface SessionProjection {
   feed: FeedEntry[];
   events: RahEvent[];
   lastSeq: number;
+  pendingStartupConfiguration?: PendingSessionStartupConfiguration;
   currentRuntimeStatus?: Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"];
   conversation?: ConversationSyncState;
   turnDirectory?: ConversationDirectoryState;

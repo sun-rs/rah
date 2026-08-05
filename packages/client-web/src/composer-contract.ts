@@ -34,7 +34,8 @@ export const COMPOSER_PLACEHOLDER = "Work with Rah";
 
 export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {
-    paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
+    paddingBottom:
+      "max(calc(env(safe-area-inset-bottom, 0px) + 0.75rem), calc(var(--workbench-keyboard-inset, 0px) + 0.5rem))",
     paddingLeft: "max(0.75rem, env(safe-area-inset-left))",
     paddingRight: "max(0.75rem, env(safe-area-inset-right))",
   } as const,

@@ -189,6 +189,40 @@ test("replaceSessionsResponse keeps a pending stored replay projection until the
   assert.equal(next.selectedSessionId, provisionalId);
 });
 
+test("authoritative refreshes cannot erase a local Starting chat", () => {
+  const provisionalId = "starting-session:local-1";
+  const pendingSummary = summary(provisionalId, "not-yet-created", { running: true });
+  delete pendingSummary.session.providerSessionId;
+  pendingSummary.session.phase = "starting";
+  pendingSummary.session.runtimeState = "starting";
+  const pendingProjection: SessionProjection = {
+    summary: pendingSummary,
+    feed: [],
+    events: [],
+    lastSeq: 0,
+    pendingStartupConfiguration: {
+      modelId: "gpt-5.6-sol",
+      reasoningId: "medium",
+      optionValues: { model_reasoning_effort: "medium" },
+    },
+  };
+  const state = {
+    projections: new Map([[provisionalId, pendingProjection]]),
+    workspaceDir: "/tmp/rah",
+    selectedSessionId: provisionalId,
+    hiddenWorkspaceDirs: new Set<string>(),
+    workspaceVisibilityVersion: 0,
+  };
+
+  const merged = applySessionsResponse(state, sessionsResponse(), replayNoop);
+  const replaced = replaceSessionsResponse(state, sessionsResponse());
+
+  for (const next of [merged, replaced]) {
+    assert.strictEqual(next.projections.get(provisionalId), pendingProjection);
+    assert.equal(next.selectedSessionId, provisionalId);
+  }
+});
+
 test("refresh keeps the selected loaded stopped replay in memory", () => {
   const ref: StoredSessionRef = {
     provider: "codex",

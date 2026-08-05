@@ -30,8 +30,6 @@ test("all direct child-process imports stay inside the reviewed process boundary
     "codex-app-server-client.ts",
     "codex-live-rpc.ts",
     "independent-terminal.ts",
-    "native-terminal-process.ts",
-    "opencode-acp-client.ts",
     "opencode-api.ts",
     "opencode-stored-sessions.ts",
     "workspace-path-utils.ts",
@@ -62,8 +60,6 @@ test("every RAH-owned background process carries one launch priority plan throug
     "background-ipc-task.ts",
     "claude-model-catalog.ts",
     "codex-app-server-client.ts",
-    "native-terminal-process.ts",
-    "opencode-acp-client.ts",
     "opencode-api.ts",
     "workspace-path-utils.ts",
   ]) {

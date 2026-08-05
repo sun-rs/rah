@@ -1,19 +1,15 @@
 import {
-  Component,
   Suspense,
-  lazy,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
-  type ErrorInfo,
-  type ReactNode,
 } from "react";
 import { Eraser, MessageCircleMore, Plus, RotateCcw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionQueuedInput, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, PermissionResponseRequest, SessionQueuedInput, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
 import type { SessionProjection } from "./types";
@@ -51,6 +47,10 @@ import { initializeTheme } from "./hooks/useTheme";
 import { initializeAppearancePreferences } from "./hooks/useAppearancePreferences";
 import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
 import { useCanvasController } from "./hooks/useCanvasController";
+import {
+  useForegroundSessionRecovery,
+  useForegroundWakeRecovery,
+} from "./hooks/useForegroundSessionRecovery";
 import { useWorkbenchPageController } from "./hooks/useWorkbenchPageController";
 import {
   useHistoryWorkspaceSortModeState,
@@ -77,10 +77,7 @@ import {
 } from "./session-mode-ui";
 import { resolveSelectedModelDraft } from "./components/SessionModelControls";
 import { deriveComposerSurface } from "./composer-contract";
-import {
-  setVisibleNotificationTargets,
-  type NotificationTarget,
-} from "./browser-notifications";
+import { type NotificationTarget } from "./browser-notifications";
 import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
@@ -88,12 +85,6 @@ import {
 } from "./workbench-selectors";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
-import { importWithStaleReload } from "./lazy-module-reload";
-import {
-  foregroundClockWasSuspended,
-  runForegroundRecoveryLoop,
-} from "./foreground-recovery";
-import { sessionStoreTransportIsHealthy } from "./session-store-transport";
 import { latestCompletedProviderTurnId } from "./session-branch-boundary";
 import {
   resolveResponsiveTier,
@@ -129,6 +120,33 @@ import {
   resolveCanvasVisibleSessionId,
   type CanvasPaneId,
 } from "./canvas-state";
+import {
+  CanvasNewSessionPane,
+  CanvasSessionPane,
+  CanvasWorkbench,
+  CouncilPage,
+  FileReferencePicker,
+  InspectorPane,
+  NewCouncilDialog,
+  SessionHistoryDialog,
+  SettingsDialog,
+  WorkbenchSelectedPane,
+  WorkbenchTerminalDialog,
+} from "./app-lazy-components";
+import { FilePreviewDialogErrorBoundary } from "./components/workbench/dialogs/FilePreviewDialogErrorBoundary";
+import {
+  PROVIDER_CHOICES,
+  createDefaultModeDrafts,
+  createEmptyCanvasNewSessionDrafts,
+  draftModelIdForCatalog,
+  pruneModelDraftForCatalog,
+  readRememberedModelDrafts,
+  rememberModelDraft,
+  sameModelDraft,
+  writeRememberedModelDrafts,
+  type CanvasNewSessionDraft,
+  type ModelDraft,
+} from "./new-session-drafts";
 
 type BranchOperationKind = "fork" | "side";
 
@@ -173,81 +191,6 @@ type ArchiveConfirmationTarget =
       running: false;
     };
 
-const loadSettingsDialog = () =>
-  importWithStaleReload(() => import("./components/workbench/dialogs/SettingsDialog"));
-const SettingsDialog = lazy(async () => ({
-  default: (await loadSettingsDialog()).SettingsDialog,
-}));
-const loadWorkbenchTerminalDialog = () =>
-  importWithStaleReload(() => import("./components/workbench/dialogs/WorkbenchTerminalDialog"));
-const WorkbenchTerminalDialog = lazy(async () => ({
-  default: (await loadWorkbenchTerminalDialog()).WorkbenchTerminalDialog,
-}));
-const loadInspectorPane = () => importWithStaleReload(() => import("./InspectorPane"));
-const InspectorPane = lazy(async () => ({
-  default: (await loadInspectorPane()).InspectorPane,
-}));
-const loadCouncilPage = () => importWithStaleReload(() => import("./council/CouncilPage"));
-const CouncilPage = lazy(async () => ({
-  default: (await loadCouncilPage()).CouncilPage,
-}));
-const loadFileReferencePicker = () =>
-  importWithStaleReload(() => import("./components/FileReferencePicker"));
-const FileReferencePicker = lazy(async () => ({
-  default: (await loadFileReferencePicker()).FileReferencePicker,
-}));
-const loadSessionHistoryDialog = () =>
-  importWithStaleReload(() => import("./components/SessionHistoryDialog"));
-const SessionHistoryDialog = lazy(async () => ({
-  default: (await loadSessionHistoryDialog()).SessionHistoryDialog,
-}));
-const loadWorkbenchSelectedPane = () =>
-  importWithStaleReload(() => import("./components/workbench/panes/WorkbenchSelectedPane"));
-const WorkbenchSelectedPane = lazy(async () => ({
-  default: (await loadWorkbenchSelectedPane()).WorkbenchSelectedPane,
-}));
-const loadCanvasSessionPane = () =>
-  importWithStaleReload(() => import("./components/workbench/canvas/CanvasSessionPane"));
-const CanvasSessionPane = lazy(async () => ({
-  default: (await loadCanvasSessionPane()).CanvasSessionPane,
-}));
-const loadCanvasNewSessionPane = () =>
-  importWithStaleReload(() => import("./components/workbench/canvas/CanvasNewSessionPane"));
-const CanvasNewSessionPane = lazy(async () => ({
-  default: (await loadCanvasNewSessionPane()).CanvasNewSessionPane,
-}));
-const loadCanvasWorkbench = () =>
-  importWithStaleReload(() => import("./components/workbench/canvas/CanvasWorkbench"));
-const CanvasWorkbench = lazy(async () => ({
-  default: (await loadCanvasWorkbench()).CanvasWorkbench,
-}));
-const loadNewCouncilDialog = () =>
-  importWithStaleReload(() => import("./council/NewCouncilDialog"));
-const NewCouncilDialog = lazy(async () => ({
-  default: (await loadNewCouncilDialog()).NewCouncilDialog,
-}));
-type ModelDraft = {
-  modelId?: string | null;
-  reasoningId?: string | null;
-  optionValues?: Record<string, SessionConfigValue>;
-};
-
-type CanvasNewSessionDraft = {
-  provider: ProviderChoice;
-  modeDrafts: Record<ProviderChoice, SessionModeDraft>;
-  modelDrafts: Record<ProviderChoice, ModelDraft>;
-};
-
-type FilePreviewDialogErrorBoundaryProps = {
-  resetKey: string;
-  onClose: () => void;
-  children: ReactNode;
-};
-
-type FilePreviewDialogErrorBoundaryState = {
-  error: Error | null;
-};
-
 type TurnFileOpenRequest = {
   id: number;
   kind: "turn_changes";
@@ -255,223 +198,6 @@ type TurnFileOpenRequest = {
   turnId: string;
   path: string;
 };
-
-class FilePreviewDialogErrorBoundary extends Component<
-  FilePreviewDialogErrorBoundaryProps,
-  FilePreviewDialogErrorBoundaryState
-> {
-  state: FilePreviewDialogErrorBoundaryState = {
-    error: null,
-  };
-
-  static getDerivedStateFromError(error: Error): FilePreviewDialogErrorBoundaryState {
-    return { error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("File preview render failed", error, errorInfo);
-  }
-
-  componentDidUpdate(prevProps: FilePreviewDialogErrorBoundaryProps) {
-    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
-      this.setState({ error: null });
-    }
-  }
-
-  render() {
-    if (!this.state.error) {
-      return this.props.children;
-    }
-    return (
-      <>
-        <div className="fixed inset-0 z-40 bg-black/45" />
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="File preview failed"
-          className="fixed left-1/2 top-1/2 z-50 flex w-[min(30rem,88vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-4 text-sm text-[var(--app-fg)] shadow-2xl"
-        >
-          <div>
-            <div className="font-semibold">File preview failed</div>
-            <div className="mt-1 text-xs text-[var(--app-hint)]">
-              {this.state.error.message || "Unknown rendering error."}
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-1.5 text-xs font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-              onClick={this.props.onClose}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </>
-    );
-  }
-}
-
-const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
-const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
-const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "opencode"];
-const FOREGROUND_RECOVERY_DEBOUNCE_MS = 120;
-const FOREGROUND_RECOVERY_TIMEOUT_MS = 12_000;
-const FOREGROUND_RECOVERY_RETRY_DELAYS_MS = [600, 1_800, 4_000, 8_000, 12_000] as const;
-const VISIBLE_HISTORY_CATCHUP_FRESH_MS = 2_000;
-const READ_ONLY_CONVERSATION_SOURCE_POLL_MS = 1_500;
-const LEGACY_READ_ONLY_CONVERSATION_REFRESH_MS = 5_000;
-const READ_ONLY_SOURCE_REVISION_RETRY_MS = 30_000;
-const FOREGROUND_WAKE_HEARTBEAT_MS = 1_000;
-const FOREGROUND_WAKE_SUSPENSION_MS = 5_000;
-
-function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
-  return {
-    codex: {},
-    claude: {},
-    opencode: {},
-  };
-}
-
-function createDefaultModeDrafts(): Record<ProviderChoice, SessionModeDraft> {
-  return {
-    codex: createDefaultModeDraft("codex"),
-    claude: createDefaultModeDraft("claude"),
-    opencode: createDefaultModeDraft("opencode"),
-  };
-}
-
-function createCanvasNewSessionDraft(provider: ProviderChoice = "codex"): CanvasNewSessionDraft {
-  return {
-    provider,
-    modeDrafts: createDefaultModeDrafts(),
-    modelDrafts: readRememberedModelDrafts(),
-  };
-}
-
-function createEmptyCanvasNewSessionDrafts(): Record<CanvasPaneId, CanvasNewSessionDraft> {
-  return {
-    "canvas-1": createCanvasNewSessionDraft(),
-    "canvas-2": createCanvasNewSessionDraft(),
-    "canvas-3": createCanvasNewSessionDraft(),
-    "canvas-4": createCanvasNewSessionDraft(),
-    "canvas-5": createCanvasNewSessionDraft(),
-    "canvas-6": createCanvasNewSessionDraft(),
-    "canvas-7": createCanvasNewSessionDraft(),
-    "canvas-8": createCanvasNewSessionDraft(),
-  };
-}
-
-function isSessionConfigValue(value: unknown): value is SessionConfigValue {
-  return (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
-}
-
-function sanitizeOptionValues(value: unknown): Record<string, SessionConfigValue> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const entries = Object.entries(value).filter((entry): entry is [string, SessionConfigValue] =>
-    isSessionConfigValue(entry[1]),
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
-function sanitizeModelDraft(value: unknown): ModelDraft {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const record = value as Partial<ModelDraft>;
-  if (typeof record.modelId !== "string" || !record.modelId) {
-    return {};
-  }
-  const optionValues = sanitizeOptionValues(record.optionValues);
-  return {
-    modelId: record.modelId,
-    ...(typeof record.reasoningId === "string" && record.reasoningId
-      ? { reasoningId: record.reasoningId }
-      : {}),
-    ...(optionValues ? { optionValues } : {}),
-  };
-}
-
-function readRememberedModelDrafts(): Record<ProviderChoice, ModelDraft> {
-  if (typeof window === "undefined") return emptyModelDrafts();
-  try {
-    const raw =
-      window.localStorage.getItem(MODEL_DRAFT_STORAGE_KEY) ??
-      LEGACY_MODEL_DRAFT_STORAGE_KEYS.map((key) => window.localStorage.getItem(key)).find(
-        (value): value is string => Boolean(value),
-      ) ??
-      "{}";
-    const parsed = JSON.parse(raw) as Partial<Record<ProviderChoice, unknown>>;
-    return PROVIDER_CHOICES.reduce((drafts, provider) => {
-      drafts[provider] = sanitizeModelDraft(parsed[provider]);
-      return drafts;
-    }, emptyModelDrafts());
-  } catch {
-    return emptyModelDrafts();
-  }
-}
-
-function writeRememberedModelDrafts(drafts: Record<ProviderChoice, ModelDraft>): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(MODEL_DRAFT_STORAGE_KEY, JSON.stringify(drafts));
-  } catch {
-    // Ignore storage failures; the in-memory draft still applies for this page.
-  }
-}
-
-function rememberModelDraft(provider: ProviderChoice, draft: ModelDraft): void {
-  if (typeof window === "undefined") return;
-  try {
-    const current = readRememberedModelDrafts();
-    current[provider] = sanitizeModelDraft(draft);
-    writeRememberedModelDrafts(current);
-  } catch {
-    // Ignore storage failures; the in-memory draft still applies for this page.
-  }
-}
-
-function catalogHasModel(
-  catalog: ProviderModelCatalog | null | undefined,
-  modelId: string | null | undefined,
-): boolean {
-  const normalizedModelId = modelId?.trim();
-  if (!normalizedModelId || !catalog) {
-    return false;
-  }
-  return catalog.models.some((model) => model.id === normalizedModelId);
-}
-
-function pruneModelDraftForCatalog(
-  catalog: ProviderModelCatalog | null | undefined,
-  draft: ModelDraft | undefined,
-): ModelDraft | undefined {
-  if (!draft?.modelId) {
-    return draft;
-  }
-  if (!catalog || catalogHasModel(catalog, draft.modelId)) {
-    return draft;
-  }
-  return {};
-}
-
-function sameModelDraft(left: ModelDraft | undefined, right: ModelDraft | undefined): boolean {
-  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
-}
-
-function draftModelIdForCatalog(
-  catalog: ProviderModelCatalog | null | undefined,
-  draft: ModelDraft | undefined,
-): string | null {
-  return catalogHasModel(catalog, draft?.modelId) ? draft!.modelId! : null;
-}
 
 export function App() {
   const {
@@ -1141,302 +867,16 @@ export function App() {
     visibleCanvasPaneKey,
     workbenchMode,
   ]);
-  const visibleSessionIds = useMemo(
-    () =>
-      visibleNotificationTargets.flatMap((target) =>
-        target.kind === "session" ? [target.id] : [],
-      ),
-    [visibleNotificationTargets],
-  );
-  const visibleSessionIdsRef = useRef(visibleSessionIds);
-  const projectionsRef = useRef(projections);
-  const isInitialLoadedRef = useRef(isInitialLoaded);
-  const visibleConversationCatchupFreshRef = useRef(new Map<string, { key: string; at: number }>());
-  const visibleConversationSourceRevisionRef = useRef(new Map<string, string>());
-  const visibleConversationLegacyRefreshAtRef = useRef(new Map<string, number>());
-  const sourceRevisionProbeUnavailableUntilRef = useRef(0);
-  const foregroundRecoveryTimerRef = useRef<number | null>(null);
-  const foregroundRecoveryControllerRef = useRef<AbortController | null>(null);
-  const foregroundWakeTickAtRef = useRef(Date.now());
-
-  useEffect(() => {
-    visibleSessionIdsRef.current = visibleSessionIds;
-    setVisibleSessionIds(visibleSessionIds);
-  }, [setVisibleSessionIds, visibleSessionIds]);
-
-  useEffect(() => {
-    projectionsRef.current = projections;
-  }, [projections]);
-
-  useEffect(() => {
-    isInitialLoadedRef.current = isInitialLoaded;
-  }, [isInitialLoaded]);
-
-  const workbenchHasForegroundAttention = useCallback(() => {
-    if (typeof document === "undefined") {
-      return true;
-    }
-    return document.visibilityState === "visible" && document.hasFocus();
-  }, []);
-
-  const catchUpVisibleConversations = useCallback(async (signal: AbortSignal) => {
-    if (!isInitialLoadedRef.current) {
-      return true;
-    }
-    const requests: Promise<boolean>[] = [];
-    for (const sessionId of visibleSessionIdsRef.current) {
-      const projection = projectionsRef.current.get(sessionId);
-      if (!projection?.summary.session.providerSessionId) {
-        continue;
-      }
-      const freshnessKey = `${projection.summary.session.updatedAt ?? ""}:${projection.lastSeq}`;
-      const fresh = visibleConversationCatchupFreshRef.current.get(sessionId);
-      if (
-        fresh?.key === freshnessKey &&
-        Date.now() - fresh.at < VISIBLE_HISTORY_CATCHUP_FRESH_MS
-      ) {
-        continue;
-      }
-      const request = refreshConversation(sessionId, {
-        signal,
-        replaceActive: true,
-        suppressError: true,
-      }).then((succeeded) => {
-        if (!succeeded || signal.aborted) {
-          return false;
-        }
-        const refreshedProjection = useSessionStore.getState().projections.get(sessionId);
-        if (refreshedProjection) {
-          visibleConversationCatchupFreshRef.current.set(sessionId, {
-            key: `${refreshedProjection.summary.session.updatedAt ?? ""}:${refreshedProjection.lastSeq}`,
-            at: Date.now(),
-          });
-        }
-        return true;
-      });
-      requests.push(request);
-    }
-    const results = await Promise.all(requests);
-    return results.every(Boolean);
-  }, [refreshConversation]);
-
-  const reconcileVisibleUnreadState = useCallback(() => {
-    const activeVisibleSessionIds = workbenchHasForegroundAttention()
-      ? visibleSessionIdsRef.current
-      : [];
-    reconcileUnreadFromLastSeen(activeVisibleSessionIds);
-  }, [
-    reconcileUnreadFromLastSeen,
-    workbenchHasForegroundAttention,
-  ]);
-
-  const runForegroundRecovery = useCallback(async () => {
-    foregroundRecoveryControllerRef.current?.abort();
-    const recoveryController = new AbortController();
-    foregroundRecoveryControllerRef.current = recoveryController;
-    try {
-      await runForegroundRecoveryLoop({
-        signal: recoveryController.signal,
-        retryDelaysMs: FOREGROUND_RECOVERY_RETRY_DELAYS_MS,
-        isVisible: () =>
-          typeof document === "undefined" || document.visibilityState === "visible",
-        onConversationRecovered: reconcileVisibleUnreadState,
-        runAttempt: async ({ signal }) => {
-          const attemptController = new AbortController();
-          const abortAttempt = () => attemptController.abort(signal.reason);
-          signal.addEventListener("abort", abortAttempt, { once: true });
-          const timeout = window.setTimeout(
-            () => attemptController.abort(),
-            FOREGROUND_RECOVERY_TIMEOUT_MS,
-          );
-          try {
-            const [transportRecovered, conversationRecovered] = await Promise.all([
-              recoverTransport({
-                signal: attemptController.signal,
-                replaceActive: true,
-                suppressError: true,
-              }).then(
-                () => true,
-                () => false,
-              ),
-              catchUpVisibleConversations(attemptController.signal).catch(() => false),
-            ]);
-            return { transportRecovered, conversationRecovered };
-          } finally {
-            window.clearTimeout(timeout);
-            signal.removeEventListener("abort", abortAttempt);
-          }
-        },
-      });
-    } finally {
-      if (foregroundRecoveryControllerRef.current === recoveryController) {
-        foregroundRecoveryControllerRef.current = null;
-      }
-    }
-  }, [catchUpVisibleConversations, reconcileVisibleUnreadState, recoverTransport]);
-
-  const scheduleForegroundRecovery = useCallback(() => {
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-      return;
-    }
-    if (foregroundRecoveryControllerRef.current) {
-      return;
-    }
-    if (foregroundRecoveryTimerRef.current !== null) {
-      window.clearTimeout(foregroundRecoveryTimerRef.current);
-    }
-    foregroundRecoveryTimerRef.current = window.setTimeout(() => {
-      foregroundRecoveryTimerRef.current = null;
-      void runForegroundRecovery();
-    }, FOREGROUND_RECOVERY_DEBOUNCE_MS);
-  }, [runForegroundRecovery]);
-
-  useEffect(() => {
-    let disposed = false;
-    let pollInFlight = false;
-    const controller = new AbortController();
-
-    const pollVisibleReadOnlySources = async () => {
-      if (
-        disposed ||
-        pollInFlight ||
-        !isInitialLoadedRef.current ||
-        (typeof document !== "undefined" && document.visibilityState !== "visible")
-      ) {
-        return;
-      }
-      pollInFlight = true;
-      const followedSessionIds = new Set<string>();
-      const refreshLegacySource = async (sessionId: string) => {
-        const now = Date.now();
-        const previous =
-          visibleConversationLegacyRefreshAtRef.current.get(sessionId) ?? 0;
-        if (now - previous < LEGACY_READ_ONLY_CONVERSATION_REFRESH_MS) {
-          return;
-        }
-        // Reserve the interval before awaiting so a slow provider scan cannot
-        // queue duplicate refreshes behind the current one.
-        visibleConversationLegacyRefreshAtRef.current.set(sessionId, now);
-        await refreshConversation(sessionId, {
-          signal: controller.signal,
-          replaceActive: true,
-          suppressError: true,
-        });
-      };
-      try {
-        await Promise.all(
-          visibleSessionIdsRef.current.map(async (sessionId) => {
-            const projection = projectionsRef.current.get(sessionId);
-            if (
-              !projection?.summary.session.providerSessionId ||
-              !isReadOnlyReplay(projection.summary)
-            ) {
-              return;
-            }
-            followedSessionIds.add(sessionId);
-            if (projection.conversation?.phase === "loading") {
-              return;
-            }
-            if (Date.now() < sourceRevisionProbeUnavailableUntilRef.current) {
-              await refreshLegacySource(sessionId);
-              return;
-            }
-            try {
-              const response = await api.readSessionConversationSourceRevision(sessionId, {
-                signal: controller.signal,
-              });
-              if (disposed || controller.signal.aborted) {
-                return;
-              }
-              sourceRevisionProbeUnavailableUntilRef.current = 0;
-              if (!response.sourceRevision) {
-                await refreshLegacySource(sessionId);
-                return;
-              }
-              const previous =
-                visibleConversationSourceRevisionRef.current.get(sessionId) ??
-                projection.conversation?.sourceRevision ??
-                undefined;
-              visibleConversationSourceRevisionRef.current.set(
-                sessionId,
-                response.sourceRevision,
-              );
-              // Refresh on first observation as well as changes. This closes
-              // the race where the source is appended between the initial
-              // turn-page read and this lightweight revision read.
-              if (previous === response.sourceRevision) {
-                return;
-              }
-              await refreshConversation(sessionId, {
-                signal: controller.signal,
-                replaceActive: true,
-                suppressError: true,
-              });
-            } catch {
-              if (disposed || controller.signal.aborted) {
-                return;
-              }
-              // A web build can be served by a still-running older daemon
-              // during an active provider turn. Probe the new lightweight
-              // route only occasionally and use a bounded latest-page refresh
-              // in between; provider history readers incrementally scan only
-              // the appended tail.
-              sourceRevisionProbeUnavailableUntilRef.current =
-                Date.now() + READ_ONLY_SOURCE_REVISION_RETRY_MS;
-              await refreshLegacySource(sessionId);
-            }
-          }),
-        );
-        for (const sessionId of visibleConversationSourceRevisionRef.current.keys()) {
-          if (!followedSessionIds.has(sessionId)) {
-            visibleConversationSourceRevisionRef.current.delete(sessionId);
-          }
-        }
-        for (const sessionId of visibleConversationLegacyRefreshAtRef.current.keys()) {
-          if (!followedSessionIds.has(sessionId)) {
-            visibleConversationLegacyRefreshAtRef.current.delete(sessionId);
-          }
-        }
-      } finally {
-        pollInFlight = false;
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void pollVisibleReadOnlySources();
-      }
-    };
-    void pollVisibleReadOnlySources();
-    const timer = window.setInterval(
-      () => void pollVisibleReadOnlySources(),
-      READ_ONLY_CONVERSATION_SOURCE_POLL_MS,
-    );
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      disposed = true;
-      controller.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [refreshConversation]);
-
-  useEffect(() => {
-    setVisibleNotificationTargets(visibleNotificationTargets);
-    return () => setVisibleNotificationTargets([]);
-  }, [visibleNotificationTargets]);
-
-  useEffect(() => {
-    if (!workbenchHasForegroundAttention()) {
-      return;
-    }
-    markSessionsRead(visibleSessionIds);
-  }, [
-    markSessionsRead,
+  const foregroundSessionRecovery = useForegroundSessionRecovery({
+    visibleNotificationTargets,
     projections,
-    visibleSessionIds,
-    workbenchHasForegroundAttention,
-  ]);
+    isInitialLoaded,
+    refreshConversation,
+    recoverTransport,
+    reconcileUnreadFromLastSeen,
+    markSessionsRead,
+    setVisibleSessionIds,
+  });
 
   const openLinkedFilePreview = useCallback((path: string) => {
     setLinkedFilePreviewPath(path);
@@ -2267,79 +1707,7 @@ export function App() {
     await respondToPermission(selectedSummary.session.id, requestId, response);
   };
 
-  useEffect(() => {
-    const cancelForegroundRecovery = () => {
-      if (foregroundRecoveryTimerRef.current !== null) {
-        window.clearTimeout(foregroundRecoveryTimerRef.current);
-        foregroundRecoveryTimerRef.current = null;
-      }
-      foregroundRecoveryControllerRef.current?.abort();
-      foregroundRecoveryControllerRef.current = null;
-    };
-    const detectForegroundWake = () => {
-      const now = Date.now();
-      const previousTickAt = foregroundWakeTickAtRef.current;
-      foregroundWakeTickAtRef.current = now;
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      if (
-        foregroundClockWasSuspended(
-          previousTickAt,
-          now,
-          FOREGROUND_WAKE_SUSPENSION_MS,
-        )
-      ) {
-        scheduleForegroundRecovery();
-      }
-    };
-    const recoverIfTransportNeedsIt = () => {
-      reconcileVisibleUnreadState();
-      detectForegroundWake();
-      if (!sessionStoreTransportIsHealthy()) {
-        scheduleForegroundRecovery();
-      }
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        recoverIfTransportNeedsIt();
-        return;
-      }
-      foregroundWakeTickAtRef.current = Date.now();
-      cancelForegroundRecovery();
-    };
-    const handleForegroundResume = () => recoverIfTransportNeedsIt();
-    const handlePageShow = (event: PageTransitionEvent) => {
-      reconcileVisibleUnreadState();
-      detectForegroundWake();
-      if (event.persisted || !sessionStoreTransportIsHealthy()) {
-        scheduleForegroundRecovery();
-      }
-    };
-    const handleOnline = () => {
-      reconcileVisibleUnreadState();
-      scheduleForegroundRecovery();
-    };
-    const wakeTimer = window.setInterval(
-      detectForegroundWake,
-      FOREGROUND_WAKE_HEARTBEAT_MS,
-    );
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleForegroundResume);
-    window.addEventListener("pageshow", handlePageShow);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("pointerdown", detectForegroundWake, { passive: true });
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleForegroundResume);
-      window.removeEventListener("pageshow", handlePageShow);
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("pointerdown", detectForegroundWake);
-      window.clearInterval(wakeTimer);
-      cancelForegroundRecovery();
-    };
-  }, [reconcileVisibleUnreadState, scheduleForegroundRecovery]);
+  useForegroundWakeRecovery(foregroundSessionRecovery);
 
   useEffect(() => {
     if (primaryPaneState.kind !== "active" || !selectedSummary) {
@@ -3332,7 +2700,18 @@ export function App() {
                               : {}),
                             confirmCreateMissingWorkspace,
                             onSessionCreated: (sessionId) => {
-                              setCanvasPaneSession(typedPaneId, sessionId);
+                              setCanvasPaneTargets((current) => {
+                                if (current[typedPaneId].kind !== "new") {
+                                  return current;
+                                }
+                                return {
+                                  ...current,
+                                  [typedPaneId]: createCanvasSessionTarget(
+                                    sessionId,
+                                    useSessionStore.getState().projections,
+                                  ),
+                                };
+                              });
                             },
                           });
                         }}

@@ -284,14 +284,19 @@ export function applyStartedSessionState(
     cwd: string;
     provider?: LifecycleState["newSessionProvider"];
     projections: Map<string, SessionProjection>;
+    selectSession?: boolean;
   },
 ): Partial<LifecycleState> {
-  const workspacePlacement = applySessionWorkspacePlacement(
+  const nextWorkspacePlacement = applySessionWorkspacePlacement(
     current,
     responseSession.session.rootDir,
     responseSession.session.cwd,
     args.cwd,
   );
+  const workspacePlacement =
+    args.selectSession === false
+      ? { ...nextWorkspacePlacement, workspaceDir: current.workspaceDir }
+      : nextWorkspacePlacement;
   args.projections.set(responseSession.session.id, createEmptySessionProjection(responseSession));
   return {
     projections: args.projections,
@@ -301,7 +306,10 @@ export function applyStartedSessionState(
     ...workspacePlacement,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
     ...(args.provider ? { newSessionProvider: args.provider } : {}),
-    selectedSessionId: responseSession.session.id,
+    selectedSessionId:
+      args.selectSession === false
+        ? current.selectedSessionId
+        : responseSession.session.id,
     pendingSessionTransition: null,
     error: null,
   };
@@ -420,6 +428,9 @@ export function mergeResumedHistoryProjection(
     preservedProjection.conversation ?? liveProjection?.conversation;
   const turnDirectory =
     preservedProjection.turnDirectory ?? liveProjection?.turnDirectory;
+  const pendingStartupConfiguration =
+    preservedProjection.pendingStartupConfiguration ??
+    liveProjection?.pendingStartupConfiguration;
   return {
     ...(liveProjection ?? preservedProjection),
     feed: [...feedByKey.values()],
@@ -428,6 +439,7 @@ export function mergeResumedHistoryProjection(
     ...(conversation ? { conversation } : {}),
     ...(turnDirectory ? { turnDirectory } : {}),
     ...(pendingInterrupt ? { pendingInterrupt } : {}),
+    ...(pendingStartupConfiguration ? { pendingStartupConfiguration } : {}),
     ...(liveProjection?.currentRuntimeStatus
       ? { currentRuntimeStatus: liveProjection.currentRuntimeStatus }
       : preservedProjection.currentRuntimeStatus

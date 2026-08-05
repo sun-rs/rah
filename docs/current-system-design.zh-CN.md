@@ -1,6 +1,6 @@
 # RAH 当前系统设计总览
 
-复核日期：2026-07-17
+复核日期：2026-08-05
 
 本文记录当前已经锁定的 RAH 系统设计，作为后续维护和接入新 provider 的主参考。细节文档见 [docs 索引](./README.md)。
 
@@ -104,6 +104,7 @@ HTTP 数据面有明确边界：static serving 只能读取构建产物目录；
 - `MuxRuntime`
 - `TmuxMuxBackend`
 - `RuntimeTerminalCoordinator`
+- `RuntimeWorkspaceOperations`（workspace/git/file inspection 的唯一 daemon owner；`RuntimeEngine` 只转发公共 API）
 - `NativeTuiMirrorRuntime`
 - `NativeTuiMirrorProvider`
 - identity-only `ProviderAdapter` + explicit capability maps（provider-server control / enhancement / stored-history seams）
@@ -123,13 +124,14 @@ HTTP 数据面有明确边界：static serving 只能读取构建产物目录；
 前端主原则：
 
 - 使用 canonical feed 渲染，不理解 provider 原生日志格式。
+- `App.tsx` 只负责 workbench 组合；动态页面 registry、New Session draft persistence、foreground Session recovery 和 file preview error boundary 各自拥有独立模块，不能回流为第二套内联实现。
 - 如果 timeline event 有 `canonicalItemId`，projection 必须按该 id upsert；`messageId` 和 text/time 去重只作为旧事件 fallback。
 - 通过 `useSessionStore` 管 session projection、selected session、history paging、event sync。
 - 对长历史使用虚拟窗口和 measured row height，不把所有 DOM 一次性渲染。
 - 非 PWA 的 ChatThread 提供按用户轮次派生的 `Turn Navigator`。每个刻度代表一条用户消息及其后续 assistant 处理过程/最终回答；Codex 后台 `Turn Directory` 可以提供尚未载入正文的完整 turn 列表，点击未加载刻度只请求对应 byte range。可见状态和已加载 turn 的定位只使用当前虚拟布局，不扫描整页 DOM。休眠状态只显示 1px 高、短而浅的刻度，当前可见 turn 不再默认变成黑色长条；只有鼠标、键盘焦点或拖动进入某个刻度时，目标及相邻刻度才逐级变长并显示缩略预览。PWA 不展示该控件。
 - mode/model/config 的 provider 差异必须由 adapter 通过 `ProviderModelCatalog`、`SessionModeState`、`ManagedSession.model/config/modelProfile` 暴露，前端不能把 mode 翻译成 provider-native 启动参数。
 - 前端模型目录按 `provider + cwd` 缓存，并以 request generation 拒绝迟到响应；浏览器只做当前 picker 的 5 分钟按需 freshness，不拥有全局 30 分钟刷新循环。
-- Home New task 与 Session Chat 必须复用 `UnifiedComposerSurface` 和 `UnifiedComposerToolbar`：白色内容面、单层细边框、24px 圆角和克制阴影，文本区与所有 action、附件和注释都在同一 surface 内。统一占位文案为 `Work with Rah`。工具栏遵循 Codex Desktop 的 ghost 层级：静止态不显示独立 pill 边框或底板；`+` 是最左侧 20px/1.75 细描边动作，随后是 permission 与 Plan，model 直接位于主动作左侧。Plan 激活时用资源蓝文字、11% 蓝色混底和 2px 内嵌蓝线表达，不能只靠轻微字重变化。Provider 的 mode/model catalog 在页面或 Session 可见时后台加载，与点击 composer、running/stopped 解耦；完整模型 ID 与灰色 effort 默认显示。运行态尚未回传显式 effort 时使用 catalog 对该模型解析出的默认/最强可见 effort，只有模型描述明确把 `defaultReasoningId` 声明为 `null`（Provider 自管默认）时才隐藏。用户对具体 Session 选择的 model / effort / optionValues 以 `provider + providerSessionId` 为稳定身份写入最多 256 项的有界浏览器配置；刷新、Stop 和 Resume 都读取同一项，不能回退到 catalog 最后一档。stopped -> starting -> live 只允许切换控件的数据源和 disabled 状态，不允许卸载 permission、Plan 或 model 节点；需要显式 Resume/claim control 的过渡面也必须直接展示同一组独立控件，不能重新折叠进设置弹层。权限菜单只保留有间距的选项名、必要图标和选中标记，不显示说明。provider selector 固定为 36px 的单层选择条：静止态无常驻灰底、外框、滑动高亮或单项底板；Desktop 当前项只用前景色、600 字重和与文字实际等宽的蓝色 2px 横线表达，PWA 隐藏文字时回退为蓝色 `20×2px` 图标标记。指针 hover 时只能给整组增加一层临时轻背景，移开即隐藏；键盘 `focus-visible` 期间保留同一组背景，各 Provider 项始终透明，不能再形成嵌套 pill。Chat 只有一个黑白 Send/Stop 动作槽；PWA 失焦时单行折叠，聚焦或任一 composer 菜单保持展开时显示全部配置，菜单打开不能导致回缩。New task 聚焦前后几何不变，窄屏配置自动分成两行。Workspace selector 不属于 composer action：它位于 composer 下方内收 12px 的低对比附属条，条高 40px、顶部 8px 被 composer 覆盖、实际只露出 32px，内部选择按钮固定 28px；超过 18 字符才跑马，不能挤占 agent 配置或发送动作。
+- Home New task 与 Session Chat 必须复用 `UnifiedComposerSurface` 和 `UnifiedComposerToolbar`：白色内容面、单层细边框、24px 圆角和克制阴影，文本区与所有 action、附件和注释都在同一 surface 内。统一占位文案为 `Work with Rah`。工具栏遵循 Codex Desktop 的 ghost 层级：静止态不显示独立 pill 边框或底板；`+` 是最左侧 20px/1.75 细描边动作，随后是 permission 与 Plan，model 直接位于主动作左侧。Plan 激活只使用资源蓝文字和更高字重，继续保持透明背景、无阴影；PWA 空间不足时复用同一控件但把内容压缩为加粗的 `P`。Provider 的 mode/model catalog 在页面或 Session 可见时后台加载，与点击 composer、running/stopped 解耦；完整模型 ID 与灰色 effort 默认显示。运行态尚未回传显式 effort 时使用 catalog 对该模型解析出的默认/最强可见 effort，只有模型描述明确把 `defaultReasoningId` 声明为 `null`（Provider 自管默认）时才隐藏。用户对具体 Session 选择的 model / effort / optionValues 以 `provider + providerSessionId` 为稳定身份写入最多 256 项的有界浏览器配置；刷新、Stop 和 Resume 都读取同一项，不能回退到 catalog 最后一档。stopped -> starting -> live 只允许切换控件的数据源和 disabled 状态，不允许卸载 permission、Plan 或 model 节点；需要显式 Resume/claim control 的过渡面也必须直接展示同一组独立控件，不能重新折叠进设置弹层。权限菜单只保留有间距的选项名、必要图标和选中标记，不显示说明。provider selector 固定为 36px 的单层选择条：静止态无常驻灰底、外框、滑动高亮或单项底板；Desktop 当前项只用前景色、600 字重和与文字实际等宽的蓝色 2px 横线表达，PWA 隐藏文字时回退为蓝色 `24×2px` 图标标记。指针 hover 时只能给整组增加一层临时轻背景，移开即隐藏；键盘 `focus-visible` 期间保留同一组背景，各 Provider 项始终透明，不能再形成嵌套 pill。Chat 只有一个黑白 Send/Stop 动作槽；PWA 失焦时单行折叠，聚焦或任一 composer 菜单保持展开时显示全部配置，菜单打开不能导致回缩。New task 聚焦前后几何不变；所有宽度都复用一条右对齐 toolbar rail，空间不足时先收紧间距、把 permission/Plan 文本压缩为图标并限制 model 宽度，不能另建移动端布局。Workspace selector 不属于 composer action：它位于 composer 下方内收 12px 的低对比附属条，条高 40px、顶部 8px 被 composer 覆盖、实际只露出 32px，内部选择按钮固定 28px；超过 18 字符才跑马，不能挤占 agent 配置或发送动作。
 - 本地附件是共享 composer 能力，覆盖 Home New、Canvas New 和可输入的 running Session composer。桌面环境点击 `+` 仍直接打开工作区文件引用选择器；compact touch/PWA 环境点击 `+` 打开一个平台中性的菜单：`Reference workspace file`、`Take photo`、`Choose from device`。第一项保留 daemon 主机工作区的 `@` 引用能力，后两项上传当前设备的照片或文件，不能用 `Mac` 等宿主平台名称描述该能力。
 - 当前设备选择或粘贴的文件先通过受设备认证保护的 `POST /api/attachments` 上传到 daemon。浏览器只保存附件 metadata 和 opaque id；daemon 在 `RAH_HOME` 下以私有权限保存原始字节，并在真正发送 turn 时解析成宿主机绝对路径。单文件上限 25 MiB、单条输入最多 10 个附件；输入可以只有附件而没有文本。前端不能把 data URL/base64 拼入 prompt、WebSocket event 或历史正文。
 - provider adapter 负责原生映射：Codex 图片使用 `localImage`，OpenCode 使用原生 file part，Claude/TUI fallback 使用 daemon 主机路径文本。Chat feed 只展示 `Image xN` 等轻量事实，不展开二进制内容。历史解析仍识别旧版本已经持久化的 data image URL，但这只是只读兼容，不是新的发送 fallback。
@@ -177,7 +179,7 @@ Tailwind 的 `sm/md` 都映射到 700px，`lg` 映射到 900px。组件如果需
 
 Session tooltip 的实现协议是 sidebar 级 `idle / pending / open` 状态机加唯一 Portal layer，而不是每行各自维护 `open` 与 timer。Session 行只声明稳定 tooltip key 与当前 ARIA 关联；跨行 hover/focus 由侧栏根节点事件委托，document/window 仅发送统一 cancel。pending 状态以 epoch 拒绝旧 timer，显示前检查 anchor 仍连接且仍为 `:hover`，列表刷新移除 anchor 时由 MutationObserver 关闭。任何变更都必须同时通过纯状态转换测试与 Chromium 的离开、等待期点击、跨行唯一性回归。
 
-iOS standalone/PWA 的 Home New task workspace selector 位于 composer 外部、但顶部 8px 收入 composer 下方的低对比附属条，保留 Folder 图标与完整可读名称；超过 18 个字符才使用共享单向跑马灯，短名称保持静止。390px 下 composer 的权限/Plan 与模型/主动作分成两行，workspace 不参与该宽度竞争；普通窄屏浏览器也使用同一防重叠协议。Provider 组与桌面复用同一 selected/module 协议，触屏无 hover 时仍必须直接看到唯一选中项。
+iOS standalone/PWA 的 Home New task workspace selector 位于 composer 外部、但顶部 8px 收入 composer 下方的低对比附属条，保留 Folder 图标与完整可读名称；超过 18 个字符才使用共享单向跑马灯，短名称保持静止。390px 下 composer 仍与 Desktop 复用同一条 toolbar rail：权限/Plan 自动压缩为图标，模型保持在主动作左侧并在有界宽度内滚动，workspace 不参与该宽度竞争；普通窄屏浏览器也使用同一防重叠协议。Provider 组与桌面复用同一 selected/module 协议，触屏无 hover 时仍必须直接看到唯一选中项。
 
 Session 启动画面必须把 provider identity 与 progress 分开：provider 图标保持静态且不叠加右下角 spinner，进度动画和 `Starting / Resuming / Opening` 状态同行显示。这样 provider 图标在启动前后保持同一语义，也不会出现两个边框相互遮挡。
 
@@ -702,7 +704,7 @@ npm run test:smoke:native-browser-webkit
 git diff --check
 ```
 
-`test:ci` 递归发现 protocol/Web/runtime 的全部 test/spec 文件，并把每个文件放在独立 Node test 进程中运行，随后执行生产 Web build 和 `npm audit --omit=dev`。新增测试文件不需要再维护脚本白名单。
+`test:ci` 递归发现 protocol/Web/runtime 的全部 test/spec 文件，并把每个文件放在独立 Node test 进程中运行；随后执行生产 Web build、确定性 Desktop/PWA 浏览器门禁、仓库卫生检查、生产源码可达性/架构检查和 `npm audit --omit=dev`。源码可达性门禁从三个 package 的真实入口静态遍历 import/export、动态 import 和 worker URL；测试专用 helper 必须进入显式小型 allowlist，不能让已失去生产 owner 的旧实现继续滞留。架构门禁对普通生产文件采用 1,600 行上限；当前 12 个历史超大 owner 进入显式、只减不增的 debt budget，并锁定 `App`、`RuntimeEngine` 已拆出的 owner 边界。仓库卫生检查同时校验 Markdown 本地链接及文档中的 `npm run` 命令。新增测试文件不需要再维护脚本白名单。
 
 Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行。当前主链路优先使用 native local server probe 验证 Codex/OpenCode 的 provider-server 能力，再用 browser smoke 验证 UI：
 
@@ -735,7 +737,7 @@ npm run test:smoke:native-browser-webkit
 - interrupted/aborted turn 是否不会留下永久 Running tool。
 - Enhanced controls 是否保持 optional；native TUI 不应暴露假的 RAH-managed plan/access/model 控制。
 - iOS / iPad / desktop 的 composer、safe-area、sidebar 状态是否正常，且所有用户可见生命周期文案统一使用 running/stopped。
-- iOS standalone/PWA 的 New task workspace 是否位于 composer 外部、长名称才跑马且不挤占 agent 配置；390px New task 配置是否稳定双行、无横向溢出；Chat 是否保持单行 idle，并在 focus 或权限/模型菜单打开时持续展开；Session/Council 对话字号 12–20px 是否即时生效且不改变 UI 菜单；全局恢复提示是否位于统一 40px 单行标题栏下方且不遮挡 composer；Wide Desktop 提示是否保持最大 24rem、右/下 16px；Markdown 多图缩略图组是否保持有效。
+- iOS standalone/PWA 的 New task workspace 是否位于 composer 外部、长名称才跑马且不挤占 agent 配置；390px New task 是否继续复用单行响应式 toolbar rail、模型紧贴主动作且无横向溢出；Chat 是否保持单行 idle，并在 focus 或权限/模型菜单打开时持续展开；Session/Council 对话字号 12–20px 是否即时生效且不改变 UI 菜单；全局恢复提示是否位于统一 40px 单行标题栏下方且不遮挡 composer；Wide Desktop 提示是否保持最大 24rem、右/下 16px；Markdown 多图缩略图组是否保持有效。
 
 ## 14. 非目标
 

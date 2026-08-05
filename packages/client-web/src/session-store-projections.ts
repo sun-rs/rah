@@ -17,6 +17,7 @@ import {
   type SessionProjection,
   type SessionsResponse,
 } from "./types";
+import { applyPendingSessionStartupConfiguration } from "./session-startup-configuration";
 
 function sessionSummaryIsActivelyRunning(summary: SessionProjection["summary"]): boolean {
   return summary.session.status === "running" && [
@@ -135,8 +136,18 @@ function projectionWithFreshSummary(
   summary: SessionProjection["summary"],
 ): SessionProjection {
   const reconciledSummary = reconcileFreshSummaryInputQueue(projection, summary);
-  const next: SessionProjection = { ...projection, summary: reconciledSummary };
-  if (!sessionSummaryIsActivelyRunning(reconciledSummary)) {
+  const startupPending = reconciledSummary.session.phase === "starting";
+  const visibleSummary = startupPending
+    ? applyPendingSessionStartupConfiguration(
+        reconciledSummary,
+        projection.pendingStartupConfiguration,
+      )
+    : reconciledSummary;
+  const next: SessionProjection = { ...projection, summary: visibleSummary };
+  if (!startupPending) {
+    delete next.pendingStartupConfiguration;
+  }
+  if (!sessionSummaryIsActivelyRunning(visibleSummary)) {
     delete next.currentRuntimeStatus;
   }
   return next;
@@ -199,6 +210,40 @@ function preservePendingStoredReplayProjections(
     }
     const key = providerSessionKey(projection.summary);
     if (key && serverProviderSessions.has(key)) {
+      continue;
+    }
+    if (result === next) {
+      result = new Map(next);
+    }
+    result.set(sessionId, projection);
+  }
+  return result;
+}
+
+function isPendingLiveStartupProjection(
+  sessionId: string,
+  projection: SessionProjection,
+): boolean {
+  return (
+    sessionId.startsWith("starting-session:") &&
+    projection.summary.session.phase === "starting" &&
+    projection.summary.session.runtimeState === "starting"
+  );
+}
+
+/**
+ * Session discovery is authoritative for daemon-owned sessions, but a local
+ * Start projection exists before the daemon can possibly list it. Never let a
+ * concurrent refresh erase that selected Chat and expose an intermediary pane.
+ * The startup command replaces this projection atomically with the real id.
+ */
+function preservePendingLiveStartupProjections(
+  next: Map<string, SessionProjection>,
+  current: Map<string, SessionProjection>,
+): Map<string, SessionProjection> {
+  let result = next;
+  for (const [sessionId, projection] of current) {
+    if (!isPendingLiveStartupProjection(sessionId, projection) || result.has(sessionId)) {
       continue;
     }
     if (result === next) {
@@ -477,6 +522,7 @@ export function mergeSessionsIntoProjections(
     }
   }
   next = preservePendingStoredReplayProjections(next, current);
+  next = preservePendingLiveStartupProjections(next, current);
   return applyEventsToProjectionMap(
     next,
     replay.takePendingEventsForSessions(new Set(next.keys())),
@@ -580,8 +626,11 @@ export function replaceSessionsResponse(
   });
   const sessionMap = createSessionMap(sessionsResponse);
   const projections = preserveSelectedReadOnlyReplayProjection(
-    preservePendingStoredReplayProjections(
-      reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
+    preservePendingLiveStartupProjections(
+      preservePendingStoredReplayProjections(
+        reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
+        state.projections,
+      ),
       state.projections,
     ),
     state.projections,

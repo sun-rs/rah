@@ -153,6 +153,27 @@ describe("session mode UI defaults", () => {
     assert.equal(state.effectiveModeId, "never/danger-full-access");
   });
 
+  test("keeps a submitted Codex plan and access pair visible while startup is pending", () => {
+    const state = resolveSessionModeControlState({
+      provider: "codex",
+      catalog: modeCatalog("codex", "never/danger-full-access"),
+      summary: {
+        session: {
+          mode: {
+            currentModeId: "plan:never/danger-full-access",
+            availableModes: [],
+            mutable: true,
+            source: "local",
+          },
+        },
+      } as SessionSummary,
+    });
+
+    assert.equal(state.selectedAccessModeId, "never/danger-full-access");
+    assert.equal(state.planModeEnabled, true);
+    assert.equal(state.effectiveModeId, "plan:never/danger-full-access");
+  });
+
   test("normalizes stale Codex live access labels", () => {
     const state = resolveSessionModeControlState({
       provider: "codex",

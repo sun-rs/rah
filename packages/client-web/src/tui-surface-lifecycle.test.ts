@@ -25,6 +25,7 @@ test("terminal and Council implementation bundles stay out of the initial web en
   const terminalPaneSource = source("./TerminalPane.tsx");
   const terminalSurfaceSource = source("./components/terminal/TerminalSurface.tsx");
   const selectedPaneSource = source("./components/workbench/panes/WorkbenchSelectedPane.tsx");
+  const lazyRegistrySource = source("./app-lazy-components.ts");
 
   assert.doesNotMatch(mainSource, /@xterm\/xterm/);
   assert.match(terminalPaneSource, /@xterm\/xterm\/css\/xterm\.css/);
@@ -32,7 +33,8 @@ test("terminal and Council implementation bundles stay out of the initial web en
   assert.match(terminalSurfaceSource, /import\("\.\.\/\.\.\/TerminalPane"\)/);
   assert.match(selectedPaneSource, /import\("\.\.\/\.\.\/\.\.\/TerminalPane"\)/);
   assert.doesNotMatch(appSource, /import \{ CouncilPage \} from/);
-  assert.match(appSource, /import\("\.\/council\/CouncilPage"\)/);
+  assert.match(appSource, /from "\.\/app-lazy-components"/);
+  assert.match(lazyRegistrySource, /import\("\.\/council\/CouncilPage"\)/);
 });
 
 test("session tui surface is active only after the current session TUI was opened and not detached", () => {

@@ -384,6 +384,78 @@ describe("session startup model and mode requests", () => {
     assert.equal(await starting, "started-immediately");
   });
 
+  test("new session keeps submitted controls visible and completion cannot steal newer navigation", async () => {
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    installWebApiMocks(async (request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/start")) {
+        await startGate;
+        return {
+          session: summary({
+            id: "started-with-medium",
+            provider: "codex",
+            cwd: "/tmp/rah",
+            modeId: "plan:never/danger-full-access",
+            modelId: "gpt-5.6-sol",
+            // Simulate the first daemon snapshot racing with launch config.
+            reasoningId: "ultra",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const other = summary({ id: "other-session", cwd: "/tmp/rah" });
+    const deps = startupDeps({
+      projections: new Map([["other-session", createEmptySessionProjection(other)]]),
+      workspaceDirs: ["/tmp/other", "/tmp/rah"],
+      workspaceDir: "/tmp/other",
+    });
+
+    const starting = startSessionCommand(deps, {
+      provider: "codex",
+      cwd: "/tmp/rah",
+      initialInput: "start with medium",
+      modeId: "plan:never/danger-full-access",
+      model: "gpt-5.6-sol",
+      reasoningId: "medium",
+      optionValues: { model_reasoning_effort: "medium" },
+    });
+
+    const provisionalId = deps.get().selectedSessionId!;
+    const provisional = deps.get().projections.get(provisionalId);
+    assert.match(provisionalId, /^starting-session:/);
+    assert.equal(provisional?.summary.session.model?.currentModelId, "gpt-5.6-sol");
+    assert.equal(provisional?.summary.session.model?.currentReasoningId, "medium");
+    assert.equal(
+      provisional?.summary.session.mode?.currentModeId,
+      "plan:never/danger-full-access",
+    );
+    assert.deepEqual(provisional?.summary.session.config?.values, {
+      model_reasoning_effort: "medium",
+    });
+
+    deps.set({ selectedSessionId: "other-session" });
+    releaseStart();
+    assert.equal(await starting, "started-with-medium");
+
+    const state = deps.get();
+    const started = state.projections.get("started-with-medium");
+    assert.equal(state.selectedSessionId, "other-session");
+    assert.equal(state.workspaceDir, "/tmp/other");
+    assert.equal(state.projections.has(provisionalId), false);
+    assert.equal(started?.summary.session.model?.currentModelId, "gpt-5.6-sol");
+    assert.equal(started?.summary.session.model?.currentReasoningId, "medium");
+    assert.equal(
+      started?.summary.session.mode?.currentModeId,
+      "plan:never/danger-full-access",
+    );
+  });
+
   test("the provisional Stop action cancels startup before the initial turn is sent", async () => {
     let releaseStart!: () => void;
     const startGate = new Promise<void>((resolve) => {
@@ -2359,6 +2431,119 @@ describe("session startup model and mode requests", () => {
     } }).get();
     assert.equal(state.selectedSessionId, "live");
     assert.equal(state.projections.has("history"), false);
+  });
+
+  test("resuming an already-running session applies the submitted controls before sending", async () => {
+    const historySummary = summary({
+      id: "history-config",
+      provider: "codex",
+      providerSessionId: "thread-running-config",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const liveSummary: SessionSummary = {
+      ...summary({
+        id: "live-config",
+        provider: "codex",
+        providerSessionId: "thread-running-config",
+        cwd: "/tmp/rah",
+        modeId: "on-request/read-only",
+        modelId: "gpt-old",
+        reasoningId: "ultra",
+      }),
+      attachedClients: [
+        {
+          id: "web-client",
+          kind: "web",
+          sessionId: "live-config",
+          connectionId: "web-connection",
+          attachMode: "interactive",
+          focus: true,
+          lastSeenAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      controlLease: {
+        sessionId: "live-config",
+        holderClientId: "web-client",
+        holderKind: "web",
+        grantedAt: "2026-04-29T00:00:00.000Z",
+      },
+    };
+    const requests = installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/live-config/mode")) {
+        return {
+          session: summary({
+            id: "live-config",
+            provider: "codex",
+            providerSessionId: "thread-running-config",
+            cwd: "/tmp/rah",
+            modeId: "never/danger-full-access",
+            modelId: "gpt-old",
+            reasoningId: "ultra",
+          }),
+        };
+      }
+      if (request.url.endsWith("/api/sessions/live-config/model")) {
+        return {
+          session: summary({
+            id: "live-config",
+            provider: "codex",
+            providerSessionId: "thread-running-config",
+            cwd: "/tmp/rah",
+            modeId: "never/danger-full-access",
+            modelId: "gpt-new",
+            reasoningId: "medium",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      selectedSessionId: "history-config",
+      projections: new Map([
+        ["history-config", createEmptySessionProjection(historySummary)],
+        ["live-config", createEmptySessionProjection(liveSummary)],
+      ]),
+      recentSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-running-config",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+    });
+
+    assert.equal(
+      await resumeHistorySessionCommand(deps, "history-config", {
+        modeId: "never/danger-full-access",
+        modelId: "gpt-new",
+        reasoningId: "medium",
+        optionValues: { model_reasoning_effort: "medium" },
+      }),
+      "live-config",
+    );
+
+    assert.deepEqual(
+      requests.map((request) => [
+        request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, ""),
+        request.body,
+      ]),
+      [
+        [
+          "/api/sessions/live-config/mode",
+          { modeId: "never/danger-full-access" },
+        ],
+        [
+          "/api/sessions/live-config/model",
+          {
+            modelId: "gpt-new",
+            optionValues: { model_reasoning_effort: "medium" },
+          },
+        ],
+      ],
+    );
   });
 
   test("resuming already-running history preserves the visible replay feed", async () => {
