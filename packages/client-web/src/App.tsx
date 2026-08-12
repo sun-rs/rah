@@ -1564,6 +1564,7 @@ export function App() {
     emptyStateAttachmentCount,
     emptyStateAttachmentUploadPending,
     emptyStateAttachmentError,
+    emptyStateSendPending,
     sendPending,
     setDraft,
     setEmptyStateDraft,
@@ -3446,6 +3447,7 @@ export function App() {
               emptyStateAttachmentCount={emptyStateAttachmentCount}
               emptyStateAttachmentUploadPending={emptyStateAttachmentUploadPending}
               emptyStateAttachmentError={emptyStateAttachmentError}
+              emptyStateSendPending={emptyStateSendPending}
               onEmptyStateDraftChange={setEmptyStateDraft}
               onEmptyStatePaste={handleEmptyStatePaste}
               onUploadEmptyStateFiles={uploadEmptyStateFiles}

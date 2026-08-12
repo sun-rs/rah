@@ -377,12 +377,6 @@ export async function startSessionCommand(
   options?: StartSessionOptions,
 ): Promise<string | null> {
   let provisionalSessionId: string | null = null;
-  let initialInputRollback: {
-    sessionId: string;
-    text: string;
-    clientMessageId: string;
-    baselineSeq: number | undefined;
-  } | null = null;
   try {
     const state = deps.get();
     const cwd = options?.cwd?.trim() || state.workspaceDir.trim();
@@ -399,6 +393,9 @@ export async function startSessionCommand(
     const initialInput = options?.initialInput?.trim();
     const initialAttachments = options?.initialAttachments ?? [];
     const initialAnnotations = options?.initialAnnotations ?? [];
+    const hasInitialInput = Boolean(
+      initialInput || initialAttachments.length > 0 || initialAnnotations.length > 0,
+    );
     const title = options?.title ?? `${providerLabel(provider)} session`;
     const clientMessageId = createClientSideId("client-message");
     const clientTurnId = createClientSideId("client-turn");
@@ -474,6 +471,22 @@ export async function startSessionCommand(
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
+      ...(hasInitialInput
+        ? {
+            initialInput: {
+              clientId: state.clientId,
+              text: initialInput ?? "",
+              clientMessageId,
+              clientTurnId,
+              ...(initialAttachments.length
+                ? { attachments: initialAttachments }
+                : {}),
+              ...(initialAnnotations.length
+                ? { annotations: initialAnnotations }
+                : {}),
+            },
+          }
+        : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
     if (consumeCanceledSessionStartup(provisionalSessionId)) {
@@ -542,42 +555,12 @@ export async function startSessionCommand(
       };
     });
     options?.onSessionCreated?.(session.session.id);
-    if (initialInput || initialAttachments.length > 0 || initialAnnotations.length > 0) {
-      void deps.initializeLiveConversationProjection(session.session.id).catch(() => undefined);
-      initialInputRollback = {
-        sessionId: session.session.id,
-        text: initialInput ?? "",
-        clientMessageId,
-        baselineSeq: deps.get().projections.get(session.session.id)?.lastSeq,
-      };
-      await deps.sendInput(
-        session.session.id,
-        initialInput ?? "",
-        initialAttachments,
-        {
-          clientMessageId,
-          clientTurnId,
-          skipOptimisticQueue: true,
-          ...(initialAnnotations.length ? { annotations: initialAnnotations } : {}),
-        },
-      );
-    } else {
-      await deps.initializeLiveConversationProjection(session.session.id);
-    }
+    await deps.initializeLiveConversationProjection(session.session.id);
     return session.session.id;
   } catch (error) {
     consumeCanceledSessionStartup(provisionalSessionId);
     deps.set((state) => {
       const projections = new Map(state.projections);
-      if (initialInputRollback) {
-        const projection = projections.get(initialInputRollback.sessionId);
-        if (projection) {
-          projections.set(
-            initialInputRollback.sessionId,
-            rollbackImmediateUserInput(projection, initialInputRollback),
-          );
-        }
-      }
       const removedProvisional = Boolean(
         provisionalSessionId && projections.delete(provisionalSessionId),
       );
@@ -941,7 +924,6 @@ type ResumeHistoryInitialInput = {
 
 type ResumeHistoryOperation = {
   promise: Promise<string | null>;
-  carriesInitialInput: boolean;
 };
 
 const resumeHistoryOperations = new Map<string, ResumeHistoryOperation>();
@@ -1102,9 +1084,12 @@ export function resumeHistorySessionCommand(
   });
   const existing = resumeHistoryOperations.get(operationKey);
   if (existing) {
-    if (!initial.hasInput || existing.carriesInitialInput) {
+    if (!initial.hasInput) {
       return existing.promise;
     }
+    // An activation may already own a different first question. Every later
+    // submit still needs its own delivery path; sharing the activation Promise
+    // must never silently consume that input.
     const previousProjection = deps.get().projections.get(sessionId);
     stageResumeHistoryInitialInput(
       deps,
@@ -1166,8 +1151,12 @@ export function resumeHistorySessionCommand(
   );
 
   let resumedSessionId: string | null = null;
-  let resumedInputBaselineSeq: number | undefined;
-  const operation = resumeHistorySessionCommandInternal(deps, sessionId, options)
+  const operation = resumeHistorySessionCommandInternal(
+    deps,
+    sessionId,
+    options,
+    initial,
+  )
     .then(async (nextSessionId) => {
       resumedSessionId = nextSessionId;
       if (consumeCanceledSessionStartup(sessionId)) {
@@ -1195,14 +1184,6 @@ export function resumeHistorySessionCommand(
         }
         return null;
       }
-      if (nextSessionId && hasInitialInput) {
-        resumedInputBaselineSeq = deps.get().projections.get(nextSessionId)?.lastSeq;
-        await sendResumeHistoryInitialInput(
-          deps,
-          nextSessionId,
-          initial,
-        );
-      }
       return nextSessionId;
     })
     .catch((error) => {
@@ -1219,7 +1200,7 @@ export function resumeHistorySessionCommand(
           deps,
           resumedSessionId,
           initial,
-          resumedInputBaselineSeq,
+          deps.get().projections.get(resumedSessionId)?.lastSeq,
         );
       }
       throw error;
@@ -1231,7 +1212,6 @@ export function resumeHistorySessionCommand(
     });
   resumeHistoryOperations.set(operationKey, {
     promise: operation,
-    carriesInitialInput: hasInitialInput,
   });
   return operation;
 }
@@ -1240,6 +1220,7 @@ async function resumeHistorySessionCommandInternal(
   deps: SessionStartupDeps,
   sessionId: string,
   options?: ResumeHistorySessionOptions,
+  initialInput?: ResumeHistoryInitialInput,
 ): Promise<string | null> {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
@@ -1438,6 +1419,18 @@ async function resumeHistorySessionCommandInternal(
   const resumeExistingRunning = async (
     running: SessionSummary,
   ): Promise<string> => {
+    const finishExistingResume = async (
+      configured: SessionSummary,
+    ): Promise<string> => {
+      if (initialInput?.hasInput) {
+        await sendResumeHistoryInitialInput(
+          deps,
+          configured.session.id,
+          initialInput,
+        );
+      }
+      return configured.session.id;
+    };
     const mode = resolveHistoryActivationMode({
       existingRunningSummary: running,
       clientId: deps.get().clientId,
@@ -1445,7 +1438,7 @@ async function resumeHistorySessionCommandInternal(
     if (mode === "select") {
       applyResumedSession(running);
       const configured = await applyRequestedResumeConfiguration(running);
-      return configured.session.id;
+      return await finishExistingResume(configured);
     }
     deps.set({
       pendingSessionAction: pendingResumeAction,
@@ -1459,7 +1452,7 @@ async function resumeHistorySessionCommandInternal(
       );
       applyResumedSession(attachResponse.session);
       const configured = await applyRequestedResumeConfiguration(attachResponse.session);
-      return configured.session.id;
+      return await finishExistingResume(configured);
     } catch (attachError) {
       deps.set({
         pendingSessionAction: null,
@@ -1499,6 +1492,22 @@ async function resumeHistorySessionCommandInternal(
       preferStoredReplay: false,
       historyReplay: "skip",
       historySourceSessionId: sessionId,
+      ...(initialInput?.hasInput
+        ? {
+            initialInput: {
+              clientId: state.clientId,
+              text: initialInput.text,
+              clientMessageId: initialInput.clientMessageId,
+              clientTurnId: initialInput.clientTurnId,
+              ...(initialInput.attachments.length
+                ? { attachments: initialInput.attachments }
+                : {}),
+              ...(initialInput.annotations.length
+                ? { annotations: initialInput.annotations }
+                : {}),
+            },
+          }
+        : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     };
     if (targetDir !== null) {

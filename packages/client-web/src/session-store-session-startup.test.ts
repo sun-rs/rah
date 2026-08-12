@@ -580,12 +580,14 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(liveProjectionLoads, ["started"]);
   });
 
-  test("new session starts initial input without waiting for conversation hydration", async () => {
+  test("new session submits its text-only first turn atomically with Session startup", async () => {
+    let startBody: Record<string, unknown> | null = null;
     installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/start")) {
+        startBody = request.body as Record<string, unknown>;
         return {
           session: summary({
             id: "started",
@@ -598,52 +600,38 @@ describe("session startup model and mode requests", () => {
     });
 
     const calls: string[] = [];
-    let releaseConversation!: () => void;
-    let markConversationStarted!: () => void;
-    const conversationGate = new Promise<void>((resolve) => {
-      releaseConversation = resolve;
-    });
-    const conversationStarted = new Promise<void>((resolve) => {
-      markConversationStarted = resolve;
-    });
-
     const deps = startupDeps(
       {},
       {
         initializeLiveConversationProjection: async () => {
           calls.push("conversation");
-          markConversationStarted();
-          await conversationGate;
         },
         sendInput: async () => {
-          calls.push("send");
-          throw new Error("send failed");
+          throw new Error("text-only startup must not issue a second input request");
         },
       },
     );
-    const command = assert.rejects(
-      startSessionCommand(
-        deps,
-        {
-          provider: "codex",
-          cwd: "/tmp/rah",
-          title: "test",
-          initialInput: "hello",
-          onSessionCreated: (sessionId) => {
-            calls.push(`created:${sessionId}`);
-          },
+    const sessionId = await startSessionCommand(
+      deps,
+      {
+        provider: "codex",
+        cwd: "/tmp/rah",
+        title: "test",
+        initialInput: "hello",
+        onSessionCreated: (createdSessionId) => {
+          calls.push(`created:${createdSessionId}`);
         },
-      ),
-      /send failed/,
+      },
     );
 
-    await conversationStarted;
-    assert.deepEqual(calls, ["created:started", "conversation", "send"]);
-    releaseConversation();
-    await command;
-    assert.deepEqual(calls, ["created:started", "conversation", "send"]);
-    assert.equal(deps.get().projections.get("started")?.feed.length, 0);
-    assert.equal(deps.get().projections.get("started")?.currentRuntimeStatus, undefined);
+    assert.equal(sessionId, "started");
+    assert.deepEqual(calls, ["created:started", "conversation"]);
+    const initialInput = startBody?.initialInput as Record<string, unknown>;
+    assert.equal(initialInput.text, "hello");
+    assert.equal(initialInput.clientId, "web-client");
+    assert.match(String(initialInput.clientMessageId), /^client-message:/);
+    assert.match(String(initialInput.clientTurnId), /^client-turn:/);
+    assert.equal(deps.get().projections.get("started")?.feed.length, 1);
   });
 
   test("new session sidebar placement uses daemon returned workspace metadata", async () => {
@@ -1183,11 +1171,13 @@ describe("session startup model and mode requests", () => {
         },
       },
     );
+    let resumeBody: Record<string, unknown> | null = null;
     installWebApiMocks(async (request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/resume")) {
+        resumeBody = request.body as Record<string, unknown>;
         await resumeGate;
         return {
           session: summary({
@@ -1216,13 +1206,11 @@ describe("session startup model and mode requests", () => {
 
     releaseResume();
     assert.equal(await resuming, "claimed-immediate");
-    assert.deepEqual(sent, [
-      {
-        sessionId: "claimed-immediate",
-        text: "continue immediately",
-        skipOptimisticQueue: true,
-      },
-    ]);
+    assert.deepEqual(sent, []);
+    assert.equal(
+      (resumeBody?.initialInput as Record<string, unknown>).text,
+      "continue immediately",
+    );
   });
 
   test("history resume completion does not steal selection after the user opens another session", async () => {
@@ -1268,11 +1256,13 @@ describe("session startup model and mode requests", () => {
         },
       },
     );
+    let resumeBody: Record<string, unknown> | null = null;
     installWebApiMocks(async (request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/resume")) {
+        resumeBody = request.body as Record<string, unknown>;
         await resumeGate;
         return {
           session: summary({
@@ -1296,12 +1286,11 @@ describe("session startup model and mode requests", () => {
     assert.equal(deps.get().selectedSessionId, "other-session");
     assert.equal(deps.get().projections.has("history-background-resume"), false);
     assert.equal(deps.get().projections.has("claimed-background-resume"), true);
-    assert.deepEqual(sent, [
-      {
-        sessionId: "claimed-background-resume",
-        text: "continue A in the background",
-      },
-    ]);
+    assert.deepEqual(sent, []);
+    assert.equal(
+      (resumeBody?.initialInput as Record<string, unknown>).text,
+      "continue A in the background",
+    );
   });
 
   test("history resume failure restores A without stealing a newer selection of B", async () => {
@@ -1450,7 +1439,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(deps.get().selectedSessionId, "other-control-session");
   });
 
-  test("history send failure removes the immediate message and Starting runtime status", async () => {
+  test("atomic history resume failure restores the original replay and removes Starting state", async () => {
     const history = summary({
       id: "history-send-failure",
       provider: "codex",
@@ -1475,25 +1464,14 @@ describe("session startup model and mode requests", () => {
         ],
         recentSessions: [],
       },
-      {
-        sendInput: async () => {
-          throw new Error("send failed");
-        },
-      },
+      {},
     );
     installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/resume")) {
-        return {
-          session: summary({
-            id: "claimed-send-failure",
-            provider: "codex",
-            providerSessionId: "thread-send-failure",
-            cwd: "/tmp/rah",
-          }),
-        };
+        throw new Error("resume+input failed");
       }
       throw new Error(`Unexpected request ${request.url}`);
     });
@@ -1502,10 +1480,10 @@ describe("session startup model and mode requests", () => {
       resumeHistorySessionCommand(deps, "history-send-failure", {
         initialInput: "do not leave this behind",
       }),
-      /send failed/,
+      /resume\+input failed/,
     );
 
-    const projection = deps.get().projections.get("claimed-send-failure");
+    const projection = deps.get().projections.get("history-send-failure");
     assert.ok(projection);
     assert.equal(projection.feed.length, 0);
     assert.equal(projection.currentRuntimeStatus, undefined);
@@ -1652,6 +1630,82 @@ describe("session startup model and mode requests", () => {
         text: "do not lose this question",
         skipOptimisticQueue: true,
       },
+    ]);
+  });
+
+  test("a second send during an input-carrying resume is queued after the atomic first input", async () => {
+    const history = summary({
+      id: "history-two-sends",
+      provider: "codex",
+      providerSessionId: "thread-two-sends",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const resumeBodies: Array<Record<string, unknown>> = [];
+    const sent: Array<{ sessionId: string; text: string }> = [];
+    const deps = startupDeps(
+      {
+        selectedSessionId: "history-two-sends",
+        projections: new Map([
+          ["history-two-sends", createEmptySessionProjection(history)],
+        ]),
+        storedSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-two-sends",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+          },
+        ],
+      },
+      {
+        sendInput: async (sessionId: string, text: string) => {
+          sent.push({ sessionId, text });
+        },
+      },
+    );
+    installWebApiMocks(async (request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        resumeBodies.push(request.body as Record<string, unknown>);
+        await resumeGate;
+        return {
+          session: summary({
+            id: "claimed-two-sends",
+            provider: "codex",
+            providerSessionId: "thread-two-sends",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    const first = resumeHistorySessionCommand(deps, "history-two-sends", {
+      initialInput: "first atomic question",
+    });
+    const second = resumeHistorySessionCommand(deps, "history-two-sends", {
+      initialInput: "second queued question",
+    });
+
+    releaseResume();
+    assert.deepEqual(await Promise.all([first, second]), [
+      "claimed-two-sends",
+      "claimed-two-sends",
+    ]);
+    assert.equal(resumeBodies.length, 1);
+    assert.equal(
+      (resumeBodies[0]?.initialInput as { text?: string } | undefined)?.text,
+      "first atomic question",
+    );
+    assert.deepEqual(sent, [
+      { sessionId: "claimed-two-sends", text: "second queued question" },
     ]);
   });
 

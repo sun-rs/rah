@@ -55,7 +55,7 @@
 | `HISTORY-CATALOG-001` | Chats 目录增量 | 启动只取有界 Recent；首次打开 All 取一次权威目录；干净重开不再全量下载 |
 | `HISTORY-BOUNDED-001` | 超大历史首屏 | 首屏只下载有界 turn 页，不下载完整 provider transcript；PWA 不加载桌面 turn 导航目录 |
 | `HISTORY-RESUME-001` | history resume | replay 转 live 不重排、不重复 |
-| `HISTORY-RESUME-SEND-001` | stopped 首次发送 | 无输入激活已在途时再按 Send，问题先乐观出现、只创建一个 runtime，并向恢复后的 Runtime ID 恰好发送一次 |
+| `HISTORY-RESUME-SEND-001` | stopped 首次发送 | 大历史慢恢复时首问与 `/sessions/resume` 原子提交；daemon queue 先接管并显示 `submitting`，Provider 接受对应 identity 后 HTTP 才成功；迟到 idle/finished 不清除 Working，刷新仍可追踪且 Provider 恰好收到一次；无输入激活已在途或已有首问在途时，后续每条输入也都有独立交付路径且只创建一个 runtime |
 | `STOP-STAYS-IN-CHAT-001` | Session stop 导航 | 显式 Stop 与 `session.closed` 竞态下都保留当前 transcript 并原地变为 stopped replay；catalog refresh 后仍停留在该 Chat，可直接继续输入恢复 |
 | `BACKGROUND-RESUME-NAVIGATION-001` | 后台 resume 导航 | 对 stopped A 提交后切到 B，A 继续启动和发送，但成功、回滚及迟到控制刷新均不得抢回当前页面 |
 | `CODEX-EVENT-001` | Codex 非 chat event | `thread/goal/cleared` 等不变成吓人的红色 chat Event |
@@ -71,11 +71,12 @@
 | `WORKSPACE-PROJECTION-001` | Session 可见性投影 | Session 只归属最具体的已注册工作区；移除工作区后同一渲染周期内消失，不依赖刷新 |
 | `WORKSPACE-EMPTY-RECOVERY-001` | 空列表恢复 | Workspaces 为 0 时添加入口仍可用，添加后恰好出现一行且刷新后保留 |
 | `WORKSPACE-NEW-TASK-001` | 工作区新建联动 | 点击工作区行的新建按钮后，New task composer 精确选择该工作区 |
+| `NEW-TASK-DRAFT-OWNERSHIP-001` | New task 首轮可靠交付 | 提交期间禁止重复创建；纯文本首问携稳定 message/turn identity 原子进入 `/sessions/start`，不再依赖页面跳转后的第二次 `/input`；Provider 接受对应首问前启动接口不得成功，真实 fake Codex 必须恰好收到一次问题并返回可见回复，启动/投递拒绝则恢复原草稿与附件，不能因 Session id 已创建或 daemon queue 已接管而静默丢失 |
 | `PWA-COMPOSER-WORKSPACE-PILL-001` | PWA workspace accessory | workspace selector 为 40px 附属条，顶部 8px 被 composer 覆盖、实际露出 32px，内部按钮 28px；超过 18 字符才跑马，不与 agent 配置或发送按钮重叠，不产生横向溢出；provider 为 36px 无边框单层条，PWA 以 600 字重和蓝色 `24×2px` 图标标记唯一当前项，Desktop 使用文字等宽蓝线，整组 hover 移开即隐藏 |
 | `PWA-CONVERSATION-DENSITY-001` | PWA 对话阅读密度 | Session/Council 正文读取 12–20px Appearance token；隐藏动作不占行，commentary 使用无卡片白底正文 |
 | `PWA-GLOBAL-NOTICE-001` | 全局恢复提示 | PWA 锚定在顶部安全区控制行下方，390×844 下不超过 72px且不覆盖 composer；与 Wide Desktop 共享低对比橙色混色、无投影 surface，四角不被宿主裁切；Session Chat/Council/Canvas 共用 40px 单行标题栏且提示始终位于分割线以下；Wide Desktop 为最大 24rem 的紧凑横向 toast，右/下边距各 16px且不受底部浮动锚点影响 |
 | `PWA-TURN-CHANGE-PREVIEW-001` | PWA 本轮文件查看 | 回复卡片的单文件入口使用独立临时查看器，关闭后直接回到 Chat；回复审查与 Task 明细的 `Changed files` 共用不修改 Inspector 状态的 Review 路径，任何关闭动作都不能暴露全屏 Inspector；Wide Desktop 仍保留 Inspector 工作流 |
-| `COMPOSER-UNIFIED-SURFACE-001` | 统一 composer surface | New task 与 Chat 共用白底、细边框、24px 圆角、轻阴影和同一 ghost toolbar；能力 catalog 无需点击即可加载，权限/Plan/完整模型与默认 effort 立即可见；Plan 激活态清晰；Session 的 model/effort 按 provider session 身份跨刷新、Stop、Resume 保存；stopped -> starting -> live 全程三个控制都保持挂载；`+` 固定最左，模型紧贴 Send/Stop；provider 当前项无灰块；Chat PWA 聚焦或菜单打开时保持展开；New task 窄屏复用同一响应式单行 rail、按宽度压缩标签且 workspace 位于 surface 外；Stop/Send 共用一个黑白主动作槽 |
+| `COMPOSER-UNIFIED-SURFACE-001` | 统一 composer surface | New task 与 Chat 共用白底、细边框、24px 圆角、轻阴影和同一 ghost toolbar；能力 catalog 无需点击即可加载，权限/Plan/完整模型与默认 effort 立即可见；Plan 激活态清晰；Session 的 model/effort 按 provider session 身份跨刷新、Stop、Resume 保存；stopped -> starting -> live 全程三个控制都保持挂载；`+` 固定最左，模型紧贴 Send/Stop；provider 当前项无灰块；Chat PWA 使用显式展开状态，iOS IME 长文本原位测量并增高到上限后才内部滚动，权限/Plan/模型均可实际操作，Portal 菜单必须位于键盘上方的 visual viewport 内；New task 窄屏复用同一响应式单行 rail、按宽度压缩标签且 workspace 位于 surface 外；Stop/Send 共用一个黑白主动作槽 |
 | `RESPONSE-ANNOTATION-001` | 回复选区注释 | 单条 assistant response 选区显示操作浮层；注释 pill 可预览，更多详情补可编辑 draft，协议/queue/provider/history 全链路不泄漏 transport envelope |
 | `DESKTOP-CONVERSATION-DENSITY-001` | Desktop 对话阅读密度 | 默认正文使用 14/22、约 430 字重、代码 12px；Appearance 只调 Session/Council 正文且范围为 12–20px，代码自动按 11–16px 联动；用户 Copy 悬浮显示但不占永久空白行，commentary 使用无卡片白底正文 |
 | `CHAT-MARKDOWN-IMAGES-001` | 回复图片缩略图组 | 连续纯图片段落以 12px gap 并排并自动换行；本地缩略图最高 160px、远程最高 200px，点击预览保持可用 |

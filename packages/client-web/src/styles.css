@@ -1,3 +1,4 @@
+@import "./assistant-process-styles.css";
 /* Minimal custom CSS for code/diff and things Tailwind utilities don't cover cleanly */
 
 .chat-thread-shell {
@@ -148,7 +149,7 @@
 }
 
 .rah-unified-composer[data-surface="chat"][data-pwa="true"]:is(
-    :focus-within,
+    [data-composer-expanded="true"], :focus-within,
     :has([data-composer-control][aria-expanded="true"])
   ) {
   width: 100%;
@@ -314,7 +315,7 @@
 }
 
 @media (max-width: 699px) {
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"])) {
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"])) {
     display: grid;
     grid-template-columns: 2.25rem minmax(0, 1fr) 2.25rem;
     grid-template-rows: 2.25rem;
@@ -323,16 +324,16 @@
     padding: 0.375rem 0.625rem;
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-composer-toolbar,
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-composer-toolbar-leading,
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-composer-toolbar-trailing {
     display: contents;
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-chat-composer-attach {
     grid-column: 1;
     grid-row: 1;
@@ -341,21 +342,21 @@
     height: 2.25rem;
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     :is(.rah-chat-composer-attach, .rah-chat-composer-primary)::after {
     position: absolute;
     inset: -0.25rem;
     content: "";
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-chat-composer-secondary,
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-chat-composer-context {
     display: none;
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-chat-composer-input {
     grid-column: 2;
     grid-row: 1;
@@ -363,7 +364,7 @@
     overflow: hidden;
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-chat-composer-input textarea {
     height: 2.25rem !important;
     min-height: 2.25rem !important;
@@ -372,7 +373,7 @@
     white-space: nowrap;
   }
 
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
+  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
     .rah-chat-composer-primary {
     grid-column: 3;
     grid-row: 1;
@@ -1142,12 +1143,11 @@ html[data-theme="light"] .code-block {
 .rah-marquee-track {
   display: inline-flex;
   min-width: max-content;
-  gap: 1.25rem;
   will-change: transform;
 }
 
 .rah-marquee[data-marquee="true"] .rah-marquee-track {
-  animation: rah-marquee-left 6.5s linear infinite;
+  animation: rah-marquee-left 7s ease-in-out infinite;
 }
 
 .rah-popover-panel {
@@ -1156,11 +1156,11 @@ html[data-theme="light"] .code-block {
 }
 
 @keyframes rah-marquee-left {
-  from {
+  0%, 15%, 85%, 100% {
     transform: translateX(0);
   }
-  to {
-    transform: translateX(calc(-50% - 0.625rem));
+  45%, 55% {
+    transform: translateX(calc(-1 * var(--rah-marquee-distance, 0px)));
   }
 }
 

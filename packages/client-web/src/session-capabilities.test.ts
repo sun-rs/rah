@@ -225,3 +225,36 @@ test("generation state also respects live runtime status when summary sync lags"
     true,
   );
 });
+
+test("a provider-bound submitting input remains generating across stale idle projection swaps", () => {
+  const summary = summaryWithSession({
+    status: "running",
+    phase: "ready",
+    runtimeState: "idle",
+    inputQueue: [
+      {
+        clientMessageId: "client-message:resume",
+        clientTurnId: "client-turn:resume",
+        text: "请继续",
+        queuedAt: "2026-04-15T00:00:01.000Z",
+        position: 0,
+        state: "submitting",
+      },
+    ],
+  });
+
+  assert.equal(isSessionGenerationActive(summary, "finished"), true);
+  assert.equal(
+    isSessionGenerationActive(
+      {
+        ...summary,
+        session: {
+          ...summary.session,
+          inputQueue: [{ ...summary.session.inputQueue![0]!, state: "queued" }],
+        },
+      },
+      "finished",
+    ),
+    false,
+  );
+});

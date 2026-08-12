@@ -463,6 +463,29 @@ describe("buildSessionsResponse", () => {
     assert.deepEqual(response.sessions, []);
   });
 
+  test("does not auto-register a live session workspace in the sidebar", () => {
+    const liveState = storedSessionState("live-outside-selection");
+    liveState.session.cwd = "/workspace/not-selected";
+    liveState.session.rootDir = "/workspace/not-selected";
+
+    const response = buildSessionsResponse({
+      liveStates: [liveState],
+      discoveredStoredSessions: [],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [],
+        rememberedWorkspaceDirs: ["/workspace/selected"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.deepEqual(response.workspaceDirs, ["/workspace/selected"]);
+    assert.equal(response.sessions[0]?.session.providerSessionId, "live-outside-selection");
+  });
+
   test("dedupes primed workspace dirs by resolved symlink path even when the child directory is gone", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "rah-workspace-symlink-"));
     try {

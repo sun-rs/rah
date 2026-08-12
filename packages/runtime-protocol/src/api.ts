@@ -230,7 +230,23 @@ export interface StartSessionRequest {
   modeId?: string;
   command?: string;
   args?: string[];
+  /**
+   * Text submitted as the first provider turn as part of Session startup. This
+   * avoids the create-then-input request gap where a browser navigation or a
+   * late provider rejection could otherwise lose the user's first question.
+   */
   initialPrompt?: string;
+  /** Stable optimistic identity for `initialPrompt`. */
+  initialClientMessageId?: string;
+  /** Stable optimistic turn identity for `initialPrompt`. */
+  initialClientTurnId?: string;
+  /**
+   * User input delivered as part of the same startup transaction. Unlike
+   * `initialPrompt`, this form also carries attachments and annotations. A
+   * successful response means the live provider accepted the input; while that
+   * handoff is pending, RAH retains the sole owned copy in the Session queue.
+   */
+  initialInput?: SessionInputRequest;
   attach?: {
     client: AttachClientDescriptor;
     mode: AttachMode;
@@ -258,6 +274,14 @@ export interface ResumeSessionRequest {
   preferStoredReplay?: boolean;
   historyReplay?: "include" | "skip";
   historySourceSessionId?: string;
+  /**
+   * User input delivered as part of the same live-resume transaction. A
+   * successful response guarantees that the live provider accepted it. Until
+   * that acknowledgement, the daemon owns the input in the resumed Session's
+   * canonical queue; live-resume failures must not degrade to a read-only
+   * replay and report success.
+   */
+  initialInput?: SessionInputRequest;
   attach?: {
     client: AttachClientDescriptor;
     mode: AttachMode;

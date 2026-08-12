@@ -650,7 +650,16 @@ export async function startOpenCodeLiveSession(params: {
     submitOpenCodePrompt({
       services,
       liveSession,
-      request: { clientId: "system", text: initialPrompt },
+      request: {
+        clientId: request.attach?.client.id ?? "system",
+        text: initialPrompt,
+        ...(request.initialClientMessageId
+          ? { clientMessageId: request.initialClientMessageId }
+          : {}),
+        ...(request.initialClientTurnId
+          ? { clientTurnId: request.initialClientTurnId }
+          : {}),
+      },
     });
   }
   return {

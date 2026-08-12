@@ -123,6 +123,119 @@ wss.on('connection', (socket) => {
     }
   });
 
+  test("delivers a new Session initialPrompt to Codex as its first provider turn", async () => {
+    const serverJs = path.join(tmpDir, "mock-codex-initial-prompt.js");
+    const receiptPath = path.join(tmpDir, "initial-prompt-receipt.json");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'model/list') {
+    send({ id: msg.id, result: { data: [], nextCursor: null } });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-initial-prompt-1' } } });
+    return;
+  }
+  if (msg.method === 'thread/name/set') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({
+      text: msg.params.input[0].text,
+      clientUserMessageId: msg.params.clientUserMessageId,
+    }));
+    const turnId = 'turn-initial-prompt-1';
+    setTimeout(() => {
+      send({ id: msg.id, result: { turn: { id: turnId } } });
+      send({ method: 'turn/started', params: { threadId: 'thread-initial-prompt-1', turn: { id: turnId } } });
+      send({
+        method: 'item/agentMessage/delta',
+        params: {
+          threadId: 'thread-initial-prompt-1',
+          turnId,
+          itemId: 'assistant-initial-prompt-1',
+          delta: 'INITIAL_PROMPT_ACK'
+        }
+      });
+      send({ method: 'turn/completed', params: { threadId: 'thread-initial-prompt-1', turn: { id: turnId, status: 'completed' } } });
+    }, 50);
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-initial-prompt");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const startRequestedAt = Date.now();
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "initial prompt delivery",
+      initialPrompt: "DELIVER_THIS_INITIAL_PROMPT",
+      initialClientMessageId: "client-message-initial",
+      initialClientTurnId: "client-turn-initial",
+      attach: {
+        client: {
+          id: "web-initial",
+          kind: "web",
+          connectionId: "web-initial",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    assert.ok(
+      Date.now() - startRequestedAt >= 40,
+      "Session startup resolved before Codex accepted its initial turn",
+    );
+
+    await waitFor(() => existsSync(receiptPath));
+    assert.deepEqual(JSON.parse(readFileSync(receiptPath, "utf8")), {
+      text: "DELIVER_THIS_INITIAL_PROMPT",
+      clientUserMessageId: "client-message-initial",
+    });
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes("INITIAL_PROMPT_ACK"),
+      ),
+    );
+    await waitFor(
+      () =>
+        (services.sessionStore.getSession(started.session.session.id)?.session.inputQueue
+          ?.length ?? 0) === 0,
+    );
+    await adapter.shutdown?.();
+  });
+
   test("round-trips request_user_input through adapter responses", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-server.js");
     writeFileSync(

@@ -18,6 +18,7 @@ export function WorkbenchEmptyPane(props: {
   emptyStateAttachmentCount?: number | undefined;
   emptyStateAttachmentUploadPending?: boolean | undefined;
   emptyStateAttachmentError?: string | null | undefined;
+  emptyStateSendPending?: boolean | undefined;
   onEmptyStateDraftChange: (value: string) => void;
   onEmptyStatePaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
   onUploadEmptyStateFiles?: ((files: readonly File[]) => void | Promise<void>) | undefined;
@@ -72,6 +73,7 @@ export function WorkbenchEmptyPane(props: {
         draftAttachmentCount={props.emptyStateAttachmentCount}
         attachmentUploadPending={props.emptyStateAttachmentUploadPending}
         attachmentError={props.emptyStateAttachmentError}
+        sendPending={props.emptyStateSendPending ?? false}
         onDraftChange={props.onEmptyStateDraftChange}
         onComposerPaste={props.onEmptyStatePaste}
         onUploadFiles={props.onUploadEmptyStateFiles}
@@ -81,7 +83,8 @@ export function WorkbenchEmptyPane(props: {
         canSend={Boolean(
           (props.emptyStateDraft.trim() || (props.emptyStateAttachmentCount ?? 0) > 0) &&
             props.availableWorkspaceDir &&
-            !props.emptyStateAttachmentUploadPending,
+            !props.emptyStateAttachmentUploadPending &&
+            !props.emptyStateSendPending,
         )}
         workspacePickerRef={props.workspacePickerRef}
         onOpenFileReference={props.onOpenFileReference}

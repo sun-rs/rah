@@ -36,6 +36,7 @@ import { AssistantMessage } from "./AssistantMessage";
 import { AssistantTurnCopyAction } from "./AssistantTurnCopyAction";
 import { AssistantProcessGroup } from "./AssistantProcessGroup";
 import { AssistantTurnHeader } from "./AssistantTurnHeader";
+import { ContextCompactionDivider } from "./ContextCompactionDivider";
 import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
 import { TaskSummaryDock } from "./TaskSummaryDock";
 import { ConversationFileChangesCard } from "./ConversationFileChangesCard";
@@ -173,32 +174,6 @@ function TimelineCard(props: {
         ) : null}
         <div className="mt-2 text-[var(--app-fg)]">{props.children}</div>
       </div>
-    </div>
-  );
-}
-
-function ContextCompactionDivider(props: {
-  item: Extract<TimelineItem, { kind: "compaction" }>;
-}) {
-  const countSuffix =
-    props.item.count && props.item.count > 1 ? ` · ${props.item.count} passes` : "";
-  const triggerSuffix = props.item.trigger ? ` · ${props.item.trigger}` : "";
-  const label = `${
-    props.item.status === "started" ? "Compacting context" : "Context compacted"
-  }${countSuffix}${triggerSuffix}`;
-  return (
-    <div
-      className="flex min-w-0 items-center gap-2 py-1 text-[11px] text-[var(--app-hint)]"
-      data-testid="context-compaction-divider"
-      role="separator"
-      aria-label={label}
-    >
-      <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-[var(--app-border)]" />
-      <span className="inline-flex shrink-0 items-center gap-1.5">
-        <ArrowUpToLine size={12} aria-hidden="true" />
-        <span>{label}</span>
-      </span>
-      <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-[var(--app-border)]" />
     </div>
   );
 }
@@ -725,8 +700,11 @@ export const ChatThread = memo(function ChatThread(props: {
     [copyableAssistantKeys, entries],
   );
   const displayRows = useMemo(
-    () => conversationDisplayRows(props.conversationTurns, entries, activeEntries),
-    [activeEntries, entries, props.conversationTurns],
+    () =>
+      conversationDisplayRows(props.conversationTurns, entries, activeEntries, {
+        generationActive: props.generationActive === true,
+      }),
+    [activeEntries, entries, props.conversationTurns, props.generationActive],
   );
   useEffect(() => {
     autoLoadedInterruptedTurnIdsRef.current.clear();

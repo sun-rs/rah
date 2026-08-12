@@ -18,6 +18,7 @@ import type {
   SteerQueuedInputRequest,
   UpdateQueuedInputRequest,
 } from "@rah/runtime-protocol";
+import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
 import {
   forkCodexLiveSession,
@@ -225,8 +226,53 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private enqueueInput(live: LiveCodexSession, request: SessionInputRequest): void {
+    if (
+      request.clientMessageId &&
+      live.queuedInputs.some(
+        (item) => item.clientMessageId === request.clientMessageId,
+      )
+    ) {
+      return;
+    }
     live.queuedInputs.push(runtimeQueuedInput(request));
     publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+  }
+
+  private waitForQueuedInputAcceptance(
+    live: LiveCodexSession,
+    clientMessageId: string,
+    timeoutMs = 90_000,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    return new Promise((resolve, reject) => {
+      const poll = () => {
+        if (this.liveSessions.get(live.sessionId) !== live || live.ephemeralExpired) {
+          reject(new Error("Codex Session closed before the initial question was accepted."));
+          return;
+        }
+        const queued = live.queuedInputs.find(
+          (item) => item.clientMessageId === clientMessageId,
+        );
+        if (!queued) {
+          resolve();
+          return;
+        }
+        if (
+          live.queuedInputDrainPaused === true &&
+          live.uncertainQueuedInputClientMessageId === clientMessageId
+        ) {
+          reject(new Error("Codex did not accept the initial question; it remains queued in RAH."));
+          return;
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          reject(new Error("Timed out waiting for Codex to accept the initial question."));
+          return;
+        }
+        const timer = setTimeout(poll, 10);
+        timer.unref?.();
+      };
+      poll();
+    });
   }
 
   private async steerLiveTurn(
@@ -601,6 +647,9 @@ export class CodexAdapter implements ProviderAdapter {
       {
         threadId: live.threadId,
         input: codexTurnInput(request),
+        ...(request.clientMessageId
+          ? { clientUserMessageId: request.clientMessageId }
+          : {}),
         cwd: live.cwd,
         approvalPolicy: live.approvalPolicy,
         ...(live.approvalsReviewer === "auto_review"
@@ -775,14 +824,33 @@ export class CodexAdapter implements ProviderAdapter {
         : rawCachedModelCatalog
           ? mergeManualProviderModels(rawCachedModelCatalog)
           : null;
-    return await startCodexLiveSession({
+    const response = await startCodexLiveSession({
       services: this.services,
       request,
       ...(cachedModelCatalog ? { initialModelCatalog: cachedModelCatalog } : {}),
       onLiveSessionReady: (liveSession) => {
         this.registerLiveSession(liveSession);
       },
-    }).then((response) => ({ session: response.summary }));
+    });
+    const initialPrompt = request.initialPrompt?.trim();
+    if (initialPrompt) {
+      const clientMessageId = request.initialClientMessageId ?? randomUUID();
+      this.sendInput(response.sessionId, {
+        clientId: request.attach?.client.id ?? "system",
+        text: initialPrompt,
+        clientMessageId,
+        ...(request.initialClientTurnId
+          ? { clientTurnId: request.initialClientTurnId }
+          : {}),
+      });
+      const live = this.liveSessions.get(response.sessionId);
+      if (!live) {
+        throw new Error("Codex Session closed before the initial question could be delivered.");
+      }
+      await this.waitForQueuedInputAcceptance(live, clientMessageId);
+    }
+    const current = this.services.sessionStore.getSession(response.sessionId);
+    return { session: current ? toSessionSummary(current) : response.summary };
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
@@ -856,24 +924,12 @@ export class CodexAdapter implements ProviderAdapter {
       });
       return { session: response.summary };
     } catch (error) {
-      if (!record) {
-        preparedResume.rollback();
-        throw error;
-      }
+      // A requested live resume must never masquerade as a successful
+      // read-only replay. The caller may be carrying the user's first input;
+      // returning replay here acknowledges a Session that cannot accept it.
+      preparedResume.rollback();
+      throw error;
     }
-
-    return finalizeStoredReplayResume({
-      services: this.services,
-      provider: "codex",
-      providerSessionId: request.providerSessionId,
-      rehydratedSessionIds: this.rehydratedSessionIds,
-      createSession: () =>
-        resumeCodexStoredSession(
-          request.attach !== undefined
-            ? { services: this.services, record, attach: request.attach }
-            : { services: this.services, record },
-        ),
-    });
   }
 
   async forkSession(
@@ -910,22 +966,13 @@ export class CodexAdapter implements ProviderAdapter {
       if (live.ephemeralExpired) {
         throw new Error("This Side task expired in Codex. Start a new Side to continue.");
       }
-      if (!live.threadId || live.turnStartInFlight) {
-        this.enqueueInput(live, request);
-        return;
+      // Accept every message into RAH's canonical queue before attempting the
+      // provider RPC. An immediate turn/start rejection must never erase the
+      // only owned copy of a user's question after HTTP already returned 200.
+      this.enqueueInput(live, request);
+      if (!live.queuedInputDrainPaused) {
+        this.drainQueuedInput(live);
       }
-      if (live.currentTurnId) {
-        this.enqueueInput(live, request);
-        return;
-      }
-      if (live.queuedInputs.length > 0 || live.queuedInputDrainPaused) {
-        this.enqueueInput(live, request);
-        if (!live.queuedInputDrainPaused) {
-          this.drainQueuedInput(live);
-        }
-        return;
-      }
-      this.startLiveTurn(live, request);
       return;
     }
     throw new Error(

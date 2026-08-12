@@ -1063,6 +1063,52 @@ describe("startRahDaemon", () => {
     );
   });
 
+  test("parses the complete first input inside start and live-resume requests", () => {
+    const initialInput = {
+      clientId: "web-client",
+      clientMessageId: "client-message:first",
+      clientTurnId: "client-turn:first",
+      text: "Continue the large Session",
+      attachments: [
+        {
+          id: "00000000-0000-4000-8000-000000000002",
+          kind: "image" as const,
+          name: "evidence.png",
+          mediaType: "image/png",
+          size: 42,
+        },
+      ],
+      annotations: [
+        {
+          id: "annotation-first",
+          text: "Earlier context",
+          source: {
+            sessionId: "history-session",
+            entryKey: "assistant-entry",
+            role: "assistant" as const,
+          },
+        },
+      ],
+    };
+
+    assert.deepEqual(
+      parseStartSessionRequest({
+        provider: "codex",
+        cwd: tempHome,
+        initialInput,
+      }).initialInput,
+      initialInput,
+    );
+    assert.deepEqual(
+      parseResumeSessionRequest({
+        provider: "codex",
+        providerSessionId: "thread-large-history",
+        initialInput,
+      }).initialInput,
+      initialInput,
+    );
+  });
+
   test("rejects removed model and access aliases at the public HTTP boundary", () => {
     assert.throws(
       () =>

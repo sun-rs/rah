@@ -99,6 +99,42 @@ describe("Claude session files", () => {
     assert.deepEqual(scan.records, []);
   });
 
+  test("excludes Claude metadata-only shells without making the provider scan incomplete", () => {
+    writeClaudeSession("session-shell.jsonl", [
+      {
+        type: "system",
+        uuid: "system-shell",
+        cwd: workDir,
+        sessionId: "session-shell",
+        timestamp: "2026-07-19T22:21:00.000Z",
+        subtype: "init",
+      },
+      {
+        type: "custom-title",
+        customTitle: "Named but empty Claude shell",
+        sessionId: "session-shell",
+      },
+    ]);
+    writeClaudeSession("session-valid.jsonl", [
+      {
+        type: "user",
+        uuid: "user-valid",
+        cwd: workDir,
+        sessionId: "session-valid",
+        timestamp: "2026-07-19T22:22:00.000Z",
+        message: { content: "real prompt" },
+      },
+    ]);
+
+    const scan = scanClaudeStoredSessionCatalog();
+    assert.equal(scan.complete, true);
+    assert.deepEqual(
+      scan.records.map((record) => record.ref.providerSessionId),
+      ["session-valid"],
+    );
+    assert.equal(findClaudeStoredSessionRecord("session-shell", workDir), undefined);
+  });
+
   test("finds stored Claude sessions across /var and /private/var aliases", () => {
     const privateLikeWorkDir = path.join("/private", workDir);
     const privateProjectId = path.resolve(privateLikeWorkDir).replace(/[^a-zA-Z0-9]/g, "-");

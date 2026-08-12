@@ -42,7 +42,7 @@ test("catalog startup ignores snapshots and metadata from an older visibility co
     writeFileSync(
       path.join(cacheDir, "catalog.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         records: [record("stale-chat")],
       }),
     );
@@ -57,7 +57,7 @@ test("catalog startup ignores snapshots and metadata from an older visibility co
             ref: record("stale-chat").ref,
             size: 100,
             mtimeMs: 200,
-            version: 3,
+            version: 4,
           },
         ],
         [
@@ -66,13 +66,13 @@ test("catalog startup ignores snapshots and metadata from an older visibility co
             ref: record("current-task").ref,
             size: 300,
             mtimeMs: 400,
-            version: 4,
+            version: 5,
           },
         ],
       ]),
     );
     assert.deepEqual(
-      loadStoredSessionCatalogCache("codex", { entryVersion: 4 }).map(
+      loadStoredSessionCatalogCache("codex", { entryVersion: 5 }).map(
         (item) => item.ref.providerSessionId,
       ),
       ["current-task"],
@@ -89,7 +89,7 @@ test("catalog startup ignores snapshots and metadata from an older visibility co
       (JSON.parse(
         readFileSync(path.join(cacheDir, "catalog.json"), "utf8"),
       ) as { version: number }).version,
-      2,
+      3,
     );
   } finally {
     if (previousRahHome === undefined) {

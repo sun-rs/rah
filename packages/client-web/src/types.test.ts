@@ -1325,6 +1325,52 @@ describe("client projection", () => {
     assert.equal(current.currentRuntimeStatus, undefined);
   });
 
+  test("does not let a late idle edge erase a provider-bound startup input", () => {
+    let current = projection();
+    current.summary = {
+      ...current.summary,
+      session: {
+        ...current.summary.session,
+        status: "running",
+        phase: "starting",
+        runtimeState: "starting",
+        updatedAt: "2026-04-15T00:00:05.000Z",
+        inputQueue: [
+          {
+            clientMessageId: "client-message:resume",
+            text: "请继续",
+            queuedAt: "2026-04-15T00:00:05.000Z",
+            position: 0,
+            state: "submitting",
+          },
+        ],
+      },
+    };
+    current.currentRuntimeStatus = "thinking";
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 6,
+        type: "session.state.changed",
+        payload: { state: "idle" },
+      }),
+    );
+    assert.equal(current.summary.session.runtimeState, "starting");
+    assert.equal(current.summary.session.phase, "starting");
+    assert.equal(current.currentRuntimeStatus, "thinking");
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 7,
+        type: "runtime.status",
+        payload: { status: "finished" },
+      }),
+    );
+    assert.equal(current.currentRuntimeStatus, "thinking");
+  });
+
   test("dedupes same-turn user echoes even when provider identities drift", () => {
     let current = projection();
     current = applyEventToProjection(

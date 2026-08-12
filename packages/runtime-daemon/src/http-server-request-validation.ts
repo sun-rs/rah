@@ -111,6 +111,8 @@ export function parseStartSessionRequest(body: unknown): StartSessionRequest {
   const command = optionalString(record, "command");
   const args = optionalStringArray(record, "args");
   const initialPrompt = optionalString(record, "initialPrompt");
+  const initialClientMessageId = optionalString(record, "initialClientMessageId");
+  const initialClientTurnId = optionalString(record, "initialClientTurnId");
   if (title !== undefined) {
     request.title = title;
   }
@@ -125,6 +127,15 @@ export function parseStartSessionRequest(body: unknown): StartSessionRequest {
   }
   if (initialPrompt !== undefined) {
     request.initialPrompt = initialPrompt;
+  }
+  if (initialClientMessageId !== undefined) {
+    request.initialClientMessageId = initialClientMessageId;
+  }
+  if (initialClientTurnId !== undefined) {
+    request.initialClientTurnId = initialClientTurnId;
+  }
+  if (record.initialInput !== undefined) {
+    request.initialInput = parseSessionInputRequest(record.initialInput);
   }
   if (record.attach !== undefined) {
     request.attach = parseAttachPayload(record.attach);
@@ -158,6 +169,9 @@ export function parseResumeSessionRequest(body: unknown): ResumeSessionRequest {
   }
   if (historySourceSessionId !== undefined) {
     request.historySourceSessionId = historySourceSessionId;
+  }
+  if (record.initialInput !== undefined) {
+    request.initialInput = parseSessionInputRequest(record.initialInput);
   }
   if (record.attach !== undefined) {
     request.attach = parseAttachPayload(record.attach);

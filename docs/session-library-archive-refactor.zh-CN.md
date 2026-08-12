@@ -230,7 +230,8 @@ require stopped
   保留该 provider 的 last-good rows，避免瞬时 I/O 错误导致列表消失；
 - Codex catalog 读取 `session_meta.payload` 区分用户根会话与内部执行记录：
   `originator=Codex Desktop` 与 `originator=codex_work_desktop` 都进入 catalog；只排除
-  `source/thread_source` 明确标记的 internal subagent rollout；这些 provider 文件仍保留在原位置；
+  `source/thread_source` 明确标记的 internal subagent rollout；Codex/Claude/OpenCode 尚未接受
+  真实用户 turn 的 metadata-only 启动空壳同样不进入 catalog；这些 provider 文件仍保留在原位置；
 - `all` 模式返回 Archived 与普通 Session，由 `libraryState` 区分；
 - `recent` 默认排除 Archived，避免归档项重新进入 Recent；
 - discovery delta 必须把 `libraryState` 纳入 equality key；
@@ -271,13 +272,14 @@ require stopped
 - remembered/workbench/cache 中存在、但完整 provider catalog 与 live runtime 都不存在的 identity
   不会进入 response；
 - Codex Desktop 的全部用户根会话都会进入普通/归档列表；internal subagent 不进入，同 identity 的
-  重复物理 rollout 只投影一行；
+  重复物理 rollout 只投影一行；三家 provider 的 metadata-only 空壳均不进入目录；
 - 完整扫描清理 stale cache，不完整扫描保留 last-good provider rows。
 
 ### Web
 
 - All 与 Archived 严格互斥；
 - Sidebar 合并 running/stored 后按 identity 去重；
+- Sidebar 只展示能由用户已登记工作区认领的有效 Session；live runtime 不会自动注册新的工作区；
 - stopped row 能打开历史，running row 打开现有 runtime；
 - Archive/Restore 后 Sidebar 与 Chats 同步；
 - 大目录使用 metadata 渲染，不触发 transcript 请求。

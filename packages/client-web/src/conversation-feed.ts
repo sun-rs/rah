@@ -291,16 +291,52 @@ export function conversationTurnsToFeed(
 }
 
 /**
- * Keeps the runtime-owned input queue out of the conversation timeline. Queue
- * items are rendered by the composer queue and enter the transcript only when
- * they are actually sent or guided into a provider turn.
+ * Queued follow-ups stay in the composer queue. A submitting item is different:
+ * RAH has already handed it to the provider and owns it until turn acceptance,
+ * so it must remain visible as the user's message even after a page refresh.
+ * The canonical provider item replaces this projection by client message id.
  */
 export function conversationFeedWithInputQueue(
   feed: readonly FeedEntry[],
   inputQueue: readonly SessionQueuedInput[],
 ): FeedEntry[] {
-  void inputQueue;
-  return [...feed];
+  const next = [...feed];
+  const visibleClientMessageIds = new Set(
+    feed.flatMap((entry) =>
+      isUserTimelineEntry(entry) && entry.item.clientMessageId
+        ? [entry.item.clientMessageId]
+        : [],
+    ),
+  );
+  for (const input of inputQueue) {
+    if (
+      (input.state ?? "queued") !== "submitting" ||
+      visibleClientMessageIds.has(input.clientMessageId)
+    ) {
+      continue;
+    }
+    next.push({
+      key: `submitting:user:${input.clientMessageId}`,
+      kind: "timeline",
+      item: {
+        kind: "user_message",
+        text: input.text,
+        clientMessageId: input.clientMessageId,
+        ...(input.clientTurnId ? { clientTurnId: input.clientTurnId } : {}),
+        ...(input.attachments?.length
+          ? {
+              attachments: input.attachments,
+              imageCount: input.attachments.filter(
+                (attachment) => attachment.kind === "image",
+              ).length,
+            }
+          : {}),
+      },
+      ts: input.queuedAt,
+    });
+    visibleClientMessageIds.add(input.clientMessageId);
+  }
+  return next;
 }
 
 function runtimeModelFromEntries(entries: readonly FeedEntry[]): TimelineRuntimeModel | undefined {
@@ -429,6 +465,7 @@ export function conversationDisplayRows(
   turns: readonly ConversationTurnProjection[],
   visibleEntries: readonly FeedEntry[],
   activeVisibleEntries: readonly FeedEntry[] = visibleEntries,
+  options: { generationActive?: boolean } = {},
 ): ChatDisplayRow[] {
   const entryByKey = new Map(visibleEntries.map((entry) => [entry.key, entry]));
   const activeEntryByKey = new Map(
@@ -625,6 +662,26 @@ export function conversationDisplayRows(
   for (; pendingUserIndex < pendingUserEntries.length; pendingUserIndex += 1) {
     const entry = pendingUserEntries[pendingUserIndex]!;
     rows.push({ kind: "feed_entry", key: entry.key, entry });
+  }
+
+  const latestPendingUser = supplementalUserEntries.at(-1);
+  const hasCanonicalActiveTurn = turns.some(
+    (turn) => turn.status === "in_progress" && turn.finalAnswerItemId === undefined,
+  );
+  if (options.generationActive && latestPendingUser && !hasCanonicalActiveTurn) {
+    const clientTurnId = latestPendingUser.item.clientTurnId;
+    rows.push({
+      kind: "assistant_process_group",
+      key: `conversation-process:optimistic:${clientTurnId ?? latestPendingUser.key}`,
+      entries: [],
+      completed: false,
+      active: true,
+      hasFinalAnswer: false,
+      startedAt: latestPendingUser.ts,
+      activities: [],
+      turnStatus: "in_progress",
+      ...(clientTurnId ? { turnId: clientTurnId } : {}),
+    });
   }
 
   return rows;

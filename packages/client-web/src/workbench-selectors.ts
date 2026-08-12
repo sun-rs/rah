@@ -3,6 +3,7 @@ import { isReadOnlyReplay } from "./session-capabilities";
 import {
   deriveWorkspaceInfos,
   deriveWorkspaceSections,
+  findOwningWorkspace,
   groupRunningSessionsByDirectory,
   isPathOwnedByHiddenWorkspace,
   sortWorkspaceInfos,
@@ -203,12 +204,17 @@ export function deriveWorkbenchSessionCollections(args: {
       ),
   );
   const sidebarStoredSessions = visibleStoredSessionRefs(args.storedSessions).filter(
-    (session) =>
-      !isPathOwnedByHiddenWorkspace(
-        sidebarWorkspaceDirs,
-        hiddenWorkspaceDirs,
-        session.rootDir || session.cwd,
-      ),
+    (session) => {
+      const sessionPath = session.rootDir || session.cwd;
+      return (
+        findOwningWorkspace(sidebarWorkspaceDirs, sessionPath) !== null &&
+        !isPathOwnedByHiddenWorkspace(
+          sidebarWorkspaceDirs,
+          hiddenWorkspaceDirs,
+          sessionPath,
+        )
+      );
+    },
   );
   const workspaceInfos = deriveWorkspaceInfos(
     sidebarWorkspaceDirs,

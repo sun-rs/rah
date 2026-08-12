@@ -434,7 +434,7 @@ export class NativeTuiMirrorRuntime {
   }
 }
 
-function attachSubmittedClientInput(
+export function attachSubmittedClientInput(
   native: NativeTuiSessionState,
   activity: ProviderActivity,
 ): { activity: ProviderActivity; input?: NativeTuiSubmittedInput } {
@@ -460,7 +460,27 @@ function attachSubmittedClientInput(
     };
   }
   const userText = userItem.text;
-  const match = inputs.find((input) => input.text === userText);
+  const exactMatch = inputs.find((input) => input.text === userText);
+  // Some terminal providers can echo the local dirty draft immediately before
+  // the Web-owned replacement text, even though RAH sent the provider-specific
+  // clear sequence first. This is still an acknowledged handoff when the most
+  // recent replacement submission is the exact suffix. Canonicalize the Chat
+  // transcript back to the user-owned text and release the queue item.
+  let replacementMatch: NativeTuiSubmittedInput | undefined;
+  if (!exactMatch) {
+    for (let index = inputs.length - 1; index >= 0; index -= 1) {
+      const candidate = inputs[index];
+      if (
+        candidate?.replacesPromptDraft === true &&
+        candidate.text.length > 0 &&
+        userText.endsWith(candidate.text)
+      ) {
+        replacementMatch = candidate;
+        break;
+      }
+    }
+  }
+  const match = exactMatch ?? replacementMatch;
   if (!match) {
     pruneSubmittedInputs(native);
     return { activity };
@@ -470,6 +490,7 @@ function attachSubmittedClientInput(
       ...activity,
       item: {
         ...activity.item,
+        ...(replacementMatch ? { text: replacementMatch.text } : {}),
         ...(match?.clientMessageId !== undefined ? { clientMessageId: match.clientMessageId } : {}),
         ...(match?.clientTurnId !== undefined ? { clientTurnId: match.clientTurnId } : {}),
       },

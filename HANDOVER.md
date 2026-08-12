@@ -15,7 +15,7 @@ RAH 是一个 **local-first、多 Provider、daemon-owned runtime 的 AI 工作�
 
 1. **daemon 是运行时唯一 owner**：负责 Codex、Claude、OpenCode 的启动、恢复、控制、事件、历史目录、投影和索引；浏览器只是 canonical protocol 的消费者。
 2. **Provider 原生结构化数据是权威**：实时会话来自 Provider server event 或原生历史 mirror；绝不从 ANSI/TUI 屏幕文本反推 Chat。
-3. **历史浏览与 running runtime 分离**：历史 session 可以只读打开；首次发送时才原子执行 Resume/Attach + Send。打开历史本身不启动 Provider。
+3. **历史浏览与 running runtime 分离**：历史 session 可以只读打开；首次发送时才用单个 daemon 请求原子执行 live Resume/Attach 并接管首条输入。打开历史本身不启动 Provider。
 4. **Chat、Workspace、Chats Catalog、Inspector 各有唯一 owner**：禁止某个页面自己再维护一套扫描、缓存或 projection。
 5. **所有列表必须确定、稳定、幂等**：刷新、窗口失焦/聚焦、Session A→B→A、Provider 后台变动，都不能让左侧数量/顺序抖动或出现重复项。
 6. **Inspector 只能展示稳定快照**：Outputs/Sources 索引重建期间返回旧稳定值或 `indexing`，不能让用户看到计数逐项增加、列表不断重排。
@@ -187,13 +187,15 @@ Timeline 主 identity 来自：
 
 用户已明确锁定以下行为：
 
-- New task 输入发送后直接进入 Chat，不出现中转页。
+- New task 输入发送后直接进入 Chat，不出现中转页；首问文本、附件、注释及稳定 message/turn identity 必须作为 `initialInput` 原子进入 `/sessions/start`，禁止依赖跳转后的第二次 `/input`。启动期间 daemon 必须把唯一输入接入该 Session 的 canonical queue；HTTP 成功必须晚于 Provider 对这条 identity 的明确接收，不能只代表 Session 已创建或内存队列已接管。只有 provider-bound startup 成功才转移草稿所有权，任何拒绝都恢复问题与附件，且同一提交在完成前必须互斥。
 - 历史 Session 第一次发送后，问题气泡立即乐观出现，不等待 Resume 完成。
 - Composer 立即在原 Send 槽位切换为黑底白色、无动画的 Stop；用户继续输入时同槽恢复 Send。
-- 标题先显示 `Starting…`，Provider 接管后转 `Working`。
+- Chat 过程行与 Sidebar 运行指示先显示 `Starting/Working`；Provider 接管后继续沿用同一 daemon-owned 状态，不能依赖标题栏临时文案。
 - 不显示独立 Resume 按钮。
 - Resume 失败时保留历史 projection，恢复 draft 与附件，不清空用户输入。
-- 同一 Provider thread 的并发首次提交共享一个 in-flight resume，不能创建两个 runtime。若用户先触发了无输入的激活、随后才按 Send，后到的问题必须先乐观写入 resident projection，并在已有 Resume 返回后向新的 Runtime ID 恰好发送一次，不能因为复用在途 Promise 而吞掉输入。
+- stopped history 的首问必须作为同一个 `/sessions/resume` 请求的 `initialInput` 交给 daemon；live resume 失败不得伪装为成功的 read-only replay。HTTP 在 Codex 接受对应 `turn/start` 之前不得返回成功；等待期间 daemon 必须拥有该输入并把 `submitting` 项投影为可刷新的用户消息/Working。Codex 明确拒绝或 transport 结果不确定时输入继续留在 canonical queue，不能从 UI 和刷新结果中消失。
+- 同一 Provider thread 的并发首次提交共享一个 in-flight resume，不能创建两个 runtime。若用户先触发了无输入的激活、随后才按 Send，后到的问题必须先乐观写入 resident projection，并在已有 Resume 返回后向新的 Runtime ID 恰好发送一次；若已有 Resume 本身已携一条输入，后续每条输入仍必须拥有独立排队路径，不能因为复用在途 Promise 而吞掉输入。
+- Resume 返回的迟到 `idle` snapshot/notification 在 `turn/start` 尚未确认、canonical queue 仍有输入时不得覆盖 `Starting/Working`。Sidebar 点、标题、composer Stop/Send 与 Chat 状态都必须来自同一 daemon-owned Session state，而不能各自猜测“已启动”等于“已投递”。
 - Resume A 的完成只有在用户仍停留于 A 的 history replay 或 A 已 claim runtime 时才可映射当前选择；等待期间若用户打开 B，A 继续后台启动和发送，但成功、回滚及迟到 control refresh 均不得把页面抢回 A。
 - stopped -> starting -> live 的整个迁移期间 composer 只切换配置数据源，不卸载权限、Plan 或模型控件；默认模型的默认 effort 必须立即显示，只有 Provider 明确声明“provider default”时才允许省略 effort。
 - 用户显式 Stop 当前 Session 后保留当前已加载 conversation projection，并原地降级为 stopped/read-only replay；页面仍停留在同一个 Chat，后续可直接输入并隐式 Resume，不能跳回 New task。
@@ -500,6 +502,7 @@ Workspace 生命周期与真实浏览器发布门禁包括：
 - `WORKSPACE-PROJECTION-001`
 - `WORKSPACE-EMPTY-RECOVERY-001`
 - `WORKSPACE-NEW-TASK-001`
+- `NEW-TASK-DRAFT-OWNERSHIP-001`
 - `PWA-COMPOSER-WORKSPACE-PILL-001`
 - `PWA-CONVERSATION-DENSITY-001`
 - `PWA-GLOBAL-NOTICE-001`
@@ -513,6 +516,7 @@ Workspace 生命周期与真实浏览器发布门禁包括：
 Desktop / PWA 视觉契约分别锁定：
 
 - New task workspace selector 位于 composer 外部的独立上下文行，超过 18 字符才跑马；不与 Start session 或 agent 配置竞争宽度。
+- PWA Chat composer 以显式交互状态展开；iOS IME 输入直接测量真实 textarea，长文本增高到上限后才内部滚动；权限与模型 Portal 按 visual viewport 定位在输入法上方。
 - Desktop/PWA 的 Session 与 Council 对话正文共享 12–20px 可调 token；默认 14/22、约 430 正文字重和 12px 代码，用户 Copy action 不占空白行。
 - Appearance 不改变 UI 菜单字体，只提供 12–20px 正文值，也不提供独立代码字号控件；代码随正文按 11–16px 有界联动。
 - 回复中的连续纯图片段落使用 12px gap 的可换行缩略图组；本地图片最高 160px、远程图片最高 200px，点击行为保持不变。

@@ -45,8 +45,9 @@ function ActivityBatch(props: {
     <div className="min-w-0">
       <button
         type="button"
-        className={`group flex min-h-8 w-full items-center gap-2 py-1 text-left text-xs font-medium outline-none ${tone}`}
+        className={`assistant-process-activity-summary group flex w-full items-center gap-2 text-left text-xs font-medium outline-none ${tone}`}
         aria-expanded={open}
+        data-testid="assistant-process-activity-summary"
         onClick={() => setOpen((value) => !value)}
       >
         <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
@@ -174,7 +175,7 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
     <section className="min-w-0" data-testid="assistant-process-group">
       <button
         type="button"
-        className={`group flex min-h-8 w-full items-center gap-2 py-1 text-left text-xs font-medium text-[var(--app-hint)] outline-none transition-colors focus-visible:text-[var(--app-fg)] ${
+        className={`assistant-process-summary group flex w-full items-center gap-2 text-left text-xs font-medium text-[var(--app-hint)] outline-none transition-colors focus-visible:text-[var(--app-fg)] ${
           canCollapse ? "hover:text-[var(--app-fg)]" : "cursor-default"
         }`}
         aria-expanded={showDetails}
@@ -205,7 +206,7 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
           {...(props.group.hasFinalAnswer
             ? { "data-testid": "assistant-process-final-divider" }
             : {})}
-          className={`mt-3 space-y-2.5 pb-3 ${
+          className={`assistant-process-details ${
             props.group.hasFinalAnswer
               ? "border-b border-[var(--app-border)]"
               : ""
@@ -239,7 +240,16 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
             ) : row.kind === "reasoning_batch" ? (
               <div key={row.key}>{props.renderEntry(row.entry)}</div>
             ) : (
-              <div key={row.key}>{props.renderEntry(row.entry)}</div>
+              <div
+                key={row.key}
+                className={
+                  row.entry.kind === "timeline" && row.entry.item.kind === "compaction"
+                    ? "assistant-process-compaction-slot"
+                    : undefined
+                }
+              >
+                {props.renderEntry(row.entry)}
+              </div>
             ),
           )}
         </div>

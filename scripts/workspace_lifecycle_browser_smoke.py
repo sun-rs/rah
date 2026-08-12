@@ -1866,7 +1866,15 @@ def main() -> int:
                           getComputedStyle(primary, '::after').width
                         ),
                         textareaHeight: textareaRect.height,
+                        textareaClientHeight: textarea.clientHeight,
+                        textareaScrollHeight: textarea.scrollHeight,
+                        textareaOverflowY: textareaStyle.overflowY,
                         textareaWhiteSpace: textareaStyle.whiteSpace,
+                        composerExpanded:
+                          element.getAttribute('data-composer-expanded'),
+                        modeDisabled: mode?.disabled ?? null,
+                        planDisabled: plan?.disabled ?? null,
+                        modelDisabled: model?.disabled ?? null,
                       };
                     }
                     """
@@ -1902,7 +1910,10 @@ def main() -> int:
             )
             pwa_chat_input.click(position={"x": 4, "y": 18}, timeout=10_000)
             expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
-            long_chat_draft = "First line remains in the task\nSecond line is revealed on focus\nThird line proves bounded growth"
+            long_chat_draft = "\n".join(
+                f"第 {index} 行用于验证 iOS 输入法下的 Composer 原位测量与有界增高。"
+                for index in range(1, 15)
+            )
             pwa_chat_textarea.fill(long_chat_draft)
             pwa_page.wait_for_timeout(260)
             pwa_chat_focused = read_pwa_chat_composer_metrics()
@@ -1921,6 +1932,26 @@ def main() -> int:
             if pwa_chat_focused["height"] > 340:
                 raise AssertionError(
                     f"PWA focused Chat composer exceeded its height cap: {pwa_chat_focused!r}"
+                )
+            if (
+                pwa_chat_focused["textareaHeight"] < 200
+                or pwa_chat_focused["textareaScrollHeight"]
+                <= pwa_chat_focused["textareaClientHeight"]
+                or pwa_chat_focused["textareaOverflowY"] != "auto"
+            ):
+                raise AssertionError(
+                    "PWA focused Chat composer did not grow to its cap and then scroll: "
+                    f"{pwa_chat_focused!r}"
+                )
+            if (
+                pwa_chat_focused["composerExpanded"] != "true"
+                or pwa_chat_focused["modeDisabled"]
+                or pwa_chat_focused["planDisabled"]
+                or pwa_chat_focused["modelDisabled"]
+            ):
+                raise AssertionError(
+                    "PWA focused Chat composer controls are not explicitly expanded and interactive: "
+                    f"{pwa_chat_focused!r}"
                 )
             if pwa_chat_focused["secondaryDisplay"] == "none":
                 raise AssertionError(
@@ -1997,9 +2028,43 @@ def main() -> int:
                 "03c-pwa-chat-composer-expanded",
             )
 
+            pwa_mode_control = pwa_chat_surface.locator(
+                '[data-composer-control="permissions"]'
+            )
+            expect(pwa_mode_control).to_be_enabled(timeout=10_000)
+            previous_mode_title = pwa_mode_control.get_attribute("title")
+            pwa_mode_control.click(timeout=10_000)
+            pwa_mode_listbox = pwa_page.get_by_role(
+                "listbox", name="Session mode", exact=True
+            )
+            expect(pwa_mode_listbox).to_be_visible(timeout=10_000)
+            alternate_mode = pwa_mode_listbox.locator(
+                '[role="option"]:not([aria-selected="true"])'
+            ).first
+            expect(alternate_mode).to_be_visible(timeout=10_000)
+            alternate_mode.click(timeout=10_000)
+            expect(pwa_mode_listbox).to_have_count(0, timeout=10_000)
+            if pwa_mode_control.get_attribute("title") == previous_mode_title:
+                raise AssertionError("PWA permission control did not apply its selection")
+
+            pwa_plan_control = pwa_chat_surface.locator(
+                '[data-composer-control="plan"]'
+            )
+            expect(pwa_plan_control).to_be_enabled(timeout=10_000)
+            previous_plan_state = pwa_plan_control.get_attribute("aria-pressed")
+            pwa_plan_control.click(timeout=10_000)
+            expect(pwa_plan_control).not_to_have_attribute(
+                "aria-pressed", previous_plan_state, timeout=10_000
+            )
+            pwa_plan_control.click(timeout=10_000)
+            expect(pwa_plan_control).to_have_attribute(
+                "aria-pressed", previous_plan_state, timeout=10_000
+            )
+
             pwa_model_control = pwa_chat_surface.locator(
                 '[data-composer-control="model"]'
             )
+            expect(pwa_model_control).to_be_enabled(timeout=10_000)
             pwa_model_control.click(timeout=10_000)
             expect(pwa_model_control).to_have_attribute("aria-expanded", "true")
             pwa_page.wait_for_timeout(220)
@@ -2014,7 +2079,23 @@ def main() -> int:
                     "PWA Chat composer collapsed while its model menu was open: "
                     f"focused={pwa_chat_focused!r} menu={pwa_chat_menu_open!r}"
                 )
-            pwa_model_control.click(timeout=10_000)
+            pwa_model_dialog = pwa_page.get_by_role(
+                "dialog", name="Model and parameters", exact=True
+            )
+            expect(pwa_model_dialog).to_be_visible(timeout=10_000)
+            pwa_sol_model = pwa_model_dialog.locator("button").filter(
+                has_text="gpt-5.6-sol"
+            ).first
+            if pwa_sol_model.count() > 0:
+                pwa_sol_model.click(timeout=10_000)
+                pwa_model_dialog.get_by_role(
+                    "button", name="Medium", exact=True
+                ).click(timeout=10_000)
+                expect(pwa_model_control).to_have_attribute(
+                    "title", "gpt-5.6-sol / Medium", timeout=10_000
+                )
+            else:
+                pwa_model_control.click(timeout=10_000)
             pwa_page.mouse.click(4, 400)
             pwa_page.wait_for_timeout(260)
             if pwa_chat_textarea.evaluate(
@@ -2087,6 +2168,7 @@ def main() -> int:
 
             remove_workspace(page, recovery_workspace)
             assert_workspace_api(base_url, [])
+
             if page_errors:
                 raise AssertionError(
                     f"browser page errors occurred during workspace lifecycle: {page_errors!r}"

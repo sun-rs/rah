@@ -312,7 +312,7 @@ Structured test running 的保留决策：
 - 只要 provider session 被 daemon-owned runtime 拉起，就是 `running`；没有 client attach 时也仍然 `running`。
 - `ready`、`working`、`waiting_input`、`waiting_permission` 都属于 `phase`，不是 `running/stopped` 边界。
 - 只读打开历史不算 `running`，也不算写手；未归档历史仍立即显示可输入、可选 model/mode/permission 的完整 composer，不显示独立 Resume 按钮。
-- 只读浏览本身不触发 resume。用户首次提交时，客户端执行原子 `resume/attach -> send`：先把文本/附件乐观写入 resident projection，再用当前 composer 选择升级为 daemon-owned running session，最后把同一份输入发送给返回的 Runtime ID。失败时保留历史 projection，并恢复 draft 与附件。
+- 只读浏览本身不触发 resume。用户首次提交时，客户端先把文本/附件乐观写入 resident projection，再把 composer 配置与同一份 `initialInput` 放入一个 `/sessions/resume` 请求；daemon 完成 live resume 后必须先把输入接入该 Runtime 的 canonical queue，并持续等待相同 `clientMessageId` 被 Provider 接受，随后 HTTP 才能成功。队列接管不是交付确认，Session 已创建也不是交付确认。禁止恢复成功后再由浏览器发第二个 `/input`，也禁止 live resume 失败时回退成不可写 replay 却返回成功。等待中的 `submitting` 项必须投影为可刷新的用户消息并维持 `Starting/Working`；Provider 明确拒绝 `turn/start` 或 transport 结果不确定时，输入继续留在 queue 并显示错误/可恢复状态；迟到的 provider `idle/finished` 不能覆盖该状态。失败时保留历史 projection，并恢复 draft 与附件。同一 Provider thread 的并发激活只创建一个 runtime，但每一条实际提交都必须有独立稳定 identity 和交付/排队路径，不能因共享 Promise 静默丢弃。
 - 主 Session、Canvas pane 等所有 surface 通过同一条 resume command 工作；同一个 provider thread 的并发首次提交共享一个在途操作，不能双击或跨 surface 创建两个 runtime。无输入激活已经在途时，后到的 Send 必须加入该操作、保留乐观消息，并在 Resume 完成后恰好发送一次，不能直接返回旧 Promise 而丢弃问题。
 - Resume A 的完成只能在用户仍选中 A 的 history replay 或 A 已 claim 的 runtime 时改写选择。若等待期间用户已经打开 B，A 仍须在后台完成 projection 迁移、控制参数刷新和输入发送，但任何成功、失败回滚或迟到的 model/mode/permission 更新都不能把当前页面抢回 A。
 - Resume 复用页面已经显示的 resident history projection，并使用 `historyReplay: "skip"` 避免重新读取同一段大历史；新 runtime 只补充恢复后的 revision/delta。Archived session 保持只读且不能隐式恢复。
@@ -513,14 +513,19 @@ Conversation 正文。生产 daemon 的目录发现必须遵循：
 6. 当前 provider catalog 是身份权威；remembered/workbench/per-file cache 只能补充 metadata，
    不能独立证明 Session 仍存在或仍属于当前产品表面。
 7. Codex 必须从首个 `session_meta.payload` 保留所有用户拥有的根会话，包括
-   `originator=Codex Desktop` 与 `originator=codex_work_desktop`；只排除明确标记为 subagent 的
-   内部 rollout。物理文件与标题索引不能替代该边界。
+   `originator=Codex Desktop` 与 `originator=codex_work_desktop`；明确标记为 subagent 的内部
+   rollout，以及尚未接受任何真实用户 turn 的 metadata-only rollout 都不进入 catalog。Claude
+   和 OpenCode 遵循同一首个用户 turn 门槛；标题、路径或 assistant/system metadata 不能把启动失败
+   留下的空壳升级为可见 Session。物理文件与标题索引不能替代该边界。
 8. catalog snapshot 与 provider metadata cache 具有 visibility contract version。完整扫描清理旧
    row；不完整扫描保留 last-good，不能因一次中断扫描让 Sidebar 数量抖动。
 9. 扫描结果、启动快照和持久化快照在进入 Session 投影前都必须按
    `{provider, providerSessionId}` 规范化：空 identity 直接拒绝，同一快照内 active/archive
    短暂并存时保留 active，其他重复项按最新 provider 时间和稳定 storage path 决定。完整扫描的
    规范化结果仍是权威集合；不完整扫描只原位 upsert，不重排或删除未观察到的 last-good row。
+10. Sidebar 的 workspace inventory 只来自用户已经登记的工作区；live runtime 不得因为在另一个
+    目录运行而自动登记工作区。Sidebar stored-session 投影还必须能由最具体的已登记工作区认领，
+    未被登记工作区包含的 provider history 只可留在全局 Chats/History，不得进入左侧工作区列表。
 
 因此 Recent 的“快”不以牺牲一致性为代价，All 的“准”也不能成为启动、Resume 或 Chat 首屏的
 串行依赖。

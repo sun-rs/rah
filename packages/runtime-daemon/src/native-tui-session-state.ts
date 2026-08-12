@@ -23,6 +23,8 @@ export type NativeTuiSubmittedInput = {
   clientId: string;
   text: string;
   submittedAt: string;
+  /** The Web submission was meant to replace an already-dirty local TUI draft. */
+  replacesPromptDraft?: boolean;
   interruptedAt?: string;
   clientMessageId?: string;
   clientTurnId?: string;

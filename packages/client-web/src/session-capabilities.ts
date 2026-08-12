@@ -149,7 +149,14 @@ export function isSessionGenerationActive(
   summary: SessionSummary,
   runtimeStatus: string | undefined,
 ): boolean {
-  return isSessionActivelyRunning(summary) || isRuntimeStatusActivelyRunning(runtimeStatus);
+  const hasSubmittingInput = summary.session.inputQueue?.some(
+    (input) => (input.state ?? "queued") === "submitting",
+  );
+  return (
+    hasSubmittingInput === true ||
+    isSessionActivelyRunning(summary) ||
+    isRuntimeStatusActivelyRunning(runtimeStatus)
+  );
 }
 
 export function isSessionControlLocked(summary: SessionSummary): boolean {

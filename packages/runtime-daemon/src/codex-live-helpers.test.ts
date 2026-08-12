@@ -344,6 +344,27 @@ test("applies active snapshot state and all live notification state", () => {
   );
 });
 
+test("keeps Working authoritative while a resumed Codex prompt awaits turn acceptance", () => {
+  assert.equal(
+    shouldApplyCodexTranslatedActivity({
+      activity: { type: "session_state", state: "idle" },
+      origin: "notification",
+      currentTurnId: null,
+      hasPendingInput: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldApplyCodexTranslatedActivity({
+      activity: { type: "session_state", state: "failed" },
+      origin: "notification",
+      currentTurnId: null,
+      hasPendingInput: true,
+    }),
+    true,
+  );
+});
+
 test("skips session authority events from a different Codex thread", () => {
   assert.equal(
     shouldApplyCodexTranslatedActivity({

@@ -423,6 +423,130 @@ describe("codex stored session discovery", () => {
     assert.ok(persistedCache.entries?.[parentPath]);
   });
 
+  test("excludes metadata-only Codex shells even when the title index and stale cache name them", async () => {
+    const validId = "019f4444-1111-7000-8bbb-ccccddddeeee";
+    const shellId = "019f4444-2222-7000-8bbb-ccccddddeeee";
+    const cwd = path.join(tmpHome, "workspace");
+    const validPath = writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId: validId,
+      cwd,
+      timestamp: "2026-07-28T00:00:00.000Z",
+      text: "real user turn",
+    });
+    const shellDir = path.join(tmpHome, "sessions", "2026", "07", "28");
+    mkdirSync(shellDir, { recursive: true });
+    const shellPath = path.join(
+      shellDir,
+      `rollout-2026-07-28T00-01-00-${shellId}.jsonl`,
+    );
+    writeFileSync(
+      shellPath,
+      `${JSON.stringify({
+        timestamp: "2026-07-28T00:01:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: shellId,
+          timestamp: "2026-07-28T00:01:00.000Z",
+          cwd,
+          source: "cli",
+        },
+      })}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(tmpHome, "session_index.jsonl"),
+      `${JSON.stringify({
+        id: shellId,
+        thread_name: "Friendly but empty shell",
+      })}\n`,
+      "utf8",
+    );
+
+    const shellStats = statSync(shellPath);
+    const cacheDir = path.join(process.env.RAH_HOME!, "stored-session-cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(cacheDir, "codex.json"),
+      JSON.stringify({
+        entries: {
+          [shellPath]: {
+            ref: {
+              provider: "codex",
+              providerSessionId: shellId,
+              cwd,
+              rootDir: cwd,
+              title: "Friendly but empty shell",
+              preview: "Friendly but empty shell",
+              source: "provider_history",
+            },
+            size: shellStats.size,
+            mtimeMs: shellStats.mtimeMs,
+            version: 4,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const scan = scanCodexStoredSessionCatalog();
+    assert.equal(scan.complete, true);
+    assert.deepEqual(
+      scan.records.map((record) => record.ref.providerSessionId),
+      [validId],
+    );
+    assert.equal(scan.records[0]?.rolloutPath, validPath);
+    const startupIdentity = await resolveCodexStoredSessionRecordNearStartup({
+      providerSessionId: shellId,
+      startupTimestampMs: Date.parse("2026-07-28T00:01:03.000Z"),
+      codexHome: tmpHome,
+    });
+    assert.equal(startupIdentity?.ref.providerSessionId, shellId);
+
+    const persistedCache = JSON.parse(
+      readFileSync(path.join(cacheDir, "codex.json"), "utf8"),
+    ) as { entries?: Record<string, unknown> };
+    assert.equal(persistedCache.entries?.[shellPath], undefined);
+    assert.ok(persistedCache.entries?.[validPath]);
+  });
+
+  test("keeps legacy Codex event_msg user turns visible", () => {
+    const sessionId = "019f4444-3333-7000-8bbb-ccccddddeeee";
+    const cwd = path.join(tmpHome, "workspace");
+    const dir = path.join(tmpHome, "sessions", "2026", "07", "28");
+    mkdirSync(dir, { recursive: true });
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-07-28T00-02-00-${sessionId}.jsonl`,
+    );
+    writeFileSync(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-07-28T00:02:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: sessionId,
+            timestamp: "2026-07-28T00:02:00.000Z",
+            cwd,
+            source: "cli",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-07-28T00:02:01.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "legacy real prompt" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const records = discoverCodexStoredSessions();
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.ref.providerSessionId, sessionId);
+    assert.equal(records[0]?.ref.preview, "legacy real prompt");
+  });
+
   test("keeps all user-owned Codex Desktop roots in the catalog and cache", () => {
     const taskId = "019f4444-aaaa-7000-8bbb-ccccddddeeee";
     const chatId = "019f5555-bbbb-7000-8ccc-ddddeeeeffff";

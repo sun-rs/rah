@@ -22,6 +22,8 @@ import type {
 } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import type { PendingSessionStartupConfiguration } from "./session-startup-configuration";
+import { shouldPreserveProviderBoundStartup } from "./session-startup-event-guards";
+import { nextRuntimeStatusForEvent } from "./session-runtime-status";
 
 export type SessionsResponse = ListSessionsResponse;
 
@@ -249,6 +251,13 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     case "session.started":
       return isIsoTsAtLeast(event.payload.session.updatedAt, current.summary.session.updatedAt);
     case "session.state.changed":
+      if (
+        event.payload.state === "idle" &&
+        shouldPreserveProviderBoundStartup(current.summary, event.ts)
+      ) {
+        return false;
+      }
+      return true;
     case "session.side.state.changed":
     case "session.native_tui.prompt_state.changed":
     case "permission.requested":
@@ -273,31 +282,6 @@ function relationshipWithSideLifecycle(
     sideState: event.payload.state,
     ...(event.payload.detail !== undefined ? { sideStateDetail: event.payload.detail } : {}),
   };
-}
-
-function sessionSummaryIsActivelyRunning(summary: SessionSummary): boolean {
-  return summary.session.status === "running" && [
-    "starting",
-    "working",
-    "stopping",
-  ].includes(summary.session.phase);
-}
-
-function nextRuntimeStatusForEvent(
-  current: SessionProjection,
-  nextSummary: SessionSummary,
-  event: RahEvent,
-): Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"] | undefined {
-  if (event.type === "runtime.status") {
-    return event.payload.status;
-  }
-  if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.canceled") {
-    return undefined;
-  }
-  if (!sessionSummaryIsActivelyRunning(nextSummary)) {
-    return undefined;
-  }
-  return current.currentRuntimeStatus;
 }
 
 function summaryWithRuntimeState(

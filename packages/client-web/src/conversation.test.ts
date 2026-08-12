@@ -326,6 +326,48 @@ test("Conversation renders a local pending user turn immediately and hands off b
   );
 });
 
+test("Conversation renders Working while a startup prompt is owned before provider turn acceptance", () => {
+  const clientMessageId = "client-message:slow-resume";
+  const clientTurnId = "client-turn:slow-resume";
+  const optimisticUser: FeedEntry = {
+    key: `optimistic:user:${clientMessageId}`,
+    kind: "timeline",
+    item: {
+      kind: "user_message",
+      text: "请继续",
+      clientMessageId,
+      clientTurnId,
+    },
+    ts: "2026-08-12T00:00:00.000Z",
+  };
+
+  const rows = conversationDisplayRows([], [optimisticUser], [optimisticUser], {
+    generationActive: true,
+  });
+  assert.deepEqual(
+    rows.map((row) => row.key),
+    [
+      optimisticUser.key,
+      `conversation-process:optimistic:${clientTurnId}`,
+    ],
+  );
+  const working = rows[1];
+  assert.equal(working?.kind, "assistant_process_group");
+  if (working?.kind !== "assistant_process_group") {
+    assert.fail("expected an optimistic Working process group");
+  }
+  assert.equal(working.active, true);
+  assert.equal(working.turnStatus, "in_progress");
+  assert.equal(working.turnId, clientTurnId);
+
+  assert.deepEqual(
+    conversationDisplayRows([], [optimisticUser], [optimisticUser], {
+      generationActive: false,
+    }).map((row) => row.key),
+    [optimisticUser.key],
+  );
+});
+
 test("Conversation does not re-render an optimistic key after the live store resolves it", () => {
   const canonicalTurn = turn("turn-live", [
     timelineItem("user-live", "turn-live", "user", "连续提问"),

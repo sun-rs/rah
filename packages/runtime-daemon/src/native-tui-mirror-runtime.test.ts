@@ -5,7 +5,10 @@ import { BoundedTaskScheduler } from "./bounded-task-scheduler";
 import { EventBus } from "./event-bus";
 import { NativeTuiDiagnosticStore } from "./native-tui-diagnostics";
 import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
-import { NativeTuiMirrorRuntime } from "./native-tui-mirror-runtime";
+import {
+  attachSubmittedClientInput,
+  NativeTuiMirrorRuntime,
+} from "./native-tui-mirror-runtime";
 import type { NativeTuiProviderMirror } from "./native-tui-provider-runtime-types";
 import {
   clearNativeTuiSessionTimers,
@@ -181,4 +184,36 @@ test("idle mirrors back off while active or externally woken mirrors return to l
 
   clearNativeTuiSessionTimers(session);
   runtime.shutdown();
+});
+
+test("dirty-prompt replacement handoff canonicalizes provider echo and releases its stable id", () => {
+  const session = nativeSession("dirty-replacement");
+  session.submittedInputs = [
+    {
+      clientId: "web-user",
+      text: "SECOND_QUESTION",
+      submittedAt: new Date().toISOString(),
+      replacesPromptDraft: true,
+      clientMessageId: "client-message-2",
+      clientTurnId: "client-turn-2",
+    },
+  ];
+
+  const result = attachSubmittedClientInput(session, {
+    type: "timeline_item",
+    turnId: "turn-2",
+    item: {
+      kind: "user_message",
+      text: "LOCAL_DIRTY_DRAFTSECOND_QUESTION",
+    },
+  });
+
+  assert.equal(result.input, session.submittedInputs[0]);
+  assert.equal(result.activity.type, "timeline_item");
+  if (result.activity.type !== "timeline_item" || result.activity.item.kind !== "user_message") {
+    assert.fail("expected a user timeline item");
+  }
+  assert.equal(result.activity.item.text, "SECOND_QUESTION");
+  assert.equal(result.activity.item.clientMessageId, "client-message-2");
+  assert.equal(result.activity.item.clientTurnId, "client-turn-2");
 });

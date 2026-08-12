@@ -137,7 +137,9 @@ import {
   CODEX_STORED_SESSION_CACHE_VERSION,
   resolveCodexStoredSessionRecordNearStartup,
 } from "./codex-stored-sessions";
+import { CLAUDE_STORED_SESSION_CACHE_VERSION } from "./claude-session-files";
 import { StoredSessionLibraryStore } from "./stored-session-library";
+import { requireStoredSessionClosed } from "./stored-session-runtime-guard";
 import type {
   StoredSessionCatalogProvider,
   StoredSessionCatalogProviderResult,
@@ -152,6 +154,11 @@ import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
 import { releaseTimelineIdentityTelemetrySession } from "./timeline-identity-telemetry";
 import { releaseTimelineReconcilerSession } from "./timeline-reconciler";
 import { RuntimeSessionLifecycle } from "./runtime-session-lifecycle";
+import {
+  createInitialSessionInputAcceptor,
+  markAcceptedSessionInput,
+} from "./runtime-input-acceptance";
+import { runShutdownStep } from "./runtime-shutdown-step";
 import { SessionInputQueueConflictError } from "./session-input-queue";
 import {
   createDefaultNativeTuiProviderRuntime,
@@ -216,11 +223,7 @@ import {
 } from "./manual-provider-models";
 import { shouldSuppressCouncilManagedHistoryEvent } from "./provider-activity";
 
-const SYSTEM_SOURCE = {
-  provider: "system" as const,
-  channel: "system" as const,
-  authority: "authoritative" as const,
-};
+import { SYSTEM_SOURCE } from "./runtime-session-events";
 
 const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 const STORED_SESSION_DELTA_LOG_LIMIT = 200;
@@ -287,29 +290,7 @@ function filterCouncilManagedHistoryPage(
   };
 }
 
-const SHUTDOWN_STEP_TIMEOUT_MS = 8_000;
 const FORK_SESSION_OPERATION_TTL_MS = 5 * 60_000;
-
-async function runShutdownStep(label: string, task: () => Promise<unknown> | unknown) {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      Promise.resolve().then(task),
-      new Promise<void>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`Shutdown step timed out after ${SHUTDOWN_STEP_TIMEOUT_MS}ms.`));
-        }, SHUTDOWN_STEP_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
-  } catch (error) {
-    console.error("[rah] shutdown step failed", { step: label, error });
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
 
 export class RuntimeEngine {
   readonly eventBus: EventBus;
@@ -323,6 +304,7 @@ export class RuntimeEngine {
   readonly turnArtifacts: TurnArtifactStore;
   private readonly conversationPages = new ConversationPageHotCache();
   private readonly conversationResourceIndexes = new ConversationResourceIndexStore();
+  private readonly acceptInitialSessionInput = createInitialSessionInputAcceptor(this);
   private rememberedSessions: StoredSessionRef[];
   private rememberedRecentSessions: StoredSessionRef[];
   private rememberedWorkspaceDirs: string[];
@@ -605,7 +587,9 @@ export class RuntimeEngine {
             ...loadStoredSessionCatalogCache("codex", {
               entryVersion: CODEX_STORED_SESSION_CACHE_VERSION,
             }),
-            ...loadStoredSessionCatalogCache("claude"),
+            ...loadStoredSessionCatalogCache("claude", {
+              entryVersion: CLAUDE_STORED_SESSION_CACHE_VERSION,
+            }),
           ];
       this.replaceStoredSessionCatalogRecords(cachedRecords);
       this.hydrateStoredSessionCatalog(cachedRecords);
@@ -1019,7 +1003,7 @@ export class RuntimeEngine {
     providerSessionId: string,
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): Promise<ListSessionsResponse> {
-    this.requireStoredSessionClosed(provider, providerSessionId, "delete");
+    requireStoredSessionClosed(this.sessionStore, provider, providerSessionId, "delete");
     await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
     const session = this.lastDiscoveredStoredSessions.find(
       (entry) =>
@@ -1124,7 +1108,7 @@ export class RuntimeEngine {
       }
 
       if (!managedRuntime || archiveBackend !== "provider_native") {
-        this.requireStoredSessionClosed(provider, providerSessionId, "archive");
+        requireStoredSessionClosed(this.sessionStore, provider, providerSessionId, "archive");
         const reportedArchiveBackend = await adapter?.archiveStoredSession?.(session);
         providerArchived = Boolean(adapter?.archiveStoredSession);
         if (reportedArchiveBackend) {
@@ -1301,7 +1285,7 @@ export class RuntimeEngine {
     providerSessionId: string,
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): Promise<ListSessionsResponse> {
-    this.requireStoredSessionClosed(provider, providerSessionId, "restore");
+    requireStoredSessionClosed(this.sessionStore, provider, providerSessionId, "restore");
     await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
     const identity = { provider, providerSessionId };
     const registryRecord = this.sessionLibrary.find(identity);
@@ -1396,7 +1380,8 @@ export class RuntimeEngine {
       sessionBelongsToWorkspace(session.rootDir || session.cwd, directory),
     );
     for (const session of matchingStoredSessions) {
-      this.requireStoredSessionClosed(
+      requireStoredSessionClosed(
+        this.sessionStore,
         session.provider,
         session.providerSessionId,
         "delete",
@@ -1439,24 +1424,6 @@ export class RuntimeEngine {
     );
   }
 
-  private requireStoredSessionClosed(
-    provider: ProviderKind,
-    providerSessionId: string,
-    operation: "archive" | "delete" | "restore",
-  ): void {
-    const managed = this.sessionStore.listSessions().find(
-      (state) =>
-        state.session.provider === provider &&
-        state.session.providerSessionId === providerSessionId,
-    );
-    if (!managed) {
-      return;
-    }
-    throw new Error(
-      `Close session ${managed.session.id} before attempting to ${operation} its provider history.`,
-    );
-  }
-
   getSessionSummary(sessionId: string): SessionSummary {
     const state = this.sessionStore.getSession(sessionId);
     if (!state) {
@@ -1474,34 +1441,46 @@ export class RuntimeEngine {
     this.assertNativeLocalServerBackendAllowed(request);
     this.assertTuiMuxBackendAllowed(request);
     if (this.shouldUseNativeLocalServerBackend(request)) {
-      return this.applyCanonicalSessionTitleToResponse(
-        await this.structuredProviders.startSession(request),
+      return this.acceptInitialSessionInput(
+        this.applyCanonicalSessionTitleToResponse(
+          await this.structuredProviders.startSession(request),
+        ),
+        request.initialInput,
       );
     }
     if (this.shouldUseTuiMuxBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
-      return this.applyCanonicalSessionTitleToResponse(
-        await this.terminals.startTuiMuxSession({
-          launch: await this.nativeTuiProviders.startLaunchSpec(request),
-          ...(request.attach !== undefined ? { attach: request.attach } : {}),
-          ...(request.origin !== undefined ? { origin: request.origin } : {}),
-        }),
+      return this.acceptInitialSessionInput(
+        this.applyCanonicalSessionTitleToResponse(
+          await this.terminals.startTuiMuxSession({
+            launch: await this.nativeTuiProviders.startLaunchSpec(request),
+            ...(request.attach !== undefined ? { attach: request.attach } : {}),
+            ...(request.origin !== undefined ? { origin: request.origin } : {}),
+          }),
+        ),
+        request.initialInput,
       );
     }
     if (this.shouldUseNativeTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
-      return this.applyCanonicalSessionTitleToResponse(
-        await this.terminals.startNativeTuiSession({
-          launch: await this.nativeTuiProviders.startLaunchSpec(request),
-          ...(request.attach !== undefined ? { attach: request.attach } : {}),
-          ...(request.origin !== undefined ? { origin: request.origin } : {}),
-        }),
+      return this.acceptInitialSessionInput(
+        this.applyCanonicalSessionTitleToResponse(
+          await this.terminals.startNativeTuiSession({
+            launch: await this.nativeTuiProviders.startLaunchSpec(request),
+            ...(request.attach !== undefined ? { attach: request.attach } : {}),
+            ...(request.origin !== undefined ? { origin: request.origin } : {}),
+          }),
+        ),
+        request.initialInput,
       );
     }
-    return this.applyCanonicalSessionTitleToResponse(
-      await this.structuredProviders.startSession(request),
+    return this.acceptInitialSessionInput(
+      this.applyCanonicalSessionTitleToResponse(
+        await this.structuredProviders.startSession(request),
+      ),
+      request.initialInput,
     );
   }
 
@@ -1514,15 +1493,21 @@ export class RuntimeEngine {
     this.assertNativeLocalServerBackendAllowed(request);
     this.assertTuiMuxBackendAllowed(request);
     if (request.preferStoredReplay === true) {
-      return this.applyCanonicalSessionTitleToResponse(
-        await this.resumeStoredReplaySession(request),
+      return this.acceptInitialSessionInput(
+        this.applyCanonicalSessionTitleToResponse(
+          await this.resumeStoredReplaySession(request),
+        ),
+        request.initialInput,
       );
     }
     const releaseReservation = this.reserveLiveProviderSessionResume(request);
     try {
       if (this.shouldUseNativeLocalServerBackend(request)) {
-        return this.applyCanonicalSessionTitleToResponse(
-          await this.structuredProviders.resumeSession(request),
+        return this.acceptInitialSessionInput(
+          this.applyCanonicalSessionTitleToResponse(
+            await this.structuredProviders.resumeSession(request),
+          ),
+          request.initialInput,
         );
       }
       if (this.shouldUseTuiMuxBackend(request)) {
@@ -1539,13 +1524,16 @@ export class RuntimeEngine {
           rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
         });
         try {
-          return this.applyCanonicalSessionTitleToResponse(
-            await this.terminals.startTuiMuxSession({
-              launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-              ...(request.attach !== undefined ? { attach: request.attach } : {}),
-              providerSessionId: request.providerSessionId,
-              ...(request.origin !== undefined ? { origin: request.origin } : {}),
-            }),
+          return this.acceptInitialSessionInput(
+            this.applyCanonicalSessionTitleToResponse(
+              await this.terminals.startTuiMuxSession({
+                launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+                ...(request.attach !== undefined ? { attach: request.attach } : {}),
+                providerSessionId: request.providerSessionId,
+                ...(request.origin !== undefined ? { origin: request.origin } : {}),
+              }),
+            ),
+            request.initialInput,
           );
         } catch (error) {
           preparedResume.rollback();
@@ -1566,21 +1554,27 @@ export class RuntimeEngine {
           rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
         });
         try {
-          return this.applyCanonicalSessionTitleToResponse(
-            await this.terminals.startNativeTuiSession({
-              launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-              ...(request.attach !== undefined ? { attach: request.attach } : {}),
-              providerSessionId: request.providerSessionId,
-              ...(request.origin !== undefined ? { origin: request.origin } : {}),
-            }),
+          return this.acceptInitialSessionInput(
+            this.applyCanonicalSessionTitleToResponse(
+              await this.terminals.startNativeTuiSession({
+                launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+                ...(request.attach !== undefined ? { attach: request.attach } : {}),
+                providerSessionId: request.providerSessionId,
+                ...(request.origin !== undefined ? { origin: request.origin } : {}),
+              }),
+            ),
+            request.initialInput,
           );
         } catch (error) {
           preparedResume.rollback();
           throw error;
         }
       }
-      return this.applyCanonicalSessionTitleToResponse(
-        await this.structuredProviders.resumeSession(request),
+      return this.acceptInitialSessionInput(
+        this.applyCanonicalSessionTitleToResponse(
+          await this.structuredProviders.resumeSession(request),
+        ),
+        request.initialInput,
       );
     } finally {
       releaseReservation();
@@ -1917,9 +1911,11 @@ export class RuntimeEngine {
         ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
       })
     ) {
+      markAcceptedSessionInput(this.sessionStore, this.eventBus, sessionId);
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).sendInput(sessionId, request);
+    markAcceptedSessionInput(this.sessionStore, this.eventBus, sessionId);
   }
 
   private sendStructuredInput(sessionId: string, request: SessionInputRequest): void {

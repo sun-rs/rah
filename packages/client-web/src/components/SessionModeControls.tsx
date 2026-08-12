@@ -11,6 +11,11 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import type { SessionModeChoice } from "../session-mode-ui";
+import {
+  readComposerVisualViewportBounds,
+  resolveComposerPopoverLayout,
+} from "../composer-popover-layout";
+import { useComposerVisualViewportRevision } from "../hooks/useComposerVisualViewportRevision";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 function isElevatedAccessMode(mode: SessionModeChoice | undefined): boolean {
@@ -66,6 +71,7 @@ export function SessionModeControls(props: {
   const accessPanelRef = useRef<HTMLDivElement | null>(null);
   const [accessOpen, setAccessOpen] = useState(false);
   const [accessPanelStyle, setAccessPanelStyle] = useState<CSSProperties>({});
+  const visualViewportRevision = useComposerVisualViewportRevision(accessOpen);
   const variant = props.variant ?? (props.compact ? "compact" : "toolbar");
   const compact = variant === "compact";
   const composer = variant === "composer";
@@ -95,27 +101,29 @@ export function SessionModeControls(props: {
   useLayoutEffect(() => {
     if (!accessOpen || !accessButtonRef.current) return;
     const rect = accessButtonRef.current.getBoundingClientRect();
-    const pad = 8;
-    const gap = 6;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const width = Math.min(Math.max(rect.width, composer ? 320 : 220), viewportWidth - pad * 2);
-    const left = Math.max(pad, Math.min(rect.left, viewportWidth - width - pad));
-    const spaceBelow = viewportHeight - rect.bottom - pad - gap;
-    const spaceAbove = rect.top - pad - gap;
-    const openBelow = spaceBelow >= 180 || spaceBelow >= spaceAbove;
-    const availableHeight = Math.max(96, openBelow ? spaceBelow : spaceAbove);
     const desiredHeight = props.accessModes.length * 40 + 12;
+    const layout = resolveComposerPopoverLayout({
+      anchor: rect,
+      viewport: readComposerVisualViewportBounds(),
+      desiredWidth: Math.max(rect.width, composer ? 320 : 220),
+      desiredHeight,
+      maximumHeight: composer ? 420 : 320,
+      minimumUsableHeight: 180,
+    });
 
     setAccessPanelStyle({
-      ...(openBelow
-        ? { top: rect.bottom + gap }
-        : { bottom: viewportHeight - rect.top + gap }),
-      left,
-      width,
-      height: Math.min(composer ? 420 : 320, availableHeight, desiredHeight),
+      left: layout.left,
+      top: layout.top,
+      width: layout.width,
+      height: layout.height,
     });
-  }, [accessOpen, composer, props.accessModes.length, variant]);
+  }, [
+    accessOpen,
+    composer,
+    props.accessModes.length,
+    variant,
+    visualViewportRevision,
+  ]);
 
   if (!composer && props.accessModes.length === 0 && !props.planModeAvailable) {
     return null;

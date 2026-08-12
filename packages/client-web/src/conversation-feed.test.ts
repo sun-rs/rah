@@ -49,13 +49,23 @@ test("keeps a queued input out of the conversation timeline", () => {
   assert.deepEqual(projected, []);
 });
 
-test("keeps a submitting input in the composer queue rather than the timeline", () => {
+test("projects a submitting input into the timeline so refresh cannot hide an owned prompt", () => {
   const projected = conversationFeedWithInputQueue(
     [],
     [queuedInput({ state: "submitting" })],
   );
 
-  assert.deepEqual(projected, []);
+  assert.equal(projected.length, 1);
+  assert.equal(projected[0]?.key, "submitting:user:message-1");
+  assert.deepEqual(
+    projected[0]?.kind === "timeline" ? projected[0].item : null,
+    {
+      kind: "user_message",
+      text: "queued message",
+      clientMessageId: "message-1",
+      clientTurnId: "turn-1",
+    },
+  );
 });
 
 test("canonical user item replaces the queue projection without duplication", () => {

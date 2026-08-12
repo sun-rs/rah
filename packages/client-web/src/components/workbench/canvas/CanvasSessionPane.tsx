@@ -268,7 +268,7 @@ export function CanvasSessionPane(props: {
     newSessionProvider: provider,
     startModeId: null,
     sendInput: sendCanvasInput,
-    startSession: async () => undefined,
+    startSession: async () => null,
   });
 
   const makeModelDraft = (modelId: string | null, reasoningId?: string | null): ModelDraft => {

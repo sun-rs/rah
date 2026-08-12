@@ -13,7 +13,6 @@ import {
 
 const TEXTAREA_TEXT_LAYOUT_CLASS_NAME =
   "whitespace-pre-wrap break-words";
-const HEIGHT_CHANGE_EPSILON_PX = 4;
 
 export const TokenizedTextarea = forwardRef<
   HTMLTextAreaElement,
@@ -33,7 +32,7 @@ export const TokenizedTextarea = forwardRef<
   } & Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, "spellCheck">
 >(function TokenizedTextarea(props, forwardedRef) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const measurementRef = useRef<HTMLTextAreaElement | null>(null);
+  const heightFrameRef = useRef<number | null>(null);
   const [localValue, setLocalValue] = useState(props.value);
   const lastEmittedValueRef = useRef(props.value);
   const isComposingRef = useRef(false);
@@ -76,72 +75,84 @@ export const TokenizedTextarea = forwardRef<
     setLocalTextareaValue(props.value);
   }, [props.value, setLocalTextareaValue]);
 
-  const measureRequiredContentHeight = useCallback((el: HTMLTextAreaElement) => {
-    let measurement = measurementRef.current;
-    if (!measurement) {
-      measurement = document.createElement("textarea");
-      measurement.setAttribute("aria-hidden", "true");
-      measurement.setAttribute("tabindex", "-1");
-      measurement.readOnly = true;
-      measurement.style.position = "fixed";
-      measurement.style.left = "-10000px";
-      measurement.style.top = "0";
-      measurement.style.visibility = "hidden";
-      measurement.style.pointerEvents = "none";
-      measurement.style.overflow = "hidden";
-      measurement.style.zIndex = "-1";
-      document.body.appendChild(measurement);
-      measurementRef.current = measurement;
-    }
-
-    const rect = el.getBoundingClientRect();
-    measurement.className = el.className;
-    measurement.rows = el.rows;
-    measurement.value = el.value;
-    measurement.style.width = `${Math.ceil(rect.width)}px`;
-    measurement.style.height = "auto";
-    return Math.ceil(measurement.scrollHeight);
-  }, []);
-
-  // Auto-resize on iOS and other browsers. Measure before paint so the chat
-  // viewport never sees a transient one-line composer during IME updates.
+  // Measure the live control instead of a detached clone. Mobile Safari can
+  // give detached textareas different font and wrapping metrics while the IME
+  // is composing, which left the visible control stuck at one or two lines.
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     const computed = window.getComputedStyle(el);
     const minHeight = Number.parseFloat(computed.minHeight) || 0;
-    const maxHeight = Number.parseFloat(computed.maxHeight) || Number.POSITIVE_INFINITY;
+    const cssMaxHeight =
+      Number.parseFloat(computed.maxHeight) || Number.POSITIVE_INFINITY;
+    const visualViewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const keyboardVisible = visualViewportHeight < window.innerHeight - 80;
+    const keyboardAwareMaxHeight = keyboardVisible
+      ? Math.max(minHeight * 3, Math.floor(visualViewportHeight * 0.42))
+      : Number.POSITIVE_INFINITY;
+    const maxHeight = Math.max(
+      minHeight,
+      Math.min(cssMaxHeight, keyboardAwareMaxHeight),
+    );
     const borderHeight =
       (Number.parseFloat(computed.borderTopWidth) || 0) +
       (Number.parseFloat(computed.borderBottomWidth) || 0);
+    const previousScrollTop = el.scrollTop;
+    const previousScrollHeight = el.scrollHeight;
+    const wasAtBottom =
+      previousScrollTop + el.clientHeight >= previousScrollHeight - 4;
 
-    const collapsedHeight = Math.ceil(minHeight);
-    const requiredContentHeight = measureRequiredContentHeight(el);
-    const collapsedContentHeight = Math.max(0, collapsedHeight - borderHeight);
-    const shouldGrow = requiredContentHeight > collapsedContentHeight + 1;
-    const expandedHeight = requiredContentHeight + borderHeight;
-    const nextHeight = shouldGrow
-      ? Math.max(collapsedHeight, Math.min(maxHeight, expandedHeight))
-      : collapsedHeight;
+    el.style.height = `${Math.ceil(minHeight)}px`;
+    el.style.overflowY = "hidden";
+    const requiredHeight = Math.ceil(el.scrollHeight + borderHeight);
+    const nextHeight = Math.max(minHeight, Math.min(maxHeight, requiredHeight));
+    el.style.height = `${Math.ceil(nextHeight)}px`;
+    const overflowed = requiredHeight > maxHeight + 1;
+    el.style.overflowY = overflowed ? "auto" : "hidden";
+    if (overflowed) {
+      el.scrollTop = wasAtBottom ? el.scrollHeight : previousScrollTop;
+    }
+  }, []);
 
-    const currentHeight = Math.ceil(el.getBoundingClientRect().height);
-    const stableHeight =
-      currentHeight > 0 && Math.abs(currentHeight - nextHeight) <= HEIGHT_CHANGE_EPSILON_PX
-        ? currentHeight
-        : nextHeight;
-    el.style.height = `${stableHeight}px`;
-  }, [measureRequiredContentHeight]);
+  const scheduleHeightAdjustment = useCallback(() => {
+    if (heightFrameRef.current !== null) {
+      window.cancelAnimationFrame(heightFrameRef.current);
+    }
+    heightFrameRef.current = window.requestAnimationFrame(() => {
+      heightFrameRef.current = null;
+      adjustHeight();
+    });
+  }, [adjustHeight]);
 
   useLayoutEffect(() => {
     adjustHeight();
   }, [adjustHeight, props.textareaClassName, localValue]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scheduleHeightAdjustment);
+    if (el.parentElement) {
+      resizeObserver?.observe(el.parentElement);
+    }
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener("resize", scheduleHeightAdjustment);
+    visualViewport?.addEventListener("scroll", scheduleHeightAdjustment);
+    window.addEventListener("resize", scheduleHeightAdjustment);
     return () => {
-      measurementRef.current?.remove();
-      measurementRef.current = null;
+      resizeObserver?.disconnect();
+      visualViewport?.removeEventListener("resize", scheduleHeightAdjustment);
+      visualViewport?.removeEventListener("scroll", scheduleHeightAdjustment);
+      window.removeEventListener("resize", scheduleHeightAdjustment);
+      if (heightFrameRef.current !== null) {
+        window.cancelAnimationFrame(heightFrameRef.current);
+        heightFrameRef.current = null;
+      }
     };
-  }, []);
+  }, [scheduleHeightAdjustment]);
 
   return (
     <div className={`relative flex-1 min-w-0 ${props.wrapperClassName ?? ""}`}>
@@ -163,6 +174,10 @@ export const TokenizedTextarea = forwardRef<
           isComposingRef.current = true;
           pendingExternalValueRef.current = null;
         }}
+        onCompositionUpdate={() => {
+          adjustHeight();
+          scheduleHeightAdjustment();
+        }}
         onCompositionEnd={(event) => {
           isComposingRef.current = false;
           const pendingExternalValue = pendingExternalValueRef.current;
@@ -170,11 +185,13 @@ export const TokenizedTextarea = forwardRef<
             pendingExternalValueRef.current = null;
             lastEmittedValueRef.current = pendingExternalValue;
             setLocalTextareaValue(pendingExternalValue);
+            scheduleHeightAdjustment();
             return;
           }
           const nextValue = event.currentTarget.value;
           setLocalTextareaValue(nextValue);
           emitChange(nextValue);
+          scheduleHeightAdjustment();
         }}
         onKeyDown={(event) => {
           const nativeEvent = event.nativeEvent as KeyboardEvent;
@@ -191,7 +208,14 @@ export const TokenizedTextarea = forwardRef<
         disabled={props.disabled}
         rows={props.rows}
         spellCheck={props.spellCheck}
-        onInput={adjustHeight}
+        onFocus={() => {
+          adjustHeight();
+          scheduleHeightAdjustment();
+        }}
+        onInput={() => {
+          adjustHeight();
+          scheduleHeightAdjustment();
+        }}
       />
     </div>
   );

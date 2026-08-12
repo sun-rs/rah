@@ -79,6 +79,7 @@ const INTERNAL_CLAUDE_EVENT_TYPES = new Set([
   "file-history-snapshot",
   "change",
 ]);
+export const CLAUDE_STORED_SESSION_CACHE_VERSION = 1;
 
 type ClaudeUsage = {
   input_tokens?: number;
@@ -350,6 +351,33 @@ function extractUserMessageText(content: unknown): string | null {
   return text.trim() ? text : null;
 }
 
+function hasClaudeUserTurn(content: unknown): boolean {
+  if (extractUserMessageText(content)) {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return false;
+    }
+    const type = (block as Record<string, unknown>).type;
+    // tool_result blocks are provider-internal continuations. Image/document
+    // blocks, by contrast, are valid image-only user prompts.
+    return typeof type === "string" && type !== "tool_result" && type !== "text";
+  });
+}
+
+function hasVisibleClaudeUserTurn(
+  records: readonly (ClaudeRawRecord | ClaudeCustomTitleRecord)[],
+): boolean {
+  return records.some(
+    (record) =>
+      record.type === "user" && hasClaudeUserTurn(record.message.content),
+  );
+}
+
 function extractAssistantMessageText(content: unknown): string | null {
   const parts = collectClaudeTextContentParts(content).filter(
     (part) => !isClaudeTranscriptNoiseText(part),
@@ -609,6 +637,9 @@ function deriveStoredSessionRef(
     activityRecords.find((record) => typeof record.sessionId === "string")?.sessionId ??
     path.basename(filePath, ".jsonl");
   if (!cwd) {
+    return null;
+  }
+  if (!hasVisibleClaudeUserTurn(records)) {
     return null;
   }
   const customTitle = [...records]
@@ -1167,6 +1198,7 @@ function discoverClaudeStoredSessionsImpl(
       filePath,
       size: stats.size,
       mtimeMs: stats.mtimeMs,
+      version: CLAUDE_STORED_SESSION_CACHE_VERSION,
     });
     if (cachedRef) {
       const cachedWithMeta = withHistoryFileMeta(cachedRef, filePath, stats);
@@ -1189,6 +1221,7 @@ function discoverClaudeStoredSessionsImpl(
             size: stats.size,
             mtimeMs: stats.mtimeMs,
             ref: nextRef,
+            version: CLAUDE_STORED_SESSION_CACHE_VERSION,
           });
           records.push({ ref: nextRef, filePath });
           continue;
@@ -1203,6 +1236,12 @@ function discoverClaudeStoredSessionsImpl(
     const parsed = lines
       .map(safeParseClaudeRecord)
       .filter((record): record is ClaudeRawRecord | ClaudeCustomTitleRecord => Boolean(record));
+    if (parsed.length > 0 && !hasVisibleClaudeUserTurn(parsed)) {
+      // Claude may leave a system/custom-title-only transcript when launch
+      // fails before accepting a user turn. It is a complete but non-visible
+      // shell, not a partial provider scan.
+      continue;
+    }
     const ref = deriveStoredSessionRef(filePath, parsed);
     if (!ref) {
       if (scanState) {
@@ -1217,6 +1256,7 @@ function discoverClaudeStoredSessionsImpl(
       size: stats.size,
       mtimeMs: stats.mtimeMs,
       ref: refWithMeta,
+      version: CLAUDE_STORED_SESSION_CACHE_VERSION,
     });
     records.push({ ref: refWithMeta, filePath });
   }
@@ -1233,6 +1273,7 @@ function discoverClaudeStoredSessionsImpl(
               ref: record.ref,
               size: stats.size,
               mtimeMs: stats.mtimeMs,
+              version: CLAUDE_STORED_SESSION_CACHE_VERSION,
             },
           ] as const;
         }),

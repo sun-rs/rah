@@ -57,7 +57,7 @@ export const COMPOSER_LAYOUT = {
   sendButtonClassName: PRIMARY_ACTION_BUTTON,
   stopWarningActionButtonClassName: `${PRIMARY_ACTION_SLOT} border border-amber-400/70 bg-amber-100 text-[10px] font-semibold tracking-[0.02em] text-amber-700 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100`,
 
-  textareaClassName: `${TEXTAREA_BASE} ${ROUNDED} min-h-[2.25rem] px-1 py-1 md:min-h-8 max-h-[280px]`,
+  textareaClassName: `${TEXTAREA_BASE} ${ROUNDED} min-h-[2.25rem] px-1 py-1 md:min-h-8 max-h-[272px]`,
   textareaContentClassName: `px-1 py-1 text-base font-normal leading-6 md:text-sm md:leading-5`,
 } as const;
 
@@ -108,9 +108,10 @@ export function canSubmitComposerInput(args: {
   if (!args.draft.trim() && (args.attachmentCount ?? 0) <= 0) {
     return false;
   }
-  if (args.sendPending && args.nativeTuiPromptState === undefined) {
-    return false;
-  }
+  // The draft is cleared synchronously and useWorkbenchComposerState serializes
+  // submissions. Keep the composer available while an earlier HTTP request is
+  // pending so a second user-owned message can enter the canonical input queue
+  // instead of being silently ignored by Enter.
   return true;
 }
 

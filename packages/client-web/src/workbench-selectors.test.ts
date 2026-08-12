@@ -340,6 +340,38 @@ describe("workbench selectors", () => {
     );
   });
 
+  test("keeps stored sessions outside registered workspaces out of the sidebar", () => {
+    const registered: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "registered-session",
+      cwd: "/workspace/selected/project",
+      rootDir: "/workspace/selected/project",
+      title: "Registered session",
+      source: "provider_history",
+    };
+    const unregistered: StoredSessionRef = {
+      ...registered,
+      providerSessionId: "unregistered-session",
+      cwd: "/workspace/not-selected",
+      rootDir: "/workspace/not-selected",
+      title: "Unregistered session",
+    };
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map(),
+      clientId: "web-current",
+      workspaceDirs: ["/workspace/selected"],
+      storedSessions: [registered, unregistered],
+      workspaceDir: "/workspace/selected",
+      workspaceSortMode: "created",
+    });
+
+    assert.deepEqual(
+      collections.sidebarStoredSessions.map((session) => session.providerSessionId),
+      ["registered-session"],
+    );
+  });
+
   test("uses visible session activity for updated workspace ordering", () => {
     const clientId = "web-current";
     const backgroundRefresh = controlledSummary({

@@ -6,6 +6,11 @@ import type {
   SessionModelDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
+import {
+  readComposerVisualViewportBounds,
+  resolveComposerPopoverLayout,
+} from "../composer-popover-layout";
+import { useComposerVisualViewportRevision } from "../hooks/useComposerVisualViewportRevision";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 function selectedModel(
@@ -98,20 +103,24 @@ function ComposerModelLabel(props: {
 }) {
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const copyRef = useRef<HTMLSpanElement | null>(null);
-  const [overflowing, setOverflowing] = useState(false);
+  const [overflowDistancePx, setOverflowDistancePx] = useState(0);
 
   useLayoutEffect(() => {
     if (!props.marqueeOnOverflow) {
-      setOverflowing(false);
+      setOverflowDistancePx(0);
       return;
     }
     const viewport = viewportRef.current;
     const copy = copyRef.current;
     if (!viewport || !copy) return;
     const measure = () => {
-      setOverflowing(
-        Math.ceil(copy.getBoundingClientRect().width) >
-          Math.floor(viewport.getBoundingClientRect().width) + 1,
+      setOverflowDistancePx(
+        Math.max(
+          0,
+          Math.ceil(
+            copy.getBoundingClientRect().width - viewport.getBoundingClientRect().width,
+          ),
+        ),
       );
     };
     measure();
@@ -125,11 +134,11 @@ function ComposerModelLabel(props: {
     return () => observer.disconnect();
   }, [props.marqueeOnOverflow, props.modelLabel, props.reasoningLabel]);
 
-  const renderCopy = (duplicate = false) => (
+  const overflowing = overflowDistancePx > 1;
+  const renderCopy = () => (
     <span
-      ref={duplicate ? undefined : copyRef}
+      ref={copyRef}
       className="rah-composer-model-label-copy inline-flex shrink-0 items-center gap-1"
-      aria-hidden={duplicate ? "true" : undefined}
     >
       <span>{props.modelLabel}</span>
       {props.reasoningLabel ? (
@@ -145,6 +154,7 @@ function ComposerModelLabel(props: {
         props.marqueeOnOverflow ? "rah-marquee" : "overflow-hidden whitespace-nowrap"
       } ${props.className ?? ""}`}
       data-marquee={props.marqueeOnOverflow && overflowing ? "true" : "false"}
+      style={{ "--rah-marquee-distance": `${overflowDistancePx}px` } as CSSProperties}
     >
       <span
         className={
@@ -154,7 +164,6 @@ function ComposerModelLabel(props: {
         }
       >
         {renderCopy()}
-        {props.marqueeOnOverflow && overflowing ? renderCopy(true) : null}
       </span>
     </span>
   );
@@ -581,6 +590,7 @@ export function SessionModelControls(props: {
   const modelListRef = useRef<HTMLDivElement>(null);
   const paramListRef = useRef<HTMLDivElement>(null);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
+  const visualViewportRevision = useComposerVisualViewportRevision(open);
   const panelModel =
     panelView === "param-list"
       ? selectedModel(props.catalog, draftModelId ?? model?.id ?? null)
@@ -608,16 +618,6 @@ export function SessionModelControls(props: {
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const pad = 8;
-    const gap = 6;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const width = Math.min(Math.max(rect.width, 280), viewportWidth - pad * 2);
-    const left = Math.max(pad, Math.min(rect.left, viewportWidth - width - pad));
-    const spaceBelow = viewportHeight - rect.bottom - pad - gap;
-    const spaceAbove = rect.top - pad - gap;
-    const openBelow = spaceBelow >= 260 || spaceBelow >= spaceAbove;
-    const availableHeight = Math.max(96, openBelow ? spaceBelow : spaceAbove);
     const activeView = panelView === "param-list" ? paramViewRef.current : modelViewRef.current;
     const activeList = panelView === "param-list" ? paramListRef.current : modelListRef.current;
     const header = activeView?.firstElementChild as HTMLElement | null | undefined;
@@ -637,17 +637,30 @@ export function SessionModelControls(props: {
         : 0;
     const fallbackHeight = 38 + Math.min(visibleOptionCount, 9) * 36 + 12;
     const desiredHeight = Math.max(72, measuredHeight || fallbackHeight);
-    const height = Math.min(420, availableHeight, desiredHeight);
+    const layout = resolveComposerPopoverLayout({
+      anchor: rect,
+      viewport: readComposerVisualViewportBounds(),
+      desiredWidth: Math.max(rect.width, 280),
+      desiredHeight,
+      maximumHeight: 420,
+      minimumUsableHeight: 260,
+    });
 
     setPanelStyle({
-      ...(openBelow
-        ? { top: rect.bottom + gap }
-        : { bottom: viewportHeight - rect.top + gap }),
-      left,
-      width,
-      height,
+      left: layout.left,
+      top: layout.top,
+      width: layout.width,
+      height: layout.height,
     });
-  }, [open, panelView, visibleOptionCount, props.compact, props.iconOnly, props.mobileIconOnly]);
+  }, [
+    open,
+    panelView,
+    visibleOptionCount,
+    props.compact,
+    props.iconOnly,
+    props.mobileIconOnly,
+    visualViewportRevision,
+  ]);
 
   /* ── Close on outside click / Escape ── */
   useEffect(() => {

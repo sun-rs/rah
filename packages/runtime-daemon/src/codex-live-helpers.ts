@@ -322,6 +322,7 @@ export function shouldApplyCodexTranslatedActivity(args: {
   activity: ProviderActivity;
   origin?: "notification" | "snapshot" | undefined;
   currentTurnId: string | null;
+  hasPendingInput?: boolean;
   providerSessionId?: string | undefined;
   mainProviderSessionId?: string | undefined;
 }): boolean {
@@ -329,6 +330,17 @@ export function shouldApplyCodexTranslatedActivity(args: {
     return false;
   }
   if (isOutOfBandTurnLifecycleActivity(args)) {
+    return false;
+  }
+  if (
+    args.hasPendingInput === true &&
+    args.activity.type === "session_state" &&
+    args.activity.state === "idle"
+  ) {
+    // Codex may publish the idle snapshot/notification from thread/resume
+    // after RAH has already accepted the first queued input but before
+    // turn/start receives its turn id. That stale idle edge must not erase the
+    // authoritative Starting/Working state while RAH still owns the prompt.
     return false;
   }
   if (
@@ -377,6 +389,8 @@ async function applyCodexLiveTranslatedItems(
         activity: item.activity,
         origin: item.origin,
         currentTurnId: liveSession.currentTurnId,
+        hasPendingInput:
+          liveSession.turnStartInFlight || liveSession.queuedInputs.length > 0,
         providerSessionId: item.providerSessionId,
         mainProviderSessionId: liveSession.threadId,
       })

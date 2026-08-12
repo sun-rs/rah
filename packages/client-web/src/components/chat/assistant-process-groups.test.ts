@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, test } from "node:test";
@@ -389,9 +390,56 @@ describe("assistant process groups", () => {
         1,
       );
     }
-    assert.match(expandedWithFinalHtml, /space-y-2\.5 pb-3/);
-    assert.doesNotMatch(collapsedWithFinalHtml, /space-y-2\.5 pb-3/);
-    assert.doesNotMatch(collapsedWithFinalHtml, /mt-3/);
+    assert.match(expandedWithFinalHtml, /assistant-process-details/);
+    assert.match(expandedWithFinalHtml, /assistant-process-activity-summary/);
+    assert.doesNotMatch(collapsedWithFinalHtml, /assistant-process-details/);
+    assert.doesNotMatch(expandedWithFinalHtml, /space-y-2\.5 pb-3|mt-3/);
+  });
+
+  test("keeps ordinary process rows at 28px and compaction at a tighter 20px rhythm", () => {
+    const styles = readFileSync(
+      new URL("../../assistant-process-styles.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(
+      styles,
+      /\.assistant-process-summary,[\s\S]*\.assistant-process-activity-summary\s*\{[\s\S]*min-height:\s*1\.75rem;[\s\S]*padding-block:\s*0\.125rem;/,
+    );
+    assert.match(
+      styles,
+      /\.assistant-process-compaction\s*\{[\s\S]*min-height:\s*1\.25rem;[\s\S]*padding-block:\s*0;/,
+    );
+    assert.match(
+      styles,
+      /\.assistant-process-details\s*\{[\s\S]*margin-top:\s*0\.25rem;[\s\S]*padding-bottom:\s*0\.375rem;/,
+    );
+    assert.match(
+      styles,
+      /\.assistant-process-details\s*>\s*\*\s*\+\s*\*\s*\{[\s\S]*margin-top:\s*0\.25rem;/,
+    );
+    assert.match(
+      styles,
+      /\.assistant-process-details\s*>\s*\.assistant-process-compaction-slot,[\s\S]*\.assistant-process-compaction-slot\s*\+\s*\*\s*\{[\s\S]*margin-top:\s*0\.125rem;/,
+    );
+  });
+
+  test("keeps context compaction on the shared process type scale with two divider rules", () => {
+    const source = readFileSync(
+      new URL("./ContextCompactionDivider.tsx", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(
+      source,
+      /assistant-process-compaction[^"\n]*text-xs[^"\n]*font-medium/,
+    );
+    assert.match(source, /data-testid="context-compaction-rule-start"/);
+    assert.match(source, /data-testid="context-compaction-rule-end"/);
+    assert.doesNotMatch(
+      source,
+      /assistant-process-compaction[^"\n]*text-\[11px\]/,
+    );
   });
 
   test("does not draw a final divider while work is still active", () => {

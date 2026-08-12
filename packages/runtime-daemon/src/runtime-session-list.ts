@@ -12,7 +12,7 @@ import {
   applyCanonicalTitleToSessionSummary,
   applyCanonicalTitleToStoredSession,
 } from "./session-title-resolver";
-import { workspaceDirsFromState } from "./workbench-directory-utils";
+import { configuredWorkspaceDirs } from "./workbench-directory-utils";
 
 const RECENT_SESSION_LIMIT = 15;
 const INTERNAL_NATIVE_TUI_PROBE_WORKSPACE_SEGMENT =
@@ -381,10 +381,10 @@ export function buildSessionsResponse(args: {
     }),
     storedSessions: responseStoredSessions,
     recentSessions,
-    workspaceDirs: workspaceDirsFromState(
-      rememberedWorkspaceDirs,
-      userFacingLiveStates,
-    ),
+    // Sidebar workspaces are an explicit user selection. A provider process
+    // may run in another directory, but that must not silently register the
+    // directory or project its history into the sidebar.
+    workspaceDirs: configuredWorkspaceDirs(rememberedWorkspaceDirs),
     hiddenWorkspaces: rememberedHiddenWorkspaces,
     ...(rememberedActiveWorkspaceDir
       ? { activeWorkspaceDir: rememberedActiveWorkspaceDir }

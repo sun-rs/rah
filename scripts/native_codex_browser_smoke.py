@@ -31,9 +31,11 @@ CASE_IDS = [
     "INTERRUPT-STATE-001",
     "QUEUE-INPUT-001",
     "NEW-SESSION-001",
+    "NEW-TASK-DRAFT-OWNERSHIP-001",
     "REFRESH-LIVE-001",
     "HISTORY-PAGING-001",
     "HISTORY-RESUME-001",
+    "HISTORY-RESUME-SEND-001",
     "CODEX-EVENT-001",
     "TUI-SURFACE-001",
     "TUI-EXIT-001",
@@ -137,6 +139,19 @@ def live_session_ids(base_url: str) -> set[str]:
     }
 
 
+def live_session_id_for_provider(base_url: str, provider_session_id: str) -> str | None:
+    response = request_json(base_url, "/api/sessions")
+    for entry in response.get("sessions", []):
+        session = entry.get("session", {})
+        if (
+            session.get("provider") == "codex"
+            and str(session.get("providerSessionId")) == provider_session_id
+            and session.get("id")
+        ):
+            return str(session["id"])
+    return None
+
+
 def open_live_session(page, session_id: str) -> None:
     page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
     page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
@@ -147,12 +162,20 @@ def open_filtered_history_session(page, provider_session_id: str) -> None:
     session_button = page.locator(
         f'button[data-provider-session-id="{provider_session_id}"]:visible',
     ).first
-    if session_button.count() == 0:
-        chats_dialog = page.get_by_role("dialog").filter(has_text="Chats")
-        group = chats_dialog.locator("section > button").first
-        expect(group).to_be_visible(timeout=30_000)
-        group.click(timeout=10_000)
-    session_button.click(timeout=30_000)
+    chats_dialog = page.get_by_role("dialog").filter(has_text="Chats")
+    group = chats_dialog.locator("section > div > button").first
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if session_button.count() > 0 and session_button.is_visible():
+            session_button.click(timeout=10_000)
+            return
+        if group.count() > 0 and group.is_visible():
+            group.click(timeout=10_000)
+        page.wait_for_timeout(100)
+    raise AssertionError(
+        f"Chats did not expose stored provider session {provider_session_id!r} "
+        "after the daemon catalog reported it"
+    )
 
 
 def free_port() -> int:
@@ -178,6 +201,10 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "if (process.argv.includes('app-server')) {",
                 "  const rl = readline.createInterface({ input: process.stdin });",
                 "  const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');",
+                "  let appServerThreadId = null;",
+                "  let appServerTurnIndex = 0;",
+                "  const resumedAppServerThreads = new Set();",
+                "  const appServerReceiptPath = path.join(codexHome, 'app-server-turns.jsonl');",
                 "  const findRollout = (root, sessionId) => {",
                 "    if (!fs.existsSync(root)) return null;",
                 "    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {",
@@ -202,6 +229,51 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "      send({ id: message.id, result: { data: [], nextCursor: null } });",
                 "      return;",
                 "    }",
+                "    if (message.method === 'collaborationMode/list') {",
+                "      send({ id: message.id, result: { data: [] } });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'thread/goal/get') {",
+                "      send({ id: message.id, result: { goal: null } });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'thread/goal/set') {",
+                "      send({ id: message.id, result: { goal: { threadId: message.params.threadId, status: message.params.status } } });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'thread/start') {",
+                "      appServerThreadId = crypto.randomUUID();",
+                "      send({ id: message.id, result: { thread: { id: appServerThreadId } } });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'thread/resume') {",
+                "      appServerThreadId = message.params.threadId;",
+                "      resumedAppServerThreads.add(appServerThreadId);",
+                "      setTimeout(() => send({ id: message.id, result: { thread: { id: appServerThreadId, cwd: process.cwd(), name: 'Slow large history', status: { type: 'idle' } }, cwd: process.cwd() } }), 700);",
+                "      return;",
+                "    }",
+                "    if (message.method === 'thread/name/set') {",
+                "      send({ id: message.id, result: { thread: { id: message.params.threadId, name: message.params.name } } });",
+                "      return;",
+                "    }",
+                "    if (message.method === 'turn/start') {",
+                "      appServerTurnIndex += 1;",
+                "      const turnId = `app-server-turn-${appServerTurnIndex}`;",
+                "      const text = message.params && message.params.input && message.params.input[0] ? message.params.input[0].text : '';",
+                "      fs.appendFileSync(appServerReceiptPath, JSON.stringify({ threadId: message.params.threadId, turnId, text, clientUserMessageId: message.params.clientUserMessageId || null }) + '\\n');",
+                "      const isSlowResume = resumedAppServerThreads.has(message.params.threadId);",
+                "      if (isSlowResume) {",
+                "        setTimeout(() => send({ method: 'thread/status/changed', params: { threadId: message.params.threadId, status: { type: 'idle' } } }), 40);",
+                "      }",
+                "      const acceptDelay = isSlowResume ? 2000 : 0;",
+                "      setTimeout(() => {",
+                "        send({ id: message.id, result: { turn: { id: turnId } } });",
+                "        send({ method: 'turn/started', params: { threadId: message.params.threadId, turn: { id: turnId } } });",
+                "        send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId, itemId: `app-server-assistant-${appServerTurnIndex}`, delta: `RAH_APP_SERVER_INITIAL_ACK:${text}` } });",
+                "        send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { id: turnId, status: 'completed' } } });",
+                "      }, acceptDelay);",
+                "      return;",
+                "    }",
                 "    if (message.method === 'thread/archive') {",
                 "      const sessionId = message.params && message.params.threadId;",
                 "      const sessionsRoot = path.join(codexHome, 'sessions');",
@@ -220,12 +292,13 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "  });",
                 "} else {",
                 "const resumeIndex = process.argv.indexOf('resume');",
-                "const providerSessionId = resumeIndex >= 0 && process.argv[resumeIndex + 1] ? process.argv[resumeIndex + 1] : process.env.MOCK_CODEX_SESSION_ID_PER_PROCESS === '1' ? crypto.randomUUID() : baseProviderSessionId;",
+                "const resumeProviderSessionId = resumeIndex >= 0 ? process.argv.slice(resumeIndex + 1).find((value) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value)) : null;",
+                "const providerSessionId = resumeProviderSessionId || (process.env.MOCK_CODEX_SESSION_ID_PER_PROCESS === '1' ? crypto.randomUUID() : baseProviderSessionId);",
                 "const rolloutPath = path.join(codexHome, 'sessions', `rollout-native-browser-${providerSessionId}.jsonl`);",
                 "fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });",
                 "function append(row) { fs.appendFileSync(rolloutPath, JSON.stringify(row) + '\\n'); }",
                 "function timestamp(offsetMs = 0) { return new Date(Date.now() + offsetMs).toISOString(); }",
-                "append({ timestamp: timestamp(), type: 'session_meta', payload: { id: providerSessionId, cwd: process.cwd(), timestamp: timestamp() } });",
+                "if (!fs.existsSync(rolloutPath) || fs.statSync(rolloutPath).size === 0) append({ timestamp: timestamp(), type: 'session_meta', payload: { id: providerSessionId, cwd: process.cwd(), timestamp: timestamp() } });",
                 "process.stdout.write(`RAH_NATIVE_CODEX_BROWSER_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
                 "process.stdout.write(`Session: ${providerSessionId}\\r\\n`);",
                 "function reportResize() {",
@@ -695,6 +768,23 @@ def exercise_codex_archive(
         panel = page.locator(".terminal-panel").last
         expect(panel).to_be_visible(timeout=10_000)
         wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
+        # A session_meta-only rollout is intentionally filtered from Chats as
+        # an empty shell. Give this archive fixture one real turn so it tests
+        # archive lifecycle instead of contradicting the catalog validity rule.
+        archive_prompt = f"RAH_NATIVE_CODEX_BROWSER_ARCHIVE_{uuid.uuid4().hex[:8]}"
+        request_json(
+            base_url,
+            f"/api/sessions/{session_id}/input",
+            {
+                "clientId": "web-user",
+                "clientMessageId": f"client-message:{uuid.uuid4()}",
+                "text": archive_prompt,
+            },
+        )
+        wait_for_terminal_text(
+            panel,
+            f"RAH_NATIVE_CODEX_BROWSER_INPUT:{archive_prompt}",
+        )
         page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
         page.get_by_role("button", name="Stop session", exact=True).click(timeout=30_000)
         page.get_by_role("dialog").filter(has_text="Stop session?").get_by_role(
@@ -707,12 +797,25 @@ def exercise_codex_archive(
         assert_session_not_in_pty_stats(base_url, session_id)
         wait_for_stored_history_ref(base_url, provider_session_id)
 
+        # The provider-history catalog is discovered asynchronously after the
+        # live runtime closes. Rehydrate the browser from the now-authoritative
+        # catalog instead of depending on the dialog's pre-close cached list.
+        page.reload(wait_until="domcontentloaded")
         page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
         page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
         page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
         open_filtered_history_session(page, provider_session_id)
         page.get_by_role("button", name="Session actions", exact=True).click(timeout=30_000)
-        page.get_by_role("button", name="Archive session", exact=True).click(timeout=30_000)
+        # Sidebar rows intentionally expose archive buttons to accessibility even when
+        # their pointer-only affordances are visually hidden. Target the open header
+        # menu item by its exact title so the smoke test does not accidentally match a
+        # different Session's sidebar action.
+        page.get_by_title("Archive session", exact=True).last.click(timeout=30_000)
+        page.get_by_role("dialog").filter(has_text="Archive session?").get_by_role(
+            "button",
+            name="Archive",
+            exact=True,
+        ).click(timeout=30_000)
         wait_for_archived_rollout(codex_home, provider_session_id)
         wait_for_stored_history_archived(base_url, provider_session_id)
         page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
@@ -734,7 +837,17 @@ def exercise_codex_history_paging(
     base_url: str,
     provider_session_id: str,
     artifact_dir: pathlib.Path,
-) -> None:
+    *,
+    close_replay: bool = True,
+) -> str | None:
+    conversation_requests: list[str] = []
+
+    def record_conversation_request(request) -> None:
+        if "/conversation/turns" in request.url:
+            conversation_requests.append(request.url)
+
+    page.on("request", record_conversation_request)
+    wait_for_stored_history_ref(base_url, provider_session_id)
     page.reload(wait_until="domcontentloaded")
     page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
     page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
@@ -755,12 +868,25 @@ def exercise_codex_history_paging(
     element = scroll_container.element_handle(timeout=10_000)
     if element is None:
         raise AssertionError("chat scroll container element was not available")
-    scroll_container.evaluate(
-        """(node) => {
-          node.scrollTop = 0;
-          node.dispatchEvent(new Event('scroll', { bubbles: true }));
-        }"""
-    )
+    with page.expect_response(
+        lambda response: (
+            f"/api/sessions/" in response.url
+            and "/conversation/turns?" in response.url
+            and "cursor=" in response.url
+        ),
+        timeout=20_000,
+    ) as first_older_response_info:
+        scroll_container.evaluate(
+            """(node) => {
+              node.dispatchEvent(new WheelEvent('wheel', { deltaY: -320, bubbles: true }));
+              node.scrollTop = 0;
+              node.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }"""
+        )
+    if first_older_response_info.value.status >= 400:
+        raise AssertionError(
+            f"initial older-history page failed with HTTP {first_older_response_info.value.status}"
+        )
     page.wait_for_function(
         """(node) => node.scrollTop > 80""",
         arg=element,
@@ -771,25 +897,323 @@ def exercise_codex_history_paging(
         raise AssertionError(
             f"older-history prepend did not preserve scroll anchor; scrollTop={preserved_scroll_top}"
         )
-    found_earliest = False
+    # The Web client hydrates 8 recent turns and prepends 20 older turns per
+    # request. This 180-turn fixture therefore needs nine older-page responses
+    # in total: the response above plus exactly eight subsequent responses.
     for _ in range(8):
+        # ChatThread deliberately rearms top-history loading only after the
+        # reader leaves the top zone.  Mirror a real down/up scroll gesture so
+        # each iteration requests exactly one additional page.
         scroll_container.evaluate(
             """(node) => {
-              node.scrollTop = 0;
+              node.scrollTop = Math.min(320, Math.max(0, node.scrollHeight - node.clientHeight));
               node.dispatchEvent(new Event('scroll', { bubbles: true }));
             }"""
         )
-        started = time.time()
-        while time.time() - started < 5:
-            if earliest_marker in scroll_container.inner_text(timeout=5_000):
-                found_earliest = True
-                break
-            page.wait_for_timeout(200)
-        if found_earliest:
-            break
-    if not found_earliest:
-        raise AssertionError(f"older-history marker {earliest_marker!r} did not render in chat")
+        page.wait_for_timeout(50)
+        with page.expect_response(
+            lambda response: (
+                f"/api/sessions/" in response.url
+                and "/conversation/turns?" in response.url
+                and "cursor=" in response.url
+            ),
+            timeout=20_000,
+        ) as older_response_info:
+            scroll_container.evaluate(
+                """(node) => {
+                  node.dispatchEvent(new WheelEvent('wheel', { deltaY: -320, bubbles: true }));
+                  node.scrollTop = 0;
+                  node.dispatchEvent(new Event('scroll', { bubbles: true }));
+                }"""
+            )
+        if older_response_info.value.status >= 400:
+            raise AssertionError(
+                f"older-history page failed with HTTP {older_response_info.value.status}"
+            )
+        page.wait_for_function(
+            """(node) => node.scrollTop > 80""",
+            arg=element,
+            timeout=20_000,
+        )
+
+    scroll_container.evaluate(
+        """(node) => {
+          node.dispatchEvent(new WheelEvent('wheel', { deltaY: -320, bubbles: true }));
+          node.scrollTop = 0;
+          node.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }"""
+    )
+    try:
+        expect(scroll_container.get_by_text(earliest_marker, exact=True)).to_be_visible(
+            timeout=10_000
+        )
+    except Exception:
+        save_browser_screenshot(page, artifact_dir, "codex-history-paging-failure")
+        raise AssertionError(
+            f"older-history marker {earliest_marker!r} did not render in chat; "
+            f"conversationRequests={conversation_requests!r}; "
+            f"scrollTop={scroll_container.evaluate('(node) => node.scrollTop')}; "
+            f"scrollHeight={scroll_container.evaluate('(node) => node.scrollHeight')}; "
+            f"clientHeight={scroll_container.evaluate('(node) => node.clientHeight')}"
+        )
     save_browser_screenshot(page, artifact_dir, "codex-history-paging-older-anchor")
+    replay_session_id = live_session_id_for_provider(base_url, provider_session_id)
+    if replay_session_id and close_replay:
+        close_session_quietly(base_url, replay_session_id)
+        wait_for_session_absent(base_url, replay_session_id)
+    return replay_session_id
+
+
+def exercise_codex_atomic_history_resume_input(
+    page,
+    base_url: str,
+    provider_session_id: str,
+    app_server_receipt: pathlib.Path,
+    artifact_dir: pathlib.Path,
+    *,
+    replay_session_id: str | None = None,
+) -> str:
+    prompt = f"RAH_SLOW_HISTORY_RESUME_DELIVERY_{uuid.uuid4().hex[:8]}"
+    answer = f"RAH_APP_SERVER_INITIAL_ACK:{prompt}"
+    second_input_requests: list[str] = []
+    resume_requests: list[dict[str, Any]] = []
+    resume_responses: list[int] = []
+    wait_for_stored_history_ref(base_url, provider_session_id)
+
+    def record_input_request(request) -> None:
+        if "/api/sessions/" in request.url and request.url.endswith("/input"):
+            second_input_requests.append(request.url)
+        if request.url.endswith("/api/sessions/resume"):
+            resume_requests.append(request.post_data_json or {})
+
+    def record_resume_response(response) -> None:
+        if response.url.endswith("/api/sessions/resume"):
+            resume_responses.append(response.status)
+
+    page.on("request", record_input_request)
+    page.on("response", record_resume_response)
+    if replay_session_id is None:
+        page.reload(wait_until="domcontentloaded")
+        page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+        page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
+        try:
+            with page.expect_response(
+                lambda response: (
+                    response.url.endswith("/api/sessions/resume")
+                    and (response.request.post_data_json or {}).get("preferStoredReplay") is True
+                    and (response.request.post_data_json or {}).get("providerSessionId")
+                    == provider_session_id
+                ),
+                timeout=30_000,
+            ) as replay_response_info:
+                open_filtered_history_session(page, provider_session_id)
+            replay_response = replay_response_info.value
+            if replay_response.status >= 400:
+                raise AssertionError(
+                    f"stored replay activation failed with HTTP {replay_response.status}: "
+                    f"{replay_response.text()}"
+                )
+            replay = replay_response.json()["session"]
+            replay_session_id = str(replay["session"]["id"])
+        except Exception as error:
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "codex-slow-history-replay-selection-failure",
+            )
+            buttons = page.locator("button[data-session-id], button[data-provider-session-id]").evaluate_all(
+                """(nodes) => nodes.map((node) => ({
+                  text: node.textContent,
+                  sessionId: node.getAttribute('data-session-id'),
+                  providerSessionId: node.getAttribute('data-provider-session-id'),
+                  visible: Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length),
+                }))"""
+            )
+            body_text = page.locator("body").inner_text(timeout=10_000)
+            raise AssertionError(
+                f"rehydrated replay was not selectable in the browser: {error}; "
+                f"buttons={buttons!r}; body_tail={body_text[-3000:]!r}"
+            ) from error
+    chat_button = page.get_by_role("button", name="Chat", exact=True)
+    if chat_button.count() > 0:
+        chat_button.click(timeout=30_000)
+    scroll_to_bottom = page.get_by_role("button", name="Scroll to bottom")
+    if scroll_to_bottom.count() > 0 and scroll_to_bottom.is_visible():
+        scroll_to_bottom.click(timeout=10_000)
+        expect(
+            page.get_by_text("HISTORY_PAGING_ASSISTANT_180", exact=True)
+        ).to_be_visible(timeout=10_000)
+
+    composer = chat_composer(page)
+    expect(composer).to_be_visible(timeout=20_000)
+    composer.fill(prompt)
+    with page.expect_response(
+        lambda response: (
+            response.url.endswith("/api/sessions/resume")
+            and ((response.request.post_data_json or {}).get("initialInput") or {}).get("text")
+            == prompt
+        ),
+        timeout=30_000,
+    ) as resume_response_info:
+        try:
+            composer.press("Enter")
+            expect(composer).to_have_value("", timeout=5_000)
+            wait_for_chat_user_message_occurrences(page, prompt, 1, timeout_s=10)
+            expect(
+                page.get_by_test_id("assistant-process-group-toggle").filter(
+                    has_text="Working"
+                )
+            ).to_be_visible(timeout=10_000)
+            expect(page.get_by_role("button", name="Stop generating")).to_be_visible(
+                timeout=10_000
+            )
+            # The fake provider publishes a late idle edge and then delays
+            # turn/start acceptance. While the Resume HTTP request is still
+            # pending, both the browser and daemon must retain the prompt.
+            page.wait_for_timeout(1_000)
+            expect(
+                page.get_by_test_id("assistant-process-group-toggle").filter(
+                    has_text="Working"
+                )
+            ).to_be_visible(timeout=10_000)
+            pending_sessions = request_json(base_url, "/api/sessions")["sessions"]
+            pending_owned = [
+                summary
+                for summary in pending_sessions
+                if any(
+                    isinstance(entry, dict)
+                    and entry.get("text") == prompt
+                    for entry in (summary["session"].get("inputQueue") or [])
+                )
+            ]
+            if len(pending_owned) != 1:
+                raise AssertionError(
+                    "Delayed live Resume did not retain exactly one daemon-owned prompt "
+                    f"before provider acceptance: {pending_sessions!r}"
+                )
+        except Exception as error:
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "codex-slow-history-resume-optimistic-failure",
+            )
+            buttons = page.locator("button:visible").evaluate_all(
+                """(nodes) => nodes.map((node) => ({
+                  text: node.textContent,
+                  ariaLabel: node.getAttribute('aria-label'),
+                  disabled: node.disabled,
+                }))"""
+            )
+            raise AssertionError(
+                f"Resume optimistic ownership split before provider acceptance: {error}; "
+                f"resumeRequests={resume_requests!r}; resumeResponses={resume_responses!r}; "
+                f"buttons={buttons!r}; sessions={request_json(base_url, '/api/sessions')!r}"
+            ) from error
+        save_browser_screenshot(
+            page,
+            artifact_dir,
+            "codex-slow-history-resume-optimistic-starting",
+        )
+
+    resume_response = resume_response_info.value
+    if resume_response.status >= 400:
+        page.wait_for_timeout(1_000)
+        raise AssertionError(
+            f"Slow history Resume failed with HTTP {resume_response.status}: "
+            f"{resume_response.text()}; resumeRequests={resume_requests!r}; "
+            f"resumeResponses={resume_responses!r}; "
+            f"sessions={request_json(base_url, '/api/sessions')!r}"
+        )
+    resume_payload = resume_response.request.post_data_json
+    initial_input = resume_payload.get("initialInput") or {}
+    if initial_input.get("text") != prompt:
+        raise AssertionError(
+            "History Resume did not own the first question atomically: "
+            f"{resume_payload!r}"
+        )
+    if initial_input.get("clientMessageId") is None:
+        raise AssertionError("History Resume omitted the stable initial client message identity")
+    if second_input_requests:
+        raise AssertionError(
+            "History Resume regressed to the lossy resume-then-input request chain: "
+            f"{second_input_requests!r}"
+        )
+
+    resumed_summary = resume_response.json()["session"]
+    resumed_session_id = str(resumed_summary["session"]["id"])
+    queued = resumed_summary["session"].get("inputQueue") or []
+    if queued:
+        raise AssertionError(
+            "Resume HTTP returned before the provider accepted its initial question: "
+            f"summary={resumed_summary!r} payload={resume_payload!r}"
+        )
+    save_browser_screenshot(
+        page,
+        artifact_dir,
+        "codex-slow-history-resume-provider-accepted",
+    )
+
+    wait_for_chat_user_message_occurrences(page, prompt, 1, timeout_s=20)
+    expect(
+        page.get_by_test_id("chat-assistant-message").filter(has_text=answer)
+    ).to_be_visible(timeout=20_000)
+    wait_for_session_history_timeline_text(
+        base_url, resumed_session_id, "user_message", prompt
+    )
+    wait_for_session_history_timeline_text(
+        base_url, resumed_session_id, "assistant_message", answer
+    )
+
+    receipt_deadline = time.monotonic() + 20
+    receipt_rows: list[dict[str, Any]] = []
+    while time.monotonic() < receipt_deadline:
+        if app_server_receipt.exists():
+            receipt_rows = [
+                json.loads(line)
+                for line in app_server_receipt.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            if any(row.get("text") == prompt for row in receipt_rows):
+                break
+        page.wait_for_timeout(100)
+    matching_receipts = [row for row in receipt_rows if row.get("text") == prompt]
+    if len(matching_receipts) != 1:
+        raise AssertionError(
+            "Provider did not receive the slow Resume question exactly once: "
+            f"{receipt_rows!r}"
+        )
+    if (
+        matching_receipts[0].get("clientUserMessageId")
+        != initial_input.get("clientMessageId")
+    ):
+        raise AssertionError(
+            "Slow Resume provider receipt lost the optimistic message identity: "
+            f"request={resume_payload!r} receipt={matching_receipts[0]!r}"
+        )
+
+    # A browser refresh must rehydrate the authoritative timeline; the user's
+    # question cannot depend on an in-memory optimistic bubble.
+    page.reload(wait_until="domcontentloaded")
+    open_live_session(page, resumed_session_id)
+    chat_button = page.get_by_role("button", name="Chat", exact=True)
+    if chat_button.count() > 0:
+        chat_button.click(timeout=30_000)
+    wait_for_chat_user_message_occurrences(page, prompt, 1, timeout_s=20)
+    expect(
+        page.get_by_test_id("chat-assistant-message").filter(has_text=answer)
+    ).to_be_visible(timeout=20_000)
+    wait_for_session_history_timeline_text_count(
+        base_url, resumed_session_id, "user_message", prompt, 1
+    )
+    wait_for_session_history_timeline_text_count(
+        base_url, resumed_session_id, "assistant_message", answer, 1
+    )
+    save_browser_screenshot(
+        page,
+        artifact_dir,
+        "codex-slow-history-resume-after-refresh",
+    )
+    return resumed_session_id
 
 
 def exercise_missing_cwd_history(
@@ -816,7 +1240,10 @@ def exercise_missing_cwd_history(
     )
     expect(page.get_by_role("dialog").filter(has_text="Workspace is missing")).to_have_count(0)
 
-    page.get_by_role("button", name="Resume", exact=True).last.click(timeout=30_000)
+    composer = chat_composer(page)
+    expect(composer).to_be_visible(timeout=10_000)
+    composer.fill("resume this missing workspace session")
+    composer.press("Enter")
     dialog = page.get_by_role("dialog").filter(has_text="Workspace is missing")
     expect(dialog).to_be_visible(timeout=10_000)
     expect(dialog.get_by_text("Create this workspace before starting the session?")).to_be_visible(
@@ -1159,6 +1586,7 @@ def fill_and_submit_chat_composer(page, text: str) -> None:
     composer.type(text)
     expect(composer).to_have_value(text, timeout=5_000)
     composer.press("Enter")
+    expect(composer).to_have_value("", timeout=5_000)
 
 
 def print_browser_preflight_error(exc: Exception) -> int:
@@ -1210,11 +1638,19 @@ def main() -> int:
     expected_queued_answer = "RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_ONE"
     expected_queued_answer_two = "RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_TWO"
     expected_foreground_answer = "RAH_NATIVE_CODEX_BROWSER_FOREGROUND_ANSWER"
+    new_task_prompt = f"RAH_NEW_TASK_PROVIDER_DELIVERY_{uuid.uuid4().hex[:8]}"
+    new_task_answer = f"RAH_APP_SERVER_INITIAL_ACK:{new_task_prompt}"
+    mobile_new_task_prompt = f"RAH_PWA_NEW_TASK_PROVIDER_DELIVERY_{uuid.uuid4().hex[:8]}"
+    mobile_new_task_answer = f"RAH_APP_SERVER_INITIAL_ACK:{mobile_new_task_prompt}"
+    app_server_receipt = codex_home / "app-server-turns.jsonl"
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
     artifact_dir = browser_artifact_dir("native-codex-browser")
     daemon: subprocess.Popen[str] | None = None
     session_id: str | None = None
+    history_resume_only = os.environ.get("RAH_NATIVE_BROWSER_HISTORY_RESUME_ONLY") == "1"
+    history_paging_only = os.environ.get("RAH_NATIVE_BROWSER_HISTORY_PAGING_ONLY") == "1"
+    history_sequence_only = os.environ.get("RAH_NATIVE_BROWSER_HISTORY_SEQUENCE_ONLY") == "1"
 
     try:
         workspace.mkdir(parents=True)
@@ -1234,35 +1670,39 @@ def main() -> int:
                 "RAH_CODEX_BINARY": str(fake_codex),
                 "RAH_CODEX_APP_SERVER_TRANSPORT": "stdio",
                 "MOCK_CODEX_SESSION_ID": provider_session_id,
+                # Every independent native TUI start represents a new Codex
+                # task. Resume still binds the explicit id from its CLI args.
+                "MOCK_CODEX_SESSION_ID_PER_PROCESS": "1",
             },
             port,
         )
 
         request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
         request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
-        started = request_json(
-            base_url,
-            "/api/sessions/start",
-            {
-                "provider": "codex",
-                "cwd": str(workspace),
-                "liveBackend": "native_tui",
-                "title": title,
-                "model": "gpt-native-browser",
-                "modeId": "never/danger-full-access",
-                "attach": {
-                    "client": {
-                        "id": "web-user",
-                        "kind": "web",
-                        "connectionId": "native-codex-browser-smoke",
+        if not history_resume_only and not history_paging_only and not history_sequence_only:
+            started = request_json(
+                base_url,
+                "/api/sessions/start",
+                {
+                    "provider": "codex",
+                    "cwd": str(workspace),
+                    "liveBackend": "native_tui",
+                    "title": title,
+                    "model": "gpt-native-browser",
+                    "modeId": "never/danger-full-access",
+                    "attach": {
+                        "client": {
+                            "id": "web-user",
+                            "kind": "web",
+                            "connectionId": "native-codex-browser-smoke",
+                        },
+                        "mode": "interactive",
+                        "claimControl": True,
                     },
-                    "mode": "interactive",
-                    "claimControl": True,
                 },
-            },
-        )["session"]
-        session_id = started["session"]["id"]
-        provider_session_id = wait_for_session_provider_id(base_url, session_id, None)
+            )["session"]
+            session_id = started["session"]["id"]
+            provider_session_id = wait_for_session_provider_id(base_url, session_id, None)
 
         with sync_playwright() as playwright:
             browser = launch_browser(playwright)
@@ -1288,18 +1728,335 @@ def main() -> int:
             )
             if not browser_connection_id:
                 raise AssertionError("browser did not establish a RAH web connection id")
-            request_json(
-                base_url,
-                f"/api/sessions/{session_id}/control/claim",
-                {
-                    "client": {
-                        "id": "web-user",
-                        "kind": "web",
-                        "connectionId": browser_connection_id,
-                    }
-                },
-            )
+            if session_id:
+                request_json(
+                    base_url,
+                    f"/api/sessions/{session_id}/control/claim",
+                    {
+                        "client": {
+                            "id": "web-user",
+                            "kind": "web",
+                            "connectionId": browser_connection_id,
+                        }
+                    },
+                )
             page.reload(wait_until="domcontentloaded")
+
+            if history_sequence_only:
+                sequence_replay_session_id = exercise_codex_history_paging(
+                    page,
+                    base_url,
+                    long_history_provider_session_id,
+                    artifact_dir,
+                    close_replay=False,
+                )
+                atomic_history_resume_session_id = exercise_codex_atomic_history_resume_input(
+                    page,
+                    base_url,
+                    long_history_provider_session_id,
+                    app_server_receipt,
+                    artifact_dir,
+                    replay_session_id=sequence_replay_session_id,
+                )
+                close_session_quietly(base_url, atomic_history_resume_session_id)
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "case": "HISTORY-PAGING-THEN-RESUME-001",
+                            "providerSessionId": long_history_provider_session_id,
+                            "screenshots": SCREENSHOTS,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                browser.close()
+                return 0
+
+            if history_paging_only:
+                exercise_codex_history_paging(
+                    page,
+                    base_url,
+                    long_history_provider_session_id,
+                    artifact_dir,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "case": "HISTORY-PAGING-001",
+                            "providerSessionId": long_history_provider_session_id,
+                            "screenshots": SCREENSHOTS,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                browser.close()
+                return 0
+
+            if history_resume_only:
+                atomic_history_resume_session_id = exercise_codex_atomic_history_resume_input(
+                    page,
+                    base_url,
+                    long_history_provider_session_id,
+                    app_server_receipt,
+                    artifact_dir,
+                )
+                close_session_quietly(base_url, atomic_history_resume_session_id)
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "case": "HISTORY-RESUME-SEND-001",
+                            "sessionId": atomic_history_resume_session_id,
+                            "providerSessionId": long_history_provider_session_id,
+                            "screenshots": SCREENSHOTS,
+                            "asserted": [
+                                "large stopped history sends its first Resume question atomically",
+                                "optimistic Working and Stop render before Resume completes",
+                                "late provider idle cannot erase Working or the daemon queue",
+                                "provider receives the exact stable question identity once",
+                                "browser refresh rehydrates the user question and assistant answer exactly once",
+                            ],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                browser.close()
+                return 0
+
+            # New Task is not complete when a Session record merely exists.
+            # Prove the exact submitted text crossed the provider turn/start
+            # boundary and produced an Agent response without a second /input
+            # request that can be lost during navigation.
+            page.locator('button[aria-label="New task"]:visible').first.click(
+                timeout=30_000
+            )
+            new_task_surface = page.locator(
+                '.rah-unified-composer[data-surface="new-task"]:visible'
+            )
+            new_task_textarea = new_task_surface.locator("textarea")
+            expect(new_task_surface).to_be_visible(timeout=10_000)
+            new_task_textarea.fill(new_task_prompt)
+            initial_input_requests: list[str] = []
+
+            def record_initial_input_request(request) -> None:
+                if "/api/sessions/" in request.url and request.url.endswith("/input"):
+                    initial_input_requests.append(request.url)
+
+            page.on("request", record_initial_input_request)
+            with page.expect_response(
+                lambda response: response.url.endswith("/api/sessions/start"),
+                timeout=30_000,
+            ) as start_response_info:
+                new_task_surface.locator(
+                    'button[aria-label="Start session"]'
+                ).click(timeout=10_000)
+            start_response = start_response_info.value
+            if start_response.status >= 400:
+                raise AssertionError(
+                    f"New Task startup failed with HTTP {start_response.status}: "
+                    f"{start_response.text()}"
+                )
+            start_payload = start_response.request.post_data_json
+            start_initial_input = start_payload.get("initialInput") or {}
+            if start_initial_input.get("text") != new_task_prompt:
+                raise AssertionError(
+                    "New Task did not submit its first question atomically: "
+                    f"{start_payload!r}"
+                )
+            if start_initial_input.get("clientMessageId") is None:
+                raise AssertionError(
+                    "New Task omitted the stable initial client message identity"
+                )
+            started_new_task = start_response.json()["session"]
+            started_new_task_id = started_new_task["session"]["id"]
+            wait_for_chat_user_message_occurrences(page, new_task_prompt, 1, timeout_s=20)
+            expect(
+                page.get_by_test_id("chat-assistant-message").filter(
+                    has_text=new_task_answer
+                )
+            ).to_be_visible(timeout=20_000)
+            receipt_deadline = time.monotonic() + 20
+            receipt_rows: list[dict[str, Any]] = []
+            while time.monotonic() < receipt_deadline:
+                if app_server_receipt.exists():
+                    receipt_rows = [
+                        json.loads(line)
+                        for line in app_server_receipt.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if line.strip()
+                    ]
+                    if any(row.get("text") == new_task_prompt for row in receipt_rows):
+                        break
+                page.wait_for_timeout(100)
+            matching_receipts = [
+                row for row in receipt_rows if row.get("text") == new_task_prompt
+            ]
+            if len(matching_receipts) != 1:
+                raise AssertionError(
+                    "Provider did not receive the New Task question exactly once: "
+                    f"{receipt_rows!r}"
+                )
+            if initial_input_requests:
+                raise AssertionError(
+                    "New Task regressed to the lossy create-then-input request chain: "
+                    f"{initial_input_requests!r}"
+                )
+            if (
+                matching_receipts[0].get("clientUserMessageId")
+                != start_initial_input.get("clientMessageId")
+            ):
+                raise AssertionError(
+                    "Provider receipt did not preserve the optimistic message identity: "
+                    f"request={start_payload!r} receipt={matching_receipts[0]!r}"
+                )
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "codex-new-task-provider-delivery",
+            )
+            if os.environ.get("RAH_NATIVE_BROWSER_INITIAL_DELIVERY_ONLY") == "1":
+                mobile_context = browser.new_context(
+                    viewport={"width": 390, "height": 844},
+                    is_mobile=True,
+                    has_touch=True,
+                )
+                mobile_context.add_init_script(
+                    "Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });"
+                )
+                mobile_page = mobile_context.new_page()
+                mobile_input_requests: list[str] = []
+
+                def record_mobile_input_request(request) -> None:
+                    if "/api/sessions/" in request.url and request.url.endswith("/input"):
+                        mobile_input_requests.append(request.url)
+
+                mobile_page.on("request", record_mobile_input_request)
+                mobile_page.goto(base_url, wait_until="domcontentloaded")
+                try:
+                    mobile_page.locator(
+                        'button[aria-label="Open sidebar"]:visible'
+                    ).first.click(timeout=3_000)
+                except Exception:
+                    pass
+                mobile_page.locator(
+                    'button[aria-label="New task"]:visible'
+                ).first.click(timeout=30_000)
+                mobile_surface = mobile_page.locator(
+                    '.rah-unified-composer[data-surface="new-task"]:visible'
+                )
+                expect(mobile_surface).to_be_visible(timeout=10_000)
+                mobile_surface.locator("textarea").fill(mobile_new_task_prompt)
+                with mobile_page.expect_response(
+                    lambda response: response.url.endswith("/api/sessions/start"),
+                    timeout=30_000,
+                ) as mobile_start_response_info:
+                    mobile_surface.locator(
+                        'button[aria-label="Start session"]'
+                    ).click(timeout=10_000)
+                mobile_start_response = mobile_start_response_info.value
+                if mobile_start_response.status >= 400:
+                    raise AssertionError(
+                        f"PWA New Task startup failed with HTTP {mobile_start_response.status}: "
+                        f"{mobile_start_response.text()}"
+                    )
+                mobile_start_payload = mobile_start_response.request.post_data_json
+                mobile_initial_input = mobile_start_payload.get("initialInput") or {}
+                if mobile_initial_input.get("text") != mobile_new_task_prompt:
+                    raise AssertionError(
+                        "PWA New Task did not submit its first question atomically: "
+                        f"{mobile_start_payload!r}"
+                    )
+                wait_for_chat_user_message_occurrences(
+                    mobile_page,
+                    mobile_new_task_prompt,
+                    1,
+                    timeout_s=20,
+                )
+                expect(
+                    mobile_page.get_by_test_id("chat-assistant-message").filter(
+                        has_text=mobile_new_task_answer
+                    )
+                ).to_be_visible(timeout=20_000)
+                mobile_receipt_deadline = time.monotonic() + 20
+                mobile_receipt_rows: list[dict[str, Any]] = []
+                while time.monotonic() < mobile_receipt_deadline:
+                    if app_server_receipt.exists():
+                        mobile_receipt_rows = [
+                            json.loads(line)
+                            for line in app_server_receipt.read_text(
+                                encoding="utf-8"
+                            ).splitlines()
+                            if line.strip()
+                        ]
+                        if any(
+                            row.get("text") == mobile_new_task_prompt
+                            for row in mobile_receipt_rows
+                        ):
+                            break
+                    mobile_page.wait_for_timeout(100)
+                mobile_matching_receipts = [
+                    row
+                    for row in mobile_receipt_rows
+                    if row.get("text") == mobile_new_task_prompt
+                ]
+                if len(mobile_matching_receipts) != 1:
+                    raise AssertionError(
+                        "Provider did not receive the PWA New Task question exactly once: "
+                        f"{mobile_receipt_rows!r}"
+                    )
+                if mobile_input_requests:
+                    raise AssertionError(
+                        "PWA New Task regressed to the lossy create-then-input request chain: "
+                        f"{mobile_input_requests!r}"
+                    )
+                if (
+                    mobile_matching_receipts[0].get("clientUserMessageId")
+                    != mobile_initial_input.get("clientMessageId")
+                ):
+                    raise AssertionError(
+                        "PWA provider receipt lost the stable optimistic identity: "
+                        f"request={mobile_start_payload!r} "
+                        f"receipt={mobile_matching_receipts[0]!r}"
+                    )
+                save_browser_screenshot(
+                    mobile_page,
+                    artifact_dir,
+                    "codex-pwa-new-task-provider-delivery",
+                )
+                mobile_context.close()
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "case": "NEW-TASK-DRAFT-OWNERSHIP-001",
+                            "sessionId": started_new_task_id,
+                            "prompt": new_task_prompt,
+                            "providerReceipt": matching_receipts[0],
+                            "secondInputRequests": initial_input_requests,
+                            "desktopScreenshot": str(
+                                artifact_dir / "codex-new-task-provider-delivery.png"
+                            ),
+                            "pwaPrompt": mobile_new_task_prompt,
+                            "pwaProviderReceipt": mobile_matching_receipts[0],
+                            "pwaSecondInputRequests": mobile_input_requests,
+                            "pwaScreenshot": str(
+                                artifact_dir
+                                / "codex-pwa-new-task-provider-delivery.png"
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                browser.close()
+                return 0
+
             page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
             page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
             page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(timeout=30_000)
@@ -1399,6 +2156,20 @@ def main() -> int:
             )
             fill_and_submit_chat_composer(page, blocked_chat_prompt)
             fill_and_submit_chat_composer(page, blocked_chat_prompt_two)
+            queued_summary = request_json(
+                base_url,
+                f"/api/sessions/{session_id}",
+            )["session"]["session"]
+            queued_texts = [
+                item.get("text")
+                for item in queued_summary.get("inputQueue", [])
+                if isinstance(item, dict)
+            ]
+            if queued_texts != [blocked_chat_prompt, blocked_chat_prompt_two]:
+                raise AssertionError(
+                    "dirty native prompt did not retain both Chat submissions in order; "
+                    f"queue={json.dumps(queued_summary.get('inputQueue'), ensure_ascii=False)}"
+                )
             page.wait_for_timeout(1000)
             page.get_by_role("button", name="TUI", exact=True).click()
             panel = page.locator(".terminal-panel").last
@@ -1737,12 +2508,12 @@ def main() -> int:
                     mobile_page.get_by_text("What would you like to build?", exact=True),
                 ).to_be_visible(timeout=10_000)
                 expect(
-                    mobile_page.locator('textarea[placeholder="Message…"]:visible').first,
+                    mobile_page.locator('textarea[placeholder="Work with Rah"]:visible').first,
                 ).to_be_visible(timeout=10_000)
                 composer_layout = mobile_page.evaluate(
                     """() => {
                         const viewportWidth = window.innerWidth;
-                        const textarea = document.querySelector('textarea[placeholder="Message…"]');
+                        const textarea = document.querySelector('textarea[placeholder="Work with Rah"]');
                         if (!(textarea instanceof HTMLElement)) {
                           return { error: 'textarea missing' };
                         }
@@ -1858,7 +2629,48 @@ def main() -> int:
             page.get_by_role("tab", name="Recent", exact=True).click(timeout=30_000)
             page.locator(f'button[data-session-id="{resume_session_id}"]:visible').first.click(timeout=30_000)
             page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
-            expect(page.get_by_text(expected_answer, exact=True)).to_be_visible(timeout=20_000)
+            try:
+                wait_for_session_history_timeline_text(
+                    base_url,
+                    resume_session_id,
+                    "assistant_message",
+                    expected_answer,
+                )
+                # The canonical conversation is already complete at this point,
+                # but the chat feed intentionally virtualizes older turns and
+                # opens at the newest reply. Scroll the real viewport to the
+                # beginning before asserting that the first mirrored answer is
+                # rendered; otherwise this checks virtualization windowing, not
+                # resume-history correctness.
+                resume_scroll_container = page.locator(
+                    '[data-testid="chat-thread-scroll-container"]:visible',
+                ).last
+                expect(resume_scroll_container).to_be_visible(timeout=10_000)
+                resume_scroll_container.evaluate(
+                    """(node) => {
+                      node.scrollTop = 0;
+                      node.dispatchEvent(new Event('scroll', { bubbles: true }));
+                    }"""
+                )
+                expect(page.get_by_text(expected_answer, exact=True)).to_be_visible(timeout=20_000)
+            except Exception as error:
+                save_browser_screenshot(
+                    page,
+                    artifact_dir,
+                    "codex-web-resume-chat-history-failure",
+                )
+                summary = request_json(base_url, f"/api/sessions/{resume_session_id}")
+                conversation = request_json(
+                    base_url,
+                    f"/api/sessions/{resume_session_id}/conversation/turns?limit=100",
+                )
+                body_text = page.locator("body").inner_text(timeout=10_000)
+                raise AssertionError(
+                    f"resumed native TUI history was not visible: {error}; "
+                    f"summary={json.dumps(summary, ensure_ascii=False)}; "
+                    f"conversation={json.dumps(conversation, ensure_ascii=False)}; "
+                    f"body_tail={body_text[-3000:]!r}"
+                ) from error
             resume_answer_count, resume_answer_matches = count_session_history_timeline_text(
                 base_url,
                 resume_session_id,
@@ -1875,12 +2687,22 @@ def main() -> int:
 
             close_session_quietly(base_url, session_id)
             session_id = None
-            exercise_codex_history_paging(
+            full_replay_session_id = exercise_codex_history_paging(
                 page,
                 base_url,
                 long_history_provider_session_id,
                 artifact_dir,
+                close_replay=False,
             )
+            atomic_history_resume_session_id = exercise_codex_atomic_history_resume_input(
+                page,
+                base_url,
+                long_history_provider_session_id,
+                app_server_receipt,
+                artifact_dir,
+                replay_session_id=full_replay_session_id,
+            )
+            close_session_quietly(base_url, atomic_history_resume_session_id)
             exercise_missing_cwd_history(
                 page,
                 base_url,
@@ -1906,6 +2728,7 @@ def main() -> int:
                     "caseIds": CASE_IDS,
                     "screenshots": SCREENSHOTS,
                     "asserted": [
+                        "New Task sends its first question atomically in Session startup, preserves its client identity, reaches Codex turn/start exactly once, and renders the Agent reply without a second /input request",
                         "Web can select native Codex live session",
                         "Chat/TUI toggle is rendered",
                         "xterm receives native TUI output",
@@ -1925,7 +2748,8 @@ def main() -> int:
                         "Foreground recovery catches up native TUI and Chat mirror without reselection",
                         "Web resume opens Codex history without duplicating existing assistant messages",
                         "Stored Codex history loads the latest page first and preserves scroll anchor when older pages prepend",
-                        "Missing-cwd history browsing does not prompt until Resume",
+                        "A large stopped Codex history owns its first Resume question in the same HTTP request, preserves Working across a late idle snapshot, delivers exactly once, and survives browser refresh",
+                        "Missing-cwd history browsing does not prompt until the user sends a Resume input",
                         "Explicit native_tui browser flow stays separate from the Web native_local_server default",
                         "Settings Status shows PTY terminal replay health for native TUI sessions",
                         "Settings Status refresh shows PTY terminal replay deltas",

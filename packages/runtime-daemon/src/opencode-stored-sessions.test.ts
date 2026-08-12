@@ -83,6 +83,39 @@ test("uses stable OpenCode stored session preview instead of the latest text par
   }
 });
 
+test("excludes OpenCode sessions that have never accepted a user message", { skip: !hasSqlite }, async () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const databasePath = path.join(dataDir, "opencode.db");
+    execFileSync("sqlite3", [
+      databasePath,
+      `
+        insert into session (
+          id, project_id, parent_id, directory, title,
+          time_created, time_updated, time_archived
+        ) values (
+          'ses_shell', 'project_active', null, '/tmp/project/sub',
+          'Named but empty OpenCode shell', 1, 2, null
+        );
+      `,
+    ]);
+
+    assert.equal(findOpenCodeStoredSessionRecord("ses_shell", { dataDir }), null);
+    assert.equal(
+      await findOpenCodeStoredSessionRecordAsync("ses_shell", { dataDir }),
+      null,
+    );
+    assert.deepEqual(
+      discoverOpenCodeStoredSessions({ dataDir }).map(
+        (record) => record.ref.providerSessionId,
+      ),
+      ["ses_active", "ses_archived"],
+    );
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("reuses OpenCode history-size metadata until the provider session revision changes", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {
@@ -145,6 +178,20 @@ test("discovers the complete OpenCode catalog when no explicit limit is requeste
           ${Date.parse("2026-04-26T16:00:00.000Z")},
           ${Date.parse("2026-04-26T16:00:05.000Z")},
           null
+        from sequence;
+
+        with recursive sequence(value) as (
+          select 1
+          union all
+          select value + 1 from sequence where value < 1005
+        )
+        insert into message (id, session_id, time_created, time_updated, data)
+        select
+          printf('bulk_message_%04d', value),
+          printf('bulk_%04d', value),
+          ${Date.parse("2026-04-26T16:00:00.000Z")},
+          ${Date.parse("2026-04-26T16:00:05.000Z")},
+          json_object('role', 'user')
         from sequence;
       `,
     ]);
@@ -798,6 +845,10 @@ function fixtureSql(
     insert into message (id, session_id, time_created, time_updated, data)
     values
       ('msg_user', 'ses_active', ${created + 100}, ${created + 100}, ${sqlJson({
+        role: "user",
+        time: { created: created + 100 },
+      })}),
+      ('msg_archived_user', 'ses_archived', ${created + 100}, ${created + 100}, ${sqlJson({
         role: "user",
         time: { created: created + 100 },
       })}),

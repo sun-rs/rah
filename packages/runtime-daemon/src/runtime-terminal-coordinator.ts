@@ -921,12 +921,12 @@ export class RuntimeTerminalCoordinator {
       clientId,
       text,
       submittedAt: new Date().toISOString(),
+      ...(clearPromptBeforeSubmit ? { replacesPromptDraft: true } : {}),
       ...(options?.clientMessageId !== undefined ? { clientMessageId: options.clientMessageId } : {}),
       ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
     });
     this.updateNativeTuiPromptState(native.sessionId, "agent_busy");
-    // Drain already persisted mirror events after the new input watermark is
-    // established, so stale persisted completions cannot briefly clear Stop.
+    // Establish the input watermark before mirroring so stale completions cannot briefly clear Stop.
     this.mirrorRuntime.mirrorSession(native.sessionId);
     delete native.clearPromptBeforeNextInput;
     this.writeNativeTuiChatSubmit(native, text, { clearPromptBeforeSubmit });

@@ -30,7 +30,7 @@ type StoredSessionMetadataCacheFile = {
 };
 
 type StoredSessionCatalogSnapshotFile = {
-  version: 2;
+  version: 3;
   records: readonly StoredSessionCatalogRecord[];
 };
 
@@ -69,7 +69,7 @@ export function loadStoredSessionCatalogSnapshot(): StoredSessionCatalogRecord[]
     const parsed = JSON.parse(
       readFileSync(catalogSnapshotPath(), "utf8"),
     ) as StoredSessionCatalogSnapshotFile;
-    if (parsed.version !== 2 || !Array.isArray(parsed.records)) {
+    if (parsed.version !== 3 || !Array.isArray(parsed.records)) {
       return [];
     }
     return canonicalizeStoredSessionCatalogRecords(
@@ -90,7 +90,7 @@ export async function writeStoredSessionCatalogSnapshot(
     await pipeline(
       Readable.from(
         streamJsonChunks({
-          version: 2,
+          version: 3,
           records: canonicalizeStoredSessionCatalogRecords(records),
         } satisfies StoredSessionCatalogSnapshotFile),
       ),

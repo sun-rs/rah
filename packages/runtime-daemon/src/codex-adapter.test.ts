@@ -188,7 +188,7 @@ describe("CodexAdapter", () => {
     return adapter.listStoredSessions();
   }
 
-  test("falls back to stored rollout replay when thread/resume is unavailable", async () => {
+  test("live resume failure stays an error until stored replay is explicitly requested", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-cwd-"));
     const sessionId = "019d9999-aaaa-7bbb-8ccc-ddddeeeeffff";
     writeRollout(sessionId, cwd);
@@ -226,9 +226,17 @@ rl.on('line', (line) => {
     assert.equal(stored[0]?.cwd, cwd);
     assert.equal(stored[0]?.preview, "Fix the resume bug");
 
+    await assert.rejects(
+      adapter.resumeSession({
+        provider: "codex",
+        providerSessionId: sessionId,
+      }),
+      /resume unsupported in mock/,
+    );
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
+      preferStoredReplay: true,
     });
     assert.equal(resumed.session.session.providerSessionId, sessionId);
     assert.equal(resumed.session.session.cwd, cwd);
@@ -1500,6 +1508,7 @@ rl.on('line', (line) => {
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
+      preferStoredReplay: true,
     });
 
     const firstPage = storedHistory.getConversationEvidencePage(
@@ -1752,6 +1761,7 @@ rl.on('line', (line) => {
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
+      preferStoredReplay: true,
     });
 
     const page = storedHistory.getConversationEvidencePage(

@@ -64,7 +64,7 @@ function estimateTimelineHeight(entry: Extract<FeedEntry, { kind: "timeline" }>)
     case "step":
       return 124;
     case "compaction":
-      return 48;
+      return 20;
     case "error":
     case "retry":
     case "system":

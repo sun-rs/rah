@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { FeedEntry } from "../../types";
 import {
   buildVirtualFeedLayout,
+  estimateFeedEntryHeight,
   projectVirtualAnchorScrollTop,
   resolveVirtualFeedWindow,
   VIRTUAL_FEED_ROW_GAP_PX,
@@ -21,6 +22,17 @@ function messageEntry(key: string, text: string): FeedEntry {
 }
 
 describe("virtualized feed layout", () => {
+  test("estimates context compaction as a compact 20px process row", () => {
+    const entry: FeedEntry = {
+      key: "compaction",
+      kind: "timeline",
+      item: { kind: "compaction", status: "completed" },
+      ts: "2026-04-22T00:00:00.000Z",
+    };
+
+    assert.equal(estimateFeedEntryHeight(entry), 20);
+  });
+
   test("prefers measured content heights while preserving cumulative offsets with row gaps", () => {
     const entries = [
       messageEntry("a", "short"),

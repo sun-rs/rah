@@ -1516,6 +1516,12 @@ describe("RuntimeEngine", () => {
         provider: "codex",
         cwd: workspace,
         liveBackend: "native_local_server",
+        initialInput: {
+          clientId: "web-start",
+          clientMessageId: "start-message-1",
+          clientTurnId: "start-turn-1",
+          text: "first new-session question",
+        },
       });
       const sessionId = started.session.session.id;
       assert.equal(adapter.startRequests.length, 1);
@@ -1525,6 +1531,16 @@ describe("RuntimeEngine", () => {
       assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
       assert.equal(started.session.session.runtime?.tuiRole, "client_view");
       assert.equal(started.session.session.runtime?.tuiContinuity, true);
+      assert.deepEqual(adapter.inputRequests[0], {
+        sessionId,
+        request: {
+          clientId: "web-start",
+          clientMessageId: "start-message-1",
+          clientTurnId: "start-turn-1",
+          text: "first new-session question",
+        },
+      });
+      assert.equal(started.session.session.runtimeState, "starting");
       engine.claimControl(sessionId, {
         client: {
           id: "terminal-client",
@@ -1562,6 +1578,12 @@ describe("RuntimeEngine", () => {
         providerSessionId: "native-local-resume",
         cwd: workspace,
         liveBackend: "native_local_server",
+        initialInput: {
+          clientId: "web-resume",
+          clientMessageId: "resume-message-1",
+          clientTurnId: "resume-turn-1",
+          text: "first resumed-session question",
+        },
       });
       assert.equal(adapter.resumeRequests.length, 1);
       assert.equal(resumed.session.session.liveBackend, "native_local_server");
@@ -1570,6 +1592,16 @@ describe("RuntimeEngine", () => {
       assert.equal(resumed.session.session.runtime?.structuredLiveEvents, true);
       assert.equal(resumed.session.session.runtime?.tuiRole, "client_view");
       assert.equal(resumed.session.session.runtime?.tuiContinuity, true);
+      assert.deepEqual(adapter.inputRequests.at(-1), {
+        sessionId: resumed.session.session.id,
+        request: {
+          clientId: "web-resume",
+          clientMessageId: "resume-message-1",
+          clientTurnId: "resume-turn-1",
+          text: "first resumed-session question",
+        },
+      });
+      assert.equal(resumed.session.session.runtimeState, "starting");
     } finally {
       await engine.shutdown();
       rmSync(workspace, { recursive: true, force: true });
@@ -3739,6 +3771,9 @@ describe("RuntimeEngine", () => {
         "  fs.writeFileSync(rollout, JSON.stringify({",
         "    type: 'session_meta',",
         `    payload: { id: '${providerSessionId}', cwd: process.cwd(), timestamp: new Date().toISOString() },`,
+        "  }) + '\\n' + JSON.stringify({",
+        "    type: 'response_item',",
+        "    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Bind this live task' }] },",
         "  }) + '\\n');",
         "}, 100);",
         "process.stdin.resume();",
@@ -5269,6 +5304,7 @@ describe("RuntimeEngine", () => {
         "  fs.mkdirSync(path.dirname(rollout), { recursive: true });",
         "  const rows = [",
         "    { timestamp: '2026-05-03T00:00:00.000Z', type: 'session_meta', payload: { id: process.env.MOCK_PROVIDER_SESSION_ID, cwd: process.cwd(), timestamp: '2026-05-03T00:00:00.000Z' } },",
+        "    { timestamp: '2026-05-03T00:00:00.500Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Run mirror diagnostics' }] } },",
         "    { timestamp: '2026-05-03T00:00:01.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-native' } },",
         "    { timestamp: '2026-05-03T00:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Mirror before failure' }] } },",
         "    { timestamp: '2026-05-03T00:00:03.000Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-native' } },",

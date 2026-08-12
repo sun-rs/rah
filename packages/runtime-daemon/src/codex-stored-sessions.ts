@@ -36,7 +36,7 @@ import {
 
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
-export const CODEX_STORED_SESSION_CACHE_VERSION = 4;
+export const CODEX_STORED_SESSION_CACHE_VERSION = 5;
 
 export type CodexStoredSessionCatalogScan = {
   records: CodexStoredSessionRecord[];
@@ -51,7 +51,7 @@ type CodexStoredSessionParseResult =
   | { kind: "record"; record: CodexStoredSessionRecord }
   | {
       kind: "ignored";
-      reason: "internal_subagent";
+      reason: "internal_subagent" | "no_user_turn";
     }
   | { kind: "invalid" };
 
@@ -219,12 +219,14 @@ function parseStoredSessionHead(options: {
   size: number;
   mtime: Date;
   archived: boolean;
+  requireUserTurn?: boolean;
 }): CodexStoredSessionParseResult {
   const { filePath, head, size, mtime, archived } = options;
   let sessionId: string | null = null;
   let cwd: string | undefined;
   let createdAt: string | undefined;
   let firstUserMessage: string | null = null;
+  let hasUserTurn = false;
 
   for (const line of head) {
     let parsed: unknown;
@@ -280,6 +282,21 @@ function parseStoredSessionHead(options: {
         ? (record.payload as Record<string, unknown>)
         : null;
     if (
+      record.type === "event_msg" &&
+      payload?.type === "user_message" &&
+      typeof payload.message === "string"
+    ) {
+      const text = payload.message.trim();
+      if (text && !isCodexBootstrapUserMessage(text)) {
+        // Older Codex rollouts persisted the canonical prompt as an
+        // event_msg rather than a response_item. It is still a real user
+        // turn and must keep that historical Session visible.
+        hasUserTurn = true;
+        firstUserMessage = text;
+        break;
+      }
+    }
+    if (
       record.type === "response_item" &&
       payload?.type === "message" &&
       payload.role === "user" &&
@@ -296,7 +313,22 @@ function parseStoredSessionHead(options: {
         if (isCodexBootstrapUserMessage(text)) {
           continue;
         }
+        hasUserTurn = true;
         firstUserMessage = text;
+        break;
+      }
+      if (
+        payload.content.some(
+          (item) =>
+            item !== null &&
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            (item as Record<string, unknown>).type !== "input_text",
+        )
+      ) {
+        // Image/file-only prompts are still real user turns even when there is
+        // no text available for the catalog preview.
+        hasUserTurn = true;
         break;
       }
     }
@@ -311,8 +343,15 @@ function parseStoredSessionHead(options: {
   if (!sessionId) {
     return { kind: "invalid" };
   }
+  // Codex creates the rollout and title-index row before the first prompt is
+  // durably accepted. A launch failure can therefore leave a metadata-only
+  // file that looks named but has no conversation. Codex Desktop does not
+  // publish these shells as tasks, so reject them at the provider boundary.
+  if (!hasUserTurn && options.requireUserTurn !== false) {
+    return { kind: "ignored", reason: "no_user_turn" };
+  }
 
-  const preview = firstUserMessage ? truncateText(firstUserMessage) : path.basename(filePath);
+  const preview = firstUserMessage ? truncateText(firstUserMessage) : "Untitled";
   return {
     kind: "record",
     record: {
@@ -426,6 +465,12 @@ export async function resolveCodexStoredSessionRecordNearStartup(options: {
             size: stats.size,
             mtime: stats.mtime,
             archived,
+            // Native TUI startup must bind the provider identity before the
+            // first prompt is accepted. This bounded lookup is not a catalog
+            // visibility decision; the full catalog still requires a user
+            // turn and will discard a launch shell after the live runtime is
+            // gone.
+            requireUserTurn: false,
           });
           if (
             parsed.kind === "record" &&

@@ -432,14 +432,15 @@ describe("composer contract", () => {
     );
   });
 
-  test("resizes the message composer before paint without live height churn", () => {
+  test("resizes the live message composer during iOS input and IME composition", () => {
     const source = readSource("./components/TokenizedTextarea.tsx");
 
     assert.match(source, /useLayoutEffect/);
-    assert.match(source, /measurementRef/);
-    assert.match(source, /measureRequiredContentHeight/);
-    assert.match(source, /measurement\.style\.height = "auto"/);
-    assert.match(source, /HEIGHT_CHANGE_EPSILON_PX/);
+    assert.match(source, /el\.style\.height/);
+    assert.match(source, /el\.scrollHeight \+ borderHeight/);
+    assert.match(source, /onCompositionUpdate/);
+    assert.match(source, /visualViewport\?\.addEventListener\("resize"/);
+    assert.match(source, /scheduleHeightAdjustment/);
     assert.match(source, /wrapperClassName/);
     assert.doesNotMatch(source, /queueMicrotask\(adjustHeight\)/);
     assert.doesNotMatch(source, /el\.style\.height = "auto"/);
@@ -447,6 +448,7 @@ describe("composer contract", () => {
       source,
       /el\.style\.height = `\\$\\{collapsedHeight\\}px`/,
     );
+    assert.doesNotMatch(source, /measurementRef|measureRequiredContentHeight/);
   });
 
   test("keeps provider, mode, capability-driven plan, and model controls independently visible", () => {
@@ -829,11 +831,11 @@ describe("composer contract", () => {
     assert.match(styles, /\.rah-unified-composer\s*\{/);
     assert.match(
       styles,
-      /\.rah-unified-composer\[data-surface="chat"\]\[data-pwa="true"\]:is\([\s\S]*:focus-within,[\s\S]*:has\(\[data-composer-control\]\[aria-expanded="true"\]\)/,
+      /\.rah-unified-composer\[data-surface="chat"\]\[data-pwa="true"\]:is\([\s\S]*\[data-composer-expanded="true"\],[\s\S]*:focus-within,[\s\S]*:has\(\[data-composer-control\]\[aria-expanded="true"\]\)/,
     );
     assert.match(
       styles,
-      /data-surface="chat"\]\[data-pwa="true"\]:not\(:focus-within\):not\(:has\(\[data-composer-control\]\[aria-expanded="true"\]\)\)[\s\S]*grid-template-rows: 2\.25rem;[\s\S]*padding: 0\.375rem 0\.625rem/,
+      /data-surface="chat"\]\[data-pwa="true"\]:not\(\[data-composer-expanded="true"\]\):not\(:focus-within\):not\(:has\(\[data-composer-control\]\[aria-expanded="true"\]\)\)[\s\S]*grid-template-rows: 2\.25rem;[\s\S]*padding: 0\.375rem 0\.625rem/,
     );
     assert.match(
       styles,
@@ -852,6 +854,9 @@ describe("composer contract", () => {
       selectedPaneSource,
       /onPointerDownCapture=\{focusPwaComposerFromPointer\}/,
     );
+    assert.match(selectedPaneSource, /expanded=\{isPwaDisplayMode && pwaComposerExpanded\}/);
+    assert.match(selectedPaneSource, /data-session-access-panel="true"/);
+    assert.match(selectedPaneSource, /data-session-model-panel="true"/);
     assert.match(selectedPaneSource, /textarea\.focus\(\{ preventScroll: true \}\)/);
     assert.match(
       selectedPaneSource,
@@ -917,7 +922,7 @@ describe("composer contract", () => {
         draft: "send this",
         sendPending: true,
       }),
-      false,
+      true,
     );
   });
 });

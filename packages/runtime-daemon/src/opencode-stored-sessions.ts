@@ -43,6 +43,11 @@ import {
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
 import { runBackgroundCommand } from "./background-command";
+import { OPEN_CODE_HAS_VISIBLE_USER_MESSAGE_SQL } from "./opencode-session-visibility";
+import {
+  openCodeHistoryMetaCacheKey,
+  openCodeHistoryMetaRevision,
+} from "./opencode-history-meta-cache";
 import {
   HISTORY_WORKLOAD_PRIORITY,
   sharedHistoryWorkloadScheduler,
@@ -263,6 +268,7 @@ export function discoverOpenCodeStoredSessions(options: {
       from session s
       left join project p on p.id = s.project_id
       where s.parent_id is null
+        and ${OPEN_CODE_HAS_VISIBLE_USER_MESSAGE_SQL}
       order by (s.time_archived is not null) asc, s.time_updated desc, s.id desc
       ${limitClause}
     `,
@@ -324,6 +330,7 @@ export function findOpenCodeStoredSessionRecord(
       from session s
       left join project p on p.id = s.project_id
       where s.id = ${quoteSql(providerSessionId)}
+        and ${OPEN_CODE_HAS_VISIBLE_USER_MESSAGE_SQL}
       limit 1
     `,
   );
@@ -383,6 +390,7 @@ export async function findOpenCodeStoredSessionRecordAsync(
       from session s
       left join project p on p.id = s.project_id
       where s.id = ${quoteSql(providerSessionId)}
+        and ${OPEN_CODE_HAS_VISIBLE_USER_MESSAGE_SQL}
       limit 1
     `,
     { throwOnReadError: true },
@@ -1542,14 +1550,6 @@ function attachRequestedClient(
       },
     });
   }
-}
-
-function openCodeHistoryMetaCacheKey(databasePath: string, sessionId: string): string {
-  return `${databasePath}#${sessionId}`;
-}
-
-function openCodeHistoryMetaRevision(row: OpenCodeSessionRow): number {
-  return row.time_updated ?? row.time_created ?? 0;
 }
 
 function hydrateOpenCodeSessionHistoryMeta(

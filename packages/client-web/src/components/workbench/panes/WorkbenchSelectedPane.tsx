@@ -88,6 +88,7 @@ import {
   shouldReplayInitialSessionTuiOutput,
 } from "../../../tui-surface-lifecycle";
 import {
+  conversationFeedWithInputQueue,
   conversationTurnsToFeed,
   stableConversationLocalFeed,
 } from "../../../conversation-feed";
@@ -382,6 +383,7 @@ export function WorkbenchSelectedPane(props: {
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  const [pwaComposerExpanded, setPwaComposerExpanded] = useState(false);
   const [sessionViewMode, setSessionViewMode] = useState<SessionViewMode>(preferredSessionViewMode);
   const [openedTuiTerminalIds, setOpenedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
@@ -451,12 +453,16 @@ export function WorkbenchSelectedPane(props: {
   const chatFeed = useMemo(
     () => conversationTurnsToFeed(
       conversation?.turns ?? [],
-      conversationLocalFeed,
+      conversationFeedWithInputQueue(
+        conversationLocalFeed,
+        props.selectedSummary.session.inputQueue ?? [],
+      ),
     ),
     [
       conversation?.revision,
       conversation?.turns,
       conversationLocalFeed,
+      props.selectedSummary.session.inputQueue,
     ],
   );
   const chatCanLoadOlderHistory = Boolean(conversation?.nextCursor);
@@ -647,9 +653,14 @@ export function WorkbenchSelectedPane(props: {
   ]);
 
   useEffect(() => {
+    setPwaComposerExpanded(false);
+  }, [props.selectedSummary.session.id]);
+
+  useEffect(() => {
     if (showComposer) {
       return;
     }
+    setPwaComposerExpanded(false);
     props.onFloatingAnchorOffsetChange(12);
   }, [props.onFloatingAnchorOffsetChange, showComposer]);
 
@@ -694,6 +705,7 @@ export function WorkbenchSelectedPane(props: {
       if (!isPwaDisplayMode) {
         return;
       }
+      setPwaComposerExpanded(true);
       const target = event.target;
       if (!(target instanceof Element)) {
         return;
@@ -723,14 +735,23 @@ export function WorkbenchSelectedPane(props: {
     }
     const blurComposerOutside = (event: PointerEvent) => {
       const textarea = props.composerRef.current;
-      if (!textarea || document.activeElement !== textarea) {
-        return;
-      }
       const target = event.target;
       if (target instanceof Node && composerContainerRef.current?.contains(target)) {
         return;
       }
-      textarea.blur();
+      const targetElement =
+        target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+      if (
+        targetElement?.closest(
+          '[data-session-access-panel="true"],[data-session-model-panel="true"]',
+        )
+      ) {
+        return;
+      }
+      setPwaComposerExpanded(false);
+      if (textarea && document.activeElement === textarea) {
+        textarea.blur();
+      }
     };
     window.addEventListener("pointerdown", blurComposerOutside, true);
     return () => window.removeEventListener("pointerdown", blurComposerOutside, true);
@@ -1197,11 +1218,17 @@ export function WorkbenchSelectedPane(props: {
               <UnifiedComposerSurface
                 surface="chat"
                 isPwa={isPwaDisplayMode}
+                expanded={isPwaDisplayMode && pwaComposerExpanded}
                 className={COMPOSER_LAYOUT.composeGridClassName}
+                onFocusCapture={() => {
+                  if (isPwaDisplayMode) {
+                    setPwaComposerExpanded(true);
+                  }
+                }}
+                onPointerDownCapture={focusPwaComposerFromPointer}
               >
                 <div
                   className="rah-chat-composer-input relative flex min-w-0 flex-col"
-                  onPointerDownCapture={focusPwaComposerFromPointer}
                 >
                   {draftAnnotations.length > 0 || draftAttachments.length > 0 ? (
                     <div className="rah-chat-composer-context flex max-w-full flex-wrap items-start gap-2 px-1 pb-1.5">

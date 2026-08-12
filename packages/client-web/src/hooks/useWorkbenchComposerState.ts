@@ -37,6 +37,7 @@ type StartSessionInput = {
   optionValues?: Record<string, SessionConfigValue>;
   reasoningId?: string;
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+  onSessionCreated?: (sessionId: string) => void;
 };
 
 type SendInputFn = (
@@ -45,7 +46,7 @@ type SendInputFn = (
   attachments?: SessionInputAttachment[],
   options?: { annotations?: SessionInputAnnotation[] },
 ) => Promise<unknown>;
-type StartSessionFn = (options: StartSessionInput) => Promise<unknown>;
+type StartSessionFn = (options: StartSessionInput) => Promise<string | null>;
 
 export function useWorkbenchComposerState(args: {
   selectedSummary: SessionSummary | null;
@@ -72,6 +73,8 @@ export function useWorkbenchComposerState(args: {
   const [emptyStateDraft, setEmptyStateDraft] = useState("");
   const emptyStateAttachments = useComposerAttachments();
   const emptyStateComposerRef = useRef<HTMLTextAreaElement | null>(null);
+  const emptyStateSendInFlightRef = useRef(false);
+  const [emptyStateSendPending, setEmptyStateSendPending] = useState(false);
   const [sendPending, setSendPending] = useState(false);
   const sendChainRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSendCountRef = useRef(0);
@@ -165,40 +168,62 @@ export function useWorkbenchComposerState(args: {
   };
 
   const handleEmptyStateSend = () => {
+    if (emptyStateSendInFlightRef.current) {
+      return;
+    }
     const textDraft = emptyStateDraft;
     const attachmentDraft = emptyStateAttachments.take();
     if ((!textDraft.trim() && attachmentDraft.length === 0) || !args.availableWorkspaceDir) {
       emptyStateAttachments.restore(attachmentDraft);
       return;
     }
+    emptyStateSendInFlightRef.current = true;
+    setEmptyStateSendPending(true);
     setEmptyStateDraft("");
     const title = textDraft.trim()
       ? textDraft.trim().slice(0, 50)
       : attachmentDraft.some((item) => item.attachment.kind === "image")
         ? "Image prompt"
         : "File prompt";
-    void args
-      .startSession({
-        provider: args.newSessionProvider,
-        cwd: args.availableWorkspaceDir,
-        title,
-        initialInput: textDraft,
-        initialAttachments: attachmentDraft.map((item) => item.attachment),
-        ...(args.startModeId ? { modeId: args.startModeId } : {}),
-        ...(args.startModelId ? { model: args.startModelId } : {}),
-        ...(args.startOptionValues ? { optionValues: args.startOptionValues } : {}),
-        ...(args.startReasoningId ? { reasoningId: args.startReasoningId } : {}),
-        ...(args.confirmCreateMissingWorkspace
-          ? { confirmCreateMissingWorkspace: args.confirmCreateMissingWorkspace }
-          : {}),
-      })
-      .then(() => {
-        emptyStateAttachments.release(attachmentDraft);
-      })
-      .catch(() => {
-        setEmptyStateDraft((current) => (current.trim() ? current : textDraft));
-        emptyStateAttachments.restore(attachmentDraft);
-      });
+    let createdSessionId: string | null = null;
+    const restoreNewTaskSubmission = () => {
+      setEmptyStateDraft((current) => (current.trim() ? current : textDraft));
+      emptyStateAttachments.restore(attachmentDraft);
+    };
+    void (async () => {
+      try {
+        const resolvedSessionId = await args.startSession({
+          provider: args.newSessionProvider,
+          cwd: args.availableWorkspaceDir,
+          title,
+          initialInput: textDraft,
+          initialAttachments: attachmentDraft.map((item) => item.attachment),
+          ...(args.startModeId ? { modeId: args.startModeId } : {}),
+          ...(args.startModelId ? { model: args.startModelId } : {}),
+          ...(args.startOptionValues ? { optionValues: args.startOptionValues } : {}),
+          ...(args.startReasoningId ? { reasoningId: args.startReasoningId } : {}),
+          ...(args.confirmCreateMissingWorkspace
+            ? { confirmCreateMissingWorkspace: args.confirmCreateMissingWorkspace }
+            : {}),
+          onSessionCreated: (sessionId) => {
+            createdSessionId = sessionId;
+          },
+        });
+        if (createdSessionId || resolvedSessionId) {
+          emptyStateAttachments.release(attachmentDraft);
+        } else {
+          restoreNewTaskSubmission();
+        }
+      } catch {
+        // A created Session is not proof that its first turn was accepted.
+        // Keep the user-owned draft whenever startup rejects so it can never
+        // disappear between Session creation and provider delivery.
+        restoreNewTaskSubmission();
+      } finally {
+        emptyStateSendInFlightRef.current = false;
+        setEmptyStateSendPending(false);
+      }
+    })();
   };
 
   const insertDraftReference = (reference: string) => {
@@ -296,6 +321,7 @@ export function useWorkbenchComposerState(args: {
     emptyStateAttachmentCount: emptyStateAttachments.count,
     emptyStateAttachmentUploadPending: emptyStateAttachments.uploading,
     emptyStateAttachmentError: emptyStateAttachments.error,
+    emptyStateSendPending,
     sendPending,
     setDraft,
     setEmptyStateDraft,

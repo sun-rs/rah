@@ -198,9 +198,8 @@ export function isReadOnlyReplaySession(state: StoredSessionState): boolean {
   );
 }
 
-export function workspaceDirsFromState(
+export function configuredWorkspaceDirs(
   rememberedWorkspaceDirs: readonly string[],
-  liveStates: readonly StoredSessionState[],
 ): string[] {
   const directories: string[] = [];
   const seen = new Set<string>();
@@ -213,6 +212,15 @@ export function workspaceDirsFromState(
     seen.add(key);
     directories.push(directory);
   }
+  return directories;
+}
+
+export function workspaceDirsFromState(
+  rememberedWorkspaceDirs: readonly string[],
+  liveStates: readonly StoredSessionState[],
+): string[] {
+  const directories = configuredWorkspaceDirs(rememberedWorkspaceDirs);
+  const seen = new Set(directories.map((directory) => canonicalDirectoryKey(directory)));
   for (const state of liveStates) {
     if (isReadOnlyReplaySession(state)) {
       continue;

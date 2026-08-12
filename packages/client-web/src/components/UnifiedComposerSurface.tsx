@@ -1,16 +1,26 @@
-import type { ReactNode } from "react";
+import type {
+  FocusEventHandler,
+  PointerEventHandler,
+  ReactNode,
+} from "react";
 
 export function UnifiedComposerSurface(props: {
   children: ReactNode;
   surface: "chat" | "new-task";
   isPwa?: boolean | undefined;
+  expanded?: boolean | undefined;
   className?: string | undefined;
+  onFocusCapture?: FocusEventHandler<HTMLDivElement> | undefined;
+  onPointerDownCapture?: PointerEventHandler<HTMLDivElement> | undefined;
 }) {
   return (
     <div
       className={`rah-unified-composer ${props.className ?? ""}`}
       data-surface={props.surface}
       data-pwa={props.isPwa ? "true" : "false"}
+      data-composer-expanded={props.expanded ? "true" : "false"}
+      onFocusCapture={props.onFocusCapture}
+      onPointerDownCapture={props.onPointerDownCapture}
     >
       {props.children}
     </div>
