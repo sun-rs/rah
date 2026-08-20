@@ -6,7 +6,9 @@ import {
   createCodexAppServerTranslationState,
   mapCodexPermissionResolution,
   mapCodexQuestionRequestToActivities,
+  codexSubmittedUserMessageActivity,
   recordCodexSubmittedUserMessage,
+  recordCodexSubmittedUserMessageForTurn,
   translateCodexAppServerNotification,
   translateCodexAppServerThreadSnapshot,
 } from "./codex-app-server-activity";
@@ -16,6 +18,7 @@ import {
   createCodexAggregateTimelineIdentity,
   createCodexTimelineIdentity,
 } from "./codex-timeline-identity";
+import { codexVisualArtifactPathFromId } from "./codex-visual-artifacts";
 
 function hasInvalidStreamObservation(items: ReturnType<typeof translateCodexAppServerNotification>): boolean {
   return items.some(
@@ -320,6 +323,35 @@ describe("translateCodexAppServerNotification", () => {
     if (completed[0]?.activity.type === "observation_completed") {
       assert.equal(completed[0].activity.observation.kind, "automation.run");
       assert.equal(completed[0].activity.observation.title, "Wait 5000ms");
+    }
+  });
+
+  test("maps generated image savedPath as a structured media artifact", () => {
+    const state = createCodexAppServerTranslationState();
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-image",
+          item: {
+            type: "imageGeneration",
+            id: "image-generation-1",
+            status: "completed",
+            result: "Generated image",
+            savedPath: "/workspace/results/chart.png",
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(completed[0]?.activity.type, "tool_call_completed");
+    if (completed[0]?.activity.type === "tool_call_completed") {
+      assert.equal(completed[0].activity.toolCall.family, "media");
+      assert.deepEqual(completed[0].activity.toolCall.detail?.artifacts[0], {
+        kind: "image",
+        path: "/workspace/results/chart.png",
+      });
     }
   });
 
@@ -943,6 +975,121 @@ describe("translateCodexAppServerNotification", () => {
     assert.deepEqual(activities, []);
   });
 
+  test("keeps multiple stable Web inputs in one provider turn distinct", () => {
+    const state = createCodexAppServerTranslationState();
+    recordCodexSubmittedUserMessage(state, {
+      text: "first prompt",
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+    const started = translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1" } },
+      },
+      state,
+    );
+    const guidedMessage = {
+      text: "guided prompt",
+      clientMessageId: "client-message-2",
+      clientTurnId: "client-turn-2",
+    };
+    recordCodexSubmittedUserMessageForTurn(state, "turn-1", guidedMessage);
+    const projectedGuide = codexSubmittedUserMessageActivity(state, {
+      turnId: "turn-1",
+      providerSessionId: "thread-1",
+      message: guidedMessage,
+    });
+
+    const firstEcho = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "client-message-1",
+            content: [{ type: "text", text: "first prompt" }],
+          },
+        },
+      },
+      state,
+    );
+    const guidedEcho = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "client-message-2",
+            content: [{ type: "text", text: "guided prompt" }],
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(
+      started.filter((item) => item.activity.type === "timeline_item").length,
+      1,
+    );
+    assert.deepEqual(firstEcho, []);
+    assert.deepEqual(
+      projectedGuide?.type === "timeline_item" ? projectedGuide.item : null,
+      {
+        kind: "user_message",
+        text: "guided prompt",
+        messageId: "client-message-2",
+        clientMessageId: "client-message-2",
+        clientTurnId: "client-turn-2",
+      },
+    );
+    assert.deepEqual(guidedEcho, []);
+  });
+
+  test("uses a native guide echo when it wins the steer response race", () => {
+    const state = createCodexAppServerTranslationState();
+    const guidedMessage = {
+      text: "guide before rpc response",
+      clientMessageId: "client-message-race",
+      clientTurnId: "client-turn-race",
+    };
+    recordCodexSubmittedUserMessageForTurn(state, "turn-race", guidedMessage);
+
+    const nativeEcho = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-race",
+          turnId: "turn-race",
+          item: {
+            type: "userMessage",
+            id: "native-guide-race",
+            clientUserMessageId: "client-message-race",
+            content: [{ type: "text", text: "guide before rpc response" }],
+          },
+        },
+      },
+      state,
+    );
+    const rpcContinuation = codexSubmittedUserMessageActivity(state, {
+      turnId: "turn-race",
+      providerSessionId: "thread-race",
+      message: guidedMessage,
+    });
+
+    assert.equal(
+      nativeEcho.filter(
+        (item) =>
+          item.activity.type === "timeline_item" &&
+          item.activity.item.kind === "user_message",
+      ).length,
+      1,
+    );
+    assert.equal(rpcContinuation, null);
+  });
+
   test("maps live image user messages without exposing data urls as text", () => {
     const state = createCodexAppServerTranslationState();
     const activities = translateCodexAppServerNotification(
@@ -1161,6 +1308,55 @@ describe("translateCodexAppServerNotification", () => {
         { kind: "text", text: "After" },
       ],
     });
+  });
+
+  test("binds live basename-only visuals to provider command path evidence", () => {
+    const state = createCodexAppServerTranslationState();
+    const visualPath =
+      ".codex/visualizations/2026/08/15/sxx-optimal-combinations/optimal-candidate-combinations.html";
+    translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-visual-evidence",
+          turnId: "turn-visual-evidence",
+          item: {
+            type: "commandExecution",
+            id: "command-visual-evidence",
+            command: "build visual",
+            cwd: "/workspace",
+            status: "completed",
+            aggregatedOutput: `wrote ${visualPath}`,
+            exitCode: 0,
+          },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-visual-evidence",
+          turnId: "turn-visual-evidence",
+          item: {
+            type: "agentMessage",
+            id: "assistant-visual-evidence",
+            text: '::codex-inline-vis{file="optimal-candidate-combinations.html"}',
+          },
+        },
+      },
+      state,
+    );
+    const timeline = completed.find((entry) => entry.activity.type === "timeline_item");
+    const item = timeline?.activity.type === "timeline_item"
+      ? timeline.activity.item
+      : undefined;
+    const artifactId = item?.kind === "assistant_message" && item.content?.[0]?.kind === "visual"
+      ? item.content[0].artifact.id
+      : undefined;
+
+    assert.equal(codexVisualArtifactPathFromId(artifactId ?? ""), visualPath);
   });
 
   test("preserves the app-server assistant message phase on completion", () => {

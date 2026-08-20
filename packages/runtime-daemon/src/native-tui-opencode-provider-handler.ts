@@ -83,13 +83,24 @@ function probeOpenCodeBinding(
   session: NativeTuiProviderRuntimeSession,
   historyCatalog: NativeTuiHistoryCatalog,
 ) {
+  const excludedProviderSessionIds = new Set(
+    session.excludedProviderSessionIds ?? [],
+  );
   const candidate = openCodeRecords(historyCatalog)
+    .filter(
+      (record) =>
+        !excludedProviderSessionIds.has(record.ref.providerSessionId),
+    )
     .filter((record) =>
       sameNativeTuiDirectory(record.ref.cwd ?? record.ref.rootDir, session.cwd),
     )
     .filter((record) => {
-      const updatedAt = Date.parse(record.ref.updatedAt ?? "");
-      return Number.isFinite(updatedAt) && updatedAt >= session.startupTimestampMs - 5_000;
+      // A new OpenCode process must create a new provider Session. An older
+      // Session can receive output during startup and therefore have a recent
+      // updatedAt; using that timestamp would bind this runtime to the wrong
+      // identity. createdAt is the ownership boundary for a Start operation.
+      const createdAt = Date.parse(record.ref.createdAt ?? "");
+      return Number.isFinite(createdAt) && createdAt >= session.startupTimestampMs;
     })
     .sort((left, right) =>
       (right.ref.updatedAt ?? "").localeCompare(left.ref.updatedAt ?? ""),
@@ -101,6 +112,7 @@ function probeOpenCodeBinding(
   return {
     providerSessionId: candidate.ref.providerSessionId,
     record: candidate,
+    authority: "history_probe" as const,
   };
 }
 

@@ -7,12 +7,14 @@ function readSource(relativePath: string): string {
 }
 
 describe("conversation resource card contract", () => {
-  test("keeps outputs in Inspector instead of duplicating them in the chat stream", () => {
+  test("previews visual outputs while keeping the generic output index in Inspector", () => {
     const chatThreadSource = readSource("./ChatThread.tsx");
     const conversationFeedSource = readSource("../../conversation-feed.ts");
 
     assert.doesNotMatch(chatThreadSource, /ConversationOutputsCard/);
     assert.doesNotMatch(conversationFeedSource, /kind: "turn_outputs"/);
+    assert.match(chatThreadSource, /ConversationVisualOutputGallery/);
+    assert.match(conversationFeedSource, /kind: "turn_visual_outputs"/);
   });
 
   test("keeps changed files visible with turn totals and a bounded reveal batch", () => {

@@ -229,9 +229,9 @@ def main() -> int:
             progress("parent opened in desktop browser")
 
             open_session_actions(page)
-            expect(page.get_by_role("button", name="Continue in new task", exact=True)).to_be_visible()
-            expect(page.get_by_role("button", name="Open Side task", exact=True)).to_be_visible()
-            page.get_by_role("button", name="Open Side task", exact=True).click()
+            expect(page.get_by_role("button", name="Fork", exact=True)).to_be_visible()
+            expect(page.get_by_role("button", name="Side", exact=True)).to_be_visible()
+            page.get_by_role("button", name="Side", exact=True).click()
             try:
                 side = wait_for_child(base_url, management_token, parent_id, "side")
             except Exception:
@@ -303,7 +303,7 @@ def main() -> int:
             page.get_by_role("button", name="Close canvas view", exact=True).click()
             open_live_session(page, parent_id)
             open_session_actions(page)
-            page.get_by_role("button", name="Continue in new task", exact=True).click()
+            page.get_by_role("button", name="Fork", exact=True).click()
             fork = wait_for_child(base_url, management_token, parent_id, "fork")
             fork_id = fork["id"]
             progress(f"persistent fork created: {fork_id}")

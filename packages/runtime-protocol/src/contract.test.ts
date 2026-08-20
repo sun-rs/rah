@@ -454,6 +454,40 @@ test("native TUI prompt state events use canonical values", () => {
   );
 });
 
+test("Session input acceptance receipts require stable non-empty identities", () => {
+  const valid = validateRahEvent({
+    id: "evt-input-accepted-1",
+    seq: 1,
+    ts: "2026-08-13T00:00:00.000Z",
+    sessionId: "session-1",
+    type: "session.input.accepted",
+    source: { provider: "system", channel: "system", authority: "authoritative" },
+    payload: {
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    },
+  });
+  assert.equal(valid.some((issue) => issue.severity === "error"), false);
+
+  const invalid = validateRahEvent({
+    id: "evt-input-accepted-2",
+    seq: 2,
+    ts: "2026-08-13T00:00:01.000Z",
+    sessionId: "session-1",
+    type: "session.input.accepted",
+    source: { provider: "system", channel: "system", authority: "authoritative" },
+    payload: { clientMessageId: "", clientTurnId: "" },
+  });
+  assert.equal(
+    invalid.some((issue) => issue.code === "session.input.accepted.message_id.invalid"),
+    true,
+  );
+  assert.equal(
+    invalid.some((issue) => issue.code === "session.input.accepted.turn_id.invalid"),
+    true,
+  );
+});
+
 test("assistant timeline messages accept only canonical message phases", () => {
   const baseEvent = {
     id: "evt-assistant-phase",

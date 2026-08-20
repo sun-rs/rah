@@ -4,7 +4,6 @@ import {
   isInlinePanelTier,
   resolveResponsiveTier,
   resolveSidePanelOpenForTier,
-  resolveTurnFileOpenSurface,
 } from "./responsive-layout";
 
 test("responsive layout has one compact, medium, and wide boundary contract", () => {
@@ -30,10 +29,4 @@ test("reports only the side-panel state used by the current tier", () => {
   assert.equal(resolveSidePanelOpenForTier("medium", true, false, "wide"), false);
   assert.equal(resolveSidePanelOpenForTier("medium", false, true, "wide"), true);
   assert.equal(resolveSidePanelOpenForTier("wide", true, false, "wide"), true);
-});
-
-test("keeps turn-file previews transient when Inspector would be a full-screen overlay", () => {
-  assert.equal(resolveTurnFileOpenSurface("compact"), "transient-viewer");
-  assert.equal(resolveTurnFileOpenSurface("medium"), "transient-viewer");
-  assert.equal(resolveTurnFileOpenSurface("wide"), "inspector");
 });

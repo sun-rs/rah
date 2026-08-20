@@ -37,17 +37,14 @@ test("renders PWA compatibility recovery as one compact row", () => {
       compact: true,
       id: "runtime-compatibility",
       errorDescriptor: {
-        title: "RAH daemon restart required",
-        body: "Verbose generation mismatch diagnostics",
-        compactTitle: "Restart RAH to update",
-        compactBody: "Restart it on the host, then retry.",
-        compactPrimaryLabel: "Retry",
-        primaryAction: "refresh",
+        title: "Restart RAH to update",
+        body: "Restart it on the host, then refresh this page.",
       },
       selectedSummary: null,
       onRefresh: () => undefined,
       onClaimControl: () => undefined,
       onDismiss: () => undefined,
+      dismissLabel: "Mute today",
     }),
   );
 
@@ -61,11 +58,13 @@ test("renders PWA compatibility recovery as one compact row", () => {
   assert.match(styles, /var\(--rah-recovery-orange\) 82%, var\(--app-fg\)/);
   assert.match(styles, /box-shadow: none/);
   assert.match(source, /pwaTop\s*\? "p-1"/);
+  assert.match(markup, /hidden line-clamp-2[^\"]*sm:block/);
+  assert.match(markup, /whitespace-nowrap/);
   assert.match(markup, /Restart RAH to update/);
-  assert.match(markup, /Restart it on the host, then retry\./);
-  assert.match(markup, />Retry</);
-  assert.doesNotMatch(markup, /Verbose generation mismatch diagnostics/);
-  assert.match(markup, /aria-label="Dismiss notice"/);
+  assert.match(markup, /Restart it on the host, then refresh this page\./);
+  assert.doesNotMatch(markup, />Retry</);
+  assert.match(markup, />Mute today</);
+  assert.match(markup, /aria-label="Mute today"/);
 });
 
 test("anchors PWA recovery below the single workbench header contract", () => {
@@ -104,17 +103,14 @@ test("renders desktop corner recovery as a small inline toast", () => {
       cornerCompact: true,
       id: "runtime-compatibility",
       errorDescriptor: {
-        title: "RAH daemon restart required",
-        body: "Verbose generation mismatch diagnostics",
-        compactTitle: "Restart RAH to update",
-        compactBody: "Restart it on the host, then retry.",
-        compactPrimaryLabel: "Retry",
-        primaryAction: "refresh",
+        title: "Restart RAH to update",
+        body: "Restart it on the host, then refresh this page.",
       },
       selectedSummary: null,
       onRefresh: () => undefined,
       onClaimControl: () => undefined,
       onDismiss: () => undefined,
+      dismissLabel: "Mute today",
     }),
   );
 
@@ -122,10 +118,10 @@ test("renders desktop corner recovery as a small inline toast", () => {
   assert.match(markup, /rah-recovery-notice/);
   assert.doesNotMatch(markup, /shadow-|backdrop-blur|bg-primary|text-primary-foreground/);
   assert.match(markup, /Restart RAH to update/);
-  assert.match(markup, /Restart it on the host, then retry\./);
-  assert.doesNotMatch(markup, /Verbose generation mismatch diagnostics/);
-  assert.match(markup, />Retry</);
-  assert.match(markup, /aria-label="Dismiss notice"/);
+  assert.match(markup, /Restart it on the host, then refresh this page\./);
+  assert.doesNotMatch(markup, />Retry</);
+  assert.match(markup, />Mute today</);
+  assert.match(markup, /aria-label="Mute today"/);
 });
 
 test("keeps simultaneous global notices in one upward-growing host", () => {

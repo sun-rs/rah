@@ -15,8 +15,10 @@ export function ProviderLogo(props: {
   provider: ProviderName;
   className?: string;
   variant?: "card" | "bare";
+  showNativeTitle?: boolean;
 }) {
   const label = providerLabel(props.provider);
+  const nativeTitle = props.showNativeTitle === false ? undefined : label;
   const variant = props.variant ?? "card";
   const sizeClassName = props.className ?? "h-5 w-5";
   const baseClassName =
@@ -30,7 +32,7 @@ export function ProviderLogo(props: {
 
   if (props.provider === "opencode") {
     return (
-      <span className={baseClassName} title={label}>
+      <span className={baseClassName} title={nativeTitle}>
         <img src={implementedProviderLogoRegistry.opencodeLight} alt={`${label} logo`} className={imageClassName} />
       </span>
     );
@@ -44,14 +46,17 @@ export function ProviderLogo(props: {
         : undefined;
   if (logo) {
     return (
-      <span className={baseClassName} title={label}>
+      <span className={baseClassName} title={nativeTitle}>
         <img src={logo} alt={`${label} logo`} className={imageClassName} />
       </span>
     );
   }
 
   return (
-    <span className={`${baseClassName} text-[10px] font-bold text-[var(--app-hint)]`} title={label}>
+    <span
+      className={`${baseClassName} text-[10px] font-bold text-[var(--app-hint)]`}
+      title={nativeTitle}
+    >
       {PROVIDER_FALLBACK_LABEL[props.provider]}
     </span>
   );

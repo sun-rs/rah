@@ -1,5 +1,12 @@
 import { useCallback, useState } from "react";
 import { clearLastHistorySelection } from "../history-selection";
+import {
+  acknowledgeSessionConversationNavigationRequest,
+  advanceSessionConversationNavigationRequest,
+  TAIL_SESSION_NAVIGATION_TARGET,
+  type SessionConversationNavigationRequest,
+  type SessionConversationNavigationTarget,
+} from "../session-conversation-navigation";
 
 export type WorkbenchMode = "single" | "canvas" | "council";
 
@@ -21,10 +28,26 @@ export function resolveModeAfterCanvasExit(target: {
 
 export function useWorkbenchPageController(options: WorkbenchPageControllerOptions) {
   const [mode, setMode] = useState<WorkbenchMode>("single");
-  const [sessionNavigationRevision, setSessionNavigationRevision] = useState(0);
+  const [sessionNavigationRequest, setSessionNavigationRequest] =
+    useState<SessionConversationNavigationRequest>({
+      revision: 0,
+      sessionId: null,
+      target: TAIL_SESSION_NAVIGATION_TARGET,
+    });
 
-  const markSessionNavigation = useCallback(() => {
-    setSessionNavigationRevision((revision) => revision + 1);
+  const markSessionNavigation = useCallback((
+    sessionId: string | null,
+    target: SessionConversationNavigationTarget = TAIL_SESSION_NAVIGATION_TARGET,
+  ) => {
+    setSessionNavigationRequest((current) =>
+      advanceSessionConversationNavigationRequest(current, sessionId, target),
+    );
+  }, []);
+
+  const acknowledgeSessionNavigation = useCallback((revision: number) => {
+    setSessionNavigationRequest((current) =>
+      acknowledgeSessionConversationNavigationRequest(current, revision),
+    );
   }, []);
 
   const closeRightPanels = useCallback(() => {
@@ -32,8 +55,12 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
     options.setRightOpen(false);
   }, [options.setRightOpen, options.setRightSidebarOpen]);
 
-  const openSession = useCallback((_workspaceDir: string, sessionId: string) => {
-    markSessionNavigation();
+  const openSession = useCallback((
+    _workspaceDir: string,
+    sessionId: string,
+    target: SessionConversationNavigationTarget = TAIL_SESSION_NAVIGATION_TARGET,
+  ) => {
+    markSessionNavigation(sessionId, target);
     setMode("single");
     options.setSelectedWorkspaceOnlyDir(null);
     options.setSelectedCouncilId(null);
@@ -88,7 +115,7 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
   }, [closeRightPanels, options.setLeftOpen, options.setSelectedCouncilId]);
 
   const prepareHistorySession = useCallback(() => {
-    markSessionNavigation();
+    markSessionNavigation(null);
     setMode("single");
     options.setLeftOpen(false);
   }, [markSessionNavigation, options.setLeftOpen]);
@@ -137,7 +164,9 @@ export function useWorkbenchPageController(options: WorkbenchPageControllerOptio
 
   return {
     mode,
-    sessionNavigationRevision,
+    sessionNavigationRevision: sessionNavigationRequest.revision,
+    sessionNavigationRequest,
+    acknowledgeSessionNavigation,
     openSession,
     openWorkspace,
     openCouncil,

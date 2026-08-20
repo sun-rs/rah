@@ -57,6 +57,21 @@ export function resolveSyncFlushPlan(args: {
     : { kind: "timer", delayMs: Math.ceil(remainingMs) };
 }
 
+export function shouldCollectUnreadEventsFromBatch(args: {
+  initial: boolean | undefined;
+  replay: boolean | undefined;
+  hasReplayCursor: boolean;
+}): boolean {
+  if (!args.replay) {
+    return args.initial !== true;
+  }
+  // Every reconnect replay is flagged `initial` by the socket protocol. When
+  // the client supplied a cursor, however, that replay is exactly the activity
+  // missed while iOS suspended the PWA and must retain per-session ownership.
+  // A cursorless first-load replay is historical baseline and stays read.
+  return args.hasReplayCursor;
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -97,6 +112,7 @@ function createLinkedAbortController(signal: AbortSignal | undefined): {
 type SessionSyncState = {
   projections: Map<string, SessionProjection>;
   unreadSessionIds: Set<string>;
+  visibleSessionIds?: Set<string>;
   selectedSessionId: string | null;
   workspaceVisibilityVersion: number;
   sessionTopologyVersion: number;
@@ -416,6 +432,76 @@ function findLiveProjectionForReplay(
   return null;
 }
 
+function pendingResumeTransferSource(
+  state: SessionSyncState,
+  preservedByCurrentBatch: SessionProjection | null,
+): SessionProjection | null {
+  if (preservedByCurrentBatch) {
+    return preservedByCurrentBatch;
+  }
+  if (state.pendingSessionAction?.kind === "resume_history") {
+    const pendingSource = state.projections.get(state.pendingSessionAction.sessionId);
+    if (pendingSource) {
+      return pendingSource;
+    }
+  }
+  const selectedProjection = state.selectedSessionId
+    ? state.projections.get(state.selectedSessionId)
+    : undefined;
+  // A lost/late Resume HTTP response may clear the pending action after the
+  // daemon has already replaced the stored replay. The selected stored source
+  // still carries the stable provider identity needed to finish that handoff.
+  return selectedProjection?.summary.session.runtime?.kind === "stored_history"
+    ? selectedProjection
+    : null;
+}
+
+function transferResumedReplayToLiveProjection(args: {
+  state: SessionSyncState;
+  projections: Map<string, SessionProjection>;
+  source: SessionProjection | null;
+}): {
+  projections: Map<string, SessionProjection>;
+  selectedSessionId: string | null;
+  transferred: boolean;
+} {
+  if (!args.source) {
+    return {
+      projections: args.projections,
+      selectedSessionId: args.state.selectedSessionId,
+      transferred: false,
+    };
+  }
+  const liveProjection = findLiveProjectionForReplay(args.projections, args.source);
+  if (!liveProjection) {
+    return {
+      projections: args.projections,
+      selectedSessionId: args.state.selectedSessionId,
+      transferred: false,
+    };
+  }
+  const sourceSessionId = args.source.summary.session.id;
+  const liveSessionId = liveProjection.summary.session.id;
+  const next = new Map(args.projections);
+  next.delete(sourceSessionId);
+  next.set(
+    liveSessionId,
+    mergeResumedHistoryProjection(
+      liveProjection.summary,
+      args.source,
+      liveProjection,
+    ),
+  );
+  return {
+    projections: next,
+    selectedSessionId:
+      args.state.selectedSessionId === sourceSessionId
+        ? liveSessionId
+        : args.state.selectedSessionId,
+    transferred: true,
+  };
+}
+
 function eventsMayChangeSessionTopology(events: readonly RahEvent[]): boolean {
   return events.some(
     (event) =>
@@ -438,13 +524,24 @@ export function applyProjectionEventsToSyncState(args: {
     ? null
     : selectedSessionClosedByEvents(args.state, args.events);
   const projections = args.applyEventsToMap(args.state.projections, args.events);
-  const sessionTopologyVersion = eventsMayChangeSessionTopology(args.events)
+  const resumeSource = pendingResumeTransferSource(
+    args.state,
+    resumedReplay,
+  );
+  const transfer = transferResumedReplayToLiveProjection({
+    state: args.state,
+    projections,
+    source: resumeSource,
+  });
+  const topologyChanged =
+    eventsMayChangeSessionTopology(args.events) || transfer.transferred;
+  const sessionTopologyVersion = topologyChanged
     ? args.state.sessionTopologyVersion + 1
     : args.state.sessionTopologyVersion;
-  if (!resumedReplay && !stoppedReplay) {
+  if (transfer.transferred) {
     return {
-      projections,
-      selectedSessionId: args.state.selectedSessionId,
+      projections: transfer.projections,
+      selectedSessionId: transfer.selectedSessionId,
       sessionTopologyVersion,
     };
   }
@@ -461,23 +558,6 @@ export function applyProjectionEventsToSyncState(args: {
     return {
       projections,
       selectedSessionId: args.state.selectedSessionId,
-      sessionTopologyVersion,
-    };
-  }
-  const liveProjection = findLiveProjectionForReplay(projections, resumedReplay);
-  if (liveProjection) {
-    const next = new Map(projections);
-    next.set(
-      liveProjection.summary.session.id,
-      mergeResumedHistoryProjection(
-        liveProjection.summary,
-        resumedReplay,
-        liveProjection,
-      ),
-    );
-    return {
-      projections: next,
-      selectedSessionId: liveProjection.summary.session.id,
       sessionTopologyVersion,
     };
   }
@@ -536,6 +616,7 @@ export async function recoverFromReplayGapCommand(args: {
     events: RahEvent[],
   ) => Map<string, SessionProjection>;
   ensureConversationLoaded: (sessionId: string) => Promise<void>;
+  listSessions?: typeof api.listSessions;
 }) {
   args.clearPendingEvents();
   if (
@@ -546,7 +627,9 @@ export async function recoverFromReplayGapCommand(args: {
   }
   const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
   const sessionTopologyVersionAtRequest = args.get().sessionTopologyVersion;
-  const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
+  const sessionsResponse = await (args.listSessions ?? api.listSessions)({
+    storedSessions: "recent",
+  });
   args.set((state) => {
     if (shouldSkipSessionsResponse(state, sessionTopologyVersionAtRequest)) {
       const projectionState = applyProjectionEventsToSyncState({
@@ -575,12 +658,17 @@ export async function recoverFromReplayGapCommand(args: {
       ...projectionState,
       error:
         `Event stream replay gap detected. Requested seq ${args.batch.replayGap?.requestedFromSeq ?? "unknown"}, ` +
-        `oldest available ${args.batch.replayGap?.oldestAvailableSeq ?? "unknown"}. Session views were rebuilt from current state.`,
+        `oldest available ${args.batch.replayGap?.oldestAvailableSeq ?? "unknown"}. ` +
+        "Readable conversation baselines were kept while visible sessions catch up.",
     };
   });
-  const selectedSessionId = args.get().selectedSessionId;
-  if (selectedSessionId) {
-    void args.ensureConversationLoaded(selectedSessionId);
+  const recoveredState = args.get();
+  const catchUpSessionIds = new Set(recoveredState.visibleSessionIds ?? []);
+  if (recoveredState.selectedSessionId) {
+    catchUpSessionIds.add(recoveredState.selectedSessionId);
+  }
+  for (const sessionId of catchUpSessionIds) {
+    void args.ensureConversationLoaded(sessionId);
   }
 }
 
@@ -768,6 +856,26 @@ export function connectStoreSyncTransport(args: {
     const hidden =
       typeof document !== "undefined" &&
       document.visibilityState === "hidden";
+    // Lifecycle events and canonical conversation deltas are the state plane:
+    // Start/Resume HTTP completion may be racing this exact batch. Applying it
+    // synchronously closes the hand-off window in which an HTTP snapshot can
+    // initialize an older baseline and a newly selected PWA chat never renders
+    // the provider answer. Frame/timer batching remains for pure data-plane
+    // traffic and larger replay tails.
+    const projections = args.getNotificationProjections();
+    const closesConversationHandoff = pendingConversationDeltas.some(
+      (delta) => !projections.get(delta.sessionId)?.conversation,
+    );
+    if (
+      !hidden &&
+      closesConversationHandoff &&
+      pendingProjectionEvents.length <= MAX_SYNC_EVENTS_PER_FLUSH &&
+      pendingConversationDeltas.length <= MAX_SYNC_DELTAS_PER_FLUSH &&
+      pendingProjectionEventBytes <= MAX_SYNC_EVENT_BYTES_PER_FLUSH
+    ) {
+      runFlush();
+      return;
+    }
     const plan = resolveSyncFlushPlan({
       hidden,
       elapsedSinceLastFlushMs:
@@ -820,6 +928,7 @@ export function connectStoreSyncTransport(args: {
     getReplayFromSeq: args.getReplayFromSeq,
     isInitialLoaded: args.isInitialLoaded,
     onBatch: (batch) => {
+      const hasReplayCursor = args.getReplayFromSeq() !== undefined;
       const splitEvents = splitProjectionTransportEvents(batch.events ?? []);
       const projectionEvents = splitEvents.projectionEvents;
       const conversationDeltas = batch.conversationDeltas ?? [];
@@ -842,7 +951,13 @@ export function connectStoreSyncTransport(args: {
         0,
       );
       appendPendingValues(pendingConversationDeltas, conversationDeltas);
-      if (!batch.initial && !batch.replay) {
+      if (
+        shouldCollectUnreadEventsFromBatch({
+          initial: batch.initial,
+          replay: batch.replay,
+          hasReplayCursor,
+        })
+      ) {
         appendPendingValues(pendingUnreadEvents, projectionEvents);
       }
       if (

@@ -8,13 +8,16 @@ import {
 } from "./file-preview-utils";
 
 describe("file preview utils", () => {
-  test("detects image, table, notebook, markdown, and text previews", () => {
+  test("detects image, table, notebook, markdown, HTML, and text previews", () => {
     assert.equal(resolveFilePreviewKind("/tmp/chart.png", undefined), "image");
     assert.equal(resolveFilePreviewKind("/tmp/data.csv", undefined), "table");
     assert.equal(resolveFilePreviewKind("/tmp/book.ipynb", undefined), "notebook");
     assert.equal(resolveFilePreviewKind("/tmp/readme.md", undefined), "markdown");
     assert.equal(resolveFilePreviewKind("/tmp/notes.markdown", undefined), "markdown");
     assert.equal(resolveFilePreviewKind("/tmp/readme.txt", "text/markdown"), "markdown");
+    assert.equal(resolveFilePreviewKind("/tmp/report.html", undefined), "html");
+    assert.equal(resolveFilePreviewKind("/tmp/report.htm", undefined), "html");
+    assert.equal(resolveFilePreviewKind("/tmp/report.txt", "text/html"), "html");
     assert.equal(resolveFilePreviewKind("/tmp/readme.txt", undefined), "text");
   });
 

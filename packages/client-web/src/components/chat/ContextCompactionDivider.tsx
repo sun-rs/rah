@@ -4,16 +4,18 @@ import { ArrowUpToLine } from "lucide-react";
 export function ContextCompactionDivider(props: {
   item: Extract<TimelineItem, { kind: "compaction" }>;
 }) {
+  const active = props.item.status === "started";
   const countSuffix =
     props.item.count && props.item.count > 1 ? ` · ${props.item.count} passes` : "";
   const triggerSuffix = props.item.trigger ? ` · ${props.item.trigger}` : "";
   const label = `${
-    props.item.status === "started" ? "Compacting context" : "Context compacted"
+    active ? "Compacting context" : "Context compacted"
   }${countSuffix}${triggerSuffix}`;
   return (
     <div
       className="assistant-process-compaction flex min-w-0 items-center gap-2 text-xs font-medium text-[var(--app-hint)]"
       data-testid="context-compaction-divider"
+      data-status={active ? "running" : "completed"}
       role="separator"
       aria-label={label}
     >
@@ -26,7 +28,7 @@ export function ContextCompactionDivider(props: {
         <span className="inline-flex h-5 w-5 items-center justify-center" aria-hidden="true">
           <ArrowUpToLine size={12} aria-hidden="true" />
         </span>
-        <span>{label}</span>
+        <span className={active ? "assistant-process-active-text" : undefined}>{label}</span>
       </span>
       <span
         aria-hidden="true"

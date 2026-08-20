@@ -30,6 +30,7 @@ import { requestCodexThreadResumeWithoutTranscript } from "./codex-app-server-re
 import { setSessionSideLifecycleState } from "./session-side-lifecycle";
 import {
   deleteRuntimeQueuedInput,
+  publishSessionInputAccepted,
   publishSessionInputQueue,
 } from "./session-input-queue";
 import {
@@ -270,6 +271,26 @@ function isSubagentLifecycleObservation(activity: ProviderActivity): boolean {
   );
 }
 
+/**
+ * Subagent lifecycle notifications describe work inside the public main turn.
+ * Codex reports the nested agent's own turn id, but exposing that id to the
+ * canonical projector creates a second top-level turn with no user message or
+ * final answer. Always correlate visible subagent activity to the active main
+ * turn instead.
+ */
+export function normalizeCodexSubagentObservationTurn(
+  activity: ProviderActivity,
+  currentTurnId: string | null,
+): ProviderActivity {
+  if (!currentTurnId || !isSubagentLifecycleObservation(activity)) {
+    return activity;
+  }
+  return {
+    ...activity,
+    turnId: currentTurnId,
+  } as ProviderActivity;
+}
+
 function isForeignProviderSessionActivity(args: {
   activity: ProviderActivity;
   providerSessionId?: string | undefined;
@@ -326,6 +347,12 @@ export function shouldApplyCodexTranslatedActivity(args: {
   providerSessionId?: string | undefined;
   mainProviderSessionId?: string | undefined;
 }): boolean {
+  if (isSubagentLifecycleObservation(args.activity) && !args.currentTurnId) {
+    // A delayed nested-agent completion after the main turn has settled has no
+    // public turn to belong to. Native history already carries the completed
+    // main-turn summary, so accepting this event would create an orphan row.
+    return false;
+  }
   if (isForeignProviderSessionActivity(args)) {
     return false;
   }
@@ -398,7 +425,13 @@ async function applyCodexLiveTranslatedItems(
       continue;
     }
     const activity = attachCurrentTurn(
-      normalizeCurrentTurnLifecycle(item.activity, liveSession.currentTurnId),
+      normalizeCurrentTurnLifecycle(
+        normalizeCodexSubagentObservationTurn(
+          item.activity,
+          liveSession.currentTurnId,
+        ),
+        liveSession.currentTurnId,
+      ),
       liveSession.currentTurnId,
     );
     const events = await applyProviderActivityAsync(
@@ -420,6 +453,12 @@ async function applyCodexLiveTranslatedItems(
     ) {
       const clientMessageId = activity.item.clientMessageId;
       if (deleteRuntimeQueuedInput(liveSession.queuedInputs, clientMessageId)) {
+        publishSessionInputAccepted(services, liveSession.sessionId, {
+          clientMessageId,
+          ...(activity.item.clientTurnId
+            ? { clientTurnId: activity.item.clientTurnId }
+            : {}),
+        });
         if (
           liveSession.queuedInputSubmission?.clientMessageId === clientMessageId
         ) {
@@ -450,6 +489,7 @@ async function applyCodexLiveTranslatedItems(
               queuedInputSubmission.clientMessageId,
             )
           ) {
+            publishSessionInputAccepted(services, liveSession.sessionId, queuedInputSubmission);
             publishSessionInputQueue(
               services,
               liveSession.sessionId,

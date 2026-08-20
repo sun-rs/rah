@@ -532,6 +532,10 @@ export type RahEventPayloadMap = {
     queuedInputCount?: number;
   };
   "session.input_queue.changed": { items: SessionQueuedInput[] };
+  "session.input.accepted": {
+    clientMessageId: string;
+    clientTurnId?: string;
+  };
   "session.input_queue.policy_changed": { policy: SessionInputQueuePolicy };
   "session.exited": { exitCode?: number; signal?: string };
   "session.failed": { error: string };

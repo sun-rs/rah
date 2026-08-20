@@ -113,8 +113,8 @@ Desktop 的编译后前端只能证明当前产品如何消费协议，不能替
 
 RAH 的 Fork 和 Side 都必须调用 provider-native `thread/fork`，不能复制已经渲染的 Chat 文本来伪造上下文：
 
-- “Continue in new task” 使用 `threadSource: "fork"`，创建持久化同工作区 Fork；它有独立 thread identity，出现在 Chats，父 session 关闭后仍保留。
-- “Open Side task” 使用 `threadSource: "sideConversation"` 与 `ephemeral: true`，创建临时 Side thread；RAH 同时写入 Side developer instructions 和明确的 conversation boundary，继承历史只作为参考，不能自动延续父任务。
+- Session 菜单中的 “Fork” 使用 `threadSource: "fork"`，创建持久化同工作区 Fork；它有独立 thread identity，出现在 Chats，父 session 关闭后仍保留。
+- Session 菜单中的 “Side” 使用 `threadSource: "sideConversation"` 与 `ephemeral: true`，创建临时 Side thread；RAH 同时写入 Side developer instructions 和明确的 conversation boundary，继承历史只作为参考，不能自动延续父任务。
 - 两者都可传 `lastTurnId` 固定分支点，并继承父 thread 的 cwd、model、reasoning、approval 与 sandbox 设置。
 - 当前只开放 `workspaceMode: "shared"`。在 RAH 具备完整 Git worktree 创建、清理和冲突处理生命周期前，不暴露 worktree Fork。
 

@@ -1574,14 +1574,15 @@ describe("workspace response reconciliation", () => {
     }
   });
 
-  test("marks unselected sessions unread for meaningful events and clears the selected session", () => {
+  test("marks only completed background turns unread and clears the visible session", () => {
     const unread = computeUnreadSessionIds(
       new Set<string>(["session:selected"]),
       new Set<string>(["session:selected"]),
       [
         event("timeline.item.added", "session:other"),
         event("tool.call.completed", "session:other"),
-        event("timeline.item.added", "session:selected"),
+        event("turn.completed", "session:other"),
+        event("turn.completed", "session:selected"),
       ],
     );
 
@@ -1593,12 +1594,28 @@ describe("workspace response reconciliation", () => {
       new Set<string>(),
       new Set<string>(["session:visible"]),
       [
-        event("timeline.item.added", "session:stale-selected"),
-        event("timeline.item.added", "session:visible"),
+        event("turn.completed", "session:stale-selected"),
+        event("turn.completed", "session:visible"),
       ],
     );
 
     assert.deepEqual([...unread], ["session:stale-selected"]);
+  });
+
+  test("does not paint running sessions blue for background process traffic", () => {
+    const unread = computeUnreadSessionIds(
+      new Set<string>(),
+      new Set<string>(),
+      [
+        event("timeline.item.added", "session:a"),
+        event("message.part.delta", "session:a"),
+        event("tool.call.completed", "session:b"),
+        event("observation.completed", "session:c"),
+        event("notification.emitted", "session:d"),
+      ],
+    );
+
+    assert.deepEqual([...unread], []);
   });
 
   test("rebuilds unread from this browser last-seen state after foreground catch-up", () => {
@@ -1610,7 +1627,11 @@ describe("workspace response reconciliation", () => {
         {
           key: "assistant:unread",
           kind: "timeline",
-          item: { kind: "assistant_message", text: "new reply" },
+          item: {
+            kind: "assistant_message",
+            text: "new reply",
+            phase: "final_answer",
+          },
           ts: "2026-04-21T00:01:00.000Z",
         },
       ];
@@ -1619,7 +1640,11 @@ describe("workspace response reconciliation", () => {
         {
           key: "assistant:visible",
           kind: "timeline",
-          item: { kind: "assistant_message", text: "visible reply" },
+          item: {
+            kind: "assistant_message",
+            text: "visible reply",
+            phase: "final_answer",
+          },
           ts: "2026-04-21T00:02:00.000Z",
         },
       ];
@@ -1661,7 +1686,11 @@ describe("workspace response reconciliation", () => {
         {
           key: "assistant:stale",
           kind: "timeline",
-          item: { kind: "assistant_message", text: "old reply" },
+          item: {
+            kind: "assistant_message",
+            text: "old reply",
+            phase: "final_answer",
+          },
           ts: "2026-04-21T00:01:00.000Z",
         },
       ];

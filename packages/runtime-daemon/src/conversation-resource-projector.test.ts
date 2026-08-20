@@ -623,4 +623,39 @@ describe("conversation resource projector", () => {
     );
     assert.deepEqual(resources.sources, []);
   });
+
+  test("infers only standalone local image links as visual outputs", () => {
+    const final = item(
+      "final",
+      "completed",
+      {
+        kind: "timeline",
+        item: {
+          kind: "assistant_message",
+          phase: "final_answer",
+          text: [
+            "资金曲线：[portfolio.png](/workspace/results/portfolio.png)",
+            "[comparison](</workspace/results/comparison chart.webp>)",
+            "See [inline.png](/workspace/results/inline.png) for the detailed explanation.",
+            "```md",
+            "[example.png](/workspace/results/example.png)",
+            "```",
+            "[remote](https://example.com/remote.png)",
+          ].join("\n"),
+        },
+      },
+      { role: "final" },
+    );
+
+    assert.deepEqual(
+      projectConversationTurnResources([final]).outputs.map((output) => [
+        output.path,
+        output.confidence,
+      ]),
+      [
+        ["/workspace/results/comparison chart.webp", "inferred"],
+        ["/workspace/results/portfolio.png", "inferred"],
+      ],
+    );
+  });
 });

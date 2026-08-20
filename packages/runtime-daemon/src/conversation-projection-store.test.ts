@@ -387,7 +387,7 @@ test("history cache expansion does not advance the live delta revision", () => {
   store.close();
 });
 
-test("resident live projection overlays a history baseline without storing the baseline", () => {
+test("resident live projection overlays a history baseline in semantic turn order without storing it", () => {
   const eventBus = new EventBus();
   const store = new ConversationProjectionStore(eventBus);
   eventBus.publish({
@@ -454,7 +454,7 @@ test("resident live projection overlays a history baseline without storing the b
         ? item.content.item.text
         : "",
     ),
-    ["history final", "live process"],
+    ["live process", "history final"],
   );
   assert.deepEqual(
     store.snapshot("session-1").turns[0]?.items.map((item) =>

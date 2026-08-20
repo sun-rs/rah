@@ -10,9 +10,18 @@ import {
   deriveComposerSurface,
   shouldShowComposerStopAction,
 } from "./composer-contract";
+import {
+  preserveDiscardedCompositionAcrossScopeChange,
+  resolveExternalTextareaValueSync,
+  shouldDiscardOrphanedCompositionInput,
+} from "./components/TokenizedTextarea";
 
 function readSource(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
+
+function readStyleBundle(): string {
+  return `${readSource("./styles.css")}\n${readSource("./composer-styles.css")}`;
 }
 
 function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
@@ -451,6 +460,90 @@ describe("composer contract", () => {
     assert.doesNotMatch(source, /measurementRef|measureRequiredContentHeight/);
   });
 
+  test("accepted Send clears an iOS composition buffer before compositionend", () => {
+    assert.deepEqual(
+      resolveExternalTextareaValueSync({
+        externalValue: "",
+        lastEmittedValue: "question owned by the parent draft",
+        isComposing: true,
+      }),
+      { kind: "apply", value: "", discardCompositionEnd: true },
+    );
+    assert.deepEqual(
+      resolveExternalTextareaValueSync({
+        externalValue: "",
+        lastEmittedValue: "question whose click already ended composition",
+        isComposing: false,
+      }),
+      { kind: "apply", value: "", discardCompositionEnd: true },
+      "the accepted clear remains authoritative when click ended composition first",
+    );
+    assert.deepEqual(
+      resolveExternalTextareaValueSync({
+        externalValue: "replacement from another scope",
+        lastEmittedValue: "current composition",
+        isComposing: true,
+      }),
+      { kind: "defer", value: "replacement from another scope" },
+    );
+    assert.equal(
+      preserveDiscardedCompositionAcrossScopeChange({
+        discardCompositionEnd: true,
+        isComposing: false,
+      }),
+      true,
+      "live Session identity migration must not reopen an already-cleared composition",
+    );
+    assert.equal(
+      preserveDiscardedCompositionAcrossScopeChange({
+        discardCompositionEnd: false,
+        isComposing: true,
+      }),
+      true,
+      "a scope migration while composing must discard the old scope's completion",
+    );
+    assert.equal(
+      shouldDiscardOrphanedCompositionInput({
+        externalValue: "",
+        compositionStartedHere: false,
+        nativeIsComposing: true,
+        inputType: "insertCompositionText",
+      }),
+      true,
+      "a late iOS composition input cannot restore an accepted question",
+    );
+    assert.equal(
+      shouldDiscardOrphanedCompositionInput({
+        externalValue: "",
+        compositionStartedHere: true,
+        nativeIsComposing: true,
+        inputType: "insertCompositionText",
+      }),
+      false,
+      "a new composition that started in the current composer remains editable",
+    );
+    assert.equal(
+      shouldDiscardOrphanedCompositionInput({
+        externalValue: "",
+        compositionStartedHere: false,
+        nativeIsComposing: false,
+        inputType: "insertText",
+      }),
+      false,
+      "ordinary typing after Send remains editable",
+    );
+    const source = readSource("./components/TokenizedTextarea.tsx");
+    assert.match(source, /discardCompositionEndRef/);
+    assert.match(source, /textareaRef\.current\.value = ""/);
+    assert.match(source, /discardCompositionEndRef\.current \|\|/);
+    assert.match(source, /event\.currentTarget\.value = externalValue/);
+    assert.match(source, /event\.currentTarget\.value = externalValueRef\.current/);
+    const selectedPaneSource = readSource(
+      "./components/workbench/panes/WorkbenchSelectedPane.tsx",
+    );
+    assert.match(selectedPaneSource, /scopeKey={`session:\$\{chatThreadKey\}`}/);
+  });
+
   test("keeps provider, mode, capability-driven plan, and model controls independently visible", () => {
     const source = readSource(
       "./components/workbench/panes/NewSessionComposer.tsx",
@@ -459,7 +552,7 @@ describe("composer contract", () => {
     const modeSource = readSource("./components/SessionModeControls.tsx");
     const modelSource = readSource("./components/SessionModelControls.tsx");
     const surfaceSource = readSource("./components/UnifiedComposerSurface.tsx");
-    const styles = readSource("./styles.css");
+    const styles = readStyleBundle();
 
     assert.match(source, /<UnifiedComposerToolbar/);
     assert.match(source, /<SessionModeControls/);
@@ -598,7 +691,7 @@ describe("composer contract", () => {
     const source = readSource(
       "./components/workbench/panes/NewSessionComposer.tsx",
     );
-    const styles = readSource("./styles.css");
+    const styles = readStyleBundle();
     const composerStart = source.indexOf('<UnifiedComposerSurface');
     const composerEnd = source.indexOf('</UnifiedComposerSurface>', composerStart);
     const workspaceStrip = source.indexOf('rah-new-task-workspace-strip', composerEnd);
@@ -804,9 +897,12 @@ describe("composer contract", () => {
       "./components/workbench/panes/WorkbenchSelectedPane.tsx",
     );
     const chatThreadSource = readSource("./components/chat/ChatThread.tsx");
+    const textSelectionSource = readSource(
+      "./components/chat/useConversationTextSelection.ts",
+    );
     const assistantSource = readSource("./components/chat/AssistantMessage.tsx");
     const sessionStoreSource = readSource("./useSessionStore.ts");
-    const styles = readSource("./styles.css");
+    const styles = readStyleBundle();
 
     assert.match(newSessionSource, /<UnifiedComposerSurface/);
     assert.match(selectedPaneSource, /<UnifiedComposerSurface/);
@@ -822,7 +918,20 @@ describe("composer contract", () => {
     assert.match(selectedPaneSource, /onAddSelectedText/);
     assert.match(selectedPaneSource, /onSelectedTextMoreDetails/);
     assert.match(chatThreadSource, /<SelectedTextOverlay/);
-    assert.match(chatThreadSource, /onMouseUpCapture=\{handlePotentialTextSelectionEnd\}/);
+    assert.match(
+      chatThreadSource,
+      /onMouseUpCapture=\{textSelection\.handleMouseUpCapture\}/,
+    );
+    assert.doesNotMatch(chatThreadSource, /setTextSelectionDragActive/);
+    assert.doesNotMatch(chatThreadSource, /!textSelectionDragActive\s*&&/);
+    assert.match(
+      textSelectionSource,
+      /options\.virtualWindowLeaseRef\.current = options\.resolvedVirtualWindow/,
+    );
+    assert.match(
+      textSelectionSource,
+      /releaseRafRef\.current = requestAnimationFrame/,
+    );
     assert.match(assistantSource, /data-selection-source="conversation-message"/);
     assert.match(
       sessionStoreSource,
@@ -855,12 +964,31 @@ describe("composer contract", () => {
       /onPointerDownCapture=\{focusPwaComposerFromPointer\}/,
     );
     assert.match(selectedPaneSource, /expanded=\{isPwaDisplayMode && pwaComposerExpanded\}/);
-    assert.match(selectedPaneSource, /data-session-access-panel="true"/);
-    assert.match(selectedPaneSource, /data-session-model-panel="true"/);
+    const sessionModeSource = readSource("./components/SessionModeControls.tsx");
+    const sessionModelSource = readSource("./components/SessionModelControls.tsx");
+    assert.match(sessionModeSource, /data-session-access-panel="true"/);
+    assert.match(sessionModelSource, /data-session-model-panel="true"/);
     assert.match(selectedPaneSource, /textarea\.focus\(\{ preventScroll: true \}\)/);
+    assert.match(selectedPaneSource, /resolveComposerPointerFocusIntent/);
+    assert.match(selectedPaneSource, /COMPOSER_INTERACTIVE_SELECTOR/);
     assert.match(
       selectedPaneSource,
       /window\.addEventListener\("pointerdown", blurComposerOutside, true\)/,
+    );
+    const contextIndicatorSource = readSource(
+      "./components/workbench/ComposerContextIndicator.tsx",
+    );
+    assert.match(
+      contextIndicatorSource,
+      /data-composer-focus-preserve="true"/,
+    );
+    assert.match(contextIndicatorSource, /data-composer-control="context"/);
+    assert.match(contextIndicatorSource, /event\.pointerType === "mouse"/);
+    assert.doesNotMatch(contextIndicatorSource, /onMouseEnter=/);
+    assert.match(selectedPaneSource, /onClickCapture=\{suppressRevealedControlClick\}/);
+    assert.match(
+      selectedPaneSource,
+      /onPointerUpCapture=\{suppressRevealedControlPointerUp\}/,
     );
   });
 

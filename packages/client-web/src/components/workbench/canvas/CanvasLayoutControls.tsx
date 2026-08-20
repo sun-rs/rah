@@ -15,7 +15,11 @@ import {
   type CanvasLayoutNode,
   type CanvasSplitAxis,
 } from "../../../canvas-layout";
-import { HEADER_ICON_BUTTON_CLASS, HEADER_MENU_ITEM_CLASS } from "../header-button-styles";
+import {
+  HEADER_ACTION_ICON_SIZE,
+  HEADER_ICON_BUTTON_CLASS,
+  HEADER_MENU_ITEM_CLASS,
+} from "../header-button-styles";
 
 function CanvasMenuButton(props: {
   ariaLabel: string;
@@ -167,7 +171,7 @@ export function CanvasLayoutDesigner(props: {
     <CanvasMenuButton
       ariaLabel="Design Canvas layout"
       title="Design Canvas layout"
-      icon={<LayoutGrid size={14} />}
+      icon={<LayoutGrid size={HEADER_ACTION_ICON_SIZE} aria-hidden="true" />}
       buttonClassName={HEADER_ICON_BUTTON_CLASS}
       panelWidth={292}
     >

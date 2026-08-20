@@ -8,7 +8,10 @@ import type {
   ConversationTurnStateProjection,
   RahEvent,
 } from "@rah/runtime-protocol";
-import { summarizeConversationActivities } from "@rah/runtime-protocol";
+import {
+  orderConversationTurnItems,
+  summarizeConversationActivities,
+} from "@rah/runtime-protocol";
 import { projectConversationTurnResources } from "./conversation-resource-projector";
 import type { EventBus } from "./event-bus";
 import { summarizeHistoryEvent } from "./history-event-projection";
@@ -294,6 +297,7 @@ function mergeConversationTurn(
       mergedItems.push(item);
     }
   }
+  const orderedItems = orderConversationTurnItems(mergedItems);
   const incomingStatusWins =
     options.preferIncomingLifecycle === true ||
     turnStatusRank(incoming.status) > turnStatusRank(existing.status) ||
@@ -305,8 +309,8 @@ function mergeConversationTurn(
     : [existing.finalAnswerItemId, incoming.finalAnswerItemId];
   const finalAnswerItemId =
     preferredFinalAnswerItemIds.find(
-      (itemId) => itemId && mergedItems.some((item) => item.id === itemId && item.role === "final"),
-    ) ?? [...mergedItems].reverse().find((item) => item.role === "final")?.id;
+      (itemId) => itemId && orderedItems.some((item) => item.id === itemId && item.role === "final"),
+    ) ?? [...orderedItems].reverse().find((item) => item.role === "final")?.id;
   const startedAt = earliestTimestamp(existing.startedAt, incoming.startedAt);
   const winningStatus = incomingStatusWins ? incoming.status : existing.status;
   const completedAt =
@@ -338,7 +342,7 @@ function mergeConversationTurn(
     ...existingBase
   } = existing;
   const fileChanges = incoming.fileChanges ?? existing.fileChanges;
-  const resources = projectConversationTurnResources(mergedItems);
+  const resources = projectConversationTurnResources(orderedItems);
   return {
     ...existingBase,
     id: incoming.id,
@@ -356,13 +360,13 @@ function mergeConversationTurn(
     ...(startedAt ? { startedAt } : {}),
     ...(completedAt ? { completedAt } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
-    items: mergedItems,
-    activities: summarizeConversationActivities(mergedItems),
+    items: orderedItems,
+    activities: summarizeConversationActivities(orderedItems),
     ...(resources.outputs.length > 0 ? { outputs: resources.outputs } : {}),
     ...(resources.sources.length > 0 ? { sources: resources.sources } : {}),
     ...(fileChanges ? { fileChanges } : {}),
     ...(finalAnswerItemId ? { finalAnswerItemId } : {}),
-    failedItemCount: mergedItems.filter((item) => item.status === "failed").length,
+    failedItemCount: orderedItems.filter((item) => item.status === "failed").length,
     ...(incoming.usage ?? existing.usage ? { usage: incoming.usage ?? existing.usage } : {}),
     ...(error ? { error } : {}),
     ...(incoming.identityConfidence ?? existing.identityConfidence

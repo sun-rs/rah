@@ -2,10 +2,14 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Ellipsis, PanelRight, Square, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_CLOSE_ICON_SIZE,
   HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
+  HEADER_MORE_ICON_SIZE,
+  HEADER_PANEL_ICON_SIZE,
   HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
   HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
+  HEADER_STOP_ICON_SIZE,
 } from "../header-button-styles";
 import { MobileSidebarToggleButton } from "./MobileSidebarToggleButton";
 import { WORKBENCH_HEADER_LAYOUT } from "../workbench-header-contract";
@@ -89,7 +93,11 @@ export function ConversationHeader(props: {
               aria-label={props.closeAction.ariaLabel}
               title={props.closeAction.title}
             >
-              <X size={14} className={props.compactCloseAction ? "" : "min-[900px]:mr-1"} />
+              <X
+                size={HEADER_CLOSE_ICON_SIZE}
+                className={props.compactCloseAction ? "" : "min-[900px]:mr-1"}
+                aria-hidden="true"
+              />
               {props.compactCloseAction ? null : (
                 <span className="hidden min-[900px]:inline">
                   {props.closeAction.label ?? "Close"}
@@ -134,7 +142,11 @@ export function ConversationHeaderStopButton(props: {
       title={props.title}
       className={props.className}
     >
-      <Square size={14} className="text-rose-500/70" />
+      <Square
+        size={HEADER_STOP_ICON_SIZE}
+        className="text-rose-500/70"
+        aria-hidden="true"
+      />
     </ConversationHeaderIconButton>
   );
 }
@@ -155,7 +167,7 @@ export function ConversationHeaderMoreButton(props: {
       title={props.title}
       className={props.className}
     >
-      <Ellipsis size={16} />
+      <Ellipsis size={HEADER_MORE_ICON_SIZE} aria-hidden="true" />
     </ConversationHeaderIconButton>
   );
 }
@@ -178,7 +190,7 @@ export function ConversationHeaderPanelToggleButton(props: {
       title={props.title}
       className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS}${props.className ? ` ${props.className}` : ""}`}
     >
-      <PanelRight size={16} />
+      <PanelRight size={HEADER_PANEL_ICON_SIZE} aria-hidden="true" />
     </button>
   );
 }

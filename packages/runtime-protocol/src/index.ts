@@ -1,6 +1,7 @@
 export * from "./session";
 export * from "./conversation-state";
 export * from "./conversation";
+export * from "./conversation-item-order";
 export * from "./conversation-activity";
 export * from "./live-backend-policy";
 export * from "./council";

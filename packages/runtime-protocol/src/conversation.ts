@@ -197,6 +197,16 @@ export interface ConversationSourceRevisionResponse {
   sourceRevision: string | null;
 }
 
+/**
+ * Safe, daemon-resolved source for a provider-owned conversation visual.
+ * Clients never construct this host path from the opaque artifact id.
+ */
+export interface ConversationVisualArtifactSourceResponse {
+  sessionId: string;
+  artifactId: string;
+  path: string | null;
+}
+
 export type ConversationTurnStateProjection = Omit<ConversationTurnProjection, "items">;
 
 export interface ConversationTurnDelta {

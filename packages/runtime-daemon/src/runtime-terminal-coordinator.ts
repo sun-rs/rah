@@ -27,7 +27,7 @@ import {
 import { resolveUserPath } from "./workbench-directory-utils";
 import type { NativeTuiLaunchSpec } from "./native-tui-launch-spec";
 import type {
-  NativeTuiBindingRecord,
+  NativeTuiBindingCandidate,
   NativeTuiProviderRuntime,
 } from "./native-tui-provider-runtime";
 import {
@@ -61,16 +61,16 @@ import {
 import {
   cancelNativeTuiQueuedInputsForClient,
   clearNativeTuiSessionTimers,
-  confirmNativeTuiQueuedInput,
   deleteNativeTuiQueuedInput,
-  enqueueNativeTuiQueuedInput,
   markNextNativeTuiQueuedInputSubmitting,
   nativeTuiProviderRuntimeSession,
+  stageNativeTuiChatInput,
+  takeConfirmedNativeTuiQueuedInput,
   updateNativeTuiQueuedInput,
   type NativeTuiSessionState,
   type NativeTuiSubmittedInput,
 } from "./native-tui-session-state";
-import { publishSessionInputQueue } from "./session-input-queue";
+import { publishSessionInputAccepted, publishSessionInputQueue } from "./session-input-queue";
 import {
   attachClientAndMaybeClaimControl,
   claimClientControlAndPublish,
@@ -310,8 +310,7 @@ function nativeTuiSubmitCountForProvider(_provider: ProviderKind): number {
 function nativeTuiSubmitDelayForProvider(provider: ProviderKind, submitIndex: number): number {
   // Claude Code briefly classifies a fast burst of terminal text as a paste.
   // Enter sent inside that window can remain in the multiline composer instead
-  // of submitting it. Only the first Enter needs to wait for the pasted draft
-  // to settle; the second is the provider-specific submit confirmation.
+  // of submitting it, so the one submit key waits for the pasted draft to settle.
   return provider === "claude" && submitIndex === 0
     ? CLAUDE_TUI_TEXT_SETTLE_MS
     : NATIVE_TUI_SUBMIT_DELAY_MS;
@@ -466,9 +465,11 @@ export class RuntimeTerminalCoordinator {
       },
       confirmQueuedInputHandoff: (sessionId, clientMessageId) => {
         const native = this.nativeTuiSessions.get(sessionId);
-        if (!native || !confirmNativeTuiQueuedInput(native, clientMessageId)) {
-          return;
-        }
+        if (!native) return;
+        const acceptedInput = takeConfirmedNativeTuiQueuedInput(native, clientMessageId);
+        if (!acceptedInput) return;
+        publishSessionInputAccepted(this.deps, sessionId, acceptedInput);
+        delete native.lastInjectedInputAtMs;
         this.updateNativeTuiPromptState(sessionId, native.promptState);
       },
     });
@@ -847,61 +848,38 @@ export class RuntimeTerminalCoordinator {
     options?: { clientMessageId?: string; clientTurnId?: string },
   ): boolean {
     const tmux = this.tuiMuxSessions.get(sessionId);
-    if (tmux) {
-      const native = this.nativeTuiSessions.get(sessionId);
-      if (!native) {
-        throw new Error("Native TUI process is not running.");
-      }
-      this.claimWebControl(sessionId, clientId);
-      if (this.shouldQueueNativeTuiChatInput(native)) {
-        const queued = enqueueNativeTuiQueuedInput(
-          native,
-          {
-            clientId,
-            text,
-            queuedAt: new Date().toISOString(),
-            clientMessageId: options?.clientMessageId ?? crypto.randomUUID(),
-            ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
-          },
-          20,
-        );
-        if (!queued) {
-          throw new Error("Native TUI input queue is full.");
-        }
-        this.updateNativeTuiPromptState(sessionId, native.promptState);
-        void this.dumpTuiMuxScreen(tmux);
-        return true;
-      }
-      this.injectNativeTuiChatInput(native, clientId, text, options);
-      return true;
-    }
     const native = this.nativeTuiSessions.get(sessionId);
     if (!native) {
-      if (this.nativeTuiSessionIds.has(sessionId)) {
+      if (tmux || this.nativeTuiSessionIds.has(sessionId)) {
         throw new Error("Native TUI process is not running.");
       }
       return false;
     }
     this.claimWebControl(sessionId, clientId);
-    if (this.shouldQueueNativeTuiChatInput(native)) {
-      const queued = enqueueNativeTuiQueuedInput(
-        native,
-        {
-          clientId,
-          text,
-          queuedAt: new Date().toISOString(),
-          clientMessageId: options?.clientMessageId ?? crypto.randomUUID(),
-          ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
-        },
-        20,
-      );
-      if (!queued) {
-        throw new Error("Native TUI input queue is full.");
+    const mustWaitForPrompt = this.shouldQueueNativeTuiChatInput(native);
+    const queued = stageNativeTuiChatInput(native, {
+      clientId,
+      text,
+      clientMessageId: options?.clientMessageId ?? crypto.randomUUID(),
+      clientTurnId: options?.clientTurnId,
+      mustWaitForPrompt,
+    });
+    if (!queued) {
+      throw new Error("Native TUI input queue is full.");
+    }
+    this.updateNativeTuiPromptState(sessionId, native.promptState);
+    if (mustWaitForPrompt || queued.state !== "submitting") {
+      if (tmux) {
+        void this.dumpTuiMuxScreen(tmux);
       }
-      this.updateNativeTuiPromptState(sessionId, native.promptState);
       return true;
     }
-    this.injectNativeTuiChatInput(native, clientId, text, options);
+    this.injectNativeTuiChatInput(native, queued.clientId, queued.text, {
+      clientMessageId: queued.clientMessageId,
+      ...(queued.clientTurnId !== undefined
+        ? { clientTurnId: queued.clientTurnId }
+        : {}),
+    });
     return true;
   }
 
@@ -972,7 +950,7 @@ export class RuntimeTerminalCoordinator {
         }
         await this.writeTuiMuxText(tmux, text);
         for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
-          await new Promise((resolve) => setTimeout(resolve, NATIVE_TUI_SUBMIT_DELAY_MS));
+          await new Promise((resolve) => setTimeout(resolve, nativeTuiSubmitDelayForProvider(native.provider, index)));
           await this.writeTuiMuxInput(tmux, nativeTuiSubmitData());
         }
         if (native.provider === "claude") {
@@ -2493,8 +2471,7 @@ export class RuntimeTerminalCoordinator {
     if (observation.binding) {
       this.bindNativeTuiProviderSession(
         sessionId,
-        observation.binding.providerSessionId,
-        observation.binding.record,
+        observation.binding,
       );
     }
   }
@@ -2530,25 +2507,47 @@ export class RuntimeTerminalCoordinator {
     }
     this.bindNativeTuiProviderSession(
       sessionId,
-      candidate.providerSessionId,
-      candidate.record,
+      candidate,
     );
   }
 
   private bindNativeTuiProviderSession(
     sessionId: string,
-    providerSessionId: string,
-    record: NativeTuiBindingRecord | null,
+    candidate: NativeTuiBindingCandidate,
   ): void {
     const native = this.nativeTuiSessions.get(sessionId);
     if (!native) {
       return;
     }
+    const { providerSessionId, record } = candidate;
     if (
       native.providerSessionId &&
       native.providerSessionId !== providerSessionId &&
       native.provider !== "claude"
     ) {
+      return;
+    }
+    const existingOwner = this.deps.sessionStore.findManagedByProviderSession(
+      native.provider,
+      providerSessionId,
+    );
+    if (existingOwner && existingOwner.session.id !== sessionId) {
+      if (candidate.authority === "history_probe") {
+        // Directory/history discovery is deliberately heuristic. A candidate
+        // already owned by another runtime is evidence that the provider has
+        // not persisted this process' identity yet, not a fatal collision.
+        (native.rejectedBindingProviderSessionIds ??= new Set()).add(
+          providerSessionId,
+        );
+        return;
+      }
+      this.failNativeTuiObservation(
+        sessionId,
+        new Error(
+          `Provider session ${native.provider}:${providerSessionId} is already running; attach instead of resume.`,
+        ),
+        providerSessionId,
+      );
       return;
     }
     const currentState = this.deps.sessionStore.getSession(sessionId);

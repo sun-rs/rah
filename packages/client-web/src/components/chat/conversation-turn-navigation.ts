@@ -4,7 +4,7 @@ import type {
 } from "@rah/runtime-protocol";
 import type { FeedEntry } from "../../types";
 import { conversationItemFeedKey } from "../../conversation-feed";
-import { isInternalUserReminder } from "./assistant-turn-headers";
+import { isInternalUserReminder } from "./internal-user-reminder";
 import type { VirtualFeedLayout } from "./virtualized-feed-layout";
 
 const PREVIEW_TEXT_LIMIT = 180;

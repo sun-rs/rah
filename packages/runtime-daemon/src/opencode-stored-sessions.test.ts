@@ -45,6 +45,7 @@ test("discovers OpenCode stored sessions from opencode.db", { skip: !hasSqlite }
     assert.deepEqual(sessions[0]!.ref, {
       provider: "opencode",
       providerSessionId: "ses_active",
+      modelProvider: "test",
       source: "provider_history",
       removalDisposition: "permanent",
       cwd: "/tmp/project/sub",

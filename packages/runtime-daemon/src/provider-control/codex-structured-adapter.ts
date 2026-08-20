@@ -33,8 +33,11 @@ import { createCodexAppServerClient } from "../codex-app-server-client";
 import { CodexJsonRpcResponseError } from "../codex-live-rpc";
 import {
   bindCodexSubmittedUserMessageToTurn,
+  codexSubmittedUserMessageActivity,
+  discardCodexSubmittedUserMessageFromTurn,
   discardPendingCodexSubmittedUserMessage,
   recordCodexSubmittedUserMessage,
+  recordCodexSubmittedUserMessageForTurn,
 } from "../codex-app-server-activity";
 import {
   CodexModelCatalogCache,
@@ -67,6 +70,7 @@ import {
   deleteRuntimeQueuedInput,
   markRuntimeQueuedInputQueued,
   markRuntimeQueuedInputSubmitting,
+  publishSessionInputAccepted,
   publishSessionInputQueue,
   publishSessionInputQueuePolicy,
   reorderRuntimeQueuedInput,
@@ -96,6 +100,21 @@ function isCodexNoActiveTurnError(error: unknown): boolean {
   return (
     message === CODEX_NO_ACTIVE_TURN_ERROR ||
     message.endsWith(`: ${CODEX_NO_ACTIVE_TURN_ERROR}`)
+  );
+}
+
+function isCodexTurnSteerRaceError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim().toLowerCase();
+  return (
+    message.includes("no active turn") ||
+    message.includes("turn is not active") ||
+    message.includes("turn is no longer active") ||
+    message.includes("turn already completed") ||
+    message.includes("turn has ended") ||
+    (message.includes("expected turn") && message.includes("current turn"))
   );
 }
 
@@ -297,12 +316,17 @@ export class CodexAdapter implements ProviderAdapter {
     if (queuedInput) {
       publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
     }
-    recordCodexSubmittedUserMessage(live.translationState, {
+    const submittedMessage = {
       text: request.text,
       ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
       ...(request.clientTurnId ? { clientTurnId: request.clientTurnId } : {}),
-    });
+    };
+    recordCodexSubmittedUserMessageForTurn(
+      live.translationState,
+      turnId,
+      submittedMessage,
+    );
     try {
       await live.client.request(
         "turn/steer",
@@ -316,18 +340,49 @@ export class CodexAdapter implements ProviderAdapter {
         },
         90_000,
       );
+      const submittedActivity = codexSubmittedUserMessageActivity(
+        live.translationState,
+        {
+          turnId,
+          providerSessionId: live.threadId,
+          message: submittedMessage,
+        },
+      );
+      if (submittedActivity) {
+        applyProviderActivity(
+          this.services,
+          live.sessionId,
+          CODEX_EVENT_SOURCE,
+          submittedActivity,
+        );
+      }
       if (queuedInput) {
         deleteRuntimeQueuedInput(live.queuedInputs, queuedInput.clientMessageId);
+        publishSessionInputAccepted(this.services, live.sessionId, queuedInput);
         publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
       }
     } catch (error) {
-      discardPendingCodexSubmittedUserMessage(
+      discardCodexSubmittedUserMessageFromTurn(
         live.translationState,
+        turnId,
         request.clientMessageId,
       );
       if (queuedInput) {
         markRuntimeQueuedInputQueued(live.queuedInputs, queuedInput.clientMessageId);
         publishSessionInputQueue(this.services, live.sessionId, live.queuedInputs);
+      }
+      const activeTurnMoved =
+        live.currentTurnId !== turnId || live.finishedTurnIds.has(turnId);
+      if (queuedInput && (activeTurnMoved || isCodexTurnSteerRaceError(error))) {
+        if (isCodexTurnSteerRaceError(error) && live.currentTurnId === turnId) {
+          live.finishedTurnIds.add(turnId);
+          live.currentTurnId = null;
+        }
+        // The provider closed the guidance window while the request was in
+        // flight. The canonical queue still owns the message, so let it start
+        // the next turn instead of surfacing a false destructive failure.
+        this.drainQueuedInput(live);
+        return;
       }
       throw error;
     }
@@ -638,6 +693,9 @@ export class CodexAdapter implements ProviderAdapter {
     if (options?.queuedInput) {
       live.queuedInputSubmission = {
         clientMessageId: options.queuedInput.clientMessageId,
+        ...(options.queuedInput.clientTurnId
+          ? { clientTurnId: options.queuedInput.clientTurnId }
+          : {}),
         accepted: false,
         rpcUncertain: false,
       };
@@ -689,6 +747,11 @@ export class CodexAdapter implements ProviderAdapter {
               options.queuedInput.clientMessageId,
             )
           ) {
+            publishSessionInputAccepted(
+              this.services,
+              live.sessionId,
+              options.queuedInput,
+            );
             publishSessionInputQueue(
               this.services,
               live.sessionId,
@@ -1061,10 +1124,35 @@ export class CodexAdapter implements ProviderAdapter {
     const queuedInput = live.queuedInputs.find(
       (item) => item.clientMessageId === clientMessageId,
     );
+    if (queuedInput?.state === "submitting") {
+      return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+    }
+    if (!queuedInput) {
+      const alreadyAccepted = this.services.eventBus
+        .list({
+          sessionIds: [sessionId],
+          eventTypes: ["session.input.accepted"],
+        })
+        .some(
+          (event) =>
+            event.type === "session.input.accepted" &&
+            event.payload.clientMessageId === clientMessageId,
+        );
+      if (alreadyAccepted) {
+        return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
+      }
+    }
     if (!queuedInput || queuedInput.state !== "queued") {
       throw new SessionInputQueueConflictError(
         "Queued message is no longer waiting and cannot be guided.",
       );
+    }
+    if (!live.currentTurnId || live.turnStartInFlight) {
+      // The active turn crossed its terminal boundary before the Guide click
+      // reached the daemon. Keep the same message and naturally drain it as
+      // the next turn; the user action is idempotently successful.
+      this.drainQueuedInput(live);
+      return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
     }
     await this.steerLiveTurn(live, queuedInput, queuedInput);
     return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);

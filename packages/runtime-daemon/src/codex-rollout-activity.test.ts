@@ -11,6 +11,7 @@ import {
   createCodexTimelineIdentity,
 } from "./codex-timeline-identity";
 import { resolveDeviceAttachment } from "./device-attachments";
+import { codexVisualArtifactPathFromId } from "./codex-visual-artifacts";
 
 describe("translateCodexRolloutLine", () => {
   test("maps user messages and agent reasoning into persisted timeline activities", () => {
@@ -1341,6 +1342,39 @@ What changed?
         { kind: "text", text: "Hover the curve to inspect values." },
       ],
     });
+  });
+
+  test("binds basename-only visuals to explicit paths previously persisted in the turn", () => {
+    const state = createCodexRolloutTranslationState();
+    const visualPath =
+      ".codex/visualizations/2026/08/15/sxx-optimal-combinations/optimal-candidate-combinations.html";
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-15T08:00:00.000Z",
+        type: "event_msg",
+        payload: { type: "exec_command_end", stdout: `wrote ${visualPath}` },
+      },
+      state,
+    );
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-15T08:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: '::codex-inline-vis{file="optimal-candidate-combinations.html"}',
+        },
+      },
+      state,
+    );
+    const item = activities[0]?.activity.type === "timeline_item"
+      ? activities[0].activity.item
+      : undefined;
+    const artifactId = item?.kind === "assistant_message" && item.content?.[0]?.kind === "visual"
+      ? item.content[0].artifact.id
+      : undefined;
+
+    assert.equal(codexVisualArtifactPathFromId(artifactId ?? ""), visualPath);
   });
 
   test("restores persisted context compactions as one aggregate Worked event per turn", () => {

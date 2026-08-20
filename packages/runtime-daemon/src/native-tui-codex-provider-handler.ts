@@ -81,6 +81,7 @@ function observeCodexOutput(
     binding: {
       providerSessionId,
       record: record ?? null,
+      authority: "provider_output",
     },
   };
 }
@@ -103,6 +104,7 @@ function probeCodexBinding(
   return {
     providerSessionId: candidate.ref.providerSessionId,
     record: candidate,
+    authority: "history_probe" as const,
   };
 }
 

@@ -21,6 +21,7 @@ import {
   createComposerAnnotation,
   type SelectedConversationText,
 } from "../composer-annotations";
+import { useSharedComposerDraft } from "../composer-draft-store";
 
 const MORE_DETAILS_PROMPT =
   "请详细说明这段选中的内容，并结合当前任务上下文解释它的含义和影响。";
@@ -61,12 +62,7 @@ export function useWorkbenchComposerState(args: {
   startSession: StartSessionFn;
 }) {
   const draftKey = composerDraftKey(args.selectedSummary);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const draft = draftKey ? drafts[draftKey] ?? "" : "";
-  const setDraft: Dispatch<SetStateAction<string>> = (nextDraft) => {
-    if (!draftKey) return;
-    setDrafts((current) => updateComposerDraftMap(current, draftKey, nextDraft));
-  };
+  const [draft, setDraft] = useSharedComposerDraft(draftKey);
   const draftAttachments = useComposerAttachments(draftKey ?? "no-session");
   const draftAnnotations = useComposerAnnotations(draftKey ?? "no-session");
   const composerRef = useRef<HTMLTextAreaElement | null>(null);

@@ -310,6 +310,17 @@ export interface AttachSessionRequest {
   client: AttachClientDescriptor;
   mode: AttachMode;
   claimControl?: boolean;
+  /**
+   * Optional controls to apply before the first input is accepted. This keeps
+   * history activation atomic even when the provider Session is already live:
+   * attach, configure, and submit either all succeed at the daemon boundary or
+   * the caller retains the draft.
+   */
+  model?: string;
+  optionValues?: Record<string, SessionConfigValue>;
+  modeId?: string;
+  /** First input owned by the same attach transaction. */
+  initialInput?: SessionInputRequest;
 }
 
 export interface UploadAttachmentResponse {
@@ -494,21 +505,31 @@ export interface StoredSessionsDeltaResponse {
   resetRequired?: boolean;
 }
 
-export interface StartSessionResponse {
-  session: SessionSummary;
+/**
+ * Daemon acknowledgement for the first input owned by a start, resume, or
+ * attach transaction. Absence means the request did not carry an initial
+ * input; clients must not infer delivery from Session creation alone.
+ */
+export interface InitialSessionInputAcceptance {
+  clientMessageId: string;
+  clientTurnId?: string;
+  acceptedAt: string;
 }
 
-export interface ResumeSessionResponse {
+export interface SessionActivationResponse {
   session: SessionSummary;
+  initialInputAcceptance?: InitialSessionInputAcceptance;
 }
+
+export interface StartSessionResponse extends SessionActivationResponse {}
+
+export interface ResumeSessionResponse extends SessionActivationResponse {}
 
 export interface ForkSessionResponse {
   session: SessionSummary;
 }
 
-export interface AttachSessionResponse {
-  session: SessionSummary;
-}
+export interface AttachSessionResponse extends SessionActivationResponse {}
 
 export interface WorkbenchResponse {
   workbench: Workbench;

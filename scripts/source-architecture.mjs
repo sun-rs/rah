@@ -10,16 +10,16 @@ const defaultProductionLineBudget = 1_600;
 // ratchets, not targets: a file may shrink below its ceiling but can never
 // grow back to it after the budget is lowered.
 const productionDebtBudgets = new Map([
-  ["packages/runtime-daemon/src/runtime-engine.ts", 3_774],
-  ["packages/runtime-protocol/src/contract.ts", 3_734],
+  ["packages/runtime-daemon/src/runtime-engine.ts", 3_376],
+  ["packages/runtime-protocol/src/contract.ts", 3_687],
   ["packages/runtime-daemon/src/codex-app-server-activity.ts", 3_641],
-  ["packages/client-web/src/App.tsx", 3_610],
+  ["packages/client-web/src/App.tsx", 3_561],
   ["packages/runtime-daemon/src/runtime-terminal-coordinator.ts", 2_699],
   ["packages/runtime-daemon/src/codex-rollout-activity.ts", 2_666],
   ["packages/client-web/src/types.ts", 2_496],
   ["packages/client-web/src/council/CouncilPage.tsx", 2_489],
   ["packages/client-web/src/components/chat/ChatThread.tsx", 2_185],
-  ["packages/client-web/src/styles.css", 1_989],
+  ["packages/client-web/src/styles.css", 1_658],
   ["packages/client-web/src/useSessionStore.ts", 1_910],
   ["packages/runtime-daemon/src/opencode-stored-sessions.ts", 1_903],
 ]);
@@ -85,6 +85,7 @@ for (const requiredImport of [
   'from "./app-lazy-components"',
   'from "./new-session-drafts"',
   'from "./hooks/useForegroundSessionRecovery"',
+  'from "./hooks/useSessionModelDrafts"',
 ]) {
   if (!appSource.includes(requiredImport)) {
     failures.push(`App.tsx must retain extracted owner ${requiredImport}`);
@@ -92,6 +93,8 @@ for (const requiredImport of [
 }
 for (const forbiddenOwner of [
   "MODEL_DRAFT_STORAGE_KEY",
+  "readSessionModelPreference(",
+  "rememberSessionModelPreference(",
   "runForegroundRecoveryLoop",
   "class FilePreviewDialogErrorBoundary",
 ]) {
@@ -106,8 +109,43 @@ const runtimeEngineSource = observed.get(
 if (!runtimeEngineSource.includes('from "./runtime-workspace-operations"')) {
   failures.push("runtime-engine.ts must delegate workspace operations to their owner");
 }
+
+const protocolContractSource = observed.get(
+  "packages/runtime-protocol/src/contract.ts",
+)?.source ?? "";
+if (!protocolContractSource.includes('from "./session-input-contract"')) {
+  failures.push("contract.ts must delegate session input validation to its owner");
+}
+for (const forbiddenOwner of [
+  "function requireInitialInput",
+  "function requireSessionInputAttachment",
+  "function requireSessionInputAcceptedPayload",
+]) {
+  if (protocolContractSource.includes(forbiddenOwner)) {
+    failures.push(`contract.ts reabsorbed session input owner: ${forbiddenOwner}`);
+  }
+}
+if (!runtimeEngineSource.includes('from "./runtime-conversation-pages"')) {
+  failures.push("runtime-engine.ts must delegate conversation pages to their owner");
+}
 if (runtimeEngineSource.includes('from "./workspace-utils"')) {
   failures.push("runtime-engine.ts must not reabsorb low-level workspace operations");
+}
+for (const forbiddenOwner of [
+  "new ConversationPageHotCache",
+  "new ConversationResourceIndexStore",
+]) {
+  if (runtimeEngineSource.includes(forbiddenOwner)) {
+    failures.push(`runtime-engine.ts reabsorbed conversation owner: ${forbiddenOwner}`);
+  }
+}
+
+const stylesSource = observed.get("packages/client-web/src/styles.css")?.source ?? "";
+if (!stylesSource.includes('@import "./composer-styles.css";')) {
+  failures.push("styles.css must retain the extracted composer style owner");
+}
+if (stylesSource.includes(".rah-unified-composer {")) {
+  failures.push("styles.css reabsorbed the extracted composer style owner");
 }
 
 if (failures.length > 0) {

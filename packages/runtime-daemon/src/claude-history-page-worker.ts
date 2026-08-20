@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import type {
   ConversationEvidencePage,
   ConversationTurnProjection,
   RahEvent,
 } from "@rah/runtime-protocol";
 import type { ClaudeStoredSessionRecord } from "./claude-session-files";
-import { getClaudeStoredSessionHistoryPage } from "./claude-session-files";
+import {
+  getClaudeStoredSessionHistoryPage,
+  readClaudeStoredSessionTurnWindow,
+} from "./claude-session-files";
 import { projectConversation } from "./conversation-projector";
 import { summarizeHistoryPage } from "./history-event-projection";
 import { serveBackgroundIpcTask } from "./background-ipc-task";
@@ -32,20 +36,52 @@ type ClaudeTurnCursor = {
   beforeProviderTurnId: string;
 };
 
-function encodeCursor(value: ClaudeTurnCursor): string {
+type ClaudeOffsetCursor = {
+  version: 2;
+  snapshotEndOffset: number;
+  endOffset: number;
+};
+
+type DecodedClaudeCursor =
+  | { kind: "offset"; value: ClaudeOffsetCursor }
+  | { kind: "legacy-turn"; value: ClaudeTurnCursor };
+
+function encodeCursor(value: ClaudeTurnCursor | ClaudeOffsetCursor): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: string | undefined): ClaudeTurnCursor | undefined {
+function decodeCursor(value: string | undefined): DecodedClaudeCursor | undefined {
   if (!value) {
     return undefined;
   }
   try {
     const parsed = JSON.parse(
       Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<ClaudeTurnCursor>;
+    ) as Partial<ClaudeTurnCursor & ClaudeOffsetCursor>;
+    if (
+      parsed.version === 2 &&
+      typeof parsed.snapshotEndOffset === "number" &&
+      Number.isSafeInteger(parsed.snapshotEndOffset) &&
+      parsed.snapshotEndOffset >= 0 &&
+      typeof parsed.endOffset === "number" &&
+      Number.isSafeInteger(parsed.endOffset) &&
+      parsed.endOffset >= 0 &&
+      parsed.endOffset <= parsed.snapshotEndOffset
+    ) {
+      return {
+        kind: "offset",
+        value: {
+          version: 2,
+          snapshotEndOffset: parsed.snapshotEndOffset,
+          endOffset: parsed.endOffset,
+        },
+      };
+    }
     return typeof parsed.beforeProviderTurnId === "string"
-      ? { beforeProviderTurnId: parsed.beforeProviderTurnId }
+      ? {
+          kind: "legacy-turn",
+          value: { beforeProviderTurnId: parsed.beforeProviderTurnId },
+        }
       : undefined;
   } catch {
     return undefined;
@@ -377,6 +413,7 @@ function compactOversizedTurn(
 export function boundClaudeSummaryPage(
   page: ConversationEvidencePage,
   maxBytes: number,
+  cursorBeforeTurn?: (providerTurnId: string) => string | undefined,
 ): ConversationEvidencePage {
   const summarized = summarizeHistoryPage(page);
   const safeBudget = Math.max(64 * 1024, maxBytes);
@@ -426,7 +463,8 @@ export function boundClaudeSummaryPage(
     retained.find((event) => event.turnId)?.turnId;
   const nextCursor =
     droppedWholeTurnPrefix && oldestRetainedTurnId
-      ? encodeCursor({ beforeProviderTurnId: oldestRetainedTurnId })
+      ? cursorBeforeTurn?.(oldestRetainedTurnId) ??
+        encodeCursor({ beforeProviderTurnId: oldestRetainedTurnId })
       : sourceNextCursor;
   const bounded: ConversationEvidencePage = {
     ...pageEnvelope,
@@ -442,7 +480,7 @@ export function boundClaudeSummaryPage(
   return bounded;
 }
 
-export function buildClaudeHistorySummaryPage(
+function buildLegacyClaudeHistorySummaryPage(
   request: ClaudeHistoryPageWorkerRequest,
 ): ConversationEvidencePage {
   const source = getClaudeStoredSessionHistoryPage({
@@ -464,9 +502,9 @@ export function buildClaudeHistorySummaryPage(
   });
   const cursor = decodeCursor(request.cursor);
   let endExclusive = projection.turns.length;
-  if (cursor) {
+  if (cursor?.kind === "legacy-turn") {
     const anchorIndex = projection.turns.findIndex(
-      (turn) => turn.providerTurnId === cursor.beforeProviderTurnId,
+      (turn) => turn.providerTurnId === cursor.value.beforeProviderTurnId,
     );
     if (anchorIndex < 0) {
       throw new Error("Claude history cursor no longer exists in the transcript.");
@@ -527,6 +565,111 @@ export function buildClaudeHistorySummaryPage(
   return boundClaudeSummaryPage(
     page,
     request.responseBudgetBytes ?? DEFAULT_RESPONSE_BUDGET_BYTES,
+  );
+}
+
+function offsetCursor(args: {
+  snapshotEndOffset: number;
+  endOffset: number;
+}): string {
+  return encodeCursor({
+    version: 2,
+    snapshotEndOffset: args.snapshotEndOffset,
+    endOffset: args.endOffset,
+  });
+}
+
+/**
+ * Native Claude history pages are byte-windowed. The cursor freezes the file
+ * length observed by the initial request and points at a complete user-turn
+ * boundary, so subsequent pages never need to replay the newer prefix.
+ */
+export function buildClaudeHistorySummaryPage(
+  request: ClaudeHistoryPageWorkerRequest,
+): ConversationEvidencePage {
+  const decoded = decodeCursor(request.cursor);
+  if (request.cursor && decoded?.kind !== "offset") {
+    // Keep in-flight cursors produced before the offset protocol deployable.
+    // New responses always use offset cursors, so this full-file path ages out
+    // naturally instead of remaining on the normal browsing path.
+    return buildLegacyClaudeHistorySummaryPage(request);
+  }
+
+  const fileSize = statSync(request.record.filePath).size;
+  const snapshotEndOffset =
+    decoded?.kind === "offset" ? decoded.value.snapshotEndOffset : fileSize;
+  const endOffset =
+    decoded?.kind === "offset" ? decoded.value.endOffset : snapshotEndOffset;
+  if (fileSize < snapshotEndOffset || endOffset > snapshotEndOffset) {
+    throw new Error("Claude history source was truncated while paging.");
+  }
+
+  const safeLimit = Math.max(1, Math.min(request.limit, 100));
+  const source = readClaudeStoredSessionTurnWindow({
+    sessionId: request.sessionId,
+    record: request.record,
+    endOffset,
+    limit: safeLimit,
+  });
+  const reboundEvents = source.events.map(
+    (event, index) =>
+      ({
+        ...event,
+        id: stableEventId(request.sessionId, event, index),
+        sessionId: request.sessionId,
+        seq: index + 1,
+      }) as RahEvent,
+  );
+  const projection = projectConversation(request.sessionId, reboundEvents, {
+    assumeSettled: true,
+  });
+  const eventsByTurn = new Map<string, RahEvent[]>();
+  for (const event of reboundEvents) {
+    if (!event.turnId) {
+      continue;
+    }
+    const events = eventsByTurn.get(event.turnId) ?? [];
+    events.push(event);
+    eventsByTurn.set(event.turnId, events);
+  }
+  const events: RahEvent[] = [];
+  for (const turn of projection.turns) {
+    const providerTurnId = turn.providerTurnId;
+    if (!providerTurnId) {
+      continue;
+    }
+    const turnEvents = eventsByTurn.get(providerTurnId) ?? [];
+    events.push(...turnEvents);
+    if (!hasTerminalEvent(turnEvents, providerTurnId)) {
+      const terminal = syntheticTerminalEvent({
+        sessionId: request.sessionId,
+        turn,
+        seq: events.length + 1,
+      });
+      if (terminal) {
+        events.push(terminal);
+      }
+    }
+  }
+  const nextCursor =
+    source.nextEndOffset !== undefined
+      ? offsetCursor({ snapshotEndOffset, endOffset: source.nextEndOffset })
+      : undefined;
+  const page: ConversationEvidencePage = {
+    sessionId: request.sessionId,
+    events: events.map((event, index) => ({ ...event, seq: index + 1 })),
+    detailMode: "summary",
+    ...(nextCursor ? { nextCursor } : {}),
+  };
+  return boundClaudeSummaryPage(
+    page,
+    request.responseBudgetBytes ?? DEFAULT_RESPONSE_BUDGET_BYTES,
+    (providerTurnId) => {
+      const turnStartOffset = source.turnStartOffsets.get(providerTurnId);
+      return turnStartOffset === undefined
+        ? undefined
+        : offsetCursor({ snapshotEndOffset, endOffset: turnStartOffset });
+    },
   );
 }
 

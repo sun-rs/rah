@@ -1,24 +1,34 @@
 import { randomUUID } from "node:crypto";
-import type { SessionInputRequest, SessionSummary } from "@rah/runtime-protocol";
+import type {
+  InitialSessionInputAcceptance,
+  RahEvent,
+  SessionInputRequest,
+  SessionSummary,
+} from "@rah/runtime-protocol";
 import type { EventBus } from "./event-bus";
 import type { SessionStore } from "./session-store";
 import { SYSTEM_SOURCE } from "./runtime-session-events";
 
 type InitialSessionInputRuntime = {
+  readonly eventBus: EventBus;
   readonly sessionStore: SessionStore;
   sendInput: (sessionId: string, request: SessionInputRequest) => void;
   getSessionSummary: (sessionId: string) => SessionSummary;
 };
 
-export type InitialSessionInputAcceptor = <T extends { session: SessionSummary }>(
+export type InitialSessionInputAcceptor = <T extends {
+  session: SessionSummary;
+  initialInputAcceptance?: InitialSessionInputAcceptance;
+}>(
   response: T,
   initialInput: SessionInputRequest | undefined,
 ) => Promise<T>;
 
 /**
  * A start/resume response is not a delivery receipt. Retain ownership until
- * the exact first input leaves the canonical queue, which is the provider
- * adapter's acceptance boundary.
+ * the provider adapter emits an explicit receipt for the exact first input.
+ * Queue disappearance is intentionally not treated as acceptance because
+ * cancellation and shutdown can also remove queue entries.
  */
 export function createInitialSessionInputAcceptor(
   runtime: InitialSessionInputRuntime,
@@ -31,42 +41,69 @@ export function createInitialSessionInputAcceptor(
     const ownedInput = initialInput.clientMessageId
       ? initialInput
       : { ...initialInput, clientMessageId: randomUUID() };
-    runtime.sendInput(sessionId, ownedInput);
-
     const clientMessageId = ownedInput.clientMessageId;
-    const deadline = Date.now() + 90_000;
-    while (true) {
-      const state = runtime.sessionStore.getSession(sessionId);
-      if (!state) {
-        throw new Error("Session closed before the initial question was accepted.");
+    let providerAcknowledged = false;
+    const observe = (event: RahEvent): void => {
+      if (
+        event.type === "session.input.accepted" &&
+        event.payload.clientMessageId === clientMessageId
+      ) {
+        providerAcknowledged = true;
       }
-      const queued = state.session.inputQueue?.find(
-        (item) => item.clientMessageId === clientMessageId,
-      );
-      if (!queued) {
-        break;
-      }
-      if (state.session.runtimeState === "failed") {
-        throw new Error(
-          state.session.runtimeDiagnostics?.lastError ??
-            "The provider rejected the initial question.",
-        );
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          "Timed out waiting for the provider to accept the initial question; RAH kept it in the Session input queue.",
-        );
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
-    return {
-      ...response,
-      session: runtime.getSessionSummary(sessionId),
     };
+    const unsubscribe = runtime.eventBus.subscribe(
+      {
+        sessionIds: [sessionId],
+        eventTypes: ["session.input.accepted"],
+      },
+      observe,
+    );
+
+    try {
+      runtime.sendInput(sessionId, ownedInput);
+      const deadline = Date.now() + 90_000;
+      while (!providerAcknowledged) {
+        const state = runtime.sessionStore.getSession(sessionId);
+        if (!state) {
+          throw new Error("Session closed before the initial question was accepted.");
+        }
+        const queued = state.session.inputQueue?.find(
+          (item) => item.clientMessageId === clientMessageId,
+        );
+        if (state.session.runtimeState === "failed") {
+          throw new Error(
+            state.session.runtimeDiagnostics?.lastError ??
+              "The provider rejected the initial question.",
+          );
+        }
+        if (Date.now() >= deadline) {
+          const detail = queued
+            ? "RAH kept it in the Session input queue"
+            : "the input never entered the canonical Session input queue";
+          throw new Error(
+            `Timed out waiting for the provider to accept the initial question; ${detail}.`,
+          );
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      return {
+        ...response,
+        session: runtime.getSessionSummary(sessionId),
+        initialInputAcceptance: {
+          clientMessageId,
+          ...(ownedInput.clientTurnId
+            ? { clientTurnId: ownedInput.clientTurnId }
+            : {}),
+          acceptedAt: new Date().toISOString(),
+        },
+      };
+    } finally {
+      unsubscribe();
+    }
   };
 }
 
-export function markAcceptedSessionInput(
+export function markSessionInputPending(
   sessionStore: SessionStore,
   eventBus: EventBus,
   sessionId: string,

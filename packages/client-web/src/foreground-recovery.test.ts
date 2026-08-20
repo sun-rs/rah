@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   foregroundClockWasSuspended,
+  foregroundSurfaceHasAttention,
   runForegroundRecoveryLoop,
 } from "./foreground-recovery";
 
@@ -9,6 +10,33 @@ test("foreground wake detection distinguishes a suspended clock from ordinary ti
   assert.equal(foregroundClockWasSuspended(1_000, 5_999, 5_000), false);
   assert.equal(foregroundClockWasSuspended(1_000, 6_000, 5_000), true);
   assert.equal(foregroundClockWasSuspended(10_000, 9_000, 5_000), false);
+});
+
+test("standalone PWA visibility remains authoritative when iOS does not restore focus", () => {
+  assert.equal(
+    foregroundSurfaceHasAttention({
+      visibilityState: "visible",
+      documentHasFocus: false,
+      pwaDisplayMode: true,
+    }),
+    true,
+  );
+  assert.equal(
+    foregroundSurfaceHasAttention({
+      visibilityState: "visible",
+      documentHasFocus: false,
+      pwaDisplayMode: false,
+    }),
+    false,
+  );
+  assert.equal(
+    foregroundSurfaceHasAttention({
+      visibilityState: "hidden",
+      documentHasFocus: true,
+      pwaDisplayMode: true,
+    }),
+    false,
+  );
 });
 
 test("foreground recovery keeps retrying after the initial backoff sequence", async () => {

@@ -68,4 +68,34 @@ describe("composer popover layout", () => {
     assert.ok(layout.top >= viewport.top + 8);
     assert.ok(layout.top + layout.height <= viewport.bottom - 8);
   });
+
+  test("centers compact context tooltips while keeping them inside a phone viewport", () => {
+    const viewport = resolveComposerVisualViewportBounds({
+      layoutWidth: 390,
+      layoutHeight: 844,
+      visualViewport: null,
+    });
+    const layout = resolveComposerPopoverLayout({
+      anchor: {
+        left: 198,
+        top: 748,
+        right: 230,
+        bottom: 780,
+        width: 32,
+        height: 32,
+      },
+      viewport,
+      desiredWidth: 288,
+      desiredHeight: 64,
+      maximumHeight: 64,
+      horizontalAlignment: "center",
+      padding: 12,
+      gap: 8,
+    });
+
+    assert.equal(layout.left, 70);
+    assert.equal(layout.placement, "above");
+    assert.ok(layout.left >= viewport.left + 12);
+    assert.ok(layout.left + layout.width <= viewport.right - 12);
+  });
 });

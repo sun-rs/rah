@@ -1,4 +1,5 @@
 import type {
+  MouseEventHandler,
   FocusEventHandler,
   PointerEventHandler,
   ReactNode,
@@ -10,8 +11,11 @@ export function UnifiedComposerSurface(props: {
   isPwa?: boolean | undefined;
   expanded?: boolean | undefined;
   className?: string | undefined;
+  onClickCapture?: MouseEventHandler<HTMLDivElement> | undefined;
   onFocusCapture?: FocusEventHandler<HTMLDivElement> | undefined;
+  onPointerCancelCapture?: PointerEventHandler<HTMLDivElement> | undefined;
   onPointerDownCapture?: PointerEventHandler<HTMLDivElement> | undefined;
+  onPointerUpCapture?: PointerEventHandler<HTMLDivElement> | undefined;
 }) {
   return (
     <div
@@ -19,8 +23,11 @@ export function UnifiedComposerSurface(props: {
       data-surface={props.surface}
       data-pwa={props.isPwa ? "true" : "false"}
       data-composer-expanded={props.expanded ? "true" : "false"}
+      onClickCapture={props.onClickCapture}
       onFocusCapture={props.onFocusCapture}
+      onPointerCancelCapture={props.onPointerCancelCapture}
       onPointerDownCapture={props.onPointerDownCapture}
+      onPointerUpCapture={props.onPointerUpCapture}
     >
       {props.children}
     </div>

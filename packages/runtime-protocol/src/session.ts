@@ -368,6 +368,8 @@ export interface SessionQueuedInput {
 export interface ManagedSession {
   id: string;
   provider: ProviderKind;
+  /** Model/API provider reported by the native provider session (for example openai or deepseek). */
+  modelProvider?: string;
   providerSessionId?: string;
   origin?: ManagedSessionOrigin;
   launchSource: SessionLaunchSource;
@@ -456,6 +458,8 @@ export interface StoredSessionIdentity {
  * is not currently running under runtime control.
  */
 export interface StoredSessionRef extends StoredSessionIdentity {
+  /** Model/API provider persisted by the native session metadata. */
+  modelProvider?: string;
   cwd?: string;
   rootDir?: string;
   title?: string;

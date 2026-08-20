@@ -2,7 +2,9 @@ import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 import { copyTextToClipboard } from "../../clipboard";
 
-export function AssistantTurnCopyAction(props: { content: string }) {
+export function AssistantTurnCopyAction(props: {
+  content: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -13,10 +15,7 @@ export function AssistantTurnCopyAction(props: { content: string }) {
   };
 
   return (
-    <div
-      className="flex w-full justify-start"
-      data-testid="assistant-turn-copy-action"
-    >
+    <div className="flex w-full items-center" data-testid="assistant-turn-copy-action">
       <button
         type="button"
         onClick={() => void handleCopy()}

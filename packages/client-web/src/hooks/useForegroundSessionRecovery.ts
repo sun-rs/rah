@@ -6,11 +6,13 @@ import {
 } from "../browser-notifications";
 import {
   foregroundClockWasSuspended,
+  foregroundSurfaceHasAttention,
   runForegroundRecoveryLoop,
 } from "../foreground-recovery";
 import { isReadOnlyReplay } from "../session-capabilities";
 import { sessionStoreTransportIsHealthy } from "../session-store-transport";
 import { useSessionStore } from "../useSessionStore";
+import { readPwaDisplayMode } from "./usePwaDisplayMode";
 
 const FOREGROUND_RECOVERY_DEBOUNCE_MS = 120;
 const FOREGROUND_RECOVERY_TIMEOUT_MS = 12_000;
@@ -78,7 +80,12 @@ export function useForegroundSessionRecovery(options: {
     if (typeof document === "undefined") {
       return true;
     }
-    return document.visibilityState === "visible" && document.hasFocus();
+    return foregroundSurfaceHasAttention({
+      visibilityState: document.visibilityState,
+      documentHasFocus:
+        typeof document.hasFocus !== "function" || document.hasFocus(),
+      pwaDisplayMode: readPwaDisplayMode(),
+    });
   }, []);
 
   const catchUpVisibleConversations = useCallback(

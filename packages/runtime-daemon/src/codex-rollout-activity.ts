@@ -30,8 +30,9 @@ import {
 } from "./council/council-mcp-projection";
 import {
   codexAssistantContentSignature,
-  parseCodexAssistantContent,
-  type ParsedCodexAssistantContent,
+  observeCodexVisualArtifactPathEvidence,
+  parseCodexAssistantContentWithVisualEvidence as parseCodexAssistantContentFromRollout,
+  type CodexVisualArtifactPathEvidenceState, type ParsedCodexAssistantContent,
 } from "./codex-visual-artifacts";
 import type { ProviderActivity } from "./provider-activity";
 import { codexRuntimeModelFromTurnContext } from "./timeline-runtime-model";
@@ -68,7 +69,7 @@ interface CodexTerminalSessionToolState {
   started: boolean;
 }
 
-export interface CodexRolloutTranslationState {
+export interface CodexRolloutTranslationState extends CodexVisualArtifactPathEvidenceState {
   pendingToolCalls: Map<string, PendingToolCall>;
   terminalSessions: Map<number, CodexTerminalSessionToolState>;
   completedToolCallIds: Set<string>;
@@ -79,13 +80,11 @@ export interface CodexRolloutTranslationState {
   providerSessionId?: string | undefined;
   currentTurnId?: string | undefined;
   currentRuntimeModel?: TimelineRuntimeModel | undefined;
-  nextTimelineItemIndex: number;
-  compactionCountByTurnId: Map<string, number>;
+  nextTimelineItemIndex: number; compactionCountByTurnId: Map<string, number>;
 }
 
 export function createCodexRolloutTranslationState(
-  options: { providerSessionId?: string | undefined } = {},
-): CodexRolloutTranslationState {
+  options: { providerSessionId?: string | undefined } = {}): CodexRolloutTranslationState {
   const state: CodexRolloutTranslationState = {
     pendingToolCalls: new Map(),
     terminalSessions: new Map(),
@@ -93,8 +92,8 @@ export function createCodexRolloutTranslationState(
     lastTimelineTextSignature: null,
     lastTimelineIdentity: null,
     lastGoalEventSignatureByThread: new Map(),
-    nextTimelineItemIndex: 0,
-    compactionCountByTurnId: new Map(),
+    nextTimelineItemIndex: 0, compactionCountByTurnId: new Map(),
+    visualArtifactPathByFileName: new Map(),
   };
   if (options.providerSessionId !== undefined) {
     state.providerSessionId = options.providerSessionId;
@@ -1502,6 +1501,7 @@ export function translateCodexRolloutLine(
   line: unknown,
   state: CodexRolloutTranslationState,
 ): CodexTranslatedActivity[] {
+  observeCodexVisualArtifactPathEvidence(line, state);
   const turnIdBeforeTranslation = state.currentTurnId;
   const translated = translateCodexRolloutLineUnscoped(line, state);
   return scopeCodexTranslatedActivitiesToTurn(
@@ -1717,7 +1717,7 @@ function translateCodexRolloutLineUnscoped(
         }
         return invalidRolloutActivity(record, "agent_message did not contain text");
       }
-      const parsed = parseCodexAssistantContent(rawText);
+      const parsed = parseCodexAssistantContentFromRollout(rawText, state);
       if (!parsed.text && !parsed.content?.some((part) => part.kind === "visual")) {
         return [];
       }
@@ -1944,7 +1944,7 @@ function translateCodexRolloutLineUnscoped(
       const contextualText = stripCodexContextualFragments(
         rawText ?? "",
       );
-      const parsed = parseCodexAssistantContent(contextualText);
+      const parsed = parseCodexAssistantContentFromRollout(contextualText, state);
       if (!parsed.text && !parsed.content?.some((part) => part.kind === "visual")) {
         if (rawText !== null) {
           return [];

@@ -220,6 +220,7 @@ export function SessionModeControls(props: {
               aria-haspopup="listbox"
               aria-expanded={accessOpen}
               data-composer-control="permissions"
+              data-composer-focus-preserve="true"
             >
               <span className="sr-only">Session mode</span>
               <SelectedAccessIcon
@@ -272,6 +273,7 @@ export function SessionModeControls(props: {
             <div
               ref={accessPanelRef}
               data-session-access-panel="true"
+              data-composer-focus-preserve="true"
               className="rah-popover-panel fixed z-[60] flex flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-xl focus:outline-none"
               style={accessPanelStyle}
               role="listbox"
@@ -291,6 +293,7 @@ export function SessionModeControls(props: {
                     <button
                       key={mode.id}
                       type="button"
+                      data-composer-focus-preserve="true"
                       onClick={() => {
                         props.onAccessModeChange(mode.id);
                         setAccessOpen(false);
@@ -369,6 +372,7 @@ export function SessionModeControls(props: {
             title={props.planModeEnabled ? "Disable plan mode" : "Enable plan mode"}
             aria-label="Plan mode"
             data-composer-control="plan"
+            data-composer-focus-preserve="true"
             data-plan-active={props.planModeEnabled ? "true" : "false"}
           >
             <ListTodo

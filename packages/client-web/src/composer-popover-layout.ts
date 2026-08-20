@@ -79,14 +79,22 @@ export function resolveComposerPopoverLayout(args: {
   minimumUsableHeight?: number;
   padding?: number;
   gap?: number;
+  horizontalAlignment?: "start" | "center" | "end";
 }): ComposerPopoverLayout {
   const padding = args.padding ?? 8;
   const gap = args.gap ?? 6;
   const minimumUsableHeight = args.minimumUsableHeight ?? 96;
   const maximumWidth = Math.max(0, args.viewport.width - padding * 2);
   const width = Math.min(Math.max(0, args.desiredWidth), maximumWidth);
+  const horizontalAlignment = args.horizontalAlignment ?? "start";
+  const desiredLeft =
+    horizontalAlignment === "end"
+      ? args.anchor.right - width
+      : horizontalAlignment === "center"
+        ? args.anchor.left + (args.anchor.width - width) / 2
+        : args.anchor.left;
   const left = clamp(
-    args.anchor.left,
+    desiredLeft,
     args.viewport.left + padding,
     args.viewport.right - padding - width,
   );

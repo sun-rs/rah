@@ -23,6 +23,7 @@ import {
   NotebookPreview,
 } from "./InspectorPreviewDisplays";
 import { resolveFilePreviewKind } from "./file-preview-utils";
+import { HtmlFilePreview } from "./HtmlFilePreview";
 import {
   buildDiffRows,
   getChangeScopeLabel,
@@ -766,6 +767,13 @@ export function InspectorFileDetailDialog(props: {
               />
             ) : filePreviewKind === "markdown" ? (
               <MarkdownFilePreview
+                path={props.selection.path}
+                content={fileContent}
+                truncated={truncated}
+                wrapLines={wrapLines}
+              />
+            ) : filePreviewKind === "html" ? (
+              <HtmlFilePreview
                 path={props.selection.path}
                 content={fileContent}
                 truncated={truncated}

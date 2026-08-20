@@ -69,10 +69,11 @@ function openCodeAgentMode(id: string, label = id): SessionModeDescriptor {
 }
 
 describe("native TUI launch specs", () => {
-  test("builds Codex start and resume without overriding CODEX_HOME", async () => {
+  test("captures the Codex history root used by the launched provider", async () => {
     const fake = fakeBinary("codex");
     const providerSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8111";
     process.env.RAH_CODEX_BINARY = fake.path;
+    process.env.CODEX_HOME = "/tmp/rah-test-codex-home";
     try {
       const start = await nativeTuiStartLaunchSpec({
         provider: "codex",
@@ -86,7 +87,8 @@ describe("native TUI launch specs", () => {
         "--cd",
         "/workspace/demo",
       ]);
-      assert.equal(start.env, undefined);
+      assert.equal(start.env?.CODEX_HOME, "/tmp/rah-test-codex-home");
+      assert.deepEqual(start.env, { CODEX_HOME: "/tmp/rah-test-codex-home" });
 
       const resume = await nativeTuiResumeLaunchSpec({
         provider: "codex",
@@ -102,7 +104,8 @@ describe("native TUI launch specs", () => {
         "/workspace/demo",
         providerSessionId,
       ]);
-      assert.equal(resume.env, undefined);
+      assert.equal(resume.env?.CODEX_HOME, "/tmp/rah-test-codex-home");
+      assert.deepEqual(resume.env, { CODEX_HOME: "/tmp/rah-test-codex-home" });
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
     }
@@ -142,6 +145,7 @@ describe("native TUI launch specs", () => {
       assert.equal(start.modelId, "opus");
       assert.equal(start.reasoningId, "max");
       assert.deepEqual(start.optionValues, { effort: "max" });
+      assert.deepEqual(start.env, { CLAUDE_CONFIG_DIR: configDir });
 
       const resume = await nativeTuiResumeLaunchSpec({
         provider: "claude",
@@ -157,6 +161,7 @@ describe("native TUI launch specs", () => {
         "1fc664f1-6b72-46ed-936f-62b2e099ac45",
       ]);
       assert.equal(resume.providerSessionId, "1fc664f1-6b72-46ed-936f-62b2e099ac45");
+      assert.deepEqual(resume.env, { CLAUDE_CONFIG_DIR: configDir });
 
       const claudeConfig = JSON.parse(
         readFileSync(path.join(configDir, ".claude.json"), "utf8"),

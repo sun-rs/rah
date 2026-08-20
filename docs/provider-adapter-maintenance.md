@@ -31,6 +31,13 @@ and `SessionModeDescriptor.applyTiming`, then submit `modeId`, but only the adap
 the provider-native mode id or decide whether applying it means immediate, next-turn, idle-only,
 restart-required, or startup-only behavior.
 
+Input delivery has one cross-provider contract. Every adapter path stages input in the daemon queue
+before provider I/O and publishes `session.input.accepted` only when provider evidence accepts the
+exact `clientMessageId`. Runtime/process creation, a PTY write, generic HTTP/RPC success, and queue
+disappearance are not substitutes for that receipt. New/Resume/Attach must remain pending until the
+receipt arrives; rejection or an uncertain transport result must leave the input visible and
+recoverable.
+
 ## 2. Browser Smoke Principle
 
 Browser smoke should validate:
@@ -93,6 +100,7 @@ Current filtering explicitly ignores:
 - `file-history-snapshot`
 - `change`
 - `queue-operation`
+- provider-internal `isMeta`, `command-*`, `local-command-*`, and `<system-reminder>` user context
 - transcript noise such as `No response requested.`
 - local command stdout wrappers
 

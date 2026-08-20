@@ -12,8 +12,10 @@ import {
   applyProjectionEventsToSyncState,
   coalesceConversationProjectionDeltas,
   coalesceProjectionEvents,
+  recoverFromReplayGapCommand,
   recoverTransportCommand,
   resolveSyncFlushPlan,
+  shouldCollectUnreadEventsFromBatch,
   splitProjectionTransportEvents,
   takeSyncEventPrefix,
 } from "./session-store-sync";
@@ -60,6 +62,30 @@ describe("session sync flush scheduling", () => {
       },
     );
     assert.ok(BACKGROUND_SYNC_FLUSH_INTERVAL_MS > 0);
+  });
+});
+
+describe("session sync unread replay ownership", () => {
+  test("counts a cursor-based reconnect replay as missed foreground activity", () => {
+    assert.equal(
+      shouldCollectUnreadEventsFromBatch({
+        initial: true,
+        replay: true,
+        hasReplayCursor: true,
+      }),
+      true,
+    );
+  });
+
+  test("keeps a cursorless first-load replay as historical read baseline", () => {
+    assert.equal(
+      shouldCollectUnreadEventsFromBatch({
+        initial: true,
+        replay: true,
+        hasReplayCursor: false,
+      }),
+      false,
+    );
   });
 });
 
@@ -214,6 +240,76 @@ function createRecoverHarness(
 }
 
 describe("session store recovery", () => {
+  test("replay-gap recovery catches up only selected and visible conversations", async () => {
+    const sessionA = createEmptySessionProjection(
+      summary({ id: "session-a", providerSessionId: "thread-a" }),
+    );
+    const sessionB = createEmptySessionProjection(
+      summary({ id: "session-b", providerSessionId: "thread-b" }),
+    );
+    const sessionC = createEmptySessionProjection(
+      summary({ id: "session-c", providerSessionId: "thread-c" }),
+    );
+    let state = {
+      projections: new Map([
+        ["session-a", sessionA],
+        ["session-b", sessionB],
+        ["session-c", sessionC],
+      ]),
+      unreadSessionIds: new Set<string>(),
+      visibleSessionIds: new Set(["session-b"]),
+      selectedSessionId: "session-a",
+      workspaceVisibilityVersion: 0,
+      sessionTopologyVersion: 0,
+      eventStreamOpenRevision: 0,
+      storedSessions: [],
+      recentSessions: [],
+      pendingSessionTransition: null,
+      pendingSessionAction: null,
+      error: null,
+      workspaceDir: "/tmp/rah",
+      hiddenWorkspaceDirs: new Set<string>(),
+    };
+    const caughtUp: string[] = [];
+
+    await recoverFromReplayGapCommand({
+      batch: {
+        events: [],
+        replayGap: {
+          requestedFromSeq: 1,
+          oldestAvailableSeq: 10,
+          newestAvailableSeq: 20,
+        },
+      },
+      get: () => state,
+      set: (partial) => {
+        state = {
+          ...state,
+          ...(typeof partial === "function" ? partial(state) : partial),
+        };
+      },
+      clearPendingEvents: () => undefined,
+      updateLastSeq: () => undefined,
+      replaceSessionsResponse: (current) => ({
+        projections: current.projections,
+        selectedSessionId: current.selectedSessionId,
+        workspaceDir: current.workspaceDir,
+        hiddenWorkspaceDirs: current.hiddenWorkspaceDirs,
+        workspaceVisibilityVersion: current.workspaceVisibilityVersion,
+        storedSessions: [],
+        recentSessions: [],
+        workspaceDirs: ["/tmp/rah"],
+      }),
+      applyEventsToMap: (current) => current,
+      ensureConversationLoaded: async (sessionId) => {
+        caughtUp.push(sessionId);
+      },
+      listSessions: async () => emptySessionsResponse(),
+    });
+
+    assert.deepEqual(caughtUp.sort(), ["session-a", "session-b"]);
+  });
+
   test("orders, deduplicates, and composes contiguous conversation deltas", () => {
     const projectionDelta = (
       sessionId: string,
@@ -559,6 +655,141 @@ describe("session store recovery", () => {
     assert.deepEqual(
       next.projections.get("live")?.feed.map((entry) => entry.key),
       ["assistant:history-answer"],
+    );
+  });
+
+  test("moves a pending Resume to live when close and started arrive in separate flushes", () => {
+    const history = summary({
+      id: "history-split",
+      providerSessionId: "thread-split",
+      readOnlyReplay: true,
+    });
+    const live = summary({
+      id: "live-split",
+      providerSessionId: "thread-split",
+    });
+    live.session.phase = "working";
+    live.session.runtimeState = "running";
+    live.session.nativeTui = {
+      terminalId: "live-split",
+      viewAvailable: true,
+      promptState: "prompt_clean",
+      queuedInputCount: 0,
+    };
+    live.session.capabilities.nativeTui = true;
+    live.session.capabilities.rawPtyInput = true;
+    const historyProjection = createEmptySessionProjection(history);
+    historyProjection.summary.session.status = "running";
+    historyProjection.summary.session.phase = "starting";
+    historyProjection.summary.session.runtimeState = "starting";
+    historyProjection.summary.session.capabilities.steerInput = true;
+    historyProjection.summary.session.capabilities.livePermissions = true;
+    historyProjection.summary.attachedClients = [
+      {
+        id: "web-client",
+        kind: "web",
+        sessionId: "history-split",
+        connectionId: "web-connection",
+        attachMode: "interactive",
+        focus: true,
+        lastSeenAt: "2026-05-10T00:00:00.000Z",
+      },
+    ];
+    historyProjection.summary.controlLease = {
+      sessionId: "history-split",
+      holderClientId: "web-client",
+      holderKind: "web",
+      grantedAt: "2026-05-10T00:00:00.000Z",
+    };
+    historyProjection.currentRuntimeStatus = "thinking";
+    historyProjection.feed = [
+      {
+        key: "optimistic:user:split-question",
+        kind: "timeline",
+        item: {
+          kind: "user_message",
+          text: "continue after split lifecycle delivery",
+          clientMessageId: "split-question",
+        },
+        ts: "2026-05-10T00:00:01.000Z",
+      },
+    ];
+    const pendingState = {
+      projections: new Map([["history-split", historyProjection]]),
+      unreadSessionIds: new Set<string>(),
+      selectedSessionId: "history-split",
+      workspaceVisibilityVersion: 0,
+      sessionTopologyVersion: 0,
+      eventStreamOpenRevision: 0,
+      pendingSessionAction: {
+        kind: "resume_history" as const,
+        sessionId: "history-split",
+      },
+      pendingSessionTransition: {
+        kind: "resume_history" as const,
+        provider: "codex" as const,
+        providerSessionId: "thread-split",
+      },
+      error: null,
+    };
+
+    const afterClose = applyProjectionEventsToSyncState({
+      state: pendingState,
+      events: [
+        event(20, { type: "session.closed", payload: {} }, "history-split"),
+      ],
+      applyEventsToMap,
+    });
+    assert.equal(afterClose.selectedSessionId, "history-split");
+    assert.equal(afterClose.projections.has("history-split"), true);
+
+    const afterStarted = applyProjectionEventsToSyncState({
+      state: {
+        ...pendingState,
+        projections: afterClose.projections,
+        selectedSessionId: afterClose.selectedSessionId,
+        sessionTopologyVersion: afterClose.sessionTopologyVersion,
+      },
+      events: [
+        event(
+          21,
+          { type: "session.started", payload: { session: live.session } },
+          "live-split",
+        ),
+        event(
+          22,
+          { type: "runtime.status", payload: { status: "thinking" } },
+          "live-split",
+        ),
+      ],
+      applyEventsToMap,
+    });
+
+    assert.equal(afterStarted.selectedSessionId, "live-split");
+    assert.equal(afterStarted.projections.has("history-split"), false);
+    assert.equal(
+      afterStarted.projections.get("live-split")?.summary.session.nativeTui?.viewAvailable,
+      true,
+    );
+    assert.equal(
+      afterStarted.projections.get("live-split")?.currentRuntimeStatus,
+      "thinking",
+    );
+    assert.equal(
+      afterStarted.projections.get("live-split")?.summary.attachedClients[0]?.sessionId,
+      "live-split",
+    );
+    assert.equal(
+      afterStarted.projections.get("live-split")?.summary.controlLease.holderClientId,
+      "web-client",
+    );
+    assert.equal(
+      afterStarted.projections.get("live-split")?.summary.controlLease.sessionId,
+      "live-split",
+    );
+    assert.deepEqual(
+      afterStarted.projections.get("live-split")?.feed.map((entry) => entry.key),
+      ["optimistic:user:split-question"],
     );
   });
 

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { resolvePrependAnchorScrollTop } from "./prepend-scroll-anchor.ts";
+import {
+  resolvePrependAnchorScrollTop,
+  shouldMaintainDetachedReaderAnchor,
+  shouldRequestOlderConversationHistory,
+} from "./prepend-scroll-anchor.ts";
 
 describe("prepend scroll anchor", () => {
   test("keeps the same message at the same viewport offset", () => {
@@ -30,5 +34,68 @@ describe("prepend scroll anchor", () => {
       }),
       1_040,
     );
+  });
+
+  test("does not let passive browser restoration capture an old-history anchor", () => {
+    assert.equal(
+      shouldRequestOlderConversationHistory({
+        armed: true,
+        inLoadZone: true,
+        contentUnderfilled: false,
+        userDetachedFromLatest: false,
+      }),
+      false,
+    );
+  });
+
+  test("loads older history for an intentional reader scroll or an underfilled page", () => {
+    assert.equal(
+      shouldRequestOlderConversationHistory({
+        armed: true,
+        inLoadZone: true,
+        contentUnderfilled: false,
+        userDetachedFromLatest: true,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldRequestOlderConversationHistory({
+        armed: true,
+        inLoadZone: true,
+        contentUnderfilled: true,
+        userDetachedFromLatest: false,
+      }),
+      true,
+    );
+  });
+
+  test("maintains a canonical row anchor only for an uninterrupted detached reader", () => {
+    assert.equal(
+      shouldMaintainDetachedReaderAnchor({
+        userDetachedFromLatest: true,
+        historyLoadActive: false,
+        explicitAlignmentActive: false,
+      }),
+      true,
+    );
+    for (const blocked of [
+      {
+        userDetachedFromLatest: false,
+        historyLoadActive: false,
+        explicitAlignmentActive: false,
+      },
+      {
+        userDetachedFromLatest: true,
+        historyLoadActive: true,
+        explicitAlignmentActive: false,
+      },
+      {
+        userDetachedFromLatest: true,
+        historyLoadActive: false,
+        explicitAlignmentActive: true,
+      },
+    ]) {
+      assert.equal(shouldMaintainDetachedReaderAnchor(blocked), false);
+    }
   });
 });

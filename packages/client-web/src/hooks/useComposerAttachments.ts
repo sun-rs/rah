@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { SessionInputAttachment } from "@rah/runtime-protocol";
 import * as api from "../api";
 
@@ -8,6 +8,26 @@ export interface ComposerAttachmentItem {
 }
 
 const MAX_COMPOSER_ATTACHMENTS = 10;
+const itemsByScope = new Map<string, ComposerAttachmentItem[]>();
+const pendingByScope = new Map<string, number>();
+const errorByScope = new Map<string, string | null>();
+const revisionByScope = new Map<string, number>();
+const listenersByScope = new Map<string, Set<() => void>>();
+
+function refreshScope(scopeKey: string): void {
+  revisionByScope.set(scopeKey, (revisionByScope.get(scopeKey) ?? 0) + 1);
+  for (const listener of listenersByScope.get(scopeKey) ?? []) listener();
+}
+
+function subscribeScope(scopeKey: string, listener: () => void): () => void {
+  const listeners = listenersByScope.get(scopeKey) ?? new Set<() => void>();
+  listeners.add(listener);
+  listenersByScope.set(scopeKey, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) listenersByScope.delete(scopeKey);
+  };
+}
 
 function releasePreview(item: ComposerAttachmentItem): void {
   if (item.previewUrl) {
@@ -20,33 +40,26 @@ function previewUrlForFile(file: File): string | undefined {
 }
 
 export function useComposerAttachments(scopeKey = "default") {
-  const [, setRevision] = useState(0);
-  const itemsByScopeRef = useRef(new Map<string, ComposerAttachmentItem[]>());
-  const pendingByScopeRef = useRef(new Map<string, number>());
-  const errorByScopeRef = useRef(new Map<string, string | null>());
-  const refresh = useCallback(() => setRevision((current) => current + 1), []);
-  const items = itemsByScopeRef.current.get(scopeKey) ?? [];
-  const pendingCount = pendingByScopeRef.current.get(scopeKey) ?? 0;
-  const error = errorByScopeRef.current.get(scopeKey) ?? null;
-
-  useEffect(() => {
-    return () => {
-      for (const scopedItems of itemsByScopeRef.current.values()) {
-        for (const item of scopedItems) releasePreview(item);
-      }
-    };
-  }, []);
+  useSyncExternalStore(
+    (listener) => subscribeScope(scopeKey, listener),
+    () => revisionByScope.get(scopeKey) ?? 0,
+    () => revisionByScope.get(scopeKey) ?? 0,
+  );
+  const items = itemsByScope.get(scopeKey) ?? [];
+  const pendingCount = pendingByScope.get(scopeKey) ?? 0;
+  const error = errorByScope.get(scopeKey) ?? null;
+  const refresh = useCallback(() => refreshScope(scopeKey), [scopeKey]);
 
   const uploadFiles = useCallback(async (files: readonly File[]) => {
-    const currentItems = itemsByScopeRef.current.get(scopeKey) ?? [];
-    const currentPending = pendingByScopeRef.current.get(scopeKey) ?? 0;
+    const currentItems = itemsByScope.get(scopeKey) ?? [];
+    const currentPending = pendingByScope.get(scopeKey) ?? 0;
     const available = Math.max(
       0,
       MAX_COMPOSER_ATTACHMENTS - currentItems.length - currentPending,
     );
     const selected = files.slice(0, available);
     if (selected.length === 0) {
-      errorByScopeRef.current.set(
+      errorByScope.set(
         scopeKey,
         available === 0
           ? `A message can include up to ${MAX_COMPOSER_ATTACHMENTS} attachments.`
@@ -55,13 +68,13 @@ export function useComposerAttachments(scopeKey = "default") {
       refresh();
       return;
     }
-    errorByScopeRef.current.set(
+    errorByScope.set(
       scopeKey,
       selected.length < files.length
         ? `Only the first ${available} attachments were added.`
         : null,
     );
-    pendingByScopeRef.current.set(scopeKey, currentPending + selected.length);
+    pendingByScope.set(scopeKey, currentPending + selected.length);
     refresh();
     const results = await Promise.allSettled(
       selected.map(async (file): Promise<ComposerAttachmentItem> => {
@@ -84,26 +97,26 @@ export function useComposerAttachments(scopeKey = "default") {
       }
     }
     if (uploaded.length > 0) {
-      itemsByScopeRef.current.set(scopeKey, [
-        ...(itemsByScopeRef.current.get(scopeKey) ?? []),
+      itemsByScope.set(scopeKey, [
+        ...(itemsByScope.get(scopeKey) ?? []),
         ...uploaded,
       ]);
     }
     if (failureMessage) {
-      errorByScopeRef.current.set(scopeKey, failureMessage);
+      errorByScope.set(scopeKey, failureMessage);
     }
-    pendingByScopeRef.current.set(
+    pendingByScope.set(
       scopeKey,
-      Math.max(0, (pendingByScopeRef.current.get(scopeKey) ?? 0) - selected.length),
+      Math.max(0, (pendingByScope.get(scopeKey) ?? 0) - selected.length),
     );
     refresh();
   }, [refresh, scopeKey]);
 
   const remove = useCallback((index: number) => {
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
+    const current = itemsByScope.get(scopeKey) ?? [];
     const item = current[index];
     if (item) releasePreview(item);
-    itemsByScopeRef.current.set(
+    itemsByScope.set(
       scopeKey,
       current.filter((_, candidateIndex) => candidateIndex !== index),
     );
@@ -111,24 +124,24 @@ export function useComposerAttachments(scopeKey = "default") {
   }, [refresh, scopeKey]);
 
   const removeLast = useCallback(() => {
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
+    const current = itemsByScope.get(scopeKey) ?? [];
     const item = current.at(-1);
     if (item) releasePreview(item);
-    itemsByScopeRef.current.set(scopeKey, current.slice(0, -1));
+    itemsByScope.set(scopeKey, current.slice(0, -1));
     refresh();
   }, [refresh, scopeKey]);
 
   const clear = useCallback(() => {
-    for (const item of itemsByScopeRef.current.get(scopeKey) ?? []) releasePreview(item);
-    itemsByScopeRef.current.set(scopeKey, []);
-    errorByScopeRef.current.set(scopeKey, null);
+    for (const item of itemsByScope.get(scopeKey) ?? []) releasePreview(item);
+    itemsByScope.set(scopeKey, []);
+    errorByScope.set(scopeKey, null);
     refresh();
   }, [refresh, scopeKey]);
 
   const take = useCallback((): ComposerAttachmentItem[] => {
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
-    itemsByScopeRef.current.set(scopeKey, []);
-    errorByScopeRef.current.set(scopeKey, null);
+    const current = itemsByScope.get(scopeKey) ?? [];
+    itemsByScope.set(scopeKey, []);
+    errorByScope.set(scopeKey, null);
     refresh();
     return current;
   }, [refresh, scopeKey]);
@@ -137,9 +150,9 @@ export function useComposerAttachments(scopeKey = "default") {
     if (restored.length === 0) {
       return;
     }
-    itemsByScopeRef.current.set(scopeKey, [
+    itemsByScope.set(scopeKey, [
       ...restored,
-      ...(itemsByScopeRef.current.get(scopeKey) ?? []),
+      ...(itemsByScope.get(scopeKey) ?? []),
     ]);
     refresh();
   }, [refresh, scopeKey]);
@@ -151,7 +164,7 @@ export function useComposerAttachments(scopeKey = "default") {
   }, []);
 
   const setError = useCallback((nextError: string | null) => {
-    errorByScopeRef.current.set(scopeKey, nextError);
+    errorByScope.set(scopeKey, nextError);
     refresh();
   }, [refresh, scopeKey]);
 

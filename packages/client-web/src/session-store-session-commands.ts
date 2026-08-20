@@ -629,11 +629,26 @@ export async function steerQueuedInputCommand(args: {
     const imageCount = queuedInput.attachments?.filter(
       (attachment) => attachment.kind === "image",
     ).length;
+    const activeTurn = [...(projection.conversation?.turns ?? [])]
+      .reverse()
+      .find(
+        (turn) =>
+          turn.status === "in_progress" && turn.finalAnswerItemId === undefined,
+      );
     const optimistic = appendOptimisticUserMessage(projection, queuedInput.text, {
       clientMessageId: queuedInput.clientMessageId,
       ...(queuedInput.clientTurnId ? { clientTurnId: queuedInput.clientTurnId } : {}),
       ...(queuedInput.attachments?.length ? { attachments: queuedInput.attachments } : {}),
       ...(imageCount !== undefined ? { imageCount } : {}),
+      ...(activeTurn
+        ? {
+            turnId: activeTurn.providerTurnId ?? activeTurn.id,
+            canonicalTurnId: activeTurn.id,
+            ...(activeTurn.providerTurnId
+              ? { providerTurnId: activeTurn.providerTurnId }
+              : {}),
+          }
+        : {}),
     });
     const projections = new Map(state.projections);
     projections.set(args.sessionId, {

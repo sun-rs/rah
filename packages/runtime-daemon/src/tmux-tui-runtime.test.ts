@@ -53,7 +53,11 @@ function setEnv(name: string, value: string): () => void {
   };
 }
 
-function writeFakeClaudeBinary(filePath: string): void {
+function writeFakeClaudeBinary(
+  filePath: string,
+  options: { minSubmitDelayMs?: number } = {},
+): void {
+  const minSubmitDelayMs = options.minSubmitDelayMs ?? 0;
   writeFileSync(
     filePath,
     [
@@ -63,6 +67,7 @@ function writeFakeClaudeBinary(filePath: string): void {
       "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
       "process.stdin.resume();",
       "let buffer = '';",
+      "let lastTextAt = 0;",
       "process.stdin.on('data', (chunk) => {",
       "  if (chunk.includes('\\u001b')) {",
       "    chunk = chunk.replace(/\\u001b/g, '');",
@@ -73,11 +78,14 @@ function writeFakeClaudeBinary(filePath: string): void {
       "    buffer = '';",
       "    process.stdout.write('TMUX_CLAUDE_CLEARED\\r\\n');",
       "  }",
+      "  const hasSubmit = chunk.includes('\\r') || chunk.includes('\\n');",
+      "  if (!hasSubmit && chunk.length > 0) lastTextAt = Date.now();",
       "  buffer += chunk;",
       "  const parts = buffer.split(/\\r|\\n/);",
       "  buffer = parts.pop() ?? '';",
       "  for (const part of parts) {",
       "    if (!part.trim()) continue;",
+      `    if (lastTextAt > 0 && Date.now() - lastTextAt < ${minSubmitDelayMs}) { buffer = part + buffer; continue; }`,
       "    process.stdout.write(`TMUX_CLAUDE_INPUT:${part.trim()}\\r\\n›\\r\\n`);",
       "    if (part.trim() === 'exit') process.exit(0);",
       "  }",
@@ -116,7 +124,9 @@ test("tui_mux fallback uses tmux as the managed mux backend", async (t) => {
   }
   const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-claude-"));
   const fakeClaude = path.join(workspace, "fake-claude.js");
-  writeFakeClaudeBinary(fakeClaude);
+  // Claude classifies fast bracketed paste as a multiline draft. A submit key
+  // sent too soon remains in the composer instead of accepting the question.
+  writeFakeClaudeBinary(fakeClaude, { minSubmitDelayMs: 700 });
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreMux = setEnv("RAH_TUI_MUX", "tmux");
   const restoreClaude = setEnv("RAH_CLAUDE_BINARY", fakeClaude);

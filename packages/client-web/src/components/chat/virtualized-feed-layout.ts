@@ -2,6 +2,9 @@ import type { FeedEntry } from "../../types";
 
 export const VIRTUAL_FEED_OVERSCAN = 6;
 export const VIRTUAL_FEED_ROW_GAP_PX = 20;
+export const VIRTUAL_FEED_MAX_EAGER_ROWS = 80;
+export const VIRTUAL_FEED_MAX_EAGER_HEIGHT_PX = 12_000;
+export const VIRTUAL_FEED_MAX_EAGER_VIEWPORTS = 8;
 
 export type VirtualFeedRowGapResolver<T extends { key: string } = FeedEntry> = (
   entry: T,
@@ -26,6 +29,40 @@ export type VirtualFeedWindow = {
   topSpacerHeight: number;
   bottomSpacerHeight: number;
 };
+
+/**
+ * Native text selection owns the rows that were mounted when the drag began.
+ * Returning that exact window avoids replacing the browser Range with either a
+ * different virtual slice or the full transcript while the pointer is down.
+ */
+export function resolveLeasedVirtualFeedWindow(
+  resolvedWindow: VirtualFeedWindow,
+  selectionLease: VirtualFeedWindow | null,
+): VirtualFeedWindow {
+  return selectionLease ?? resolvedWindow;
+}
+
+/**
+ * Window by render cost, not merely by item count. A handful of very long
+ * markdown replies can be more expensive than hundreds of compact process
+ * rows, so either dimension may put the feed into its bounded-DOM mode.
+ */
+export function shouldVirtualizeFeedLayout(args: {
+  layout: VirtualFeedLayout;
+  viewportHeight: number;
+  rowCount?: number;
+}): boolean {
+  const viewportHeight = Math.max(0, args.viewportHeight);
+  if (viewportHeight <= 0 || args.layout.rows.length === 0) {
+    return false;
+  }
+  const rowCount = args.rowCount ?? args.layout.rows.length;
+  const heightBudget = Math.max(
+    VIRTUAL_FEED_MAX_EAGER_HEIGHT_PX,
+    viewportHeight * VIRTUAL_FEED_MAX_EAGER_VIEWPORTS,
+  );
+  return rowCount > VIRTUAL_FEED_MAX_EAGER_ROWS || args.layout.totalHeight >= heightBudget;
+}
 
 export function projectVirtualAnchorScrollTop(args: {
   layout: VirtualFeedLayout;
@@ -64,7 +101,7 @@ function estimateTimelineHeight(entry: Extract<FeedEntry, { kind: "timeline" }>)
     case "step":
       return 124;
     case "compaction":
-      return 20;
+      return 28;
     case "error":
     case "retry":
     case "system":

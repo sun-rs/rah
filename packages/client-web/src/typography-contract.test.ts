@@ -121,6 +121,23 @@ describe("Codex-compatible typography contract", () => {
     assert.match(markdownSource, /coalesceMarkdownImageBlocks/);
   });
 
+  test("separates primary Markdown sections without slicing every subsection", () => {
+    const proseSource = readSource("./styles.css");
+    const processSource = readSource("./assistant-process-styles.css");
+
+    assert.match(
+      processSource,
+      /\.prose-chat-final > :first-child > h1:first-child,[\s\S]*\.prose-chat-final > :first-child > h4:first-child\s*\{\s*margin-top:\s*0;/,
+    );
+    assert.match(proseSource, /\.prose-chat h1:not\(:first-child\),/);
+    assert.match(proseSource, /\.prose-chat h2:not\(:first-child\),/);
+    assert.doesNotMatch(proseSource, /\.prose-chat h3:not\(:first-child\),/);
+    assert.doesNotMatch(
+      proseSource,
+      /\.prose-chat-block:not\(:first-child\) > h3:first-child/,
+    );
+  });
+
   test("removes permanent desktop user-action whitespace while keeping copy reachable", () => {
     const proseSource = readSource("./styles.css");
 
@@ -137,7 +154,7 @@ describe("Codex-compatible typography contract", () => {
   test("keeps interactive local-file labels selectable without disabling file opening", () => {
     const proseSource = readSource("./styles.css");
     const markdownSource = readSource("./components/chat/MarkdownRenderer.tsx");
-    const threadSource = readSource("./components/chat/ChatThread.tsx");
+    const selectionSource = readSource("./components/chat/useConversationTextSelection.ts");
 
     assert.match(
       proseSource,
@@ -154,8 +171,8 @@ describe("Codex-compatible typography contract", () => {
     assert.match(markdownSource, /data-selectable-conversation-text="true"/);
     assert.match(markdownSource, /selectionIntersectsNode\(window\.getSelection\(\), event\.currentTarget\)/);
     assert.match(
-      threadSource,
-      /interactiveTarget && !selectableInteractiveText/,
+      selectionSource,
+      /interactiveTarget && !target\?\.closest\("\[data-selectable-conversation-text='true'\]"\)/,
     );
   });
 

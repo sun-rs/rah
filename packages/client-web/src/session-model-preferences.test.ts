@@ -128,18 +128,23 @@ describe("session model preferences", () => {
 
   test("wires persisted preferences into every Session composer path", () => {
     const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    const draftOwnerSource = readFileSync(
+      new URL("./hooks/useSessionModelDrafts.ts", import.meta.url),
+      "utf8",
+    );
     const startPreferenceSource = readFileSync(
       new URL("./session-start-model-preferences.ts", import.meta.url),
       "utf8",
     );
 
-    assert.match(appSource, /const modelDraftForSession = useCallback/);
-    assert.match(appSource, /readSessionModelPreference\(/);
-    assert.match(appSource, /rememberSessionModelPreference\(/);
+    assert.match(appSource, /useSessionModelDrafts/);
+    assert.match(draftOwnerSource, /const modelDraftForSession = useCallback/);
+    assert.match(draftOwnerSource, /readSessionModelPreference\(/);
+    assert.match(draftOwnerSource, /rememberSessionModelPreference\(/);
     assert.match(appSource, /resumeModelDraft=\{modelDraftForSession\(summary\.session\.id\)\}/);
     assert.match(appSource, /onResumeModelDraftChange=\{updateResumeModelDraft\}/);
     assert.match(appSource, /updateResumeModelDraft\(selectedSummary\.session\.id, nextDraft\)/);
-    assert.match(appSource, /const startSessionWithRememberedModel = useCallback/);
+    assert.match(draftOwnerSource, /const startSessionWithRememberedModel = useCallback/);
     assert.match(startPreferenceSource, /rememberStartedModel\(sessionId\)/);
     assert.equal((appSource.match(/await startSessionWithRememberedModel\(/g) ?? []).length, 2);
   });

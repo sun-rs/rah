@@ -7,6 +7,21 @@ export type ForegroundRecoveryAttemptContext = {
   signal: AbortSignal;
 };
 
+export function foregroundSurfaceHasAttention(args: {
+  visibilityState: DocumentVisibilityState;
+  documentHasFocus: boolean;
+  pwaDisplayMode: boolean;
+}): boolean {
+  if (args.visibilityState !== "visible") {
+    return false;
+  }
+  // iOS standalone PWAs can remain `document.hasFocus() === false` after the
+  // app returns to the foreground. Visibility is the authoritative lifecycle
+  // signal there; requiring focus suppresses catch-up, read reconciliation,
+  // and sticky-bottom restoration until the whole page is reloaded.
+  return args.pwaDisplayMode || args.documentHasFocus;
+}
+
 export function foregroundClockWasSuspended(
   previousTickAt: number,
   currentTickAt: number,

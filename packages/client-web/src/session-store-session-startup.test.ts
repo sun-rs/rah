@@ -17,6 +17,7 @@ import {
   createEmptySessionProjection,
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
+import { adoptExistingProjectionForProviderSession } from "./session-store-projections";
 import { initialConversationSyncState, type FeedEntry } from "./types";
 import { ensureConversationLoadedCommand } from "./session-store-conversation";
 
@@ -51,9 +52,30 @@ function installWebApiMocks(handler: (request: CapturedRequest) => unknown): Cap
       body: init?.body ? JSON.parse(String(init.body)) : null,
     };
     requests.push(request);
-    const result = await handler(request);
+    let result = await handler(request);
     if (result instanceof Response) {
       return result;
+    }
+    const initialInput = (
+      request.body as { initialInput?: { clientMessageId?: string; clientTurnId?: string } } | null
+    )?.initialInput;
+    if (
+      initialInput?.clientMessageId &&
+      result &&
+      typeof result === "object" &&
+      "session" in result &&
+      !("initialInputAcceptance" in result)
+    ) {
+      result = {
+        ...result,
+        initialInputAcceptance: {
+          clientMessageId: initialInput.clientMessageId,
+          ...(initialInput.clientTurnId
+            ? { clientTurnId: initialInput.clientTurnId }
+            : {}),
+          acceptedAt: "2026-04-29T00:00:00.000Z",
+        },
+      };
     }
     return new Response(JSON.stringify(result), {
       status: 200,
@@ -161,6 +183,7 @@ function startupDeps(
         typeof partial === "function" ? partial(state) : partial,
       );
     },
+    ensureEventTransportReady: async () => undefined,
     ensureConversationLoaded: async () => undefined,
     initializeLiveConversationProjection: async () => undefined,
     sendInput: async () => undefined,
@@ -582,11 +605,13 @@ describe("session startup model and mode requests", () => {
 
   test("new session submits its text-only first turn atomically with Session startup", async () => {
     let startBody: Record<string, unknown> | null = null;
+    const calls: string[] = [];
     installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/start")) {
+        calls.push("api:start");
         startBody = request.body as Record<string, unknown>;
         return {
           session: summary({
@@ -599,10 +624,12 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    const calls: string[] = [];
     const deps = startupDeps(
       {},
       {
+        ensureEventTransportReady: async () => {
+          calls.push("transport:ready");
+        },
         initializeLiveConversationProjection: async () => {
           calls.push("conversation");
         },
@@ -625,7 +652,12 @@ describe("session startup model and mode requests", () => {
     );
 
     assert.equal(sessionId, "started");
-    assert.deepEqual(calls, ["created:started", "conversation"]);
+    assert.deepEqual(calls, [
+      "transport:ready",
+      "api:start",
+      "created:started",
+      "conversation",
+    ]);
     const initialInput = startBody?.initialInput as Record<string, unknown>;
     assert.equal(initialInput.text, "hello");
     assert.equal(initialInput.clientId, "web-client");
@@ -2215,6 +2247,73 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "resumed");
   });
 
+  test("history replay shows the bounded memory baseline before resume and preserves it across runtime handoff", async () => {
+    const ref: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "thread-cached",
+      cwd: "/tmp/large-history",
+      rootDir: "/tmp/large-history",
+      title: "Cached history",
+    };
+    const cachedConversation = {
+      ...initialConversationSyncState(),
+      phase: "ready" as const,
+      loadedScope: "history" as const,
+      turns: [{ id: "cached-turn" } as never],
+      needsRefresh: true,
+      detachedBaseline: true,
+    };
+    const deps = startupDeps(
+      {},
+      {
+        restoreCachedConversation: () => cachedConversation,
+        adoptExistingProjectionForProviderSession,
+      },
+    );
+    const provisionalId = storedReplayPlaceholderSessionId(ref);
+    let visibleAtResumeRequest: string[] | undefined;
+    installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/resume")) {
+        visibleAtResumeRequest = (deps as {
+          get: () => {
+            projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+          };
+        }).get().projections.get(provisionalId)?.conversation?.turns.map((turn) => turn.id);
+        return {
+          session: summary({
+            id: "resumed-cached",
+            provider: "codex",
+            providerSessionId: ref.providerSessionId,
+            cwd: ref.cwd,
+            readOnlyReplay: true,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await resumeStoredSessionCommand(deps, ref, { preferStoredReplay: true });
+
+    assert.deepEqual(visibleAtResumeRequest, ["cached-turn"]);
+    const state = (deps as {
+      get: () => {
+        selectedSessionId: string | null;
+        projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      };
+    }).get();
+    assert.equal(state.selectedSessionId, "resumed-cached");
+    assert.deepEqual(
+      state.projections
+        .get("resumed-cached")
+        ?.conversation?.turns.map((turn) => turn.id),
+      ["cached-turn"],
+    );
+    assert.equal(
+      state.projections.get("resumed-cached")?.conversation?.needsRefresh,
+      true,
+    );
+  });
+
   test("Canvas history recovery keeps a stale provider error local to its pane", async () => {
     const ref: StoredSessionRef = {
       provider: "codex",
@@ -2456,6 +2555,94 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.projections.get("live")?.conversation, preservedConversation);
   });
 
+  test("an existing live Session accepts attach, controls, and the first history input atomically", async () => {
+    const history = summary({
+      id: "history-atomic-attach",
+      provider: "codex",
+      providerSessionId: "thread-atomic-attach",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const live = summary({
+      id: "live-atomic-attach",
+      provider: "codex",
+      providerSessionId: "thread-atomic-attach",
+      cwd: "/tmp/rah",
+      modeId: "default",
+      modelId: "gpt-5.6-sol",
+      reasoningId: "low",
+    });
+    const calls: string[] = [];
+    const requests = installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/live-atomic-attach/attach")) {
+        calls.push("api:attach");
+        return { session: live };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps(
+      {
+        selectedSessionId: history.session.id,
+        projections: new Map([
+          [history.session.id, createEmptySessionProjection(history)],
+          [live.session.id, createEmptySessionProjection(live)],
+        ]),
+        storedSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-atomic-attach",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+            createdAt: "2026-04-29T00:00:00.000Z",
+          },
+        ],
+      },
+      {
+        ensureEventTransportReady: async () => {
+          calls.push("transport:ready");
+        },
+      },
+    );
+
+    assert.equal(
+      await resumeHistorySessionCommand(deps, history.session.id, {
+        initialInput: "deliver through attach",
+        modelId: "gpt-5.6-sol",
+        reasoningId: "medium",
+        optionValues: { model_reasoning_effort: "medium" },
+        modeId: "plan",
+      }),
+      live.session.id,
+    );
+    assert.deepEqual(calls, ["transport:ready", "api:attach"]);
+
+    const attach = requests.find((request) => request.url.endsWith("/attach"));
+    assert.ok(attach);
+    assert.equal(requests.some((request) => request.url.endsWith("/input")), false);
+    assert.equal(requests.some((request) => request.url.endsWith("/model")), false);
+    assert.equal(requests.some((request) => request.url.endsWith("/mode")), false);
+    assert.deepEqual(attach.body, {
+      client: {
+        id: "web-client",
+        kind: "web",
+        connectionId: "web-connection",
+      },
+      mode: "interactive",
+      claimControl: true,
+      model: "gpt-5.6-sol",
+      optionValues: { model_reasoning_effort: "medium" },
+      modeId: "plan",
+      initialInput: {
+        clientId: "web-client",
+        text: "deliver through attach",
+        clientMessageId: (attach.body as { initialInput: { clientMessageId: string } })
+          .initialInput.clientMessageId,
+        clientTurnId: (attach.body as { initialInput: { clientTurnId: string } })
+          .initialInput.clientTurnId,
+      },
+    });
+  });
+
   test("resuming history selects an already controlled live projection without network calls", async () => {
     const historySummary = summary({
       id: "history",
@@ -2557,20 +2744,7 @@ describe("session startup model and mode requests", () => {
       },
     };
     const requests = installWebApiMocks((request) => {
-      if (request.url.endsWith("/api/sessions/live-config/mode")) {
-        return {
-          session: summary({
-            id: "live-config",
-            provider: "codex",
-            providerSessionId: "thread-running-config",
-            cwd: "/tmp/rah",
-            modeId: "never/danger-full-access",
-            modelId: "gpt-old",
-            reasoningId: "ultra",
-          }),
-        };
-      }
-      if (request.url.endsWith("/api/sessions/live-config/model")) {
+      if (request.url.endsWith("/api/sessions/live-config/attach")) {
         return {
           session: summary({
             id: "live-config",
@@ -2619,14 +2793,18 @@ describe("session startup model and mode requests", () => {
       ]),
       [
         [
-          "/api/sessions/live-config/mode",
-          { modeId: "never/danger-full-access" },
-        ],
-        [
-          "/api/sessions/live-config/model",
+          "/api/sessions/live-config/attach",
           {
-            modelId: "gpt-new",
+            client: {
+              id: "web-client",
+              kind: "web",
+              connectionId: "web-connection",
+            },
+            mode: "interactive",
+            claimControl: true,
+            model: "gpt-new",
             optionValues: { model_reasoning_effort: "medium" },
+            modeId: "never/danger-full-access",
           },
         ],
       ],

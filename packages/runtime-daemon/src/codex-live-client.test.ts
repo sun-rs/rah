@@ -1146,6 +1146,28 @@ rl.on('line', (line) => {
       services.sessionStore.getSession(sessionId)?.session.inputQueue?.length,
       0,
     );
+    const guidedUserEvents = services.eventBus
+      .list({ sessionIds: [sessionId], eventTypes: ["timeline.item.added"] })
+      .filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.turnId === "turn-steer-active" &&
+          event.payload.item.kind === "user_message" &&
+          event.payload.item.clientMessageId === "message-guide",
+      );
+    assert.equal(guidedUserEvents.length, 1);
+    assert.equal(
+      guidedUserEvents[0]?.type === "timeline.item.added" &&
+        guidedUserEvents[0].payload.item.kind === "user_message"
+        ? guidedUserEvents[0].payload.item.text
+        : null,
+      "guide this run",
+    );
+    await assert.doesNotReject(
+      adapter.steerQueuedInput(sessionId, "message-guide", {
+        clientId: "web-user",
+      }),
+    );
 
     adapter.setInputQueuePolicy(sessionId, {
       clientId: "web-user",

@@ -9,7 +9,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import * as React from "react";
 
 export function ComposerInputQueue(props: {
   items: readonly SessionQueuedInput[];
@@ -20,14 +20,20 @@ export function ComposerInputQueue(props: {
   onSteer: (clientMessageId: string) => Promise<void> | void;
   onOpenSide?: (item: SessionQueuedInput) => Promise<void> | void;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState("");
-  const [menuId, setMenuId] = useState<string | null>(null);
-  const [pendingIds, setPendingIds] = useState(() => new Set<string>());
-  const [draggedId, setDraggedId] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editText, setEditText] = React.useState("");
+  const [menuId, setMenuId] = React.useState<string | null>(null);
+  const [pendingIds, setPendingIds] = React.useState(() => new Set<string>());
+  const [draggedId, setDraggedId] = React.useState<string | null>(null);
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  // `submitting` is the provider-handoff representation of a user message.
+  // It is projected into the conversation feed by stable clientMessageId and
+  // must not also appear as an editable follow-up in the composer queue.
+  const queuedItems = props.items.filter(
+    (item) => (item.state ?? "queued") === "queued",
+  );
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!menuId) return;
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setMenuId(null);
@@ -36,7 +42,7 @@ export function ComposerInputQueue(props: {
     return () => window.removeEventListener("pointerdown", close);
   }, [menuId]);
 
-  if (props.items.length === 0) return null;
+  if (queuedItems.length === 0) return null;
 
   const run = async (id: string, action: () => Promise<void> | void) => {
     setPendingIds((current) => new Set(current).add(id));
@@ -57,8 +63,8 @@ export function ComposerInputQueue(props: {
       className="mb-2 overflow-visible rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-sm"
       data-testid="composer-input-queue"
     >
-      {props.items.map((item, index) => {
-        const pending = pendingIds.has(item.clientMessageId) || item.state === "submitting";
+      {queuedItems.map((item, index) => {
+        const pending = pendingIds.has(item.clientMessageId);
         const editing = editingId === item.clientMessageId;
         return (
           <div
@@ -72,7 +78,7 @@ export function ComposerInputQueue(props: {
             onDrop={(event) => {
               event.preventDefault();
               if (draggedId && draggedId !== item.clientMessageId) {
-                void run(draggedId, () => props.onReorder(draggedId, index + 1));
+                void run(draggedId, () => props.onReorder(draggedId, item.position));
               }
               setDraggedId(null);
             }}
@@ -92,10 +98,13 @@ export function ComposerInputQueue(props: {
               onKeyDown={(event) => {
                 if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
                 event.preventDefault();
-                const position = event.key === "ArrowUp" ? index : index + 2;
-                if (position >= 1 && position <= props.items.length) {
+                const target =
+                  event.key === "ArrowUp"
+                    ? queuedItems[index - 1]
+                    : queuedItems[index + 1];
+                if (target) {
                   void run(item.clientMessageId, () =>
-                    props.onReorder(item.clientMessageId, position),
+                    props.onReorder(item.clientMessageId, target.position),
                   );
                 }
               }}
@@ -234,7 +243,7 @@ export function ComposerInputQueue(props: {
 }
 
 function QueueMenuButton(props: {
-  icon: ReactNode;
+  icon: React.ReactNode;
   label: string;
   description?: string;
   title?: string;

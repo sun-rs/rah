@@ -263,6 +263,92 @@ test("refresh keeps the selected loaded stopped replay in memory", () => {
   assert.equal(next.selectedSessionId, replay.summary.session.id);
 });
 
+test("replay-gap replacement keeps rendered Conversation while rebuilding raw projections", () => {
+  const current = projectionWithQueuedInput();
+  current.feed.push({
+    key: "raw-feed",
+    kind: "notification",
+    level: "info",
+    title: "raw",
+    body: "must be rebuilt",
+    ts: "2026-06-06T12:02:00.000Z",
+  });
+  current.conversation = {
+    phase: "ready",
+    loadedScope: "history",
+    turns: [{ id: "cached-turn" } as never],
+    nextCursor: "older-cursor",
+    revision: 4,
+    daemonRevision: 7,
+    pendingDeltas: [],
+    needsRefresh: false,
+    approximateBytes: 512,
+    sourceRevision: "source-1",
+    loadedAt: "2026-06-06T12:00:00.000Z",
+    lastError: null,
+  };
+
+  const next = replaceSessionsResponse(
+    {
+      projections: new Map([[current.summary.session.id, current]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: null,
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([summary("queued-session", "queued-thread", { running: true })]),
+  );
+  const replaced = next.projections.get("queued-session");
+
+  assert.deepEqual(replaced?.feed, []);
+  assert.deepEqual(replaced?.conversation?.turns.map((turn) => turn.id), ["cached-turn"]);
+  assert.equal(replaced?.conversation?.needsRefresh, true);
+  assert.equal(replaced?.conversation?.daemonRevision, 7);
+  assert.equal(replaced?.conversation?.detachedBaseline, undefined);
+});
+
+test("replay-gap runtime rekey keeps a readable tail without reusing runtime cursors", () => {
+  const existing = createPendingStoredReplayProjection({
+    provider: "codex",
+    providerSessionId: "thread-rekey",
+    cwd: "/tmp/rah",
+  });
+  existing.summary = summary("old-runtime", "thread-rekey", { running: true });
+  existing.conversation = {
+    phase: "ready",
+    loadedScope: "history",
+    turns: [{ id: "cached-turn" } as never],
+    nextCursor: "old-runtime-cursor",
+    revision: 4,
+    daemonRevision: 7,
+    pendingDeltas: [],
+    needsRefresh: false,
+    approximateBytes: 512,
+    sourceRevision: "source-1",
+    loadedAt: "2026-06-06T12:00:00.000Z",
+    lastError: null,
+  };
+
+  const next = replaceSessionsResponse(
+    {
+      projections: new Map([["old-runtime", existing]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "old-runtime",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([summary("new-runtime", "thread-rekey", { running: true })]),
+  );
+  const replacement = next.projections.get("new-runtime")?.conversation;
+
+  assert.equal(next.selectedSessionId, "new-runtime");
+  assert.deepEqual(replacement?.turns.map((turn) => turn.id), ["cached-turn"]);
+  assert.equal(replacement?.phase, "ready");
+  assert.equal(replacement?.daemonRevision, null);
+  assert.equal(replacement?.nextCursor, null);
+  assert.equal(replacement?.detachedBaseline, true);
+});
+
 test("replaceSessionsResponse drops pending stored replay projection once the real replay exists", () => {
   const ref: StoredSessionRef = {
     provider: "codex",
@@ -362,6 +448,38 @@ test("replaceSessionsResponse preserves a submitting input across a stale replay
     projection.summary.session.inputQueue?.[0],
   ]);
   assert.deepEqual(next.projections.get("queued-session")?.feed, []);
+});
+
+test("turn-bound optimistic guidance remains unresolved until canonical acceptance", () => {
+  const projection = projectionWithQueuedInput("submitting");
+  projection.feed = projection.feed.map((entry) =>
+    entry.kind === "timeline" && entry.item.kind === "user_message"
+      ? {
+          ...entry,
+          canonicalTurnId: "active-canonical-turn",
+          providerTurnId: "active-provider-turn",
+          turnId: "active-provider-turn",
+        }
+      : entry,
+  );
+  const freshSummary = summary("queued-session", "queued-thread", { running: true });
+  freshSummary.session.capabilities.queuedInput = true;
+
+  const next = applySessionsResponse(
+    {
+      projections: new Map([["queued-session", projection]]),
+      workspaceDir: "/tmp/rah",
+      selectedSessionId: "queued-session",
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    },
+    sessionsResponse([freshSummary]),
+    replayNoop,
+  );
+
+  assert.deepEqual(next.projections.get("queued-session")?.summary.session.inputQueue, [
+    projection.summary.session.inputQueue?.[0],
+  ]);
 });
 
 test("replaceSessionsResponse cannot resurrect a queue item after canonical handoff", () => {

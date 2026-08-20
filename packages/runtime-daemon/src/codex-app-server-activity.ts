@@ -9,7 +9,6 @@ import type {
   ProcessOutputSnapshot,
   ProcessOutputStream,
   RuntimeOperation,
-  SessionInputAttachment,
   TimelineIdentity,
   TimelineItem,
   TimelineRuntimeModel,
@@ -20,6 +19,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
 import { classifyCodexCommandResult } from "./codex-command-result";
+import { codexImageGenerationActivities } from "./codex-image-generation-activity";
 import { BoundedProcessOutputAccumulator } from "./bounded-process-output";
 import { isCodexOutputDetailIncomplete } from "./codex-notification-ingress";
 import { normalizeContextUsage } from "./context-usage";
@@ -37,11 +37,32 @@ import {
 } from "./provider-history-attachments";
 import {
   codexAssistantContentSignature,
-  parseCodexAssistantContent,
+  observeCodexVisualArtifactPathEvidence,
+  parseCodexAssistantContentWithVisualEvidence,
+  type CodexVisualArtifactPathEvidenceState,
 } from "./codex-visual-artifacts";
 import type { ProviderActivity } from "./provider-activity";
 import { parsePersistedUserMessageContent } from "./session-input-attachments";
 import { timelineRuntimeModel } from "./timeline-runtime-model";
+import {
+  bindCodexSubmittedUserMessageToTurn,
+  createCodexSubmittedUserMessageActivity,
+  createCodexSubmittedUserMessageState,
+  markCodexSubmittedUserMessageEmitted,
+  submittedUserMessageKey,
+  takeCodexSubmittedUserMessageForEcho,
+  type CodexLiveSubmittedUserMessageParams,
+  type CodexSubmittedUserMessageState,
+} from "./codex-submitted-user-messages";
+
+export {
+  bindCodexSubmittedUserMessageToTurn,
+  discardCodexSubmittedUserMessageFromTurn,
+  discardPendingCodexSubmittedUserMessage,
+  recordCodexSubmittedUserMessage,
+  recordCodexSubmittedUserMessageForTurn,
+} from "./codex-submitted-user-messages";
+export type { CodexSubmittedUserMessage } from "./codex-submitted-user-messages";
 
 export interface CodexLiveTranslatedActivity {
   activity: ProviderActivity;
@@ -57,14 +78,8 @@ type PendingLiveToolCall = {
   toolCall: ToolCall;
 };
 
-export type CodexSubmittedUserMessage = {
-  text: string;
-  attachments?: SessionInputAttachment[];
-  clientMessageId?: string;
-  clientTurnId?: string;
-};
-
-export interface CodexAppServerTranslationState {
+export interface CodexAppServerTranslationState extends CodexSubmittedUserMessageState,
+  CodexVisualArtifactPathEvidenceState {
   pendingToolCalls: Map<string, PendingLiveToolCall>;
   agentMessageByItemId: Map<string, string[]>;
   visibleAgentMessageTextByItemId: Map<string, string>;
@@ -83,9 +98,6 @@ export interface CodexAppServerTranslationState {
   userTimelineItemIndexByTurnId: Map<string, number>;
   reservedUserTimelineItemIndexByTurnId: Map<string, number>;
   nextTimelineItemIndexByTurnId: Map<string, number>;
-  pendingSubmittedUserMessage?: CodexSubmittedUserMessage;
-  submittedUserMessageByTurnId: Map<string, CodexSubmittedUserMessage>;
-  clientUserMessageEmittedTurnIds: Set<string>;
   pendingRuntimeModel?: TimelineRuntimeModel;
   runtimeModelByTurnId: Map<string, TimelineRuntimeModel>;
   providerSessionIdByTurnId: Map<string, string>;
@@ -97,6 +109,7 @@ export interface CodexAppServerTranslationState {
   patchOutputByCallId: Map<string, BoundedProcessOutputAccumulator>;
   commandObservationByCallId: Map<string, WorkbenchObservation>;
   patchObservationByCallId: Map<string, WorkbenchObservation>;
+  visualArtifactPathByFileName: Map<string, string>;
 }
 
 export function createCodexAppServerTranslationState(): CodexAppServerTranslationState {
@@ -119,8 +132,7 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     userTimelineItemIndexByTurnId: new Map(),
     reservedUserTimelineItemIndexByTurnId: new Map(),
     nextTimelineItemIndexByTurnId: new Map(),
-    submittedUserMessageByTurnId: new Map(),
-    clientUserMessageEmittedTurnIds: new Set(),
+    ...createCodexSubmittedUserMessageState(),
     runtimeModelByTurnId: new Map(),
     providerSessionIdByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
@@ -131,44 +143,8 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     patchOutputByCallId: new Map(),
     commandObservationByCallId: new Map(),
     patchObservationByCallId: new Map(),
+    visualArtifactPathByFileName: new Map(),
   };
-}
-
-export function recordCodexSubmittedUserMessage(
-  state: CodexAppServerTranslationState,
-  message: CodexSubmittedUserMessage,
-): void {
-  state.pendingSubmittedUserMessage = message;
-}
-
-export function bindCodexSubmittedUserMessageToTurn(
-  state: CodexAppServerTranslationState,
-  turnId: string,
-): CodexSubmittedUserMessage | undefined {
-  const existing = state.submittedUserMessageByTurnId.get(turnId);
-  if (existing) {
-    return existing;
-  }
-  const pending = state.pendingSubmittedUserMessage;
-  if (!pending) {
-    return undefined;
-  }
-  state.submittedUserMessageByTurnId.set(turnId, pending);
-  delete state.pendingSubmittedUserMessage;
-  return pending;
-}
-
-export function discardPendingCodexSubmittedUserMessage(
-  state: CodexAppServerTranslationState,
-  clientMessageId: string | undefined,
-): void {
-  if (
-    state.pendingSubmittedUserMessage &&
-    (clientMessageId === undefined ||
-      state.pendingSubmittedUserMessage.clientMessageId === clientMessageId)
-  ) {
-    delete state.pendingSubmittedUserMessage;
-  }
 }
 
 type JsonRpcNotification = {
@@ -645,6 +621,25 @@ function createLiveTimelineIdentity(
     confidence: "derived",
     ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
     ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
+  });
+}
+
+export function codexSubmittedUserMessageActivity(state: CodexAppServerTranslationState,
+  params: CodexLiveSubmittedUserMessageParams): ProviderActivity | null {
+  const messageId =
+    params.message.clientMessageId ??
+    params.message.clientTurnId ??
+    `client-input:${params.turnId}:${Date.now().toString(36)}`;
+  return createCodexSubmittedUserMessageActivity(state, {
+    turnId: params.turnId,
+    message: params.message,
+    identity: createLiveTimelineIdentity(state, {
+      providerSessionId: params.providerSessionId,
+      turnId: params.turnId,
+      itemKind: "user_message",
+      providerItemKey: messageId,
+      providerMessageId: messageId,
+    }),
   });
 }
 
@@ -1686,10 +1681,28 @@ function mapThreadItem(
         state.emittedUserMessageItemIds.add(id);
         return [];
       }
-      const submitted = bindCodexSubmittedUserMessageToTurn(state, turnId);
-      if (submitted && state.clientUserMessageEmittedTurnIds.has(turnId)) {
+      // `turn/started` normally binds and projects the initial Web input
+      // before Codex echoes its native userMessage item. The echo can race
+      // ahead of that notification, though, so bind here as well and consume
+      // by stable message identity (with text only as a provider fallback).
+      bindCodexSubmittedUserMessageToTurn(state, turnId);
+      const submitted = takeCodexSubmittedUserMessageForEcho(state, turnId, {
+        providerMessageId: id,
+        clientMessageId:
+          stringField(item, "clientUserMessageId") ??
+          stringField(item, "clientMessageId") ??
+          undefined,
+        text,
+      });
+      const submittedKey = submitted
+        ? submittedUserMessageKey(submitted)
+        : undefined;
+      if (
+        submittedKey &&
+        state.emittedClientUserMessageIds.has(submittedKey)
+      ) {
         state.emittedUserMessageItemIds.add(id);
-        state.submittedUserMessageByTurnId.delete(turnId);
+        state.emittedClientUserMessageIds.delete(submittedKey);
         return [];
       }
       const nativeAttachments = submitted?.attachments?.length
@@ -1761,8 +1774,13 @@ function mapThreadItem(
             },
           ]
         : [{ type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "unknown", metadata: item as never } }];
+      if (submitted) {
+        // If the provider's native echo wins the race against turn/steer's
+        // response, it is already the canonical projection. Mark it before
+        // the RPC continuation can attempt the same client input again.
+        markCodexSubmittedUserMessageEmitted(state, submitted);
+      }
       state.emittedUserMessageItemIds.add(id);
-      state.submittedUserMessageByTurnId.delete(turnId);
       return activities;
     }
     case "agentMessage": {
@@ -1774,8 +1792,9 @@ function mapThreadItem(
       }
       const text = stringField(item, "text") ?? "";
       const buffered = (state.agentMessageByItemId.get(id) ?? []).join("");
-      const parsed = parseCodexAssistantContent(
+      const parsed = parseCodexAssistantContentWithVisualEvidence(
         stripCodexContextualFragments(text || buffered),
+        state,
       );
       state.completedAgentMessageItemIds.add(id);
       state.agentMessageByItemId.delete(id);
@@ -2153,15 +2172,16 @@ function mapThreadItem(
           : { type: "observation_completed", turnId, observation },
       ];
     }
-    case "imageView":
-    case "imageGeneration": {
-      const observation = makeGenericObservation(item, "media.read", itemType === "imageView" ? "View image" : "Generate image", phase === "started" ? "running" : "completed");
+    case "imageView": {
+      const observation = makeGenericObservation(item, "media.read", "View image", phase === "started" ? "running" : "completed");
       return [
         phase === "started"
           ? { type: "observation_started", turnId, observation }
           : { type: "observation_completed", turnId, observation },
       ];
     }
+    case "imageGeneration":
+      return codexImageGenerationActivities(item, phase, turnId);
     case "sleep": {
       const durationMs = numberField(item, "durationMs");
       const title = durationMs !== undefined ? `Wait ${durationMs}ms` : "Wait";
@@ -2280,6 +2300,7 @@ export function translateCodexAppServerThreadSnapshot(
   if (!threadRecord) {
     return [];
   }
+  observeCodexVisualArtifactPathEvidence(threadRecord, state);
   const providerSessionId = stringField(threadRecord, "id");
   const turns = Array.isArray(threadRecord.turns) ? threadRecord.turns : [];
   const translatedItems: CodexLiveTranslatedActivity[] = [];
@@ -2456,6 +2477,7 @@ export function translateCodexAppServerNotification(
   notification: JsonRpcNotification,
   state: CodexAppServerTranslationState,
 ): CodexLiveTranslatedActivity[] {
+  observeCodexVisualArtifactPathEvidence(notification, state);
   if (CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHOD_SET.has(notification.method)) {
     return [];
   }
@@ -2549,45 +2571,19 @@ export function translateCodexAppServerNotification(
         }),
       ];
       if (submitted) {
-        const messageId =
-          submitted.clientMessageId ??
-          submitted.clientTurnId ??
-          `client-input:${turn.id}`;
-        const userIdentity = createLiveTimelineIdentity(state, {
-          providerSessionId,
+        const submittedActivity = codexSubmittedUserMessageActivity(state, {
           turnId: turn.id,
-          itemKind: "user_message",
-          providerItemKey: messageId,
-          providerMessageId: messageId,
+          providerSessionId,
+          message: submitted,
         });
-        state.clientUserMessageEmittedTurnIds.add(turn.id);
+        if (!submittedActivity) {
+          return activities;
+        }
         activities.push(
-          translated(notification, {
-            type: "timeline_item",
-            turnId: turn.id,
-            item: {
-              kind: "user_message",
-              text: submitted.text,
-              messageId,
-              ...(submitted.clientMessageId !== undefined
-                ? { clientMessageId: submitted.clientMessageId }
-                : {}),
-              ...(submitted.clientTurnId !== undefined
-                ? { clientTurnId: submitted.clientTurnId }
-                : {}),
-              ...(submitted.attachments?.length
-                ? { attachments: submitted.attachments }
-                : {}),
-              ...(submitted.attachments?.some((attachment) => attachment.kind === "image")
-                ? {
-                    imageCount: submitted.attachments.filter(
-                      (attachment) => attachment.kind === "image",
-                    ).length,
-                  }
-                : {}),
-            },
-            ...timelineIdentityProps(userIdentity),
-          }),
+          translated(
+            notification,
+            submittedActivity,
+          ),
         );
       }
       return activities;
@@ -2635,7 +2631,7 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "turn/completed did not include turn.status");
       }
       const turnId = typeof turn.id === "string" ? turn.id : "current-turn";
-      state.submittedUserMessageByTurnId.delete(turnId);
+      state.submittedUserMessagesByTurnId.delete(turnId);
       const timing = turnLifecycleTiming(turn);
       const providerSessionId = providerSessionIdForTurn(state, turnId, params);
       const activities: CodexLiveTranslatedActivity[] = [];
@@ -2765,7 +2761,11 @@ export function translateCodexAppServerNotification(
         return [];
       }
       const buffered = (state.agentMessageByItemId.get(delta.itemId) ?? []).join("");
-      const parsed = parseCodexAssistantContent(buffered, { streaming: true });
+      const parsed = parseCodexAssistantContentWithVisualEvidence(
+        buffered,
+        state,
+        { streaming: true },
+      );
       const signature = codexAssistantContentSignature(parsed);
       const previousSignature =
         state.visibleAgentMessageSignatureByItemId.get(delta.itemId);

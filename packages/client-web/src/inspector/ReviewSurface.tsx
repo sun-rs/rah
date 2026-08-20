@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
+  ChevronUp,
   FileDiff,
   LoaderCircle,
   Search,
@@ -67,13 +69,14 @@ function useSemanticallyStableValue<T>(value: T, identity: string): T {
   return stable.current.value;
 }
 
-export function ReviewSurface(props: { scope: ReviewScope }) {
+export function ReviewSurface(props: { scope: ReviewScope; initialPath?: string }) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [diffContent, setDiffContent] = useState("");
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffTruncated, setDiffTruncated] = useState(false);
+  const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
   const [wrapLines, setWrapLines] = useState(
     () => readDiffPreferences().wrapLines,
   );
@@ -120,8 +123,13 @@ export function ReviewSurface(props: { scope: ReviewScope }) {
 
   useEffect(() => {
     setQuery("");
-    setSelectedKey(null);
-  }, [identity]);
+    setMobileFilesOpen(false);
+    setSelectedKey(
+      props.initialPath
+        ? files.find((file) => file.path === props.initialPath)?.key ?? null
+        : null,
+    );
+  }, [files, identity, props.initialPath]);
 
   useEffect(() => {
     setSelectedKey((current) =>
@@ -315,7 +323,34 @@ export function ReviewSurface(props: { scope: ReviewScope }) {
           )}
         </div>
 
-        <aside className="flex min-h-0 flex-col border-l border-[var(--app-border)] bg-[var(--app-subtle-bg)] max-md:order-1 max-md:max-h-52 max-md:border-b max-md:border-l-0">
+        <button
+          type="button"
+          className="hidden min-h-11 w-full min-w-0 items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 text-left max-md:flex"
+          aria-expanded={mobileFilesOpen}
+          aria-controls="review-mobile-file-list"
+          onClick={() => setMobileFilesOpen((current) => !current)}
+        >
+          <FileResourceIcon
+            path={selectedFile?.path ?? ""}
+            size={15}
+            className="shrink-0 text-[var(--app-hint)]"
+          />
+          <span className="min-w-0 flex-1 truncate text-xs text-[var(--app-fg)]">
+            {selectedFile
+              ? getDisplayPath(selectedFile.path, scope.workspaceRoot)
+              : "Choose a changed file"}
+          </span>
+          <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
+            {files.length} {files.length === 1 ? "file" : "files"}
+          </span>
+          {mobileFilesOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </button>
+        <aside
+          id="review-mobile-file-list"
+          className={`flex min-h-0 flex-col border-l border-[var(--app-border)] bg-[var(--app-subtle-bg)] max-md:order-1 max-md:max-h-52 max-md:border-b max-md:border-l-0 ${
+            mobileFilesOpen ? "max-md:flex" : "max-md:hidden"
+          }`}
+        >
           <label className="relative m-2 block shrink-0">
             <Search
               size={14}
@@ -335,7 +370,10 @@ export function ReviewSurface(props: { scope: ReviewScope }) {
               <button
                 key={file.key}
                 type="button"
-                onClick={() => setSelectedKey(file.key)}
+                onClick={() => {
+                  setSelectedKey(file.key);
+                  setMobileFilesOpen(false);
+                }}
                 className={`flex min-h-9 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
                   file.key === selectedFile?.key
                     ? "bg-[var(--app-selected-bg)] text-[var(--app-selected-fg)]"

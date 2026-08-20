@@ -47,6 +47,21 @@ function capitalizeValue(value: string): string {
   return value.length > 0 ? value.slice(0, 1).toUpperCase() + value.slice(1) : value;
 }
 
+function formatModelProvider(value: string | undefined): string {
+  if (!value) return "Unavailable";
+  switch (value.trim().toLowerCase()) {
+    case "openai":
+      return "OpenAI";
+    case "deepseek":
+      return "DeepSeek";
+    case "kimi":
+    case "moonshotai":
+      return "Kimi";
+    default:
+      return value;
+  }
+}
+
 function formatStatus(session: SessionSummary["session"] | undefined): string {
   if (!session) {
     return "Unavailable";
@@ -140,6 +155,13 @@ export function SessionInfoDialog(props: {
   const isRunningSession = session?.status === "running";
   const origin = formatSessionOrigin(session);
   const showCwd = Boolean(session?.cwd && session.rootDir && session.cwd !== session.rootDir);
+  const modelProvider =
+    session?.modelProvider ??
+    (() => {
+      const modelId = session?.model?.currentModelId;
+      const separator = modelId?.indexOf("/") ?? -1;
+      return separator > 0 ? modelId!.slice(0, separator) : undefined;
+    })();
 
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
@@ -167,7 +189,9 @@ export function SessionInfoDialog(props: {
           </div>
           <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full">
             <InfoSectionHeader>Session</InfoSectionHeader>
-            <InfoRow label="Provider" value={session ? providerLabel(session.provider) : "Unavailable"} />
+            <InfoRow label="Runtime provider" value={session ? providerLabel(session.provider) : "Unavailable"} />
+            <InfoRow label="Model provider" value={formatModelProvider(modelProvider)} />
+            <InfoRow label="Model" mono value={session?.model?.currentModelId ?? "Unavailable"} />
             <InfoRow label="Status" value={formatStatus(session)} />
             {providerSessionId ? (
               <InfoRow

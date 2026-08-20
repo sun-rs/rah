@@ -40,7 +40,7 @@ export function LocalImageResource(props: {
         if (cancelled) {
           return;
         }
-        if (!response.contentBase64) {
+        if (!response.contentBase64 || !response.mimeType?.startsWith("image/")) {
           setFailed(true);
           return;
         }
@@ -67,6 +67,10 @@ export function LocalImageResource(props: {
       alt={props.alt ?? ""}
       loading="lazy"
       decoding="async"
+      onError={() => {
+        setSrc(null);
+        setFailed(true);
+      }}
       className={
         props.mode === "compact"
           ? "h-full w-full object-cover"

@@ -62,6 +62,7 @@ import {
 import {
   useSidebarSessionTooltipController,
 } from "./useSidebarSessionTooltipController";
+import { writeCanvasSessionDragTarget } from "./components/workbench/canvas/canvas-session-drag";
 
 const sessionWorkspaceBranchCache = new Map<string, string | null>();
 const sessionWorkspaceBranchRequests = new Map<string, Promise<string | null>>();
@@ -463,6 +464,11 @@ function RunningSessionRow(props: {
         ? SIDEBAR_LAYOUT.sessionDualActionHiddenGroupClassName
         : SIDEBAR_LAYOUT.sessionSingleActionHiddenGroupClassName
   }`;
+  const visibleActionCount = archiveArmed ? 1 : props.session.archivable ? 2 : 1;
+  const titleActionCoverCount = Math.max(
+    0,
+    visibleActionCount - (props.session.status === "stopped" ? 0 : 1),
+  );
   const reorderDropTarget = useSidebarReorderDropTarget(props.reorder);
   const draggable = props.canvasDraggable || props.reorder !== undefined;
 
@@ -484,6 +490,8 @@ function RunningSessionRow(props: {
       data-sidebar-session-provider={props.session.provider}
       data-sidebar-session-tooltip-key={props.tooltipKey}
       data-sidebar-archive-armed={archiveArmed ? "true" : undefined}
+      data-sidebar-visible-action-count={visibleActionCount}
+      data-sidebar-title-action-cover-count={titleActionCoverCount}
       draggable={draggable}
       data-sidebar-reorder-key={props.reorder?.itemKey}
       data-sidebar-drop-position={reorderDropTarget.dropPosition ?? undefined}
@@ -495,12 +503,28 @@ function RunningSessionRow(props: {
           return;
         }
         if (props.canvasDraggable) {
-          event.dataTransfer.setData("application/x-rah-session-id", props.session.id);
+          if (props.session.runtimeSessionId) {
+            writeCanvasSessionDragTarget(event.dataTransfer, {
+              kind: "runtime",
+              sessionId: props.session.runtimeSessionId,
+            });
+          } else if (props.session.storedRef) {
+            writeCanvasSessionDragTarget(event.dataTransfer, {
+              kind: "stored",
+              provider: props.session.storedRef.provider,
+              providerSessionId: props.session.storedRef.providerSessionId,
+            });
+          }
         }
         if (props.reorder) {
           event.dataTransfer.setData(props.reorder.mimeType, props.reorder.itemKey);
         }
-        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.effectAllowed =
+          props.canvasDraggable && props.reorder
+            ? "copyMove"
+            : props.canvasDraggable
+              ? "copy"
+              : "move";
       }}
       onDragOver={reorderDropTarget.onDragOver}
       onDragLeave={reorderDropTarget.onDragLeave}
@@ -511,6 +535,7 @@ function RunningSessionRow(props: {
       <div className={SIDEBAR_LAYOUT.sessionInlineRowClassName}>
         <button
           type="button"
+          draggable={draggable}
           onClick={props.onSelect}
           className={selectButtonClassName}
           aria-describedby={props.tooltipDescriptionId}
@@ -546,7 +571,10 @@ function RunningSessionRow(props: {
                 title={props.session.pinned ? "Unpin" : "Pin"}
                 aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
               >
-                <Pin size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx} className={props.session.pinned ? "fill-current" : ""} />
+                <Pin
+                  size={SIDEBAR_VISUAL_PROTOCOL.actionIconPx}
+                  className={`rotate-45 ${props.session.pinned ? "fill-current" : ""}`}
+                />
               </button>
             </span>
             {props.session.archivable ? (
@@ -789,7 +817,7 @@ function WorkspaceRow(props: {
                   props.activeTooltipKey === tooltipKey ? props.tooltipId : undefined
                 }
                 nested
-                canvasDraggable={props.enableSessionDrag && item.running}
+                canvasDraggable={props.enableSessionDrag}
                 onTogglePin={() => props.onTogglePinSession(item.pinItemKey)}
                 onArchive={() => props.onArchiveSession(item)}
                 onSelect={() => props.onSelectSession(item)}
@@ -835,7 +863,11 @@ export function SessionSidebar(props: {
   >;
   erroredSessionIds?: ReadonlySet<string>;
   unreadCouncilIds?: ReadonlySet<string>;
-  onSelectSession: (workspaceDir: string, sessionId: string) => void;
+  onSelectSession: (
+    workspaceDir: string,
+    sessionId: string,
+    entryIntent: "tail" | "latest_unread_reply",
+  ) => void;
   onSelectStoredSession: (workspaceDir: string, session: StoredSessionRef) => void;
   onArchiveRunningSession: (sessionId: string) => void;
   onArchiveStoredSession: (session: StoredSessionRef) => void;
@@ -1002,7 +1034,7 @@ export function SessionSidebar(props: {
                   tooltipDescriptionId={
                     activeTooltipTarget?.key === tooltipKey ? tooltipId : undefined
                   }
-                  canvasDraggable={props.enableSessionDrag === true && item.running}
+                  canvasDraggable={props.enableSessionDrag === true}
                   reorder={{
                     itemKey: orderKey,
                     mimeType: PINNED_SIDEBAR_DRAG_TYPE,
@@ -1018,7 +1050,11 @@ export function SessionSidebar(props: {
                   }}
                   onSelect={() => {
                     if (item.runtimeSessionId) {
-                      props.onSelectSession(workspaceDir, item.runtimeSessionId);
+                      props.onSelectSession(
+                        workspaceDir,
+                        item.runtimeSessionId,
+                        item.status === "unread" ? "latest_unread_reply" : "tail",
+                      );
                     } else if (item.storedRef) {
                       props.onSelectStoredSession(workspaceDir, item.storedRef);
                     }
@@ -1122,7 +1158,11 @@ export function SessionSidebar(props: {
             }
             onSelectSession={(session) => {
               if (session.runtimeSessionId) {
-                props.onSelectSession(workspace.directory, session.runtimeSessionId);
+                props.onSelectSession(
+                  workspace.directory,
+                  session.runtimeSessionId,
+                  session.status === "unread" ? "latest_unread_reply" : "tail",
+                );
               } else if (session.storedRef) {
                 props.onSelectStoredSession(workspace.directory, session.storedRef);
               }

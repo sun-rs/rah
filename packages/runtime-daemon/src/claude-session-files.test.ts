@@ -1183,6 +1183,93 @@ describe("Claude session files", () => {
     );
   });
 
+  test("filters Claude internal user metadata and strips injected reminders", () => {
+    writeClaudeSession("session-internal-user-context.jsonl", [
+      {
+        type: "user",
+        uuid: "user-meta-caveat",
+        isMeta: true,
+        cwd: workDir,
+        sessionId: "session-internal-user-context",
+        timestamp: "2026-08-21T01:00:00.000Z",
+        message: {
+          content: "<local-command-caveat>provider-only caveat</local-command-caveat>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-command-envelope",
+        cwd: workDir,
+        sessionId: "session-internal-user-context",
+        timestamp: "2026-08-21T01:00:01.000Z",
+        message: {
+          content:
+            "<command-name>/model</command-name><command-message>model</command-message><command-args></command-args>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-real",
+        cwd: workDir,
+        sessionId: "session-internal-user-context",
+        timestamp: "2026-08-21T01:00:02.000Z",
+        origin: { kind: "human" },
+        promptSource: "typed",
+        message: {
+          content:
+            "real question\n<system-reminder>provider-only reminder</system-reminder>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-reminder-only",
+        cwd: workDir,
+        sessionId: "session-internal-user-context",
+        timestamp: "2026-08-21T01:00:03.000Z",
+        message: {
+          content: "<system-reminder>provider-only follow-up</system-reminder>",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-real",
+        cwd: workDir,
+        sessionId: "session-internal-user-context",
+        timestamp: "2026-08-21T01:00:04.000Z",
+        message: {
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "real answer" }],
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir).find(
+      (session) =>
+        session.ref.providerSessionId === "session-internal-user-context",
+    );
+    assert.ok(record);
+    assert.equal(record.ref.preview, "real question");
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+    const users = page.events.filter(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message",
+    );
+    assert.deepEqual(
+      users.map((event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["real question"],
+    );
+  });
+
   test("keeps response annotation transport context out of Claude history", () => {
     writeClaudeSession("session-response-annotation.jsonl", [
       {

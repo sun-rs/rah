@@ -38,3 +38,26 @@ test("renders queued follow-ups above the composer instead of as chat bubbles", 
   assert.doesNotMatch(html, /Turn (?:on|off) queueing/);
   assert.doesNotMatch(html, /data-testid="chat-user-message"/);
 });
+
+test("does not duplicate a submitting provider handoff beside its chat bubble", () => {
+  const html = renderToStaticMarkup(
+    createElement(ComposerInputQueue, {
+      items: [
+        {
+          clientMessageId: "submitting-message",
+          text: "Already projected into chat",
+          queuedAt: "2026-07-21T00:00:00.000Z",
+          position: 1,
+          state: "submitting",
+        },
+      ],
+      canSteer: false,
+      onUpdate: () => undefined,
+      onDelete: () => undefined,
+      onReorder: () => undefined,
+      onSteer: () => undefined,
+    }),
+  );
+
+  assert.equal(html, "");
+});

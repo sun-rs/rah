@@ -639,6 +639,7 @@ export function resumeCodexStoredSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "codex",
     providerSessionId: record.ref.providerSessionId,
+    ...(record.ref.modelProvider ? { modelProvider: record.ref.modelProvider } : {}),
     launchSource: "web",
     cwd: record.ref.cwd ?? process.cwd(),
     rootDir: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
@@ -707,6 +708,9 @@ export function getCodexStoredSessionHistoryPage(params: {
   const temp = services.sessionStore.createManagedSession({
     provider: "codex",
     providerSessionId: params.record.ref.providerSessionId,
+    ...(params.record.ref.modelProvider
+      ? { modelProvider: params.record.ref.modelProvider }
+      : {}),
     launchSource: "web",
     cwd: params.record.ref.cwd ?? process.cwd(),
     rootDir: params.record.ref.rootDir ?? params.record.ref.cwd ?? process.cwd(),

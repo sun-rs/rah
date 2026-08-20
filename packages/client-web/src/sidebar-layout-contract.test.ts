@@ -14,16 +14,24 @@ import {
   SEGMENTED_CONTROL_SIZE_CLASSES,
 } from "./components/segmented-control-styles";
 import {
+  HEADER_ACTION_ICON_SIZE,
+  HEADER_CLOSE_ICON_SIZE,
+  HEADER_EDGE_TOGGLE_DESKTOP_TOP_CLASS,
   HEADER_EDGE_TOGGLE_BUTTON_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
+  HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_ICON_BUTTON_BASE_CLASS,
+  HEADER_MODE_ICON_SIZE,
+  HEADER_MORE_ICON_SIZE,
+  HEADER_PANEL_ICON_SIZE,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_BASE_CLASS,
   HEADER_SEGMENTED_LABEL_CLASS,
   HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
+  HEADER_STOP_ICON_SIZE,
   HEADER_TEXT_BUTTON_BASE_CLASS,
   HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
   SIDEBAR_HEADER_ICON_BUTTON_CLASS,
@@ -179,7 +187,8 @@ describe("sidebar layout contract", () => {
       shellSource,
       /aria-label=\{props\.sidebarOpen \? "Collapse sidebar" : "Expand sidebar"\}/,
     );
-    assert.match(shellSource, /fixed left-2 top-2 z-40 hidden md:inline-flex/);
+    assert.match(shellSource, /HEADER_EDGE_TOGGLE_DESKTOP_TOP_CLASS/);
+    assert.equal(HEADER_EDGE_TOGGLE_DESKTOP_TOP_CLASS, "top-1");
     assert.match(shellSource, />RAH<\/span>/);
     assert.equal(SIDEBAR_LAYOUT.headerTitleClassName, "rah-sidebar-header-title");
     assert.match(stylesSource, /\.rah-sidebar-header-title\s*\{[\s\S]*font-size:\s*var\(--rah-sidebar-header-title-size\);[\s\S]*font-weight:\s*var\(--rah-sidebar-header-title-weight\);[\s\S]*line-height:\s*var\(--rah-sidebar-header-title-line\)/);
@@ -206,7 +215,7 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bh-8\b/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bw-8\b/);
     assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bshrink-0\b/);
-    assert.equal(SIDEBAR_HEADER_ICON_SIZE, 20);
+    assert.equal(SIDEBAR_HEADER_ICON_SIZE, HEADER_EDGE_TOGGLE_ICON_SIZE);
     assert.equal(SIDEBAR_HEADER_LOGO_CLASS, "h-5 w-5");
     assert.match(SIDEBAR_LAYOUT.rootClassName, /rah-sidebar-content/);
     assert.match(sidebarSource, /toolbarLabelFullClassName/);
@@ -363,18 +372,18 @@ describe("sidebar layout contract", () => {
   });
 
   test("routes turn changes through shared review and file preview paths", () => {
-    const appSource = readSource("./App.tsx");
     const cardSource = readSource("./components/chat/ConversationFileChangesCard.tsx");
     const threadSource = readSource("./components/chat/ChatThread.tsx");
+    const reviewSource = readSource("./inspector/ReviewSurface.tsx");
 
     assert.match(cardSource, /onOpenFile\?: \(path: string\) => void/);
     assert.match(cardSource, /onClick=\{\(\) => props\.onOpenFile\?\.\(file\.path\)\}/);
     assert.match(cardSource, /onReview\?: \(\) => void/);
     assert.match(cardSource, /onClick=\{props\.onReview\}/);
-    assert.match(threadSource, /onOpenTurnFileChange\?: \(turnId: string, path: string\) => void/);
+    assert.doesNotMatch(threadSource, /onOpenTurnFileChange/);
     assert.match(
       threadSource,
-      /const openTurnReview = useCallback\([\s\S]*?setReviewScope\(\{\s*kind:\s*"turn",/,
+      /const openTurnReview = useCallback\([\s\S]*?setReviewRequest\(\{[\s\S]*?kind:\s*"turn",/,
     );
     assert.match(threadSource, /onReview=\{\(\) => openTurnReview\(row\.turnId, row\.fileChanges\)\}/);
     assert.match(
@@ -383,22 +392,11 @@ describe("sidebar layout contract", () => {
     );
     assert.match(
       threadSource,
-      /onOpenFile:\s*\(path:\s*string\)\s*=>\s*props\.onOpenTurnFileChange\?\.\(row\.turnId,\s*path\)/,
+      /onOpenFile=\{\(path\) =>\s*openTurnReview\(row\.turnId, row\.fileChanges, path\)/,
     );
-    assert.match(threadSource, /<ReviewDialog[\s\S]*?scope=\{reviewScope\}/);
-    assert.match(
-      appSource,
-      /resolveTurnFileOpenSurface\(viewportTier\) === "transient-viewer"/,
-    );
-    assert.match(appSource, /setTransientTurnFileOpenRequest\(request\)/);
-    assert.match(
-      appSource,
-      /setTransientTurnFileOpenRequest\(request\)[\s\S]*?setRightSidebarOpen\(false\)[\s\S]*?setRightOpen\(false\)/,
-    );
-    assert.match(
-      appSource,
-      /transientTurnFileOpenRequest[\s\S]*?<InspectorFileDetailDialog[\s\S]*?source: "turn_changes"/,
-    );
+    assert.match(threadSource, /<ReviewDialog[\s\S]*?scope=\{reviewRequest\.scope\}/);
+    assert.match(reviewSource, /aria-controls="review-mobile-file-list"/);
+    assert.match(reviewSource, /mobileFilesOpen \? "max-md:flex" : "max-md:hidden"/);
   });
 
   test("keeps the Inspector file viewer nonmodal, persistent, resizable, and horizontally scrollable", () => {
@@ -744,11 +742,35 @@ describe("sidebar layout contract", () => {
     assert.match(sidebarSource, /data-sidebar-has-actions="true"/);
     assert.match(
       sidebarSource,
+      /const visibleActionCount = archiveArmed \? 1 : props\.session\.archivable \? 2 : 1/,
+    );
+    assert.match(
+      sidebarSource,
+      /visibleActionCount - \(props\.session\.status === "stopped" \? 0 : 1\)/,
+    );
+    assert.match(
+      sidebarSource,
+      /data-sidebar-visible-action-count=\{visibleActionCount\}/,
+    );
+    assert.match(
+      sidebarSource,
+      /data-sidebar-title-action-cover-count=\{titleActionCoverCount\}/,
+    );
+    assert.match(
+      sidebarSource,
       /data-sidebar-archive-armed=\{archiveArmed \? "true" : undefined\}/,
     );
     assert.match(
       stylesSource,
       /\.rah-sidebar-row:hover[\s\S]*data-sidebar-has-actions="true"[\s\S]*\.rah-sidebar-session-status[\s\S]*opacity:\s*0;/,
+    );
+    assert.match(
+      stylesSource,
+      /\.rah-sidebar-session-row\[data-sidebar-title-action-cover-count="2"\][\s\S]*--rah-sidebar-session-action-cover:[\s\S]*calc\(var\(--rah-sidebar-action-size\) \+ var\(--rah-sidebar-action-size\)\)/,
+    );
+    assert.match(
+      stylesSource,
+      /@media \(hover: hover\) and \(pointer: fine\)[\s\S]*data-sidebar-title-action-cover-count="0"[\s\S]*\.rah-sidebar-session-title[\s\S]*black calc\(100% - var\(--rah-sidebar-session-action-cover\)\)[\s\S]*transparent calc\(100% - var\(--rah-sidebar-session-action-cover\) \+ 12px\)/,
     );
     assert.match(
       stylesSource,
@@ -936,6 +958,7 @@ describe("sidebar layout contract", () => {
   test("uses edge toggles for page chrome and stable icon buttons in conversation headers", () => {
     const appSource = readSource("./App.tsx");
     const councilSource = readSource("./council/CouncilPage.tsx");
+    const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
     const sheetSource = readSource("./components/Sheet.tsx");
     const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
     const headerSource = readSource("./components/workbench/shells/ConversationHeader.tsx");
@@ -947,7 +970,17 @@ describe("sidebar layout contract", () => {
     const sideDockSource = readSource("./components/workbench/session/SessionSideDock.tsx");
     const inspectorHeaderSource = readSource("./inspector/InspectorHeader.tsx");
 
+    assert.equal(HEADER_ACTION_ICON_SIZE, 18);
+    assert.equal(HEADER_STOP_ICON_SIZE, 16);
+    assert.equal(HEADER_MORE_ICON_SIZE, 20);
+    assert.equal(HEADER_CLOSE_ICON_SIZE, 18);
+    assert.equal(HEADER_PANEL_ICON_SIZE, 18);
+    assert.equal(HEADER_MODE_ICON_SIZE, 18);
     assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 20);
+    assert.equal(
+      HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS,
+      "top-[calc(env(safe-area-inset-top,0px)+0.25rem)]",
+    );
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bh-8\b/);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bw-8\b/);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bshrink-0\b/);
@@ -972,7 +1005,7 @@ describe("sidebar layout contract", () => {
     assert.match(canvasSource, /<ConversationHeader/);
     assert.match(canvasSource, /onOpenLeft=\{props\.onOpenLeft\}/);
     assert.match(canvasSource, /onExpandSidebar=\{props\.onExpandSidebar\}/);
-    assert.match(mobileToggleSource, /fixed left-2 top-\[calc\(env\(safe-area-inset-top,0px\)\+0\.5rem\)\] z-40/);
+    assert.match(mobileToggleSource, /HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS/);
 
     assert.doesNotMatch(sidePanelSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
     assert.doesNotMatch(sidePanelSource, /PanelRight/);
@@ -1009,7 +1042,14 @@ describe("sidebar layout contract", () => {
       assert.doesNotMatch(source, /<PanelRight size=\{16\}/);
       assert.doesNotMatch(source, /<X size=\{16\}/);
     }
-    assert.match(headerSource, /<PanelRight size=\{16\}/);
+    assert.match(headerSource, /<PanelRight size=\{HEADER_PANEL_ICON_SIZE\}/);
+    assert.match(headerSource, /<Square[\s\S]*size=\{HEADER_STOP_ICON_SIZE\}/);
+    assert.match(headerSource, /<Ellipsis size=\{HEADER_MORE_ICON_SIZE\}/);
+    assert.match(headerSource, /<X[\s\S]*size=\{HEADER_CLOSE_ICON_SIZE\}/);
+    assert.match(sessionSource, /<SquareTerminal size=\{HEADER_MODE_ICON_SIZE\}/);
+    assert.match(sessionSource, /<MessageSquareText size=\{HEADER_MODE_ICON_SIZE\}/);
+    assert.match(canvasSource, /<Eraser size=\{HEADER_ACTION_ICON_SIZE\}/);
+    assert.match(councilSource, /<ListTree size=\{HEADER_ACTION_ICON_SIZE\}/);
     assert.match(headerSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
   });
 
@@ -1331,7 +1371,13 @@ describe("sidebar layout contract", () => {
     assert.match(sessionSource, /ConversationHeaderMetaList/);
     assert.doesNotMatch(sessionSource, /ConversationStateMetaBadge/);
     assert.match(sessionSource, /ComposerContextIndicator/);
-    assert.match(sessionSource, /conic-gradient\(var\(--app-hint\)/);
+    const contextIndicatorSource = readSource(
+      "./components/workbench/ComposerContextIndicator.tsx",
+    );
+    assert.match(contextIndicatorSource, /conic-gradient\(var\(--app-hint\)/);
+    assert.match(contextIndicatorSource, /createPortal/);
+    assert.match(contextIndicatorSource, /horizontalAlignment: "center"/);
+    assert.doesNotMatch(contextIndicatorSource, /bottom-full right-0/);
     assert.doesNotMatch(sessionSource, /CONVERSATION_META_BADGE_PWA_CLASS/);
     assert.doesNotMatch(sessionSource, /sessionMetaBadgeClassName/);
     assert.match(councilSource, /ConversationHeaderMetaList/);

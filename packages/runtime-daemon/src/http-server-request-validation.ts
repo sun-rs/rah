@@ -203,7 +203,13 @@ export function parseForkSessionRequest(body: unknown): ForkSessionRequest {
 }
 
 export function parseAttachSessionRequest(body: unknown): AttachSessionRequest {
-  return parseAttachPayload(body);
+  const record = requireObjectBody(body);
+  const request = parseAttachPayload(record);
+  Object.assign(request, parseOptionalSessionConfig(record));
+  if (record.initialInput !== undefined) {
+    request.initialInput = parseSessionInputRequest(record.initialInput);
+  }
+  return request;
 }
 
 export function parseClaimControlRequest(body: unknown): ClaimControlRequest {

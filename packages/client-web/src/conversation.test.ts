@@ -49,6 +49,21 @@ function timelineItem(
   };
 }
 
+function reasoningItem(
+  id: string,
+  turnId: string,
+  text: string,
+): ConversationItemProjection {
+  return {
+    ...timelineItem(id, turnId, "process", text),
+    providerItemId: id,
+    content: {
+      kind: "timeline",
+      item: { kind: "reasoning", text, presentation: "transient_status" },
+    },
+  };
+}
+
 function observationItem(
   id: string,
   turnId: string,
@@ -189,13 +204,13 @@ test("Conversation feed uses explicit process/final roles and canonical detail i
     "commentary",
   );
   assert.equal(
-    feed[1]?.kind === "timeline" && feed[1].item.kind === "assistant_message"
-      ? feed[1].item.phase
+    feed[2]?.kind === "timeline" && feed[2].item.kind === "assistant_message"
+      ? feed[2].item.phase
       : null,
     "final_answer",
   );
   assert.equal(
-    feed[2]?.kind === "observation" ? feed[2].observation.id : null,
+    feed[1]?.kind === "observation" ? feed[1].observation.id : null,
     "observation",
   );
 });
@@ -644,6 +659,52 @@ test("Conversation keeps canonical outputs in the resource index instead of dupl
   ]);
 });
 
+test("Conversation places visual outputs after the final answer without duplicating embedded images", () => {
+  const projectedTurn: ConversationTurnProjection = {
+    ...turn("turn-images", [
+      timelineItem("user-images", "turn-images", "user", "question"),
+      timelineItem("final-images", "turn-images", "final", "done"),
+    ]),
+    finalAnswerItemId: "final-images",
+    outputs: [
+      {
+        id: "generated-chart",
+        kind: "image",
+        label: "chart.png",
+        path: "/workspace/chart.png",
+        activity: "generated",
+        confidence: "authoritative",
+        sourceItemIds: ["image-tool"],
+      },
+      {
+        id: "embedded-chart",
+        kind: "image",
+        label: "embedded.png",
+        path: "/workspace/embedded.png",
+        activity: "generated",
+        confidence: "authoritative",
+        sourceItemIds: ["final-images"],
+      },
+    ],
+  };
+  const rows = conversationDisplayRows(
+    [projectedTurn],
+    conversationTurnsToFeed([projectedTurn]),
+  );
+
+  assert.deepEqual(rows.map((row) => row.kind), [
+    "feed_entry",
+    "feed_entry",
+    "turn_visual_outputs",
+    "turn_copy_action",
+  ]);
+  const visualRow = rows[2];
+  assert.equal(visualRow?.kind, "turn_visual_outputs");
+  if (visualRow?.kind === "turn_visual_outputs") {
+    assert.deepEqual(visualRow.outputs.map((output) => output.id), ["generated-chart"]);
+  }
+});
+
 test("Conversation places authoritative file changes after the owning final answer", () => {
   const projectedTurn: ConversationTurnProjection = {
     ...turn("turn-changes", [
@@ -1049,6 +1110,135 @@ test("Conversation foreground refresh promotes a stale working reply to the serv
   assert.deepEqual(testHarness.requests, [{}, {}]);
 });
 
+test("Conversation stale memory baseline stays readable while ensure performs a tail refresh", async () => {
+  const cached = turn("turn-cached", [
+    timelineItem("final-cached", "turn-cached", "final", "cached"),
+  ]);
+  const current = turn("turn-current", [
+    timelineItem("final-current", "turn-current", "final", "current"),
+  ]);
+  const response = deferred<ConversationTurnsPageResponse>();
+  const testHarness = harness([response.promise]);
+  testHarness.deps.set((state) => {
+    const projections = new Map(state.projections);
+    const projection = projections.get("session-1")!;
+    projections.set("session-1", {
+      ...projection,
+      conversation: {
+        phase: "ready",
+        loadedScope: "history",
+        turns: [cached],
+        nextCursor: null,
+        revision: 2,
+        daemonRevision: null,
+        pendingDeltas: [],
+        needsRefresh: true,
+        approximateBytes: 100,
+        sourceRevision: "source-old",
+        loadedAt: "2026-08-15T00:00:00.000Z",
+        lastError: null,
+        detachedBaseline: true,
+      },
+    });
+    return { projections };
+  });
+
+  const refresh = ensureConversationLoadedCommand(testHarness.deps, "session-1");
+  assert.equal(
+    testHarness.state().projections.get("session-1")?.conversation?.phase,
+    "ready",
+  );
+  assert.deepEqual(
+    testHarness.state().projections.get("session-1")?.conversation?.turns.map((turn) => turn.id),
+    ["turn-cached"],
+  );
+
+  const freshPage = page([current], "fresh-older-cursor", 9);
+  freshPage.sourceRevision = "source-current";
+  response.resolve(freshPage);
+  assert.equal(await refresh, true);
+
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
+  assert.deepEqual(conversation?.turns.map((turn) => turn.id), ["turn-current"]);
+  assert.equal(conversation?.nextCursor, "fresh-older-cursor");
+  assert.equal(conversation?.daemonRevision, 9);
+  assert.equal(conversation?.needsRefresh, false);
+  assert.equal(conversation?.detachedBaseline, undefined);
+  assert.deepEqual(testHarness.requests, [{}]);
+});
+
+test("Conversation detached refresh retains earlier thinking omitted by a bounded summary", async () => {
+  const staleTurn = turn("turn-stale", [
+    timelineItem("final-stale", "turn-stale", "final", "stale"),
+  ]);
+  const first = reasoningItem("reasoning-1", "turn-working", "first thought");
+  const second = reasoningItem("reasoning-2", "turn-working", "second thought");
+  const latest = reasoningItem("reasoning-3", "turn-working", "latest thought");
+  const cachedTurn: ConversationTurnProjection = {
+    ...turn("turn-working", [first, second, latest]),
+    status: "in_progress",
+    itemsView: "summary",
+  };
+  const refreshedLatest = {
+    ...latest,
+    content: {
+      kind: "timeline" as const,
+      item: {
+        kind: "reasoning" as const,
+        text: "latest thought updated",
+        presentation: "transient_status" as const,
+      },
+    },
+    revision: 2,
+  };
+  const boundedRefresh: ConversationTurnProjection = {
+    ...turn("turn-working", [refreshedLatest]),
+    status: "in_progress",
+    itemsView: "summary",
+    revision: 2,
+  };
+  const testHarness = harness([page([boundedRefresh], "fresh-cursor", 11)]);
+  testHarness.deps.set((state) => {
+    const projections = new Map(state.projections);
+    const projection = projections.get("session-1")!;
+    projections.set("session-1", {
+      ...projection,
+      conversation: {
+        phase: "ready",
+        loadedScope: "history",
+        turns: [staleTurn, cachedTurn],
+        nextCursor: null,
+        revision: 3,
+        daemonRevision: null,
+        pendingDeltas: [],
+        needsRefresh: true,
+        approximateBytes: 100,
+        sourceRevision: "source-old",
+        loadedAt: "2026-08-20T00:00:00.000Z",
+        lastError: null,
+        detachedBaseline: true,
+      },
+    });
+    return { projections };
+  });
+
+  assert.equal(await ensureConversationLoadedCommand(testHarness.deps, "session-1"), true);
+
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
+  assert.deepEqual(conversation?.turns.map((candidate) => candidate.id), ["turn-working"]);
+  assert.deepEqual(
+    conversation?.turns[0]?.items.map((item) => [item.id, item.content.kind === "timeline" ? item.content.item.text : null]),
+    [
+      ["reasoning-1", "first thought"],
+      ["reasoning-2", "second thought"],
+      ["reasoning-3", "latest thought updated"],
+    ],
+  );
+  assert.equal(conversation?.nextCursor, "fresh-cursor");
+  assert.equal(conversation?.daemonRevision, 11);
+  assert.equal(conversation?.detachedBaseline, undefined);
+});
+
 test("Conversation refresh does not erase already rendered items from an incomplete working snapshot", async () => {
   const user = timelineItem("user-working", "turn-working", "user", "question");
   const reasoning = timelineItem(
@@ -1228,6 +1418,96 @@ test("Conversation applies deltas that arrive while the HTTP baseline is loading
   assert.equal(conversation?.daemonRevision, 1);
   assert.equal(conversation?.needsRefresh, false);
   assert.equal(conversation?.turns[0]?.items[0]?.id, "process-live");
+});
+
+test("Conversation retains a first live delta before a new Session baseline exists", async () => {
+  const resident = deferred<ConversationTurnsPageResponse>();
+  const testHarness = harness([resident.promise]);
+  const liveTurn = turn("turn-live", [
+    timelineItem("user-live", "turn-live", "user", "question"),
+    timelineItem("final-live", "turn-live", "final", "answer"),
+  ]);
+
+  testHarness.deps.set((state) => ({
+    projections: applyConversationDeltasToProjectionMap(
+      state.projections,
+      [delta(4, 0, liveTurn)],
+    ),
+  }));
+  let conversation = testHarness.state().projections.get("session-1")?.conversation;
+  assert.equal(conversation?.phase, "idle");
+  assert.equal(conversation?.daemonRevision, null);
+  assert.equal(conversation?.pendingDeltas.length, 1);
+
+  const initialize = initializeLiveConversationCommand(testHarness.deps, "session-1");
+  resident.resolve(page([
+    turn("turn-live", [timelineItem("user-live", "turn-live", "user", "question")]),
+  ], undefined, 1));
+
+  assert.equal(await initialize, true);
+  conversation = testHarness.state().projections.get("session-1")?.conversation;
+  assert.equal(conversation?.daemonRevision, 4);
+  assert.equal(conversation?.pendingDeltas.length, 0);
+  assert.deepEqual(
+    conversation?.turns[0]?.items.map((item) => item.id),
+    ["user-live", "final-live"],
+  );
+});
+
+test("Conversation applies a composed live delta that overlaps an HTTP baseline", async () => {
+  const testHarness = harness([page([
+    turn("turn-live", [timelineItem("user-live", "turn-live", "user", "question")]),
+  ], undefined, 1)]);
+  await initializeLiveConversationCommand(testHarness.deps, "session-1");
+  const complete = turn("turn-live", [
+    timelineItem("user-live", "turn-live", "user", "question"),
+    timelineItem("final-live", "turn-live", "final", "answer"),
+  ]);
+
+  testHarness.deps.set((state) => ({
+    projections: applyConversationDeltasToProjectionMap(
+      state.projections,
+      [delta(4, 0, complete)],
+    ),
+  }));
+
+  const conversation = testHarness.state().projections.get("session-1")?.conversation;
+  assert.equal(conversation?.daemonRevision, 4);
+  assert.equal(conversation?.needsRefresh, false);
+  assert.deepEqual(
+    conversation?.turns[0]?.items.map((item) => item.id),
+    ["user-live", "final-live"],
+  );
+});
+
+test("Conversation reorders a late Resume prompt across baseline and delta merge", async () => {
+  const preflight = timelineItem("preflight", "turn-resume", "process", "compacting");
+  const baseline = {
+    ...turn("turn-resume", [preflight]),
+    status: "in_progress" as const,
+  };
+  const testHarness = harness([page([baseline], undefined, 1)]);
+  await initializeLiveConversationCommand(testHarness.deps, "session-1");
+
+  const prompt = timelineItem("prompt", "turn-resume", "user", "Continue the audit");
+  const answer = timelineItem("answer", "turn-resume", "final", "Audit resumed");
+  const completed = {
+    ...turn("turn-resume", [preflight, prompt, answer]),
+    finalAnswerItemId: answer.id,
+  };
+  testHarness.deps.set((state) => ({
+    projections: applyConversationDeltasToProjectionMap(
+      state.projections,
+      [delta(2, 1, completed)],
+    ),
+  }));
+
+  assert.deepEqual(
+    testHarness.state().projections
+      .get("session-1")
+      ?.conversation?.turns[0]?.items.map((item) => item.id),
+    ["prompt", "preflight", "answer"],
+  );
 });
 
 test("Conversation holds revision gaps and applies the complete chain when it arrives", async () => {

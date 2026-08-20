@@ -1,6 +1,6 @@
 # Conversation 历史浏览与分页边界
 
-复核日期：2026-07-28
+复核日期：2026-08-16
 
 ## 1. 唯一读取模型
 
@@ -45,6 +45,41 @@ GET /api/sessions/:sessionId/conversation/turns?cursor=...&limit=20
 
 prepend 前记录可见 canonical row anchor；合并后通过 virtual layout 投影新的 `scrollTop`，再做
 像素校准。加载过程不能要求用户先下滚再上滚来“重新触发”。
+
+Chat viewport 只有两种稳定所有权：仍贴底的读者跟随最新内容，主动上滚的读者保留当前可见
+canonical viewport anchor。anchor 优先冻结视口顶部附近的稳定正文后代及其像素偏移，后代暂时不存在时
+才回退到 canonical row identity；因此同一个超长 assistant row 内的 lazy image、Markdown 或字体迟到布局
+也不能把已经主动上滚的读者推走。这个 anchor 只服务当前连续挂载的 Chat 与向上 prepend；用户显式点击 Session
+（包括再次点击当前 Session）或整页 reload 都是一次新的进入，普通 Session 必须默认定位 canonical
+tail，不能恢复此前的裸 `scrollTop`。唯一入口例外是点击带蓝点的 Session：sidebar 必须在清除未读前冻结
+产生蓝点的终态 turn identity、final row identity 与时间边界，并一次性定位该未读 final 的顶部；如果
+`turn.completed` 先于 final projection 到达，只能先停在 canonical tail 等待同一 turn 的 final，禁止拿旧
+reply 或当前 history page 的顶部代替。导航请求在目标对齐或读者开始手势时即被消费，Chat 重挂载不能
+重复执行。普通 latest intent 必须跨过首屏分页、虚拟行挂载和真实高度回写，直到尾部像素位置稳定后才
+可释放，任何中间被动 scroll event 都不能提前取消。
+
+向上分页的 prepend anchor 只能由读者真实上滚取得所有权；Safari/iOS 在页面恢复时写回的旧
+`scrollTop`、虚拟高度校准和图片/Markdown 慢布局都属于被动滚动，不得触发 older-history load，
+否则该 prepend anchor 会反向覆盖“进入即定位最新”的 intent。唯一例外是首屏内容不足一个
+viewport 时允许自动补齐更早页，但仍不能恢复旧裸坐标。
+
+“长回复完成后定位到回复开头”只有两种一次性资格来源：点击蓝点时冻结的未读 final identity；或
+当前 Chat 连续处于前台、并在这次挂载中亲自观察到的本轮输入到 final。普通点击或再次进入绿点
+Session 只拥有 canonical tail intent，不能重新签发旧 turn 的回复开头资格。成功定位、读者开始任何
+触摸/指针/滚轮/键盘滚动手势、窗口失焦、页面隐藏或切换 Session，都会永久消费当前 turn 的资格；
+同一 turn 后续 projection、ResizeObserver 或前台恢复不得重新签发。返回时只能由上述贴底/脱离贴底
+状态决定位置，不能在恢复贴底后再执行一个过期的回复开头跳转；打开一个已经 running 的 Session 也
+不能仅凭 runtime 状态获得自动跳转资格。回复开头先使用 virtual layout 定位尚未挂载的目标行，目标
+DOM 挂载后必须再按真实矩形做像素
+校准，且在读者真正滚动前持续持有 keyed row anchor，以承受图片和 Markdown 的迟到高度变化；不能把
+估算 `scrollTop` 或固定数量的 animation frame 当作最终位置。`touchstart`、`pointerdown`、wheel 与滚动
+键必须在 capture 阶段先撤销 reply anchor、延迟定位和 bottom-follow ownership，再让浏览器应用第一个
+滚动增量；此后 ResizeObserver、虚拟高度回写和慢资源布局都不得把读者拉回回复顶部。
+
+未读 cursor 与上述一次性资格都是 per-client 状态：它们以当前浏览器/PWA 的 storage container 为
+边界，不进入 daemon canonical state，也不在 iOS 与 Mac 之间同步。一个客户端读过 final 后，另一个
+客户端仍可保留蓝点并独立获得一次回复顶部定位；这不是重复导航，而是两个 viewport 各自完成首次
+阅读。跨设备只共享 Conversation 内容与终态 identity，不共享“已呈现给读者”或 viewport 所有权。
 
 cursor 是 opaque：
 
@@ -103,8 +138,10 @@ Resume 不清空已展示的 history：
 
 1. 当前 projection 保持可见。
 2. 按钮原地进入 Resuming。
-3. daemon 返回 live runtime id 后，按 provider session identity 迁移 projection。
-4. canonical delta 接管后继续追加。
+3. daemon 先建立 live runtime，再把 `initialInput` 放入 canonical queue，并等待相同 identity 的
+   `session.input.accepted`；runtime 创建、PTY 写入或 queue disappearance 都不能提前结束 Resume。
+4. daemon 返回 live runtime id 与 acceptance 后，按 provider session identity 迁移 projection；
+   canonical delta 接管后继续追加。
 
 如果同一 provider session 已运行，使用已有 live projection，不重复 resume。
 
@@ -113,7 +150,7 @@ Resume 不清空已展示的 history：
 | Provider | 主要证据 | 分页策略 |
 | --- | --- | --- |
 | Codex | app-server turn/item page；adapter 内的 bounded rollout evidence | native cursor 或 frozen persisted cursor |
-| Claude | JSONL transcript | timestamp/frozen cursor |
+| Claude | JSONL transcript | frozen end-offset + backward byte-range cursor |
 | OpenCode | live 使用 server event + 有界官方 message API；stored history 使用 session-scoped SQLite message/part | provider cursor 或 frozen timestamp + message id cursor |
 
 这些证据只在 daemon 内转换为 `ConversationEvidencePage`，随后进入 projector。浏览器不可直接读取。
@@ -151,6 +188,18 @@ Codex Desktop 把多种产品表面写在同一个 `~/.codex/sessions` 树中。
 - 删除、归档和按 workspace 批量删除在执行前等待权威 catalog；普通启动、Resume、Chat 浏览和
   Recent 请求不得隐式等待完整 catalog。
 - resident settled turns 默认有界。
+- Web 是否虚拟化同时受 80 个 eager row、约 12,000px 估算内容与 8 个 viewport 的成本预算控制；
+  单个超长 Markdown、图片或工具卡即使 row 数少也会触发 virtual window。measured height 回写布局，
+  prepend 使用可见 canonical anchor 校准，不用固定行高猜测。鼠标拖选正文时继续保持 bounded DOM，
+  并租约锁定拖选开始时已经挂载的 virtual window；mouseup 先读取原生选区，再释放窗口、结算延后的
+  measured height 与 viewport，不能为了支持“添加到任务”临时挂载整份会话。
+- 当前页面内由独立 Conversation memory cache 保证 A→B→A：缓存键只能是
+  `{provider, providerSessionId}`，不得使用易变的 Runtime Session id；最多 16 项、单项约 8 MiB、
+  总计约 32 MiB、30 分钟 LRU。缓存只保存已经可读的 canonical projection，不参与 provider catalog、
+  workspace visibility 或 Sidebar 派生，因此不能复活空壳 Session。重选时旧 tail 必须同步可见，随后
+  只校准当前可见 Session；replay gap 不得并发重读所有非可见历史。跨 runtime 恢复的旧 cursor/revision
+  必须丢弃，canonical tail 响应建立新的分页边界。网络失败保留旧内容；整页 reload/iOS 进程回收则自然
+  退化到 daemon page cache。Conversation 正文仍禁止进入 localStorage/IndexedDB。
 - daemon 对已经投影完成的 canonical page 维护独立内存 LRU，服务浏览器 reload：地址为
   `Runtime Session + cursor + limit`，命中还必须同时匹配 provider `sourceRevision` 与 resident
   `liveRevision`。单条最多 1 MiB、全局最多 128 条 / 32 MiB、最长 30 分钟；工作中 turn、pending/
@@ -172,6 +221,9 @@ Codex Desktop 把多种产品表面写在同一个 `~/.codex/sessions` 树中。
   ledger 上限为 64。live path 不允许每 750ms 同步扫描 SQLite 全历史。
 - OpenCode stored history 的 SQL 必须先按目标 `session_id` 过滤，summary page 不读取大
   reasoning/tool payload；cursor 用 timestamp + message id 保证同毫秒记录稳定分页。
+- Claude cursor 冻结首次请求时的 `snapshotEndOffset`，随后只读取该 offset 之前的 bounded byte range；
+  文件继续增长不改变已打开 snapshot，也不能退回“每页全文件解析再 slice”。旧 timestamp cursor
+  只保留一次部署期兼容，新的响应一律返回 offset cursor。
 - summary page 必须移除 provider event 的大 `raw` payload，只保留 canonical message、lifecycle 和 compact process metadata；展开 turn/item detail 时才读取完整 raw evidence。
 - HTTP 大 JSON 支持 gzip。
 - `approximateBytes` 用于诊断弱网 payload，不参与 UI 语义。
@@ -229,3 +281,4 @@ python3 scripts/history-browser-benchmark.py <provider-session-id> --older-pages
 - 完整 catalog scan 会清理旧 visibility contract 的 snapshot/cache；不完整 scan 保留 last-good。
 - 首屏处于 `loading` 时不发 source-revision probe；首屏完成后第一次 probe 不取消、重复或清空
   已显示 history。
+- 180-turn 隔离真实浏览器连续向上分页时，可见 DOM 保持有界、旧页持续进入、无横向溢出。

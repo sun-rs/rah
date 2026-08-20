@@ -105,8 +105,13 @@ import {
   type RecoverTransportOptions,
 } from "./session-store-sync";
 import {
+  ensureSessionStoreTransportReady,
   restartSessionStoreTransport,
 } from "./session-store-transport";
+import {
+  restoreConversationProjectionStateFromMemory,
+  sessionConversationMemoryCache,
+} from "./session-conversation-memory-cache";
 import {
   appendVisibleWorkspaceDir,
   hideWorkspace,
@@ -867,6 +872,7 @@ function createStartupDeps(
   return {
     get,
     set,
+    ensureEventTransportReady: ensureSessionStoreTransportReady,
     ensureConversationLoaded: ensureConversationReady,
     initializeLiveConversationProjection: async (sessionId: string) => {
       await get().initializeLiveConversation(sessionId);
@@ -874,6 +880,8 @@ function createStartupDeps(
     sendInput: get().sendInput,
     attachSession: get().attachSession,
     resumeStoredSession: get().resumeStoredSession,
+    restoreCachedConversation: (ref: StoredSessionRef) =>
+      sessionConversationMemoryCache.restore(ref),
     applySessionsResponse,
     adoptExistingProjectionForProviderSession,
     applyEventsToMap,
@@ -919,10 +927,6 @@ async function recoverFromReplayGap(batch: EventBatch) {
     applyEventsToMap,
     ensureConversationLoaded: ensureConversationReady,
   });
-  const loadedSessionIds = [...useSessionStore.getState().projections.entries()]
-    .filter(([, projection]) => projection.conversation?.phase === "ready")
-    .map(([sessionId]) => sessionId);
-  await Promise.all(loadedSessionIds.map((sessionId) => refreshConversationBaseline(sessionId)));
 }
 
 function connectStoreTransport() {
@@ -1853,6 +1857,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (isPendingResumeProjectionTransferTarget(get(), sessionId)) {
       return true;
     }
+    set((state) => restoreConversationProjectionStateFromMemory(state, sessionId));
     const loaded = await ensureConversationLoadedCommand({ get, set }, sessionId);
     refreshConversationGapIfNeeded(sessionId);
     return loaded;
@@ -1898,5 +1903,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 }));
 
 useSessionStore.subscribe((state) => {
+  sessionConversationMemoryCache.rememberProjections(state.projections);
   syncHistorySelectionSubscription({ state });
 });

@@ -52,6 +52,16 @@ def browser_headless() -> bool:
     return os.environ.get("RAH_NATIVE_HEADLESS", "1") != "0"
 
 
+def selected_provider_configs() -> tuple[ProviderConfig, ...]:
+    selected = os.environ.get("RAH_NATIVE_PROVIDER_FILTER", "").strip().lower()
+    if not selected:
+        return CONFIGS
+    configs = tuple(config for config in CONFIGS if config.provider == selected)
+    if not configs:
+        raise RuntimeError(f"unsupported RAH_NATIVE_PROVIDER_FILTER={selected!r}")
+    return configs
+
+
 def launch_browser(playwright):
     browser_name = selected_browser_name()
     browser_types = {
@@ -109,11 +119,11 @@ CONFIGS = (
         input_marker="RAH_NATIVE_CLAUDE_BROWSER_INPUT",
         interrupt_marker="RAH_NATIVE_CLAUDE_BROWSER_INTERRUPTED",
         request={
-            "model": "opus",
-            "optionValues": {"effort": "max"},
+            "model": "sonnet",
+            "optionValues": {"effort": "low"},
             "modeId": "bypassPermissions",
         },
-        expected_arg_fragments=("--session-id|", "--model|opus", "--effort|max"),
+        expected_arg_fragments=("--session-id|", "--model|sonnet", "--effort|low"),
         expects_chat_mirror=True,
         expected_mirror_text="Claude native browser answer",
     ),
@@ -194,10 +204,12 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
             "  const projectDir = path.join(configDir, 'projects', projectId);",
             "  const now = new Date().toISOString();",
             "  fs.mkdirSync(projectDir, { recursive: true });",
-            "  fs.writeFileSync(path.join(projectDir, `${sessionId}.jsonl`), [",
+            "  const historyPath = path.join(projectDir, `${sessionId}.jsonl`);",
+            "  if (fs.existsSync(historyPath)) return;",
+            "  fs.writeFileSync(historyPath, [",
             "    JSON.stringify({ type: 'user', uuid: 'claude-native-browser-user', cwd: process.cwd(), sessionId, timestamp: now, message: { content: 'Claude native browser question\\n<turn_aborted>\\nThe user interrupted the previous turn on purpose.\\n</turn_aborted>' } }),",
             "    JSON.stringify({ type: 'system', uuid: 'claude-native-browser-api-error', subtype: 'api_error', cwd: process.cwd(), sessionId, timestamp: now, error: { status: 503, headers: { server: 'cloudflare', 'x-request-id': 'f589e5e5-1066-4763-abe4-14122f11c486' }, error: { error: { message: 'No available accounts: no available accounts', type: 'api_error' }, type: 'error' }, type: 'api_error' } }),",
-            "    JSON.stringify({ type: 'assistant', uuid: 'claude-native-browser-assistant', cwd: process.cwd(), sessionId, timestamp: now, message: { model: 'claude-opus-4-7', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Claude native browser answer' }] } }),",
+            "    JSON.stringify({ type: 'assistant', uuid: 'claude-native-browser-assistant', cwd: process.cwd(), sessionId, timestamp: now, message: { model: 'claude-sonnet-4-6', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Claude native browser answer' }] } }),",
             "    JSON.stringify({ type: 'system', uuid: 'claude-native-browser-duration', parentUuid: 'claude-native-browser-assistant', cwd: process.cwd(), sessionId, timestamp: now, subtype: 'turn_duration', durationMs: 100 }),",
             "  ].join('\\n') + '\\n');",
             "}, 100);",
@@ -278,9 +290,12 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
                 "  const now = new Date().toISOString();",
                 "  fs.mkdirSync(projectDir, { recursive: true });",
                 "  fs.appendFileSync(path.join(projectDir, `${sessionId}.jsonl`), [",
-                "    JSON.stringify({ type: 'user', uuid: `claude-native-browser-user-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, message: { content: text } }),",
-                "    JSON.stringify({ type: 'assistant', uuid: `claude-native-browser-assistant-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, message: { model: 'claude-opus-4-7', stop_reason: 'end_turn', content: [{ type: 'text', text: dynamicAnswer(text) }] } }),",
-                "    JSON.stringify({ type: 'system', uuid: `claude-native-browser-duration-${turnIndex}`, parentUuid: `claude-native-browser-assistant-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, subtype: 'turn_duration', durationMs: 100 }),",
+                "    JSON.stringify({ type: 'user', uuid: `claude-native-browser-meta-${process.pid}-${turnIndex}`, isMeta: true, cwd: process.cwd(), sessionId, timestamp: now, message: { content: '<local-command-caveat>RAH_FAKE_INTERNAL_CAVEAT</local-command-caveat>' } }),",
+                "    JSON.stringify({ type: 'user', uuid: `claude-native-browser-command-${process.pid}-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, message: { content: '<command-name>/rah-internal</command-name><command-message>RAH_FAKE_INTERNAL_COMMAND</command-message><command-args></command-args>' } }),",
+                "    JSON.stringify({ type: 'user', uuid: `claude-native-browser-reminder-${process.pid}-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, message: { content: '<system-reminder>RAH_FAKE_INTERNAL_REMINDER</system-reminder>' } }),",
+                "    JSON.stringify({ type: 'user', uuid: `claude-native-browser-user-${process.pid}-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, origin: { kind: 'human' }, promptSource: 'typed', message: { content: `${text}\\n<system-reminder>RAH_FAKE_MIXED_REMINDER</system-reminder>` } }),",
+                "    JSON.stringify({ type: 'assistant', uuid: `claude-native-browser-assistant-${process.pid}-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, message: { model: 'claude-sonnet-4-6', stop_reason: 'end_turn', content: [{ type: 'text', text: dynamicAnswer(text) }] } }),",
+                "    JSON.stringify({ type: 'system', uuid: `claude-native-browser-duration-${process.pid}-${turnIndex}`, parentUuid: `claude-native-browser-assistant-${process.pid}-${turnIndex}`, cwd: process.cwd(), sessionId, timestamp: now, subtype: 'turn_duration', durationMs: 100 }),",
                 "  ].join('\\n') + '\\n');",
                 "}",
                 "function appendOpenCodeTurn(text, turnIndex) {",
@@ -332,6 +347,7 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
                 "let buffer = '';",
                 "let interruptEscCount = 0;",
                 "let turnIndex = 0;",
+                "let lastTextAt = 0;",
                 "function writePrompt() {",
                 "  if (provider === 'opencode') process.stdout.write('Ask anything\\r\\n');",
                 "  if (provider === 'claude') process.stdout.write('> \\r\\n');",
@@ -363,12 +379,15 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
                 "    chunk = chunk.split('\\u001b').join('');",
                 "    handleEscapeInterrupt(escapeCount);",
                 "  }",
+                "  const hasSubmit = chunk.includes('\\r') || chunk.includes('\\n');",
+                "  if (provider === 'claude' && !hasSubmit && chunk.length > 0) lastTextAt = Date.now();",
                 "  buffer += chunk;",
                 "  const parts = buffer.split(/\\r|\\n/);",
                 "  buffer = parts.pop() ?? '';",
                 "  for (const raw of parts) {",
                 "    const text = raw.trim();",
                 "    if (text) {",
+                "      if (provider === 'claude' && lastTextAt > 0 && Date.now() - lastTextAt < 700) { buffer = raw + buffer; continue; }",
                 "      if (text === 'exit') {",
                 f"        process.stdout.write(`{config.ready_marker}_EXITING\\r\\n`);",
                 "        process.exit(0);",
@@ -559,13 +578,17 @@ def dynamic_answer_for(config: ProviderConfig, prompt: str) -> str:
 
 def wait_for_provider_binding(base_url: str, session_id: str, provider: str, timeout_s: int = 20) -> None:
     started = time.time()
+    last_summary: dict[str, Any] = {}
     while time.time() - started < timeout_s:
-        summary = request_json(base_url, f"/api/sessions/{session_id}")
-        provider_session_id = summary.get("session", {}).get("session", {}).get("providerSessionId")
+        last_summary = request_json(base_url, f"/api/sessions/{session_id}")
+        provider_session_id = last_summary.get("session", {}).get("session", {}).get("providerSessionId")
         if provider_session_id:
             return
         time.sleep(0.2)
-    raise AssertionError(f"{provider} native session did not bind providerSessionId")
+    raise AssertionError(
+        f"{provider} native session did not bind providerSessionId: "
+        f"{json.dumps(last_summary, ensure_ascii=False)[:4000]}"
+    )
 
 
 def assert_session_idle(base_url: str, session_id: str, provider: str) -> None:
@@ -656,14 +679,23 @@ def assert_opencode_mirror_details(page) -> None:
     expect(worked_button).to_be_visible(timeout=10_000)
     if worked_button.get_attribute("aria-expanded") != "true":
         worked_button.click()
-    reasoning_button = page.get_by_role("button", name="Reasoning").last
-    expect(reasoning_button).to_be_visible(timeout=10_000)
-    reasoning_button.click()
+    # Worked is the only turn-level disclosure. Reasoning is narrative inside
+    # that disclosure, not a redundant third nested toggle.
     expect(page.get_by_text("OpenCode native browser reasoning trace")).to_be_visible(timeout=10_000)
+    expect(page.get_by_role("button", name="Reasoning")).to_have_count(0)
     command_button = page.get_by_role("button", name="Ran 1 command").last
     expect(command_button).to_be_visible(timeout=10_000)
     command_button.click()
-    expect(page.get_by_text("OpenCode browser tool")).to_be_visible(timeout=10_000)
+    # The activity row exposes the semantic command instead of repeating the
+    # provider's generic tool title. Its own disclosure still owns the exact
+    # provider output.
+    expect(page.get_by_text("Ran printf opencode-browser-tool", exact=True)).to_be_visible(
+        timeout=10_000
+    )
+    page.get_by_role("button", name="Expand activity details").last.click()
+    expect(page.get_by_text("opencode browser tool output", exact=True)).to_be_visible(
+        timeout=10_000
+    )
     assert_page_text_absent(page, "Step 1")
     assert_page_text_absent(page, "Step 2")
 
@@ -857,7 +889,12 @@ def resume_native_session(
     workspace: pathlib.Path,
     config: ProviderConfig,
     provider_session_id: str,
-) -> str:
+) -> tuple[str, str | None]:
+    initial_input = (
+        f"resume initial {config.provider} browser native"
+        if config.provider == "claude"
+        else None
+    )
     resumed = request_json(
         base_url,
         "/api/sessions/resume",
@@ -867,6 +904,18 @@ def resume_native_session(
             "cwd": str(workspace),
             "liveBackend": "native_tui",
             **config.request,
+            **(
+                {
+                    "initialInput": {
+                        "clientId": "web-user",
+                        "text": initial_input,
+                        "clientMessageId": f"{config.provider}-resume-initial-message",
+                        "clientTurnId": f"{config.provider}-resume-initial-turn",
+                    }
+                }
+                if initial_input
+                else {}
+            ),
             "attach": {
                 "client": {
                     "id": "web-user",
@@ -884,7 +933,7 @@ def resume_native_session(
     session_id = str(session["id"])
     STARTED_SESSIONS.append((base_url, session_id))
     wait_for_provider_binding(base_url, session_id, config.provider)
-    return session_id
+    return session_id, initial_input
 
 
 def mark_session_closed(base_url: str, session_id: str) -> None:
@@ -1051,6 +1100,10 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
                 assert_page_text_absent(page, "x-request-id")
                 assert_page_text_absent(page, "f589e5e5-1066-4763-abe4-14122f11c486")
                 assert_page_text_absent(page, '"headers"')
+                assert_page_text_absent(page, "RAH_FAKE_INTERNAL_CAVEAT")
+                assert_page_text_absent(page, "RAH_FAKE_INTERNAL_COMMAND")
+                assert_page_text_absent(page, "RAH_FAKE_INTERNAL_REMINDER")
+                assert_page_text_absent(page, "RAH_FAKE_MIXED_REMINDER")
             artifact_dir = getattr(page, "_rah_artifact_dir", None)
             if artifact_dir:
                 save_browser_screenshot(page, artifact_dir, f"{config.provider}-chat-mirror")
@@ -1234,7 +1287,9 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
     close_session_quietly(base_url, session_id)
     mark_session_closed(base_url, session_id)
 
-    resume_session_id = resume_native_session(base_url, workspace, config, provider_session_id)
+    resume_session_id, resume_initial_input = resume_native_session(
+        base_url, workspace, config, provider_session_id
+    )
     page.reload(wait_until="domcontentloaded")
     open_sessions_dialog(page)
     open_live_sessions_tab(page)
@@ -1257,6 +1312,18 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
                 f"{config.provider} resumed history duplicated {config.expected_mirror_text!r}: "
                 f"count={len(resume_matches)} identities={json.dumps(identities, ensure_ascii=False)}"
             )
+    if resume_initial_input:
+        resume_answer = dynamic_answer_for(config, resume_initial_input)
+        expect(page.get_by_text(resume_initial_input, exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_text(resume_answer, exact=True)).to_be_visible(timeout=20_000)
+        wait_for_chat_user_message_occurrences(page, resume_initial_input, 1)
+        for internal_text in (
+            "RAH_FAKE_INTERNAL_CAVEAT",
+            "RAH_FAKE_INTERNAL_COMMAND",
+            "RAH_FAKE_INTERNAL_REMINDER",
+            "RAH_FAKE_MIXED_REMINDER",
+        ):
+            assert_page_text_absent(page, internal_text)
     assert_page_text_absent(page, "Unhandled provider event")
     artifact_dir = getattr(page, "_rah_artifact_dir", None)
     if artifact_dir:
@@ -1264,6 +1331,89 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
     close_session_quietly(base_url, resume_session_id)
     mark_session_closed(base_url, resume_session_id)
     return {"provider": config.provider, "sessionId": session_id, "resumeSessionId": resume_session_id}
+
+
+def write_isolated_claude_browser_env(output_path: pathlib.Path) -> None:
+    """Keep an isolated fake-Claude tmux runtime alive for in-app Browser QA."""
+    tmp_root = pathlib.Path(tempfile.mkdtemp(prefix="rah-claude-in-app-browser-"))
+    workspace = tmp_root / "workspace"
+    rah_home = tmp_root / "rah-home"
+    claude_config_dir = tmp_root / "claude-config"
+    xdg_data_home = tmp_root / "xdg-data"
+    fake_claude = tmp_root / "fake-claude.js"
+    workspace.mkdir(parents=True)
+    config = next(config for config in CONFIGS if config.provider == "claude")
+    write_fake_provider(fake_claude, config)
+    port = free_port()
+    daemon: subprocess.Popen[str] | None = None
+    try:
+        daemon = start_daemon(
+            {
+                "RAH_HOME": str(rah_home),
+                "CLAUDE_CONFIG_DIR": str(claude_config_dir),
+                "XDG_DATA_HOME": str(xdg_data_home),
+                "RAH_CLAUDE_BINARY": str(fake_claude),
+                "RAH_TUI_MUX": "tmux",
+            },
+            port,
+        )
+        base_url = f"http://127.0.0.1:{port}"
+        request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
+        request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
+        initial_text = "seed claude sonnet low browser history"
+        started = request_json(
+            base_url,
+            "/api/sessions/start",
+            {
+                "provider": "claude",
+                "cwd": str(workspace),
+                "liveBackend": "tui_mux",
+                "title": "Claude Sonnet low regression",
+                **config.request,
+                "initialInput": {
+                    "clientId": "web-user",
+                    "text": initial_text,
+                    "clientMessageId": "claude-in-app-seed-message",
+                    "clientTurnId": "claude-in-app-seed-turn",
+                },
+                "attach": {
+                    "client": {
+                        "id": "web-user",
+                        "kind": "web",
+                        "connectionId": "claude-in-app-browser-setup",
+                    },
+                    "mode": "interactive",
+                    "claimControl": True,
+                },
+            },
+        )["session"]
+        session_id = str(started["session"]["id"])
+        provider_session_id = str(started["session"]["providerSessionId"])
+        close_session_quietly(base_url, session_id)
+        wait_for_stored_history_ref(base_url, "claude", provider_session_id)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "pid": daemon.pid,
+                    "tmpRoot": str(tmp_root),
+                    "baseUrl": base_url,
+                    "workspace": str(workspace),
+                    "providerSessionId": provider_session_id,
+                    "initialText": initial_text,
+                    "model": "sonnet",
+                    "effort": "low",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        print(output_path.read_text(encoding="utf-8"), flush=True)
+        while daemon.poll() is None:
+            time.sleep(1)
+    finally:
+        if daemon is not None:
+            terminate_process_tree(daemon)
+        move_path_to_trash(tmp_root)
 
 
 def main() -> int:
@@ -1287,7 +1437,8 @@ def main() -> int:
         "XDG_DATA_HOME": str(xdg_data_home),
         "MOCK_OPENCODE_SESSION_ID": "ses_native_opencode_browser",
     }
-    for config in CONFIGS:
+    configs = selected_provider_configs()
+    for config in configs:
         binary = tmp_root / f"fake-{config.provider}.js"
         write_fake_provider(binary, config)
         env[config.env_name] = str(binary)
@@ -1303,8 +1454,8 @@ def main() -> int:
                 "localStorage.setItem('rah-hide-tool-calls-in-chat', 'false');"
                 "localStorage.setItem('rah-hide-opencode-reasoning-in-chat', 'false');"
             )
-            results = [exercise_provider(page, base_url, workspace, config) for config in CONFIGS]
-            for config in CONFIGS:
+            results = [exercise_provider(page, base_url, workspace, config) for config in configs]
+            for config in configs:
                 exercise_provider_tui_exit(page, base_url, workspace, config)
             browser.close()
         print(
@@ -1373,4 +1524,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    isolated_claude_output = os.environ.get("RAH_CLAUDE_BROWSER_ENV_FILE")
+    if isolated_claude_output:
+        write_isolated_claude_browser_env(pathlib.Path(isolated_claude_output))
+        raise SystemExit(0)
     raise SystemExit(main())

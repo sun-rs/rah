@@ -131,8 +131,8 @@ Codex app-server 本身会在 thread 同时“无订阅且不 active”持续 30
 ## 6. UI 协议
 
 - 创建期间入口立即进入 pending/disabled 状态，避免双击。
-- `Continue in new task` 必须标注 `Shares this workspace`。
-- `Open Side task` 必须标注 `Ephemeral, shared workspace`。
+- Session `...` 菜单中的两个入口固定使用简短名称 `Fork` 与 `Side`；共享 workspace、
+  persistent/ephemeral 等说明只放在 tooltip 与本文协议中，不在菜单里重复成长标签。
 - 桌面默认主任务约占 60%，Side 总区域约占 40%；Side 不应反客为主。主任务与 Side
   区域、相邻 Side 之间统一使用 1px 可见线和更宽的透明拖动命中区，禁止额外的粗轨道。
   用户调整后的主/Side 比例和 Side 间比例按父 session 持久化。

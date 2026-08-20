@@ -195,14 +195,14 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "const fs = require('node:fs');",
                 "const path = require('node:path');",
                 "const readline = require('node:readline');",
+                f"const {{ WebSocketServer }} = require({json.dumps(str(ROOT_DIR / 'node_modules' / 'ws'))});",
                 "const baseProviderSessionId = process.env.MOCK_CODEX_SESSION_ID;",
                 "const codexHome = process.env.CODEX_HOME;",
                 "if (!baseProviderSessionId || !codexHome) process.exit(2);",
                 "if (process.argv.includes('app-server')) {",
-                "  const rl = readline.createInterface({ input: process.stdin });",
-                "  const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');",
                 "  let appServerThreadId = null;",
                 "  let appServerTurnIndex = 0;",
+                "  let activeAppServerTurn = null;",
                 "  const resumedAppServerThreads = new Set();",
                 "  const appServerReceiptPath = path.join(codexHome, 'app-server-turns.jsonl');",
                 "  const findRollout = (root, sessionId) => {",
@@ -218,8 +218,7 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "    }",
                 "    return null;",
                 "  };",
-                "  rl.on('line', (line) => {",
-                "    const message = JSON.parse(line);",
+                "  const handleMessage = (message, send) => {",
                 "    if (message.id === undefined) return;",
                 "    if (message.method === 'initialize') {",
                 "      send({ id: message.id, result: {} });",
@@ -261,17 +260,46 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "      const turnId = `app-server-turn-${appServerTurnIndex}`;",
                 "      const text = message.params && message.params.input && message.params.input[0] ? message.params.input[0].text : '';",
                 "      fs.appendFileSync(appServerReceiptPath, JSON.stringify({ threadId: message.params.threadId, turnId, text, clientUserMessageId: message.params.clientUserMessageId || null }) + '\\n');",
-                "      const isSlowResume = resumedAppServerThreads.has(message.params.threadId);",
+                "      const isGuideBrowserCase = text.startsWith('RAH_BROWSER_GUIDE_INITIAL_');",
+                "      const isSlowResume = resumedAppServerThreads.has(message.params.threadId) && !isGuideBrowserCase;",
                 "      if (isSlowResume) {",
                 "        setTimeout(() => send({ method: 'thread/status/changed', params: { threadId: message.params.threadId, status: { type: 'idle' } } }), 40);",
                 "      }",
                 "      const acceptDelay = isSlowResume ? 2000 : 0;",
                 "      setTimeout(() => {",
-                "        send({ id: message.id, result: { turn: { id: turnId } } });",
-                "        send({ method: 'turn/started', params: { threadId: message.params.threadId, turn: { id: turnId } } });",
-                "        send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId, itemId: `app-server-assistant-${appServerTurnIndex}`, delta: `RAH_APP_SERVER_INITIAL_ACK:${text}` } });",
-                "        send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { id: turnId, status: 'completed' } } });",
+                "        if (isSlowResume) {",
+                "          send({ method: 'item/started', params: { threadId: message.params.threadId, turnId, item: { type: 'contextCompaction', id: `resume-compaction-${appServerTurnIndex}` } } });",
+                "          send({ method: 'item/completed', params: { threadId: message.params.threadId, turnId, item: { type: 'contextCompaction', id: `resume-compaction-${appServerTurnIndex}` } } });",
+                "        }",
+                "        const effectiveModel = message.params.model || 'gpt-native-browser';",
+                "        const effectiveEffort = message.params.effort || 'medium';",
+                "        const turn = { id: turnId, model: effectiveModel, effort: effectiveEffort };",
+                "        send({ id: message.id, result: { turn } });",
+                "        send({ method: 'turn/started', params: { threadId: message.params.threadId, turn } });",
+                "        if (isGuideBrowserCase) activeAppServerTurn = { threadId: message.params.threadId, turnId, text, send };",
+                "        if (isGuideBrowserCase) send({ method: 'item/reasoning/summaryTextDelta', params: { threadId: message.params.threadId, turnId, itemId: `reason-before-${appServerTurnIndex}`, delta: 'RAH_GUIDE_REASONING_BEFORE', summaryIndex: 0 } });",
+                "        setTimeout(() => {",
+                "          if (isGuideBrowserCase && (!activeAppServerTurn || activeAppServerTurn.turnId !== turnId)) return;",
+                "          send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId, itemId: `app-server-assistant-${appServerTurnIndex}`, delta: `RAH_APP_SERVER_INITIAL_ACK:${text}` } });",
+                "          send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { id: turnId, status: 'completed' } } });",
+                "          activeAppServerTurn = null;",
+                "        }, isGuideBrowserCase ? 120000 : 0);",
                 "      }, acceptDelay);",
+                "      return;",
+                "    }",
+                "    if (message.method === 'turn/steer') {",
+                "      if (!activeAppServerTurn || activeAppServerTurn.turnId !== message.params.expectedTurnId) {",
+                "        send({ id: message.id, error: { code: -32000, message: 'turn is no longer active' } });",
+                "        return;",
+                "      }",
+                "      const guidedText = message.params && message.params.input && message.params.input[0] ? message.params.input[0].text : '';",
+                "      const current = activeAppServerTurn;",
+                "      send({ id: message.id, result: { turn: { id: current.turnId } } });",
+                "      send({ method: 'item/completed', params: { threadId: current.threadId, turnId: current.turnId, item: { type: 'userMessage', id: message.params.clientUserMessageId || `guide-${appServerTurnIndex}`, clientUserMessageId: message.params.clientUserMessageId || null, content: [{ type: 'text', text: guidedText }] } } });",
+                "      send({ method: 'item/reasoning/summaryTextDelta', params: { threadId: current.threadId, turnId: current.turnId, itemId: `reason-after-${appServerTurnIndex}`, delta: 'RAH_GUIDE_REASONING_AFTER', summaryIndex: 0 } });",
+                "      send({ method: 'item/agentMessage/delta', params: { threadId: current.threadId, turnId: current.turnId, itemId: `app-server-assistant-${appServerTurnIndex}`, delta: `RAH_APP_SERVER_GUIDE_ACK:${guidedText}` } });",
+                "      send({ method: 'turn/completed', params: { threadId: current.threadId, turn: { id: current.turnId, status: 'completed' } } });",
+                "      activeAppServerTurn = null;",
                 "      return;",
                 "    }",
                 "    if (message.method === 'thread/archive') {",
@@ -289,7 +317,21 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "      return;",
                 "    }",
                 "    send({ id: message.id, error: { code: -32601, message: `method not found: ${message.method}` } });",
-                "  });",
+                "  };",
+                "  if (process.argv.includes('--listen')) {",
+                "    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => {",
+                "      const address = wss.address();",
+                "      process.stderr.write(`listening ws://127.0.0.1:${address.port}/\\n`);",
+                "    });",
+                "    wss.on('connection', (socket) => {",
+                "      const send = (message) => socket.send(JSON.stringify(message));",
+                "      socket.on('message', (raw) => handleMessage(JSON.parse(raw.toString()), send));",
+                "    });",
+                "  } else {",
+                "    const rl = readline.createInterface({ input: process.stdin });",
+                "    const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');",
+                "    rl.on('line', (line) => handleMessage(JSON.parse(line), send));",
+                "  }",
                 "} else {",
                 "const resumeIndex = process.argv.indexOf('resume');",
                 "const resumeProviderSessionId = resumeIndex >= 0 ? process.argv.slice(resumeIndex + 1).find((value) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value)) : null;",
@@ -476,6 +518,84 @@ def start_daemon(env: dict[str, str], port: int) -> subprocess.Popen[str]:
                     return proc
         time.sleep(0.05)
     raise TimeoutError(f"daemon did not start on port {port}; stdout={stdout}")
+
+
+def write_isolated_guide_browser_env(output_path: pathlib.Path) -> None:
+    """Start the fake-provider daemon and keep it alive for in-app Browser QA."""
+    tmp_root = pathlib.Path(tempfile.mkdtemp(prefix="rah-guide-browser-"))
+    workspace = tmp_root / "workspace"
+    rah_home = tmp_root / "rah-home"
+    codex_home = tmp_root / "codex-home"
+    claude_config_dir = tmp_root / "claude-config"
+    xdg_data_home = tmp_root / "xdg-data"
+    fake_codex = tmp_root / "fake-codex.js"
+    workspace.mkdir(parents=True)
+    (codex_home / "sessions").mkdir(parents=True)
+    write_fake_codex(fake_codex)
+    port = free_port()
+    daemon = start_daemon(
+        {
+            "RAH_HOME": str(rah_home),
+            "CODEX_HOME": str(codex_home),
+            "CLAUDE_CONFIG_DIR": str(claude_config_dir),
+            "XDG_DATA_HOME": str(xdg_data_home),
+            "RAH_CODEX_BINARY": str(fake_codex),
+            "RAH_CODEX_APP_SERVER_TRANSPORT": "websocket",
+            "MOCK_CODEX_SESSION_ID": str(uuid.uuid4()),
+            "MOCK_CODEX_SESSION_ID_PER_PROCESS": "1",
+        },
+        port,
+    )
+    base_url = f"http://127.0.0.1:{port}"
+    request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
+    request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
+    initial_text = f"RAH_BROWSER_GUIDE_INITIAL_{uuid.uuid4().hex[:8]}"
+    initial_message_id = f"guide-initial-{uuid.uuid4().hex[:8]}"
+    started = request_json(
+        base_url,
+        "/api/sessions/start",
+        {
+            "provider": "codex",
+            "cwd": str(workspace),
+            "model": "gpt-native-browser",
+            "modeId": "never/danger-full-access",
+            "initialInput": {
+                "clientId": "web-user",
+                "text": initial_text,
+                "clientMessageId": initial_message_id,
+                "clientTurnId": f"guide-turn-{uuid.uuid4().hex[:8]}",
+            },
+            "attach": {
+                "client": {
+                    "id": "web-user",
+                    "kind": "web",
+                    "connectionId": "guide-browser-setup",
+                },
+                "mode": "interactive",
+                "claimControl": True,
+            },
+        },
+    )["session"]
+    output_path.write_text(
+        json.dumps(
+            {
+                "pid": daemon.pid,
+                "tmpRoot": str(tmp_root),
+                "baseUrl": base_url,
+                "workspace": str(workspace),
+                "sessionId": started["session"]["id"],
+                "initialText": initial_text,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    try:
+        while daemon.poll() is None:
+            time.sleep(1)
+    finally:
+        terminate_process_tree(daemon)
+        move_path_to_trash(tmp_root)
 
 
 def wait_for_session_provider_id(
@@ -956,6 +1076,16 @@ def exercise_codex_history_paging(
             f"scrollHeight={scroll_container.evaluate('(node) => node.scrollHeight')}; "
             f"clientHeight={scroll_container.evaluate('(node) => node.clientHeight')}"
         )
+    rendered_feed_rows = scroll_container.locator("[data-feed-entry-key]").count()
+    if rendered_feed_rows > 64:
+        raise AssertionError(
+            "Long history did not keep the primary conversation DOM bounded: "
+            f"renderedRows={rendered_feed_rows}"
+        )
+    if scroll_container.locator('[data-chat-virtual-spacer="bottom"]').count() != 1:
+        raise AssertionError(
+            "Long history reached its earliest turn without retaining a virtual bottom spacer"
+        )
     save_browser_screenshot(page, artifact_dir, "codex-history-paging-older-anchor")
     replay_session_id = live_session_id_for_provider(base_url, provider_session_id)
     if replay_session_id and close_replay:
@@ -1067,6 +1197,12 @@ def exercise_codex_atomic_history_resume_input(
             expect(page.get_by_role("button", name="Stop generating")).to_be_visible(
                 timeout=10_000
             )
+            expect(page.get_by_role("button", name="Stop session", exact=True)).to_be_enabled(
+                timeout=10_000
+            )
+            expect(page.get_by_role("button", name="TUI", exact=True)).to_be_visible(
+                timeout=10_000
+            )
             # The fake provider publishes a late idle edge and then delays
             # turn/start acceptance. While the Resume HTTP request is still
             # pending, both the browser and daemon must retain the prompt.
@@ -1076,16 +1212,29 @@ def exercise_codex_atomic_history_resume_input(
                     has_text="Working"
                 )
             ).to_be_visible(timeout=10_000)
-            pending_sessions = request_json(base_url, "/api/sessions")["sessions"]
-            pending_owned = [
-                summary
-                for summary in pending_sessions
-                if any(
-                    isinstance(entry, dict)
-                    and entry.get("text") == prompt
-                    for entry in (summary["session"].get("inputQueue") or [])
-                )
-            ]
+            # The HTTP request owns initialInput while provider thread/resume
+            # is still creating the live identity. Once that identity exists,
+            # the same prompt must move into its canonical queue until
+            # turn/start accepts it. Poll through the legitimate no-live-id
+            # window rather than assuming thread/resume always finishes in a
+            # fixed second on a loaded host.
+            pending_sessions: list[dict[str, Any]] = []
+            pending_owned: list[dict[str, Any]] = []
+            ownership_deadline = time.monotonic() + 10
+            while time.monotonic() < ownership_deadline:
+                pending_sessions = request_json(base_url, "/api/sessions")["sessions"]
+                pending_owned = [
+                    summary
+                    for summary in pending_sessions
+                    if any(
+                        isinstance(entry, dict)
+                        and entry.get("text") == prompt
+                        for entry in (summary["session"].get("inputQueue") or [])
+                    )
+                ]
+                if len(pending_owned) == 1:
+                    break
+                page.wait_for_timeout(50)
             if len(pending_owned) != 1:
                 raise AssertionError(
                     "Delayed live Resume did not retain exactly one daemon-owned prompt "
@@ -1157,6 +1306,12 @@ def exercise_codex_atomic_history_resume_input(
     expect(
         page.get_by_test_id("chat-assistant-message").filter(has_text=answer)
     ).to_be_visible(timeout=20_000)
+    assert_resume_turn_semantic_layout(
+        page,
+        prompt,
+        answer,
+        "gpt-native-browser",
+    )
     wait_for_session_history_timeline_text(
         base_url, resumed_session_id, "user_message", prompt
     )
@@ -1202,6 +1357,12 @@ def exercise_codex_atomic_history_resume_input(
     expect(
         page.get_by_test_id("chat-assistant-message").filter(has_text=answer)
     ).to_be_visible(timeout=20_000)
+    assert_resume_turn_semantic_layout(
+        page,
+        prompt,
+        answer,
+        "gpt-native-browser",
+    )
     wait_for_session_history_timeline_text_count(
         base_url, resumed_session_id, "user_message", prompt, 1
     )
@@ -1214,6 +1375,203 @@ def exercise_codex_atomic_history_resume_input(
         "codex-slow-history-resume-after-refresh",
     )
     return resumed_session_id
+
+
+def exercise_codex_pwa_atomic_history_resume_input(
+    browser,
+    base_url: str,
+    provider_session_id: str,
+    app_server_receipt: pathlib.Path,
+    artifact_dir: pathlib.Path,
+) -> str:
+    prompt = f"RAH_PWA_SLOW_HISTORY_RESUME_DELIVERY_{uuid.uuid4().hex[:8]}"
+    answer = f"RAH_APP_SERVER_INITIAL_ACK:{prompt}"
+    context = browser.new_context(
+        viewport={"width": 390, "height": 844},
+        is_mobile=True,
+        has_touch=True,
+    )
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });"
+    )
+    page = context.new_page()
+    try:
+        page.goto(base_url, wait_until="domcontentloaded")
+        try:
+            page.locator('button[aria-label="Open sidebar"]:visible').first.click(
+                timeout=3_000
+            )
+        except Exception:
+            pass
+        page.locator('button[aria-label="Chats"]:visible').first.click(timeout=30_000)
+        page.get_by_role("tab", name="All", exact=True).click(timeout=30_000)
+        page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
+        open_filtered_history_session(page, provider_session_id)
+        chat_button = page.get_by_role("button", name="Chat", exact=True)
+        if chat_button.count() > 0:
+            chat_button.click(timeout=30_000)
+
+        composer = chat_composer(page)
+        expect(composer).to_be_visible(timeout=20_000)
+        composer.fill(prompt)
+        # Leave Mobile Safari's composition boundary open while Send clears
+        # the parent-owned draft. A late input/compositionend pair must not
+        # restore the submitted text into the composer.
+        composer.evaluate(
+            """(node) => {
+              window.__rahPwaResumeComposer = node;
+              window.__rahPwaResumeCompositionTrace = [];
+              for (const type of ['compositionstart', 'input', 'compositionend']) {
+                node.addEventListener(type, (event) => {
+                  window.__rahPwaResumeCompositionTrace.push({
+                    type,
+                    value: node.value,
+                    isComposing: event.isComposing,
+                    inputType: event.inputType,
+                  });
+                });
+              }
+            }"""
+        )
+        composer.dispatch_event(
+            "compositionstart",
+            {"data": prompt},
+        )
+        with page.expect_response(
+            lambda response: (
+                response.url.endswith("/api/sessions/resume")
+                and ((response.request.post_data_json or {}).get("initialInput") or {}).get("text")
+                == prompt
+            ),
+            timeout=30_000,
+        ) as response_info:
+            page.get_by_role("button", name="Send message", exact=True).click(timeout=10_000)
+            expect(composer).to_have_value("", timeout=5_000)
+            composer_identity_after_send = composer.evaluate(
+                "node => node === window.__rahPwaResumeComposer"
+            )
+            composer.evaluate(
+                """(node, value) => {
+                  // Bypass React's per-node value tracker exactly as a native
+                  // iOS composition mutation does. Assigning node.value here
+                  // would update that tracker and make the synthetic input a
+                  // false no-op from React's perspective.
+                  const setter = Object.getOwnPropertyDescriptor(
+                    HTMLTextAreaElement.prototype,
+                    'value',
+                  ).set;
+                  setter.call(node, value);
+                  node.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    data: value,
+                    inputType: 'insertCompositionText',
+                    isComposing: true,
+                  }));
+                  node.dispatchEvent(new CompositionEvent('compositionend', {
+                    bubbles: true,
+                    data: value,
+                  }));
+                }""",
+                prompt,
+            )
+            try:
+                expect(composer).to_have_value("", timeout=5_000)
+            except AssertionError as error:
+                trace = page.evaluate("window.__rahPwaResumeCompositionTrace || []")
+                raise AssertionError(
+                    "PWA accepted Send restored its submitted composition; "
+                    f"sameNodeAfterSend={composer_identity_after_send}, trace={trace!r}"
+                ) from error
+            wait_for_chat_user_message_occurrences(page, prompt, 1, timeout_s=10)
+            expect(
+                page.get_by_test_id("assistant-process-group-toggle").filter(
+                    has_text="Working"
+                )
+            ).to_be_visible(timeout=10_000)
+            expect(page.get_by_role("button", name="Stop generating")).to_be_visible(
+                timeout=10_000
+            )
+            expect(page.get_by_role("button", name="Stop session", exact=True)).to_be_enabled(
+                timeout=10_000
+            )
+            expect(
+                page.get_by_role("button", name="Show native TUI", exact=True)
+            ).to_be_visible(timeout=10_000)
+            page.wait_for_timeout(1_000)
+            expect(composer).to_have_value("")
+            expect(page.get_by_role("button", name="Stop generating")).to_be_visible()
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "codex-pwa-slow-history-resume-live-controls",
+            )
+
+        response = response_info.value
+        if response.status >= 400:
+            raise AssertionError(
+                f"PWA slow history Resume failed with HTTP {response.status}: {response.text()}"
+            )
+        resumed_session_id = str(response.json()["session"]["session"]["id"])
+        wait_for_chat_user_message_occurrences(page, prompt, 1, timeout_s=20)
+        expect(
+            page.get_by_test_id("chat-assistant-message").filter(has_text=answer)
+        ).to_be_visible(timeout=20_000)
+        assert_resume_turn_semantic_layout(
+            page,
+            prompt,
+            answer,
+            "gpt-native-browser",
+        )
+        model_meta = page.get_by_test_id("assistant-turn-model-meta").last
+        expect(model_meta).to_be_visible(timeout=10_000)
+        page.wait_for_timeout(250)
+        model_meta.tap(timeout=10_000)
+        try:
+            expect(model_meta).to_have_attribute("aria-expanded", "true", timeout=10_000)
+            expect(page.get_by_test_id("assistant-turn-model-meta-detail").last).to_contain_text(
+                "gpt-native-browser",
+                timeout=10_000,
+            )
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "codex-pwa-slow-history-resume-completed",
+            )
+        except Exception:
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "codex-pwa-slow-history-resume-model-detail-failure",
+            )
+            raise
+        receipt_deadline = time.monotonic() + 20
+        receipts: list[dict[str, Any]] = []
+        while time.monotonic() < receipt_deadline:
+            if app_server_receipt.exists():
+                receipts = [
+                    json.loads(line)
+                    for line in app_server_receipt.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                if any(row.get("text") == prompt for row in receipts):
+                    break
+            page.wait_for_timeout(100)
+        matching = [row for row in receipts if row.get("text") == prompt]
+        if len(matching) != 1:
+            raise AssertionError(
+                "Provider did not receive the PWA Resume question exactly once: "
+                f"{receipts!r}"
+            )
+        page.get_by_role("button", name="Show native TUI", exact=True).click(
+            timeout=10_000
+        )
+        expect(page.locator(".terminal-panel").last).to_be_visible(timeout=10_000)
+        page.get_by_role("button", name="Show chat", exact=True).click(timeout=10_000)
+        expect(chat_composer(page)).to_be_visible(timeout=10_000)
+        expect(chat_composer(page)).to_have_value("")
+        return resumed_session_id
+    finally:
+        context.close()
 
 
 def exercise_missing_cwd_history(
@@ -1352,6 +1710,111 @@ def wait_for_chat_user_message_occurrences(page, needle: str, expected: int, tim
     raise AssertionError(
         f"chat user message {needle!r} count did not become {expected}; last={last_count}"
     )
+
+
+def assert_resume_turn_semantic_layout(
+    page,
+    prompt: str,
+    answer: str,
+    expected_model: str,
+) -> None:
+    layout = page.evaluate(
+        """({ prompt, answer }) => {
+          const findText = (selector, text) =>
+            [...document.querySelectorAll(selector)].find((node) =>
+              (node.textContent || '').includes(text)
+            );
+          const user = findText('[data-testid="chat-user-message"]', prompt);
+          const assistant = findText('[data-testid="chat-assistant-message"]', answer);
+          const process = [...document.querySelectorAll('[data-testid="assistant-process-group"]')]
+            .find((node) =>
+              user && assistant &&
+              Boolean(user.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+              Boolean(node.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING)
+            );
+          const meta = [...document.querySelectorAll('[data-testid="assistant-turn-model-meta"]')]
+            .find((node) =>
+              process && process.contains(node)
+            );
+          const status = process?.querySelector('[data-testid="assistant-process-group-toggle"]');
+          return {
+            user: user?.getBoundingClientRect().toJSON() ?? null,
+            process: process?.getBoundingClientRect().toJSON() ?? null,
+            assistant: assistant?.getBoundingClientRect().toJSON() ?? null,
+            meta: meta?.getBoundingClientRect().toJSON() ?? null,
+            metaLabel: meta?.getAttribute('aria-label') ?? null,
+            metaNativeTitles: meta?.querySelectorAll('[title]').length ?? null,
+            metaBeforeStatus: Boolean(
+              meta && status &&
+              (meta.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING)
+            ),
+            legacyHeaders: document.querySelectorAll('[data-testid="chat-assistant-turn-header"]').length,
+          };
+        }""",
+        {"prompt": prompt, "answer": answer},
+    )
+    if not all(layout.get(key) for key in ("user", "process", "assistant", "meta")):
+        raise AssertionError(f"Resume semantic layout is incomplete: {layout!r}")
+    if not (
+        layout["user"]["top"] < layout["process"]["top"]
+        and layout["process"]["top"] < layout["assistant"]["top"]
+        and layout["process"]["top"] - 1 <= layout["meta"]["top"]
+        and layout["meta"]["bottom"] <= layout["process"]["bottom"] + 1
+        and layout["metaBeforeStatus"]
+    ):
+        raise AssertionError(f"Resume semantic layout is out of order: {layout!r}")
+    if layout["legacyHeaders"] != 0:
+        raise AssertionError(f"Legacy pre-answer model header remains mounted: {layout!r}")
+    if expected_model not in (layout["metaLabel"] or ""):
+        raise AssertionError(f"Worked provider icon does not expose the effective model: {layout!r}")
+    if layout["metaNativeTitles"] != 0:
+        raise AssertionError(f"Worked provider icon still exposes a duplicate native tooltip: {layout!r}")
+    if page.evaluate("window.matchMedia('(hover: hover)').matches"):
+        model_meta = page.locator(
+            f'[data-testid="assistant-turn-model-meta"][aria-label*="{expected_model}"]'
+        ).last
+        model_meta.hover(timeout=10_000)
+        expect(page.get_by_test_id("assistant-turn-model-meta-detail").last).to_contain_text(
+            expected_model,
+            timeout=10_000,
+        )
+        page.mouse.move(0, 0)
+        expect(page.get_by_test_id("assistant-turn-model-meta-detail")).to_have_count(0)
+
+
+def expect_chat_assistant_with_diagnostics(
+    page,
+    base_url: str,
+    session_id: str,
+    answer: str,
+    conversation_batches: list[dict[str, Any]],
+    artifact_dir: pathlib.Path,
+    screenshot_name: str,
+    timeout_ms: int = 20_000,
+) -> None:
+    try:
+        expect(
+            page.get_by_test_id("chat-assistant-message").filter(has_text=answer)
+        ).to_be_visible(timeout=timeout_ms)
+    except Exception as error:
+        save_browser_screenshot(page, artifact_dir, screenshot_name)
+        live = request_json(
+            base_url,
+            f"/api/sessions/{session_id}/conversation/turns?limit=100&liveOnly=true",
+        )
+        history = request_json(
+            base_url,
+            f"/api/sessions/{session_id}/conversation/turns?limit=100",
+        )
+        summary = request_json(base_url, f"/api/sessions/{session_id}")
+        raise AssertionError(
+            f"assistant answer {answer!r} did not render; "
+            f"summary={json.dumps(summary, ensure_ascii=False)}; "
+            f"live={json.dumps(live, ensure_ascii=False)}; "
+            f"history={json.dumps(history, ensure_ascii=False)}; "
+            f"recentDeltas={json.dumps(conversation_batches[-20:], ensure_ascii=False)}; "
+            f"body={page.locator('body').inner_text(timeout=10_000)[-5000:]!r}"
+        ) from error
 
 
 def count_terminal_text(panel, needle: str) -> int:
@@ -1618,6 +2081,8 @@ def main() -> int:
     workspace = tmp_root / "workspace"
     rah_home = tmp_root / "rah-home"
     codex_home = tmp_root / "codex-home"
+    claude_config_dir = tmp_root / "claude-config"
+    xdg_data_home = tmp_root / "xdg-data"
     fake_codex = tmp_root / "fake-codex.js"
     provider_session_id = str(uuid.uuid4())
     long_history_provider_session_id = str(uuid.uuid4())
@@ -1667,8 +2132,14 @@ def main() -> int:
             {
                 "RAH_HOME": str(rah_home),
                 "CODEX_HOME": str(codex_home),
+                "CLAUDE_CONFIG_DIR": str(claude_config_dir),
+                "XDG_DATA_HOME": str(xdg_data_home),
                 "RAH_CODEX_BINARY": str(fake_codex),
-                "RAH_CODEX_APP_SERVER_TRANSPORT": "stdio",
+                # Keep the fake provider transport identical to production.
+                # A stdio app-server has no endpoint for `codex --remote`, so
+                # it cannot truthfully expose the native-TUI controls asserted
+                # by the New/Resume lifecycle cases in this suite.
+                "RAH_CODEX_APP_SERVER_TRANSPORT": "websocket",
                 "MOCK_CODEX_SESSION_ID": provider_session_id,
                 # Every independent native TUI start represents a new Codex
                 # task. Resume still binds the explicit id from its CLI args.
@@ -1805,6 +2276,16 @@ def main() -> int:
                     artifact_dir,
                 )
                 close_session_quietly(base_url, atomic_history_resume_session_id)
+                pwa_history_resume_session_id = (
+                    exercise_codex_pwa_atomic_history_resume_input(
+                        browser,
+                        base_url,
+                        long_history_provider_session_id,
+                        app_server_receipt,
+                        artifact_dir,
+                    )
+                )
+                close_session_quietly(base_url, pwa_history_resume_session_id)
                 print(
                     json.dumps(
                         {
@@ -1819,6 +2300,11 @@ def main() -> int:
                                 "late provider idle cannot erase Working or the daemon queue",
                                 "provider receives the exact stable question identity once",
                                 "browser refresh rehydrates the user question and assistant answer exactly once",
+                                "Resume preflight is presented after its activating prompt and before the final answer",
+            "provider icon starts the Working / Worked / Interrupted row and exposes effective model metadata on Desktop hover or PWA tap",
+                                "iOS PWA clears an active composition on Send and does not restore it on late composition events",
+                                "desktop and iOS PWA project attached header Stop, composer Stop, and Chat/TUI controls before Resume HTTP completion",
+                                "iOS PWA can enter the resumed native TUI and return to an empty structured composer without refresh",
                             ],
                         },
                         ensure_ascii=False,
@@ -1875,11 +2361,15 @@ def main() -> int:
             started_new_task = start_response.json()["session"]
             started_new_task_id = started_new_task["session"]["id"]
             wait_for_chat_user_message_occurrences(page, new_task_prompt, 1, timeout_s=20)
-            expect(
-                page.get_by_test_id("chat-assistant-message").filter(
-                    has_text=new_task_answer
-                )
-            ).to_be_visible(timeout=20_000)
+            expect_chat_assistant_with_diagnostics(
+                page,
+                base_url,
+                started_new_task_id,
+                new_task_answer,
+                conversation_batches,
+                artifact_dir,
+                "codex-new-task-provider-delivery-failure",
+            )
             receipt_deadline = time.monotonic() + 20
             receipt_rows: list[dict[str, Any]] = []
             while time.monotonic() < receipt_deadline:
@@ -1931,12 +2421,27 @@ def main() -> int:
                 )
                 mobile_page = mobile_context.new_page()
                 mobile_input_requests: list[str] = []
+                mobile_conversation_batches: list[dict[str, Any]] = []
+
+                def capture_mobile_websocket(websocket) -> None:
+                    def capture_mobile_frame(payload) -> None:
+                        try:
+                            batch = json.loads(payload)
+                        except (TypeError, json.JSONDecodeError):
+                            return
+                        if isinstance(batch, dict) and isinstance(
+                            batch.get("conversationDeltas"), list
+                        ):
+                            mobile_conversation_batches.append(batch)
+
+                    websocket.on("framereceived", capture_mobile_frame)
 
                 def record_mobile_input_request(request) -> None:
                     if "/api/sessions/" in request.url and request.url.endswith("/input"):
                         mobile_input_requests.append(request.url)
 
                 mobile_page.on("request", record_mobile_input_request)
+                mobile_page.on("websocket", capture_mobile_websocket)
                 mobile_page.goto(base_url, wait_until="domcontentloaded")
                 try:
                     mobile_page.locator(
@@ -1967,6 +2472,8 @@ def main() -> int:
                     )
                 mobile_start_payload = mobile_start_response.request.post_data_json
                 mobile_initial_input = mobile_start_payload.get("initialInput") or {}
+                mobile_started_new_task = mobile_start_response.json()["session"]
+                mobile_started_new_task_id = mobile_started_new_task["session"]["id"]
                 if mobile_initial_input.get("text") != mobile_new_task_prompt:
                     raise AssertionError(
                         "PWA New Task did not submit its first question atomically: "
@@ -1978,11 +2485,15 @@ def main() -> int:
                     1,
                     timeout_s=20,
                 )
-                expect(
-                    mobile_page.get_by_test_id("chat-assistant-message").filter(
-                        has_text=mobile_new_task_answer
-                    )
-                ).to_be_visible(timeout=20_000)
+                expect_chat_assistant_with_diagnostics(
+                    mobile_page,
+                    base_url,
+                    mobile_started_new_task_id,
+                    mobile_new_task_answer,
+                    mobile_conversation_batches,
+                    artifact_dir,
+                    "codex-pwa-new-task-provider-delivery-failure",
+                )
                 mobile_receipt_deadline = time.monotonic() + 20
                 mobile_receipt_rows: list[dict[str, Any]] = []
                 while time.monotonic() < mobile_receipt_deadline:
@@ -2648,6 +3159,7 @@ def main() -> int:
                 expect(resume_scroll_container).to_be_visible(timeout=10_000)
                 resume_scroll_container.evaluate(
                     """(node) => {
+                      node.dispatchEvent(new WheelEvent('wheel', { deltaY: -320, bubbles: true }));
                       node.scrollTop = 0;
                       node.dispatchEvent(new Event('scroll', { bubbles: true }));
                     }"""
@@ -2819,4 +3331,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    isolated_guide_output = os.environ.get("RAH_GUIDE_BROWSER_ENV_FILE")
+    if isolated_guide_output:
+        write_isolated_guide_browser_env(pathlib.Path(isolated_guide_output))
+        raise SystemExit(0)
     raise SystemExit(main())

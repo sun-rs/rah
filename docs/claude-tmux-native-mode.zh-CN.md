@@ -48,7 +48,7 @@ Council 是 Claude tmux 的特殊场景：Claude agent 会通过 `rah_council.ch
 
 ### Send
 
-Web chat 发送时，RAH 把整段文本放入 tmux 独立 buffer，再用 `paste-buffer -p` 交给 Claude 的 bracketed-paste 输入协议，最后只发送一次 Enter。不能重新使用逐字符 `send-keys` 加双 Enter：长提示会进入 Claude 的 paste 判定窗口，第二个 Enter 还可能恢复或重复部分 multiline draft。
+Web chat 发送时，RAH 把整段文本放入 tmux 独立 buffer，再用 `paste-buffer -p` 交给 Claude 的 bracketed-paste 输入协议，等待 Claude 的 paste 判定窗口稳定后只发送一次 Enter。不能重新使用逐字符 `send-keys` 加双 Enter：过早 Enter 会留在 multiline composer，第二个 Enter 还可能恢复或重复部分 draft。tmux 写入成功不等于输入已接收；只有 JSONL 出现同一提交并发布 `session.input.accepted` 后，New/Resume/Attach 才能完成首问事务。
 
 用户在 RAH 中明确选择 `Bypass Permissions` 时，这个选择本身就是 Claude 首次危险模式确认的
 用户意图。RAH 在启动或 Resume 前以原子写入方式设置 Claude 当前的
@@ -73,6 +73,8 @@ Claude tmux 下的 Stop 应理解为黄色 Esc 动作：
 ### Chat Timeline
 
 Chat timeline 只展示 Claude JSONL/history 能解析出的用户消息、助手消息、工具调用和错误信息。
+
+Claude 会把 `isMeta`、`command-*`、`local-command-*` 与 `<system-reminder>` 等内部上下文编码成 `user` record。adapter 必须在 JSONL 翻译阶段过滤纯内部 record，并在混合 record 中只保留真实用户文本；这些内容不能建立 turn 或进入用户气泡。
 
 不应把以下运行时提示写入 Claude tmux chat timeline：
 

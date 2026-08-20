@@ -20,6 +20,7 @@ import type {
   ConversationItemDetailResponse,
   ConversationResourceIndexResponse,
   ConversationSourceRevisionResponse,
+  ConversationVisualArtifactSourceResponse,
   ConversationTurnDetailResponse,
   ConversationTurnsPageResponse,
   CreateCouncilRequest,
@@ -293,6 +294,19 @@ export async function readSessionConversationVisualArtifactDocument(
       artifactId,
     )}?${query.toString()}`,
     options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
+export async function readSessionConversationVisualArtifactSource(
+  sessionId: string,
+  artifactId: string,
+  options?: { signal?: AbortSignal },
+): Promise<ConversationVisualArtifactSourceResponse> {
+  return requestJson<ConversationVisualArtifactSourceResponse>(
+    `/api/sessions/${encodeURIComponent(
+      sessionId,
+    )}/conversation/visual-artifacts/${encodeURIComponent(artifactId)}/source`,
+    options?.signal ? { signal: options.signal } : undefined,
   );
 }
 

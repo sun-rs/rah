@@ -359,8 +359,10 @@ export async function startCodexLiveSession(params: {
     ...(request.model ? { model: request.model } : {}),
     ...(configOverrides ? { config: configOverrides } : {}),
   })) as {
-    thread?: { id?: string };
+    thread?: { id?: string; modelProvider?: string; model_provider?: string };
     model?: string;
+    modelProvider?: string;
+    model_provider?: string;
     reasoningEffort?: string | null;
     reasoning_effort?: string | null;
   };
@@ -370,6 +372,11 @@ export async function startCodexLiveSession(params: {
     throw new Error("Codex app-server did not return a thread id.");
   }
   await setCodexThreadNameIfRequested(client, threadId, request.title);
+  const modelProvider =
+    threadStart.modelProvider ??
+    threadStart.model_provider ??
+    threadStart.thread?.modelProvider ??
+    threadStart.thread?.model_provider;
   const currentModelId =
     request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null;
   const currentModel = currentModelId
@@ -400,6 +407,7 @@ export async function startCodexLiveSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "codex",
     providerSessionId: threadId,
+    ...(modelProvider ? { modelProvider } : {}),
     ...(request.origin !== undefined ? { origin: request.origin } : {}),
     launchSource: "web",
     liveBackend: "native_local_server",
@@ -555,6 +563,8 @@ export async function resumeCodexLiveSession(params: {
         preview?: string;
         name?: string | null;
         status?: unknown;
+        modelProvider?: string;
+        model_provider?: string;
       };
       cwd?: string;
       approvalPolicy?: unknown;
@@ -562,6 +572,8 @@ export async function resumeCodexLiveSession(params: {
       sandbox?: unknown;
       approvalsReviewer?: unknown;
       model?: string;
+      modelProvider?: string;
+      model_provider?: string;
       reasoningEffort?: string | null;
       reasoning_effort?: string | null;
     };
@@ -574,6 +586,12 @@ export async function resumeCodexLiveSession(params: {
       request.cwd ??
       record?.ref.cwd ??
       process.cwd();
+    const modelProvider =
+      resumeResponse.modelProvider ??
+      resumeResponse.model_provider ??
+      thread?.modelProvider ??
+      thread?.model_provider ??
+      record?.ref.modelProvider;
     const resumedMode = resolveCodexStartupMode({
       modeId: request.modeId,
       fallbackApprovalPolicy: codexApprovalPolicyFromResponse(resumeResponse),
@@ -640,6 +658,7 @@ export async function resumeCodexLiveSession(params: {
     const state = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: threadId,
+      ...(modelProvider ? { modelProvider } : {}),
       ...(request.origin !== undefined ? { origin: request.origin } : {}),
       launchSource: "web",
       liveBackend: "native_local_server",
@@ -779,6 +798,9 @@ function createForkedManagedSession(args: {
   const state = args.services.sessionStore.createManagedSession({
     provider: "codex",
     providerSessionId: args.threadId,
+    ...(args.parent.modelProvider
+      ? { modelProvider: args.parent.modelProvider }
+      : {}),
     launchSource: "web",
     liveBackend: "native_local_server",
     cwd: args.cwd,

@@ -120,6 +120,12 @@ Provider 状态：
 | Claude | `context_window / estimated` 或 `turn / exact` | Claude transcript usage + known context-window fallback；没有生产 SDK live control path。 |
 | OpenCode | `context_window / exact` 或 `estimated` | ACP usage 或 provider catalog context limit。 |
 
+## 6.1 Turn 内追加输入与 Guide
+
+一个 Provider turn 不只包含首条 user message，也可以包含零到多条由 Guide/steer 接受的追加输入。daemon 必须为每条输入保留稳定的 `clientMessageId/clientTurnId`，并把它投影为同一 `turnId` 下独立的 canonical `user_message`；前端只按 canonical item 顺序把这些消息插入 thinking/activity 流，不能把它们重建成 final 后的下一轮气泡。
+
+Codex app-server 的 native user echo 与 `turn/steer` RPC continuation 可能互相抢先。两条路径必须通过稳定 client identity 做 exactly-once 投影：native echo 先到时 RPC continuation 不再重复发布；RPC 先成功时后续 native echo 被吸收。若 Provider 在 steer 请求飞行期间结束当前 turn，canonical queue 仍拥有原消息，并把它自然排入下一 turn；这种边界竞态与重复 Guide 请求都按幂等成功处理，不能把“queue item 已转 submitting/accepted”误报为用户操作失败。
+
 ## 7. Actions
 
 RAH 统一把 session 操作建模为 action capability：
@@ -139,7 +145,9 @@ actions: {
 - `stop`：关闭 RAH 管理的 running 执行体，不删除 provider 历史。
 - `archive`：可选的 provider stored-history 归档能力；它不等于 Stop/Close，也不能用来表达 runtime 生命周期。
 - `delete`：删除或移入废纸篓 provider stored session。
-- `info`：显示 session/provider/workspace/source 信息。
+- `info`：显示 runtime provider、provider session identity、workspace/source，以及原生元数据报告的
+  model/API provider。后者是独立字段，例如 OpenCode runtime 下仍可显示 DeepSeek/Kimi，不能用
+  adapter 名称冒充模型供应方。
 - `rename: native`：写入 provider 原生历史，使非 RAH TUI 的 resume list 也能看到。
 - `rename: local`：provider 不支持原生 rename，RAH 持久化 display title override。
 - `rename: none`：不支持。
@@ -218,8 +226,8 @@ type TimelineAssistantContentPart =
 
 边界规则：
 
-- Codex adapter 只解析官方持久协议
-  `::codex-inline-vis{file="<safe-name>.html"}`。指令必须独占一行、位于 Markdown fenced code
+- Codex adapter 解析当前持久协议 `::codex-inline-vis{file="<safe-name>.html"}`，并兼容旧版
+  `visualize{"path":"...html","mode":"wide"}`。指令必须独占一行、位于 Markdown fenced code
   block 之外且语法完全匹配；不从代码示例、PNG、CSV、文件扩展名或自然语言猜测 visual。
 - 指令在 assistant content 中出现的位置必须保留；普通 `text` 字段继续提供搜索、复制和无
   visual 客户端的纯文本视图，但不包含原始协议字样。
@@ -228,8 +236,26 @@ type TimelineAssistantContentPart =
 - artifact id 对客户端不透明。只有对应 provider adapter 能从 provider-owned storage 解析
   实际文件；客户端不能提交路径，daemon 也不能接受目录穿越、绝对路径、软链接、非普通文件
   或超过协议上限的 fragment。
+- Codex Visualize 的当前产物可能位于会话 workspace 的 human-readable 子目录，旧版本也可能写入
+  provider home。adapter 优先使用指令本身或同一 provider turn 工具/变更证据明确给出的
+  `.codex/visualizations/.../<safe-name>.html` 路径，并把它编码成客户端不可解释的 artifact id；没有
+  路径证据时才按精确日期、provider session id 与安全文件名解析两个固定候选；
+  每个候选仍分别执行 realpath 包含性、symlink、普通文件与大小上限检查，禁止递归搜索 workspace。
 - provider fragment 只能在隔离 iframe 中运行。RAH 使用 vendored Codex Visualize host
   CSS/HTML、严格 CSP、`sandbox="allow-scripts"` 和只读 artifact endpoint；fragment 不进入
   Inspector Outputs，因为它是 assistant 回复的内联内容，不是独立交付文件。
 - Claude/OpenCode 以后只有在各自暴露同等明确、可持久恢复的原生协议时才能映射到该 union；
   不允许为了“统一体验”在公共层新增启发式扫描或提示注入。
+
+### 11.1 静态图片产物
+
+静态图片不是 interactive visual fragment。Provider 已给出确定性图片路径或 URL 时，adapter 应将其
+映射为 `ToolCallArtifact { kind: "image", path/url }`，再由统一 resource projector 生成
+`ConversationOutputProjection(kind="image")`。Codex app-server 的 `imageGeneration.savedPath` 属于
+该通道；`imageView` 只是读取证据，不能反向宣称被查看的文件是本轮 Output。
+
+没有 Provider artifact 的旧历史只能使用受限兼容规则：final answer 中独占一行的绝对本地图片链接
+可被 daemon 标记为 `confidence="inferred"`，正文链接本身仍保持链接。客户端不得遍历工作区、按
+`.png` 扩展名全局替换 Markdown anchor，也不得把 `file.write`、当前 Git 状态或 TUI 屏幕文本当作
+图片所有权证据。实际预览通过有界 host-file reader 延迟读取并验证 PNG/JPEG/GIF/WebP/AVIF/SVG
+签名；验证或解码失败时显示占位，不能让坏文件破坏对话布局。

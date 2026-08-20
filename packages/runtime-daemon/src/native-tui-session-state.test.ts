@@ -9,6 +9,7 @@ import {
   enqueueNativeTuiQueuedInput,
   markNextNativeTuiQueuedInputSubmitting,
   nativeTuiProviderRuntimeSession,
+  stageNativeTuiInputHandoff,
   updateNativeTuiQueuedInput,
   type NativeTuiSessionState,
 } from "./native-tui-session-state";
@@ -32,6 +33,10 @@ describe("native TUI session state", () => {
     const projected = nativeTuiProviderRuntimeSession(
       nativeSession({
         providerSessionId: "provider-a",
+        rejectedBindingProviderSessionIds: new Set([
+          "provider-rejected-a",
+          "provider-rejected-b",
+        ]),
         queuedInputs: [
           {
             clientId: "client-a",
@@ -50,6 +55,10 @@ describe("native TUI session state", () => {
       cwd: "/tmp/project",
       startupTimestampMs: 1_000,
       providerSessionId: "provider-a",
+      excludedProviderSessionIds: [
+        "provider-rejected-a",
+        "provider-rejected-b",
+      ],
     });
   });
 
@@ -105,6 +114,86 @@ describe("native TUI session state", () => {
     assert.equal(confirmNativeTuiQueuedInput(native, "message-2"), true);
     assert.equal(confirmNativeTuiQueuedInput(native, "message-2"), false);
     assert.deepEqual(native.queuedInputs, []);
+  });
+
+  test("stages prompt-ready input as submitting until provider echo acknowledges it", () => {
+    const native = nativeSession();
+
+    const staged = stageNativeTuiInputHandoff(
+      native,
+      {
+        clientId: "client-a",
+        clientMessageId: "message-ready",
+        clientTurnId: "turn-ready",
+        text: "deliver exactly once",
+        queuedAt: "now",
+      },
+      { maxQueueLength: 20, submitImmediately: true },
+    );
+
+    assert.equal(staged?.state, "submitting");
+    assert.deepEqual(native.queuedInputs, [staged]);
+    assert.equal(confirmNativeTuiQueuedInput(native, "message-ready"), true);
+    assert.deepEqual(native.queuedInputs, []);
+  });
+
+  test("stages busy-prompt input as queued without bypassing an in-flight handoff", () => {
+    const native = nativeSession({
+      queuedInputs: [
+        {
+          clientId: "client-a",
+          clientMessageId: "message-active",
+          text: "active",
+          queuedAt: "before",
+          state: "submitting",
+        },
+      ],
+    });
+
+    const staged = stageNativeTuiInputHandoff(
+      native,
+      {
+        clientId: "client-b",
+        clientMessageId: "message-next",
+        text: "next",
+        queuedAt: "now",
+      },
+      { maxQueueLength: 20, submitImmediately: false },
+    );
+
+    assert.equal(staged?.state, "queued");
+    assert.equal(native.queuedInputs[0]?.state, "submitting");
+    assert.equal(native.queuedInputs[1]?.clientMessageId, "message-next");
+  });
+
+  test("keeps a prompt-ready input queued when a provider receipt is still outstanding", () => {
+    const native = nativeSession({
+      queuedInputs: [
+        {
+          clientId: "client-a",
+          clientMessageId: "message-active",
+          text: "active",
+          queuedAt: "before",
+          state: "submitting",
+        },
+      ],
+    });
+
+    const staged = stageNativeTuiInputHandoff(
+      native,
+      {
+        clientId: "client-b",
+        clientMessageId: "message-next",
+        text: "next",
+        queuedAt: "now",
+      },
+      { maxQueueLength: 20, submitImmediately: true },
+    );
+
+    assert.equal(staged?.clientMessageId, "message-next");
+    assert.equal(staged?.state, "queued");
+    assert.equal(native.queuedInputs[0]?.state, "submitting");
+    assert.equal(native.queuedInputs[1]?.state, "queued");
   });
 
   test("cancels only queued input for the interrupted client", () => {

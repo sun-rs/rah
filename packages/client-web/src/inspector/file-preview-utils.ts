@@ -3,7 +3,7 @@ import type {
   NotebookPreviewData,
 } from "@rah/runtime-protocol";
 
-export type FilePreviewKind = "image" | "table" | "notebook" | "markdown" | "text";
+export type FilePreviewKind = "image" | "table" | "notebook" | "markdown" | "html" | "text";
 
 export type ParsedDelimitedTable = {
   delimiter: "," | "\t";
@@ -40,6 +40,9 @@ export function resolveFilePreviewKind(path: string, mimeType: string | undefine
   }
   if (lowerMime === "text/markdown" || /\.(md|markdown)$/.test(lowerPath)) {
     return "markdown";
+  }
+  if (lowerMime === "text/html" || /\.html?$/.test(lowerPath)) {
+    return "html";
   }
   return "text";
 }

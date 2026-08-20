@@ -1,16 +1,22 @@
 import type { FeedEntry } from "../../types";
-import { isInternalUserReminder } from "./assistant-turn-headers";
+import { isInternalUserReminder } from "./internal-user-reminder";
+import type { ChatDisplayRow } from "./assistant-process-groups";
 import type { VirtualFeedLayout } from "./virtualized-feed-layout";
-import { VIRTUAL_FEED_ROW_GAP_PX } from "./virtualized-feed-layout";
 
-const LATEST_REPLY_VIEWPORT_MARGIN_PX = 24;
-const LATEST_REPLY_TOP_SCROLL_THRESHOLD_PX = 16;
+const LATEST_REPLY_TOP_VISIBILITY_TOLERANCE_PX = 4;
 
 export type LatestReplyStartTarget = {
   entryKey: string;
   entryIndex: number;
   targetScrollTop: number;
-  replyHeight: number;
+};
+
+type ReplyStartLayoutArgs = {
+  entries: readonly FeedEntry[];
+  displayRows?: readonly ChatDisplayRow[];
+  layout: VirtualFeedLayout;
+  contentTopOffset?: number;
+  navigableAssistantKeys?: ReadonlySet<string>;
 };
 
 export type LatestReplyAutoNavigationState = {
@@ -78,6 +84,47 @@ export function latestNavigableAssistantReplyKey(
     : null;
 }
 
+export function latestNavigableAssistantReplyKeyAtOrAfter(
+  entries: readonly FeedEntry[],
+  navigableAssistantKeys: ReadonlySet<string>,
+  minimumTimestampMs: number | null,
+): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || !isNavigableAssistantReplyEntry(entry, navigableAssistantKeys)) {
+      continue;
+    }
+    if (minimumTimestampMs === null) {
+      return entry.key;
+    }
+    const timestampMs = Date.parse(entry.ts);
+    if (Number.isFinite(timestampMs) && timestampMs >= minimumTimestampMs - 250) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
+export function latestNavigableAssistantReplyKeyForTurn(
+  entries: readonly FeedEntry[],
+  navigableAssistantKeys: ReadonlySet<string>,
+  turnId: string | null,
+): string | null {
+  if (!turnId) {
+    return null;
+  }
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (
+      entry?.turnId === turnId &&
+      isNavigableAssistantReplyEntry(entry, navigableAssistantKeys)
+    ) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
 export function createLatestReplyAutoNavigationState(args: {
   latestUserKey: string | null;
   latestReplyKey: string | null;
@@ -87,7 +134,28 @@ export function createLatestReplyAutoNavigationState(args: {
     latestUserKey: args.latestUserKey,
     latestReplyKey: args.latestReplyKey,
     generationActive: args.generationActive,
-    armed: args.generationActive,
+    // Mounting an already-running conversation is not evidence that the
+    // reader stayed with this turn. Arm only when this mounted surface sees
+    // the live turn begin or sees its user message arrive.
+    armed: false,
+    pendingReplyKey: null,
+  };
+}
+
+/**
+ * Leaving this conversation forfeits automatic navigation to a future final.
+ * The foreground-restoration protocol then owns the viewport: sticky readers
+ * return to latest, while detached readers keep their existing position.
+ */
+export function suspendLatestReplyAutoNavigationState(
+  current: LatestReplyAutoNavigationState,
+): LatestReplyAutoNavigationState {
+  if (!current.armed && current.pendingReplyKey === null) {
+    return current;
+  }
+  return {
+    ...current,
+    armed: false,
     pendingReplyKey: null,
   };
 }
@@ -108,13 +176,28 @@ export function advanceLatestReplyAutoNavigationState(
 ): LatestReplyAutoNavigationState {
   const userChanged = args.latestUserKey !== current.latestUserKey;
   const replyChanged = args.latestReplyKey !== current.latestReplyKey;
-  let armed = current.armed || (!current.generationActive && args.generationActive);
+  // A runtime-status transition is not proof that this mounted reader sent
+  // the turn. Foreground catch-up can reveal an already-running background
+  // turn after a Session is opened; arming from that transition makes its
+  // eventual final pull the viewport away from the explicit latest-position
+  // navigation. A new canonical/optimistic user identity is the causal owner.
+  let armed = current.armed;
   let pendingReplyKey = current.pendingReplyKey;
 
   if (userChanged) {
     pendingReplyKey = null;
-    if (args.generationActive || args.latestUserKey?.startsWith("optimistic:user:")) {
+    const currentWasLocalOptimistic =
+      current.latestUserKey?.startsWith("optimistic:user:") ?? false;
+    const nextIsLocalOptimistic =
+      args.latestUserKey?.startsWith("optimistic:user:") ?? false;
+    if (nextIsLocalOptimistic) {
       armed = true;
+    } else if (!currentWasLocalOptimistic) {
+      // Canonical users arriving through history hydration, foreground
+      // catch-up, another client, or a reconnect are not proof that this
+      // mounted reader submitted the turn. They must never steal the explicit
+      // Session-entry bottom lease by jumping to the beginning of a reply.
+      armed = false;
     }
   }
   if (replyChanged && args.latestReplyKey && armed) {
@@ -131,29 +214,63 @@ export function advanceLatestReplyAutoNavigationState(
   };
 }
 
-function measuredReplyHeight(args: {
+export function resolveReplyStartTarget(args: ReplyStartLayoutArgs & {
   entryKey: string;
-  rowIndex: number;
-  rowCount: number;
-  rowHeight: number;
-  measuredHeights: ReadonlyMap<string, number>;
-}): number {
-  const measuredHeight = args.measuredHeights.get(args.entryKey);
-  if (measuredHeight !== undefined) {
-    return measuredHeight;
+}): LatestReplyStartTarget | null {
+  const entryIndex = args.entries.findIndex((entry) => entry.key === args.entryKey);
+  if (entryIndex < 0) {
+    return null;
   }
-  const rowGap = args.rowIndex < args.rowCount - 1 ? VIRTUAL_FEED_ROW_GAP_PX : 0;
-  return Math.max(1, args.rowHeight - rowGap);
+  const entry = args.entries[entryIndex];
+  if (!entry || !isNavigableAssistantReplyEntry(entry, args.navigableAssistantKeys)) {
+    return null;
+  }
+  const rowIndex = args.displayRows
+    ? args.displayRows.findIndex(
+        (candidate) => candidate.kind === "feed_entry" && candidate.entry.key === entry.key,
+      )
+    : args.layout.rows.findIndex((candidate) => candidate.key === entry.key);
+  const row = rowIndex >= 0 ? args.layout.rows[rowIndex] : undefined;
+  if (!row) {
+    return null;
+  }
+  return {
+    entryKey: entry.key,
+    entryIndex,
+    targetScrollTop: row.offsetTop + (args.contentTopOffset ?? 0),
+  };
 }
 
-export function resolveLatestReplyStartTarget(args: {
-  entries: readonly FeedEntry[];
-  layout: VirtualFeedLayout;
-  measuredHeights: ReadonlyMap<string, number>;
+export function resolveRequestedReplyStartTarget(args: ReplyStartLayoutArgs & {
+  navigableAssistantKeys: ReadonlySet<string>;
+  entryKey: string | null;
+  turnId: string | null;
+  minimumTimestampMs: number | null;
+}): LatestReplyStartTarget | null {
+  const resolve = (entryKey: string) => resolveReplyStartTarget({ ...args, entryKey });
+  const direct = args.entryKey ? resolve(args.entryKey) : null;
+  if (direct) {
+    return direct;
+  }
+  const turnReplyKey = latestNavigableAssistantReplyKeyForTurn(
+    args.entries,
+    args.navigableAssistantKeys,
+    args.turnId,
+  );
+  if (turnReplyKey) {
+    return resolve(turnReplyKey);
+  }
+  const timestampReplyKey = latestNavigableAssistantReplyKeyAtOrAfter(
+    args.entries,
+    args.navigableAssistantKeys,
+    args.minimumTimestampMs,
+  );
+  return timestampReplyKey ? resolve(timestampReplyKey) : null;
+}
+
+export function resolveLatestReplyStartTarget(args: ReplyStartLayoutArgs & {
   scrollTop: number;
   viewportHeight: number;
-  contentTopOffset?: number;
-  navigableAssistantKeys?: ReadonlySet<string>;
 }): LatestReplyStartTarget | null {
   if (args.viewportHeight <= 0) {
     return null;
@@ -166,35 +283,24 @@ export function resolveLatestReplyStartTarget(args: {
   if (!entry) {
     return null;
   }
-  const rowIndex = args.layout.rows.findIndex((candidate) => candidate.key === entry.key);
-  const row = rowIndex >= 0 ? args.layout.rows[rowIndex] : undefined;
-  if (!row) {
-    return null;
-  }
-  if (!isNavigableAssistantReplyEntry(entry, args.navigableAssistantKeys)) {
-    return null;
-  }
-
-  const replyHeight = measuredReplyHeight({
+  const target = resolveReplyStartTarget({
+    entries: args.entries,
+    ...(args.displayRows ? { displayRows: args.displayRows } : {}),
+    layout: args.layout,
+    ...(args.contentTopOffset !== undefined
+      ? { contentTopOffset: args.contentTopOffset }
+      : {}),
+    ...(args.navigableAssistantKeys
+      ? { navigableAssistantKeys: args.navigableAssistantKeys }
+      : {}),
     entryKey: entry.key,
-    rowIndex,
-    rowCount: args.layout.rows.length,
-    rowHeight: row.height,
-    measuredHeights: args.measuredHeights,
   });
-  if (replyHeight <= args.viewportHeight - LATEST_REPLY_VIEWPORT_MARGIN_PX) {
+  if (
+    !target ||
+    args.scrollTop <=
+      target.targetScrollTop + LATEST_REPLY_TOP_VISIBILITY_TOLERANCE_PX
+  ) {
     return null;
   }
-
-  const targetScrollTop = row.offsetTop + (args.contentTopOffset ?? 0);
-  if (args.scrollTop <= targetScrollTop + LATEST_REPLY_TOP_SCROLL_THRESHOLD_PX) {
-    return null;
-  }
-
-  return {
-    entryKey: entry.key,
-    entryIndex,
-    targetScrollTop,
-    replyHeight,
-  };
+  return target;
 }

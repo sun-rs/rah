@@ -65,12 +65,18 @@ import {
   deleteRuntimeQueuedInput,
   markRuntimeQueuedInputQueued,
   markRuntimeQueuedInputSubmitting,
+  publishSessionInputAccepted,
   publishSessionInputQueue,
   runtimeQueuedInput,
   type RuntimeQueuedInput,
   withdrawRuntimeQueuedInput,
 } from "../session-input-queue";
 import { openCodePromptParts } from "../session-input-attachments";
+
+function openCodeModelProvider(modelId: string | null): string | undefined {
+  const separator = modelId?.indexOf("/") ?? -1;
+  return separator > 0 ? modelId!.slice(0, separator) : undefined;
+}
 
 export interface LiveOpenCodeSession {
   sessionId: string;
@@ -266,6 +272,12 @@ function confirmOpenCodeQueuedInputHandoff(
   if (!deleteRuntimeQueuedInput(liveSession.queuedInputs, clientMessageId)) {
     return;
   }
+  publishSessionInputAccepted(services, liveSession.sessionId, {
+    clientMessageId,
+    ...(activity.item.clientTurnId
+      ? { clientTurnId: activity.item.clientTurnId }
+      : {}),
+  });
   liveSession.queuedInputSubmissionStates?.delete(clientMessageId);
   if (liveSession.uncertainQueuedInputClientMessageId === clientMessageId) {
     delete liveSession.uncertainQueuedInputClientMessageId;
@@ -566,6 +578,9 @@ export async function startOpenCodeLiveSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "opencode",
     providerSessionId: providerSession.id,
+    ...(openCodeModelProvider(currentModelId)
+      ? { modelProvider: openCodeModelProvider(currentModelId) }
+      : {}),
     ...(request.origin !== undefined ? { origin: request.origin } : {}),
     launchSource: "web",
     liveBackend: "native_local_server",
@@ -731,6 +746,9 @@ export async function resumeOpenCodeLiveSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "opencode",
     providerSessionId: params.providerSessionId,
+    ...(openCodeModelProvider(currentModelId)
+      ? { modelProvider: openCodeModelProvider(currentModelId) }
+      : {}),
     ...(params.origin !== undefined ? { origin: params.origin } : {}),
     launchSource: "web",
     liveBackend: "native_local_server",
@@ -825,26 +843,25 @@ export function sendInputToOpenCodeLiveSession(params: {
 }): void {
   const { services, liveSession, request } = params;
   if (
-    liveSession.activityState.currentTurnId ||
-    liveSession.providerReadyForInput === false
+    request.clientMessageId &&
+    liveSession.queuedInputs.some(
+      (item) => item.clientMessageId === request.clientMessageId,
+    )
   ) {
-    liveSession.queuedInputs.push(runtimeQueuedInput(request));
-    publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
     return;
   }
-  if (liveSession.queuedInputs.length > 0 || liveSession.queuedInputDrainPaused) {
-    liveSession.queuedInputs.push(runtimeQueuedInput(request));
-    publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
-    if (!liveSession.queuedInputDrainPaused) {
-      drainQueuedOpenCodeInput(services, liveSession);
-    }
-    return;
+  // The HTTP prompt response is asynchronous, so even an idle OpenCode
+  // session must first take ownership in the canonical queue. The provider
+  // message echo, not a successful socket write, is the acceptance boundary.
+  liveSession.queuedInputs.push(runtimeQueuedInput(request));
+  publishSessionInputQueue(services, liveSession.sessionId, liveSession.queuedInputs);
+  if (
+    !liveSession.activityState.currentTurnId &&
+    liveSession.providerReadyForInput !== false &&
+    !liveSession.queuedInputDrainPaused
+  ) {
+    drainQueuedOpenCodeInput(services, liveSession);
   }
-  submitOpenCodePrompt({
-    services,
-    liveSession,
-    request,
-  });
 }
 
 export async function setOpenCodeLiveSessionMode(params: {
@@ -919,6 +936,23 @@ function submitOpenCodePrompt(params: {
           queuedInput.clientMessageId,
           "accepted",
         );
+        if (
+          deleteRuntimeQueuedInput(
+            liveSession.queuedInputs,
+            queuedInput.clientMessageId,
+          )
+        ) {
+          publishSessionInputAccepted(
+            services,
+            liveSession.sessionId,
+            queuedInput,
+          );
+          publishSessionInputQueue(
+            services,
+            liveSession.sessionId,
+            liveSession.queuedInputs,
+          );
+        }
       }
       liveSession.providerReadyForInput = true;
       liveSession.queuedInputDrainPaused = false;

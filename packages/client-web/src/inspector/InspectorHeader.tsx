@@ -1,6 +1,7 @@
 import { SquareTerminal } from "lucide-react";
 import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "../components/SegmentedControl";
 import { SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS } from "../components/segmented-control-styles";
+import { HEADER_ACTION_ICON_SIZE } from "../components/workbench/header-button-styles";
 import { ConversationHeaderPanelToggleButton } from "../components/workbench/shells/ConversationHeader";
 import type { InspectorTab } from "./shared";
 
@@ -31,7 +32,7 @@ export function InspectorHeader(props: {
             aria-label="Open terminal"
             title="Open terminal"
           >
-            <SquareTerminal size={16} />
+            <SquareTerminal size={HEADER_ACTION_ICON_SIZE} aria-hidden="true" />
           </button>
         ) : null}
         {props.onClosePanel ? (

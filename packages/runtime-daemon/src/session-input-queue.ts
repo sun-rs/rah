@@ -27,6 +27,25 @@ const QUEUE_EVENT_SOURCE = {
   authority: "authoritative" as const,
 };
 
+export function publishSessionInputAccepted(
+  services: RuntimeServices,
+  sessionId: string,
+  input: Pick<RuntimeQueuedInput, "clientMessageId" | "clientTurnId">,
+): void {
+  if (!services.sessionStore.getSession(sessionId)) {
+    return;
+  }
+  services.eventBus.publish({
+    sessionId,
+    type: "session.input.accepted",
+    source: QUEUE_EVENT_SOURCE,
+    payload: {
+      clientMessageId: input.clientMessageId,
+      ...(input.clientTurnId ? { clientTurnId: input.clientTurnId } : {}),
+    },
+  });
+}
+
 export function runtimeQueuedInput(request: SessionInputRequest): RuntimeQueuedInput {
   return {
     ...request,

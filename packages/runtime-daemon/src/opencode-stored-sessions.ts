@@ -44,6 +44,7 @@ import {
 } from "./stored-session-metadata-cache";
 import { runBackgroundCommand } from "./background-command";
 import { OPEN_CODE_HAS_VISIBLE_USER_MESSAGE_SQL } from "./opencode-session-visibility";
+import { OPEN_CODE_MODEL_PROVIDER_SELECT_SQL, openCodeStoredSessionIdentity } from "./opencode-stored-session-metadata";
 import {
   openCodeHistoryMetaCacheKey,
   openCodeHistoryMetaRevision,
@@ -106,7 +107,7 @@ const HISTORY_SOURCE = {
   authority: "authoritative" as const,
 };
 
-const OPENCODE_HISTORY_META_CACHE_VERSION = 1;
+const OPENCODE_HISTORY_META_CACHE_VERSION = 2;
 const MAX_OPENCODE_SQLITE_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_OPENCODE_SUMMARY_PART_CHARS = 16 * 1024;
 const MAX_OPENCODE_DETAIL_PART_CHARS = 256 * 1024;
@@ -119,6 +120,7 @@ type OpenCodeSessionRow = {
   time_updated: number | null;
   time_archived: number | null;
   project_worktree: string | null;
+  model_provider: string | null;
   preview: string | null;
   message_count: number | null;
   history_bytes: number | null;
@@ -263,6 +265,7 @@ export function discoverOpenCodeStoredSessions(options: {
             limit 1
           )
         ) as preview,
+        ${OPEN_CODE_MODEL_PROVIDER_SELECT_SQL} as model_provider,
         null as message_count,
         null as history_bytes
       from session s
@@ -325,6 +328,7 @@ export function findOpenCodeStoredSessionRecord(
             limit 1
           )
         ) as preview,
+        ${OPEN_CODE_MODEL_PROVIDER_SELECT_SQL} as model_provider,
         null as message_count,
         null as history_bytes
       from session s
@@ -385,6 +389,7 @@ export async function findOpenCodeStoredSessionRecordAsync(
             limit 1
           )
         ) as preview,
+        ${OPEN_CODE_MODEL_PROVIDER_SELECT_SQL} as model_provider,
         null as message_count,
         null as history_bytes
       from session s
@@ -1380,9 +1385,7 @@ function materializeOpenCodeStoredMessages(params: {
   };
   const cwd = params.record.ref.cwd ?? process.cwd();
   const temp = services.sessionStore.createManagedSession({
-    provider: "opencode",
-    providerSessionId: params.record.ref.providerSessionId,
-    launchSource: "web",
+    ...openCodeStoredSessionIdentity(params.record.ref),
     cwd,
     rootDir: params.record.ref.rootDir ?? cwd,
     ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
@@ -1478,9 +1481,7 @@ export function resumeOpenCodeStoredSession(params: {
 }): { sessionId: string } {
   const cwd = params.record.ref.cwd ?? process.cwd();
   const state = params.services.sessionStore.createManagedSession({
-    provider: "opencode",
-    providerSessionId: params.record.ref.providerSessionId,
-    launchSource: "web",
+    ...openCodeStoredSessionIdentity(params.record.ref),
     cwd,
     rootDir: params.record.ref.rootDir ?? cwd,
     ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
@@ -1656,10 +1657,8 @@ function hydrateOpenCodeSessionHistoryMeta(
   return records;
 }
 
-function buildStoredSessionRecord(
-  row: OpenCodeSessionRow | undefined,
-  databasePath: string,
-): OpenCodeStoredSessionRecord[] {
+function buildStoredSessionRecord(row: OpenCodeSessionRow | undefined,
+  databasePath: string): OpenCodeStoredSessionRecord[] {
   if (!row?.id) {
     return [];
   }
@@ -1672,6 +1671,7 @@ function buildStoredSessionRecord(
   const ref: StoredSessionRef = withHistoryMeta({
     provider: "opencode",
     providerSessionId: row.id,
+    ...(row.model_provider ? { modelProvider: row.model_provider } : {}),
     source: "provider_history",
     removalDisposition: "permanent",
     ...(cwd ? { cwd } : {}),

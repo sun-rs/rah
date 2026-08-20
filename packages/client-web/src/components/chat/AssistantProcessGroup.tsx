@@ -53,7 +53,13 @@ function ActivityBatch(props: {
         <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
           <ConversationActivityIcon kind={props.activityKind} />
         </span>
-        <span className="min-w-0 flex-1 truncate group-focus-visible:underline group-focus-visible:underline-offset-4">{label}</span>
+        <span
+          className={`min-w-0 flex-1 truncate group-focus-visible:underline group-focus-visible:underline-offset-4 ${
+            running ? "assistant-process-active-text" : ""
+          }`}
+        >
+          {label}
+        </span>
         {props.failureCount > 0 ? <span className="shrink-0">Failed</span> : null}
         {props.interruptedCount > 0 && !running ? (
           <span className="shrink-0">Interrupted</span>
@@ -134,6 +140,7 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
     itemId: string,
   ) => Promise<void> | void;
   onOpenLocalFile?: (path: string) => void;
+  modelMeta?: ReactNode;
   renderEntry: (entry: FeedEntry) => ReactNode;
 }) {
   const detailRows = useMemo(
@@ -170,37 +177,52 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
     props.detailLoading === true;
   const canCollapse = processSettled && hasProcessDetails;
   const showDetails = props.expanded && hasProcessDetails;
+  const guidedUserEntries = useMemo(
+    () => props.group.entries.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    ),
+    [props.group.entries],
+  );
 
   return (
     <section className="min-w-0" data-testid="assistant-process-group">
-      <button
-        type="button"
-        className={`assistant-process-summary group flex w-full items-center gap-2 text-left text-xs font-medium text-[var(--app-hint)] outline-none transition-colors focus-visible:text-[var(--app-fg)] ${
-          canCollapse ? "hover:text-[var(--app-fg)]" : "cursor-default"
-        }`}
-        aria-expanded={showDetails}
-        disabled={!canCollapse}
-        data-testid="assistant-process-group-toggle"
-        onClick={(event) => {
-          if (canCollapse) {
-            props.onExpandedChange(
-              props.group,
-              !showDetails,
-              event.currentTarget,
-            );
-          }
-        }}
-      >
-        {props.group.active ? (
-          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
-            <LoaderCircle size={13} className="animate-spin" />
+      <div className="flex min-w-0 items-center gap-1">
+        {props.modelMeta}
+        <button
+          type="button"
+          className={`assistant-process-summary group flex min-w-0 flex-1 items-center gap-2 text-left text-xs font-medium text-[var(--app-hint)] outline-none transition-colors focus-visible:text-[var(--app-fg)] ${
+            canCollapse ? "hover:text-[var(--app-fg)]" : "cursor-default"
+          }`}
+          aria-expanded={showDetails}
+          disabled={!canCollapse}
+          data-testid="assistant-process-group-toggle"
+          onClick={(event) => {
+            if (canCollapse) {
+              props.onExpandedChange(
+                props.group,
+                !showDetails,
+                event.currentTarget,
+              );
+            }
+          }}
+        >
+          {props.group.active ? (
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm group-focus-visible:text-[var(--app-accent)]">
+              <LoaderCircle size={13} className="animate-spin" />
+            </span>
+          ) : null}
+          <span
+            className={`min-w-0 truncate group-focus-visible:underline group-focus-visible:underline-offset-4 ${
+              props.group.active ? "assistant-process-active-text" : ""
+            }`}
+          >
+            {label}
           </span>
-        ) : null}
-        <span className="min-w-0 truncate group-focus-visible:underline group-focus-visible:underline-offset-4">{label}</span>
-        {canCollapse ? (
-          showDetails ? <ChevronDown size={14} /> : <ChevronRight size={14} />
-        ) : null}
-      </button>
+          {canCollapse ? (
+            showDetails ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+          ) : null}
+        </button>
+      </div>
       {showDetails ? (
         <div
           {...(props.group.hasFinalAnswer
@@ -208,14 +230,14 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
             : {})}
           className={`assistant-process-details ${
             props.group.hasFinalAnswer
-              ? "border-b border-[var(--app-border)]"
+              ? "assistant-process-final-divider"
               : ""
           }`}
         >
           {props.detailLoading ? (
             <div className="flex min-h-8 items-center gap-2 text-xs text-[var(--app-hint)]">
               <LoaderCircle size={13} className="animate-spin" />
-              <span>Loading work details...</span>
+              <span className="assistant-process-active-text">Loading work details...</span>
             </div>
           ) : detailRows.length === 0 && props.group.detailsAvailable ? (
             <div className="text-xs text-[var(--app-hint)]">Work details unavailable.</div>
@@ -245,7 +267,9 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
                 className={
                   row.entry.kind === "timeline" && row.entry.item.kind === "compaction"
                     ? "assistant-process-compaction-slot"
-                    : undefined
+                    : row.entry.kind === "timeline" && row.entry.item.kind === "user_message"
+                      ? "assistant-process-guidance-slot"
+                      : undefined
                 }
               >
                 {props.renderEntry(row.entry)}
@@ -253,13 +277,22 @@ export const AssistantProcessGroup = memo(function AssistantProcessGroup(props: 
             ),
           )}
         </div>
-      ) : props.group.hasFinalAnswer ? (
-        <div
-          className="border-b border-[var(--app-border)]"
-          data-testid="assistant-process-final-divider"
-          aria-hidden="true"
-        />
-      ) : null}
+      ) : (
+        <>
+          {guidedUserEntries.map((entry) => (
+            <div key={entry.key} className="assistant-process-guidance-slot">
+              {props.renderEntry(entry)}
+            </div>
+          ))}
+          {props.group.hasFinalAnswer ? (
+            <div
+              className="assistant-process-final-divider-line"
+              data-testid="assistant-process-final-divider"
+              aria-hidden="true"
+            />
+          ) : null}
+        </>
+      )}
     </section>
   );
 });

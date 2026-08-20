@@ -249,7 +249,7 @@ async function readFileDataAtResolvedPathAsync(
   }
   const maxReadableBytes = maxReadableFileBytes(filePath);
   const truncated = stats.size > maxReadableBytes;
-  const mimeType = resolvePreviewMimeType(filePath);
+  const mimeType = await resolvePreviewMimeType(filePath, stats.size);
 
   if (mimeType?.startsWith("image/")) {
     return await readImageFileData(filePath, stats.size, {
@@ -619,20 +619,47 @@ function maxReadableFileBytes(filePath: string): number {
     : DEFAULT_MAX_READABLE_FILE_BYTES;
 }
 
-function resolvePreviewMimeType(filePath: string): string | undefined {
+function detectedImageMimeType(buffer: Buffer): string | undefined {
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    return "image/png";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  const signature = buffer.subarray(0, 12).toString("ascii");
+  if (signature.startsWith("GIF87a") || signature.startsWith("GIF89a")) {
+    return "image/gif";
+  }
+  if (signature.startsWith("RIFF") && signature.slice(8, 12) === "WEBP") {
+    return "image/webp";
+  }
+  if (
+    buffer.length >= 16 &&
+    buffer.subarray(4, 8).toString("ascii") === "ftyp" &&
+    /(?:avif|avis)/.test(buffer.subarray(8, 32).toString("ascii"))
+  ) {
+    return "image/avif";
+  }
+  if (
+    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(
+      buffer.toString("utf8"),
+    )
+  ) {
+    return "image/svg+xml";
+  }
+  return undefined;
+}
+
+async function resolvePreviewMimeType(
+  filePath: string,
+  sizeBytes: number,
+): Promise<string | undefined> {
   const extension = path.extname(filePath).toLowerCase();
+  if ([".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(extension)) {
+    const prefix = await readFilePrefixAsync(filePath, sizeBytes, 4_096);
+    return detectedImageMimeType(prefix);
+  }
   switch (extension) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".svg":
-      return "image/svg+xml";
     case ".csv":
       return "text/csv";
     case ".tsv":
@@ -643,6 +670,9 @@ function resolvePreviewMimeType(filePath: string): string | undefined {
       return "application/json";
     case ".md":
       return "text/markdown";
+    case ".htm":
+    case ".html":
+      return "text/html";
     default:
       return undefined;
   }

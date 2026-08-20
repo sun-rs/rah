@@ -70,6 +70,7 @@ export type LiveCodexSession = {
   /** The single queued input currently crossing the turn/start acceptance boundary. */
   queuedInputSubmission?: {
     clientMessageId: string;
+    clientTurnId?: string;
     accepted: boolean;
     rpcUncertain: boolean;
   };

@@ -415,7 +415,7 @@ export function ProcessActivityEntry(props: {
         <span
           className={`flex min-w-0 flex-1 items-baseline truncate ${
             status === "failed" ? "text-[var(--app-danger)]" : ""
-          }`}
+          } ${status === "running" ? "assistant-process-active-text" : ""}`}
           title={processActivityLabel(props.entry)}
         >
           <ActivityLabel model={label} onOpenLocalFile={props.onOpenLocalFile} />
@@ -444,7 +444,7 @@ export function ProcessActivityEntry(props: {
           {detailLoading ? (
             <div className="mb-2 flex items-center gap-2 text-xs text-[var(--app-hint)]">
               <LoaderCircle size={13} className="animate-spin" />
-              <span>Loading details...</span>
+              <span className="assistant-process-active-text">Loading details...</span>
             </div>
           ) : null}
           <CompactArtifacts

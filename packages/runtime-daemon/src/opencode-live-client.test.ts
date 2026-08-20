@@ -380,7 +380,9 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
 
     await waitFor(() => prompts.length === 1);
     assert.deepEqual(prompts, ["first"]);
-    assert.equal(liveSession.queuedInputs.length, 1);
+    assert.equal(liveSession.queuedInputs.length, 2);
+    assert.equal(liveSession.queuedInputs[0]?.state, "submitting");
+    assert.equal(liveSession.queuedInputs[1]?.state, "queued");
 
     const events = services.eventBus.list({ sessionIds: [session.session.id] });
     // Web already owns the optimistic user bubble. The daemon should wait for
@@ -511,7 +513,12 @@ test("OpenCode restores a rejected queued input and pauses later inputs", async 
     await waitFor(
       () =>
         liveSession.queuedInputDrainPaused === true &&
-        liveSession.queuedInputs.length === 2,
+        liveSession.queuedInputs.some(
+          (item) => item.clientMessageId === "message-rejected",
+        ) &&
+        liveSession.queuedInputs.some(
+          (item) => item.clientMessageId === "message-third",
+        ),
     );
     assert.deepEqual(
       liveSession.queuedInputs.map((item) => item.clientMessageId),
@@ -530,11 +537,15 @@ test("OpenCode restores a rejected queued input and pauses later inputs", async 
     );
     await waitFor(() => prompts.length === 3);
     assert.deepEqual(prompts, ["first", "rejected", "third"]);
-    await waitFor(
-      () =>
-        liveSession.queuedInputs.length === 1 &&
-        liveSession.queuedInputs[0]?.clientMessageId === "message-third" &&
-        liveSession.queuedInputs[0]?.state === "submitting",
+    await waitFor(() => liveSession.queuedInputs.length === 0);
+    assert.ok(
+      services.eventBus
+        .list({ sessionIds: [session.session.id] })
+        .some(
+          (event) =>
+            event.type === "session.input.accepted" &&
+            event.payload.clientMessageId === "message-third",
+        ),
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -804,7 +815,8 @@ test("interruptOpenCodeLiveSession settles the turn when OpenCode accepts abort"
       request: { clientId: "web-client", text: "recovery after stop" },
     });
     await waitFor(() => promptRequests.length === 2);
-    assert.equal(liveSession.queuedInputs.length, 0);
+    assert.equal(liveSession.queuedInputs.length, 1);
+    assert.equal(liveSession.queuedInputs[0]?.state, "submitting");
 
     assert.ok(
       services.eventBus

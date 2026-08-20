@@ -36,7 +36,7 @@ import {
 
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
-export const CODEX_STORED_SESSION_CACHE_VERSION = 5;
+export const CODEX_STORED_SESSION_CACHE_VERSION = 6;
 
 export type CodexStoredSessionCatalogScan = {
   records: CodexStoredSessionRecord[];
@@ -224,6 +224,7 @@ function parseStoredSessionHead(options: {
   const { filePath, head, size, mtime, archived } = options;
   let sessionId: string | null = null;
   let cwd: string | undefined;
+  let modelProvider: string | undefined;
   let createdAt: string | undefined;
   let firstUserMessage: string | null = null;
   let hasUserTurn = false;
@@ -273,6 +274,11 @@ function parseStoredSessionHead(options: {
       }
       if (typeof payload.timestamp === "string") {
         createdAt = payload.timestamp;
+      }
+      if (typeof payload.model_provider === "string" && payload.model_provider.trim()) {
+        modelProvider = payload.model_provider.trim();
+      } else if (typeof payload.modelProvider === "string" && payload.modelProvider.trim()) {
+        modelProvider = payload.modelProvider.trim();
       }
       continue;
     }
@@ -358,6 +364,7 @@ function parseStoredSessionHead(options: {
       ref: {
         provider: "codex",
         providerSessionId: sessionId,
+        ...(modelProvider ? { modelProvider } : {}),
         ...(cwd ? { cwd } : {}),
         ...(cwd ? { rootDir: cwd } : {}),
         title: truncateText(preview, 72),

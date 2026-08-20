@@ -2,7 +2,7 @@
 
 这份文档回答三个问题：
 
-1. `RAH / hapi / paseo / AionUi ACP 2.0` 各自最强的点是什么
+1. `RAH / hapi / paseo / AionUi ACP 2.0 / Herdr` 各自最强的点是什么
 2. RAH 应该吸收哪些成熟经验，哪些不该照搬
 3. RAH 如果想继续往“最强架构”走，下一阶段应该怎么做
 
@@ -26,18 +26,19 @@ RAH 现在已经完成了：
 - `hapi` 最强的是 **scanner / normalize / history visibility discipline**
 - `paseo` 最强的是 **store-centric authoritative state machine**
 - `AionUi ACP 2.0` 最强的是 **ACP runtime/session lifecycle 分层**
+- `Herdr` 最强的是 **server-owned terminal runtime + state/runtime/render 分离的工程纪律**
 
 RAH 不应该推翻重来，而应该继续吸收这些成熟经验。
 
-## 2. 四者对照
+## 2. 五者对照
 
-| 维度 | RAH | hapi | paseo | AionUi ACP 2.0 |
-| --- | --- | --- | --- | --- |
-| 主目标 | 本地 runtime-owned 多 provider 工作台 | 多 agent remote/local 控制与历史可见性 | 高完成度 agent 工作台与状态机 | 大规模 ACP backend runtime |
-| 强项 | canonical protocol、provider-native adapter、真实 browser smoke | scanner、hook、normalize、可见性边界 | history/live authoritative state machine、store ownership | session lifecycle、permission resolver、client factory、ACP runtime 分层 |
-| 主风险 | 状态所有权若分散，易回归 | scanner/hook 复杂度高 | 状态机实现成本高 | 容易把所有 provider 都拉进 ACP-first 思路 |
-| 最值得学 | 保持现状 | 文件型 provider 的 scanner/hook toolkit、normalize-first | cursor/generation/authoritative applied | ACP subsystem 的 runtime/session 结构 |
-| 不该照搬 | - | 整套 hub/runner | 整套 server/store 结构 | 整套 ACP runtime 替换现有 provider-native adapter |
+| 维度 | RAH | hapi | paseo | AionUi ACP 2.0 | Herdr |
+| --- | --- | --- | --- | --- | --- |
+| 主目标 | 本地 runtime-owned 多 provider 工作台 | 多 agent remote/local 控制与历史可见性 | 高完成度 agent 工作台与状态机 | 大规模 ACP backend runtime | 可持久 attach 的 agent terminal multiplexer |
+| 强项 | canonical protocol、provider-native adapter、真实 browser smoke | scanner、hook、normalize、可见性边界 | history/live authoritative state machine、store ownership | session lifecycle、permission resolver、client factory、ACP runtime 分层 | server/client、state/runtime、pure render、socket API、平台隔离 |
+| 主风险 | 状态所有权若分散，易回归 | scanner/hook 复杂度高 | 状态机实现成本高 | 容易把所有 provider 都拉进 ACP-first 思路 | working/blocked 多依赖终端 detection，缺少 Conversation 语义 |
+| 最值得学 | 保持现状 | 文件型 provider 的 scanner/hook toolkit、normalize-first | cursor/generation/authoritative applied | ACP subsystem 的 runtime/session 结构 | no-god-object、共享事实归 server、客户端只拥有展示状态 |
+| 不该照搬 | - | 整套 hub/runner | 整套 server/store 结构 | 整套 ACP runtime 替换现有 provider-native adapter | 用屏幕检测替代 provider-native Chat/turn/input truth |
 
 ## 3. 各家的成熟经验到底值钱在哪里
 
@@ -84,6 +85,19 @@ AionUi ACP 2.0 的价值不在“它能替代一切”，而在：
 
 这套东西非常适合未来的 **ACP provider 子系统**，但不应拿来替换当前已经跑通的 provider-native 路线。
 
+### 3.4 Herdr
+
+Herdr 与 RAH 都把持久 runtime 放在后台 server，让 UI/terminal client 可以 detach/reattach。更重要的
+是其仓库规则明确要求 `AppState` 与 runtime 分开、render 保持纯、拒绝 God object、平台代码隔离，
+并要求 shared runtime/session fact 进入 server/API，而 sidebar、颜色和 viewport 只属于客户端。
+
+这些原则直接强化 RAH 现有 daemon-owned runtime 和 workbench boundary。其 adversarial identity
+invariant、characterization test 与维护检查也值得用于 RAH 的 Resume/restore/identity 重构。
+
+边界同样清楚：Herdr 可以用进程与终端 screen detection 判断 agent 的 working/blocked/idle；RAH 的
+Conversation、首问 acceptance、turn identity 与 Changed Files 不能采用这一证据层级。screen detection
+只可作为 TUI diagnostics/fallback，不得替换 Provider 原生结构化事件或历史。
+
 ## 4. RAH 该吸收什么
 
 ### 4.1 立刻继续吸收的
@@ -111,6 +125,13 @@ AionUi ACP 2.0 的价值不在“它能替代一切”，而在：
 - fake ACP CLI + real ACP smoke 这一套测试策略值得直接借鉴
 
 但这应该是 **新增 ACP 子系统**，不是替换现有 adapter 主路由。
+
+#### 从 Herdr 吸收
+
+- 把 shared runtime fact 与 client presentation state 的判断写进每次设计评审。
+- 继续用明确的 source architecture ratchet 阻止 God object 回长。
+- 对 identity、restore、handoff 的高风险改动先建立对抗性不变量和真实 attach/reload 门禁。
+- 保持 daemon/server 长驻与浏览器/PWA detach 的独立性。
 
 ## 5. RAH 不该吸收什么
 
@@ -178,7 +199,7 @@ RAH 现在已经把 diagnostics 收得比较对了：
 
 目标：
 
-- 不影响现有四条 provider 主线
+- 不影响现有三条 provider 主线
 - 先承载未来的 ACP backend
 
 参考来源：
@@ -207,6 +228,7 @@ RAH 现在已经把 diagnostics 收得比较对了：
 - 吸收 `paseo` 的状态机集中度
 - 吸收 `hapi` 的 scanner/normalize 纪律
 - 吸收 `AionUi ACP 2.0` 的 ACP runtime 设计，但只用于未来 ACP 子系统
+- 吸收 `Herdr` 的 server/client 与 state/runtime/render 分离纪律，但不采用 screen detection 作为 Chat truth
 
 一句话总结：
 

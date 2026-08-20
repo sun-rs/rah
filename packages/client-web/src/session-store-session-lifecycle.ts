@@ -7,7 +7,11 @@ import {
   revealWorkspaceCandidates,
 } from "./session-store-workspace";
 import { deriveSessionConversationActivityAt } from "./session-conversation-activity";
-import { initialConversationSyncState, type SessionProjection } from "./types";
+import {
+  initialConversationSyncState,
+  type ConversationSyncState,
+  type SessionProjection,
+} from "./types";
 
 type LifecycleState = {
   projections: Map<string, SessionProjection>;
@@ -209,7 +213,10 @@ export function createStoppedReplayProjection(
   return next;
 }
 
-export function createPendingStoredReplayProjection(ref: StoredSessionRef): SessionProjection {
+export function createPendingStoredReplayProjection(
+  ref: StoredSessionRef,
+  cachedConversation?: ConversationSyncState,
+): SessionProjection {
   const now = new Date().toISOString();
   const sessionId = storedReplayPlaceholderSessionId(ref);
   const cwd = ref.cwd ?? ref.rootDir ?? "";
@@ -222,6 +229,7 @@ export function createPendingStoredReplayProjection(ref: StoredSessionRef): Sess
         id: sessionId,
         provider: ref.provider,
         providerSessionId: ref.providerSessionId,
+        ...(ref.modelProvider ? { modelProvider: ref.modelProvider } : {}),
         launchSource: "web",
         status: "stopped",
         phase: "ended",
@@ -242,19 +250,21 @@ export function createPendingStoredReplayProjection(ref: StoredSessionRef): Sess
     feed: [],
     events: [],
     lastSeq: 0,
-    conversation: {
-      ...initialConversationSyncState(),
-      phase: "loading",
-      loadedScope: "history",
-    },
+    conversation:
+      cachedConversation ?? {
+        ...initialConversationSyncState(),
+        phase: "loading",
+        loadedScope: "history",
+      },
   };
 }
 
 export function applyPendingStoredReplaySessionState(
   current: LifecycleState,
   ref: StoredSessionRef,
+  cachedConversation?: ConversationSyncState,
 ): Partial<LifecycleState> {
-  const projection = createPendingStoredReplayProjection(ref);
+  const projection = createPendingStoredReplayProjection(ref, cachedConversation);
   const workspacePlacement = applySessionWorkspacePlacement(
     current,
     ref.rootDir,
@@ -409,10 +419,11 @@ export function applyResumedStoredSessionState(
   };
 }
 
-export function mergeResumedHistoryProjection(
+function mergeSessionProjectionHandoff(
   responseSession: SessionSummary,
   preservedProjection: SessionProjection,
   liveProjection?: SessionProjection,
+  conversationAuthority: "preserved" | "live" = "preserved",
 ): SessionProjection {
   const feedByKey = new Map(preservedProjection.feed.map((entry) => [entry.key, entry] as const));
   for (const entry of liveProjection?.feed ?? []) {
@@ -425,12 +436,65 @@ export function mergeResumedHistoryProjection(
   const pendingInterrupt =
     liveProjection?.pendingInterrupt ?? preservedProjection.pendingInterrupt;
   const conversation =
-    preservedProjection.conversation ?? liveProjection?.conversation;
+    conversationAuthority === "live"
+      ? liveProjection?.conversation ?? preservedProjection.conversation
+      : preservedProjection.conversation ?? liveProjection?.conversation;
   const turnDirectory =
-    preservedProjection.turnDirectory ?? liveProjection?.turnDirectory;
+    conversationAuthority === "live"
+      ? liveProjection?.turnDirectory ?? preservedProjection.turnDirectory
+      : preservedProjection.turnDirectory ?? liveProjection?.turnDirectory;
   const pendingStartupConfiguration =
     preservedProjection.pendingStartupConfiguration ??
     liveProjection?.pendingStartupConfiguration;
+  const responseUpdatedAt = responseSession.session.updatedAt;
+  const liveUpdatedAt = liveProjection?.summary.session.updatedAt;
+  const liveHasProjectedEvents = (liveProjection?.lastSeq ?? 0) > 0;
+  const responseSessionIsFreshest =
+    liveUpdatedAt === undefined ||
+    responseUpdatedAt > liveUpdatedAt ||
+    (responseUpdatedAt === liveUpdatedAt && !liveHasProjectedEvents);
+  const freshestSummary = responseSessionIsFreshest
+    ? responseSession
+    : liveProjection!.summary;
+  const otherSummary = responseSessionIsFreshest
+    ? liveProjection?.summary
+    : responseSession;
+  const attachedClientsSource =
+    responseSession.attachedClients.length > 0
+      ? responseSession.attachedClients
+      : (liveProjection?.summary.attachedClients.length ?? 0) > 0
+        ? liveProjection!.summary.attachedClients
+        : preservedProjection.summary.attachedClients;
+  const controlLeaseSource =
+    responseSession.controlLease.holderClientId !== undefined
+      ? responseSession.controlLease
+      : liveProjection?.summary.controlLease.holderClientId !== undefined
+        ? liveProjection.summary.controlLease
+        : preservedProjection.summary.controlLease;
+  const targetSessionId = freshestSummary.session.id;
+  // Activation HTTP completion and lifecycle events race on independent
+  // transports. Never let a later-arriving but older HTTP snapshot erase a
+  // Working phase or native-TUI capabilities already projected from events.
+  // Attachment/control metadata is merged separately because those events do
+  // not advance ManagedSession.updatedAt.
+  const summary: SessionSummary = {
+    ...(otherSummary ?? {}),
+    ...freshestSummary,
+    session: freshestSummary.session,
+    // The preserved projection owns the browser attachment while the daemon is
+    // still allocating the target live identity. Lifecycle events can reveal
+    // that identity before the activation response carries its attachment
+    // snapshot. Preserve the ownership, but rebind it to the target runtime so
+    // header Stop and native-TUI controls become live in the same event flush.
+    attachedClients: attachedClientsSource.map((client) => ({
+      ...client,
+      sessionId: targetSessionId,
+    })),
+    controlLease: {
+      ...controlLeaseSource,
+      sessionId: targetSessionId,
+    },
+  };
   return {
     ...(liveProjection ?? preservedProjection),
     feed: [...feedByKey.values()],
@@ -445,8 +509,45 @@ export function mergeResumedHistoryProjection(
       : preservedProjection.currentRuntimeStatus
         ? { currentRuntimeStatus: preservedProjection.currentRuntimeStatus }
         : {}),
-    summary: responseSession,
+    summary,
   };
+}
+
+/**
+ * Hand a provisional New Task projection to the daemon-created Session.
+ * The provisional projection owns the optimistic draft and selected controls;
+ * the live projection owns canonical conversation state already received over
+ * the event stream. A failed history request for the temporary id therefore
+ * cannot overwrite an accepted provider reply.
+ */
+export function mergeStartedSessionProjection(
+  responseSession: SessionSummary,
+  provisionalProjection: SessionProjection,
+  liveProjection?: SessionProjection,
+): SessionProjection {
+  return mergeSessionProjectionHandoff(
+    responseSession,
+    provisionalProjection,
+    liveProjection,
+    "live",
+  );
+}
+
+/**
+ * Resume keeps the fully paged stopped transcript as its baseline while live
+ * lifecycle state is transferred onto the new runtime identity.
+ */
+export function mergeResumedHistoryProjection(
+  responseSession: SessionSummary,
+  preservedProjection: SessionProjection,
+  liveProjection?: SessionProjection,
+): SessionProjection {
+  return mergeSessionProjectionHandoff(
+    responseSession,
+    preservedProjection,
+    liveProjection,
+    "preserved",
+  );
 }
 
 export function applyResumedHistorySessionState(

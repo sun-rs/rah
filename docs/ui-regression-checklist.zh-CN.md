@@ -63,6 +63,8 @@ npm run test:smoke:history-resume
 - 选中 `workspace` 后手动打开 inspector，会显示该 workspace 的 `Files / Changes`
 - 选中 `session` 后 inspector 正常显示 `Files / Changes / Events`
 - iPad portrait / split 下，Inspector tab 不应换行、错位、撑高
+- Session `... -> Info` 同时显示 Runtime provider、Model provider 与 Model；OpenCode 的 DeepSeek/Kimi
+  等第三方模型不能只显示成 OpenCode
 - session 标题栏 provider 图标和 Council 标题栏 Council 图标都应有一致的 pill/card 外壳；小型 badge/button 内可使用 bare 图标，但不能在标题栏裸放 SVG。
 - 左侧 sidebar 的 Council bare 图标应为黑色 glyph，尺寸接近同组功能按钮；非 sidebar 位置的 Council 图标应维持橙色 glyph，并与同位置 provider 图标同规格。不要为黑色状态引入单独图片资产。
 
@@ -157,6 +159,8 @@ npm run test:smoke:history-resume
 - 输入增多时，输入框只向上长高
 - `+ / send / stop` 不会跟着输入框一起上下漂
 - 输入框上限足够高，不会过早内部滚动
+- 同一 Session 在普通 Chat 与 Canvas pane 间切换时，未发送文本、附件和注释保持同一份；不同
+  Session 之间仍严格隔离
 
 失败信号：
 
@@ -181,10 +185,15 @@ npm run test:smoke:history-resume
 检查：
 
 - thinking 时 `scroll-to-bottom` 按钮位置稳定
-- 最新 assistant 回复内容高于当前 chat 可视区时，贴底状态应显示 `Read latest reply`；点击后应跳到该最新回复内容顶部，并退出 bottom-follow
+- 最新 assistant 最终回复的起点滚出当前 chat 可视区超过 4px 时，应显示 `Read latest reply`；点击后应精确跳到该回复内容顶部、退出 bottom-follow，并在起点重新可见后隐藏
+- 最终回复本体即使能装进视口，只要其后的 Changed Files、visual outputs 或复制动作使回复起点滚出视口，也必须显示 `Read latest reply`
 - 用户在一条长 assistant 回复后发出新问题、且新 assistant 回复尚未出现时，不应显示 `Read latest reply`
-- 如果最新 assistant 回复较短，即使上一条回复很长，也不应显示 `Read latest reply` 去跳回上一轮
+- 如果最新 assistant 回复较短，即使上一条回复很长，也只能导航到这条最新短回复，不能跳回上一轮
 - Canvas pane、pane 最大化、普通 session/council 页面都应按各自 chat 滚动区高度触发，而不是按浏览器整窗高度触发
+- Desktop 与 390×844 PWA 点击蓝点 Session 必须落在产生蓝点的最新未读 final 顶部；模拟 `turn.completed` 先到、final projection 慢到时，等待期间只能显示最新尾部，不能跳到旧 final、旧 history page 顶部或回复末尾
+- 蓝点定位完成后，第一次轻微 touch/pointer/wheel 手势立即取得 viewport 所有权；手指刚移动时不得再次对齐、抖动或被 ResizeObserver 拉回，Chat/TUI 重挂载也不得重复执行已消费的蓝点导航
+- 打开包含超长 assistant row 与多张 lazy image 的 stopped Session，默认仍在最新；连续向上滚动两次后，
+  图片进入视口并完成布局时，滚动前位于视口顶部附近的正文必须保持同一像素位置
 - `GlobalWorkbenchCallout` 不和 `scroll-to-bottom` 重叠
 - 多行 composer、高 safe-area、error callout 同时出现时，底部元素仍然分层清楚
 
@@ -192,7 +201,15 @@ npm run test:smoke:history-resume
 
 - 两个浮层重叠
 - thinking 时浮层上下跳
-- `Read latest reply` 在短回复上频繁出现，或在长回复顶部已经可见时仍不消失
+- `Read latest reply` 在回复起点仍可见时频繁出现，或在回复起点已精确对齐后仍不消失
+- 蓝点 Session 偶发落在未读回复末尾/旧历史位置，或首次手势触发第二次程序化定位
+- 只在图片丰富的大 Session 上，第二次滚轮后正文突然上下跳动
+
+### 5. Turn Review
+
+- 点 Changed Files 的 `审查` 与任一文件行都打开同一个 Review；点文件时该文件立即选中
+- Desktop、PWA、Canvas 都不得因 turn 文件点击而打开右侧 Inspector
+- 390×844 下文件列表默认折叠为 Review 顶部选择条，可展开、筛选、切换并再次折叠
 
 ## 六、History
 
@@ -204,11 +221,14 @@ npm run test:smoke:history-resume
 - claim history -> live 升级路径正常
 - 长历史打开后仍锚到底部
 - 向上加载更旧历史不会把当前位置跳乱
+- Canvas 中 running 与 stopped/history Session 都能从左侧标题行拖入任意 pane；drop 后 pane 绑定正确
+  provider session，源 Session 不从 Sidebar 消失
 
 失败信号：
 
 - 手机历史弹窗偏移出屏幕
 - 长历史打开后不在底部
+- stopped Session 显示为不可拖动，或只有按到标题空白区的少数拖动能成功
 
 ## 七、Inspector 详情
 
@@ -219,6 +239,7 @@ npm run test:smoke:history-resume
 - `Diff / File` 切换正常
 - 从 Chat 回复点击图片或本地文件链接时，首次打开必须出现可见 preview/loading dialog，不能是一片空白。
 - 大图本地/LAN 打开应显示原图；远程/Tailscale/公网打开应显示 bounded preview，而不是 “too large or unavailable”。
+- HTML 文件默认显示静态 `Preview`，内联 CSS / SVG 正常；切换 `Source` 后仍能查看和复制源码。预览不得执行文件脚本、请求外链资源或导航 RAH 主页面；超过读取上限的 HTML 只能显示 source prefix。
 - `rename / binary / staged+unstaged` 都能正常显示
 - 窄屏 inspector 中 tab 条不乱
 

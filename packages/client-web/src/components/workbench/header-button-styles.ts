@@ -21,7 +21,32 @@ export const HEADER_ICON_BUTTON_BASE_CLASS =
 
 export const HEADER_ICON_BUTTON_CLASS = `inline-flex ${HEADER_ICON_BUTTON_BASE_CLASS}`;
 
+/**
+ * Every action in the 40px workbench header shares one 32px hit target. The
+ * SVGs deliberately do not share a mechanical width: Lucide's outlined square
+ * fills much more of its viewBox than its ellipsis, X, and panel glyphs. These
+ * optical sizes make their visible ink area consistent on both desktop and
+ * PWA while preserving one interaction geometry.
+ */
+export const HEADER_ACTION_ICON_SIZE = 18;
+
+export const HEADER_STOP_ICON_SIZE = 16;
+
+export const HEADER_MORE_ICON_SIZE = 20;
+
+export const HEADER_CLOSE_ICON_SIZE = 18;
+
+export const HEADER_PANEL_ICON_SIZE = 18;
+
+export const HEADER_MODE_ICON_SIZE = 18;
+
+/** The three-line menu has extra viewBox inset, so it keeps a 20px box. */
 export const HEADER_EDGE_TOGGLE_ICON_SIZE = 20;
+
+export const HEADER_EDGE_TOGGLE_DESKTOP_TOP_CLASS = "top-1";
+
+export const HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS =
+  "top-[calc(env(safe-area-inset-top,0px)+0.25rem)]";
 
 export const HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS =
   "icon-click-feedback h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";

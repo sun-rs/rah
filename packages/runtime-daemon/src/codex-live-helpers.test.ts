@@ -3,6 +3,7 @@ import test from "node:test";
 import { createCodexAppServerTranslationState } from "./codex-app-server-activity";
 import {
   createLiveSessionBridge,
+  normalizeCodexSubagentObservationTurn,
   shouldApplyCodexTranslatedActivity,
 } from "./codex-live-helpers";
 import type { CodexAppServerRpcClient } from "./codex-live-rpc";
@@ -399,24 +400,39 @@ test("skips session authority events from a different Codex thread", () => {
 });
 
 test("keeps visible subagent observations while filtering only session authority", () => {
+  const nestedActivity = {
+    type: "observation_completed" as const,
+    turnId: "subagent-turn",
+    observation: {
+      id: "subagent-1",
+      kind: "subagent.lifecycle" as const,
+      status: "completed" as const,
+      title: "Subagent activity",
+    },
+  };
   assert.equal(
     shouldApplyCodexTranslatedActivity({
-      activity: {
-        type: "observation_completed",
-        turnId: "subagent-turn",
-        observation: {
-          id: "subagent-1",
-          kind: "subagent.lifecycle",
-          status: "completed",
-          title: "Subagent activity",
-        },
-      },
+      activity: nestedActivity,
       origin: "notification",
       currentTurnId: "main-turn",
       providerSessionId: "thread-subagent",
       mainProviderSessionId: "thread-main",
     }),
     true,
+  );
+  assert.deepEqual(
+    normalizeCodexSubagentObservationTurn(nestedActivity, "main-turn"),
+    { ...nestedActivity, turnId: "main-turn" },
+  );
+  assert.equal(
+    shouldApplyCodexTranslatedActivity({
+      activity: nestedActivity,
+      origin: "notification",
+      currentTurnId: null,
+      providerSessionId: "thread-subagent",
+      mainProviderSessionId: "thread-main",
+    }),
+    false,
   );
 });
 

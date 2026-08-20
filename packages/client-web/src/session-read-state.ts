@@ -1,6 +1,13 @@
 import type { SessionSummary } from "@rah/runtime-protocol";
 import type { FeedEntry, SessionProjection } from "./types";
+import { conversationItemFeedKey } from "./conversation-feed";
 
+/**
+ * Unread is deliberately owned by one browser/PWA storage container. A final
+ * reply that was read on macOS may therefore remain unread on iOS, allowing
+ * each client to grant its own one-shot reply-start navigation. Do not move
+ * this cursor into daemon/account state without changing that product contract.
+ */
 const SESSION_LAST_SEEN_AT_KEY = "rah.sessionLastSeenAt.v1";
 const READ_STATE_INITIALIZED_AT_KEY = "__rahReadStateInitializedAt";
 const MAX_STORED_SESSION_READ_KEYS = 1_000;
@@ -110,15 +117,126 @@ export function sessionReadKey(summary: SessionSummary): string {
 
 function unreadEntryTimestampMs(entry: FeedEntry): number | null {
   if (entry.kind === "timeline") {
-    if (entry.item.kind !== "assistant_message") {
+    if (
+      entry.item.kind !== "assistant_message" ||
+      entry.item.phase !== "final_answer"
+    ) {
       return null;
     }
     return parseTimestampMs(entry.ts);
   }
-  if (entry.kind === "permission" || entry.kind === "notification") {
-    return parseTimestampMs(entry.ts);
-  }
   return null;
+}
+
+/**
+ * Returns the stable feed identity for the newest canonical final reply.
+ * Sidebar selection captures this before selecting the Session clears its
+ * unread marker, so Chat can honor the blue-dot entry contract without
+ * consulting mutable read state after navigation.
+ */
+export function latestFinalReplyEntryKey(
+  projection: SessionProjection,
+): string | null {
+  return latestFinalReplyNavigationTarget(projection)?.entryKey ?? null;
+}
+
+export function latestFinalReplyNavigationTarget(
+  projection: SessionProjection,
+): {
+  entryKey: string | null;
+  turnId: string | null;
+  replyTimestampMs: number | null;
+} | null {
+  const latestTerminalEvent = [...projection.events]
+    .reverse()
+    .find((event) =>
+      event.type === "turn.completed" ||
+      event.type === "turn.failed" ||
+      event.type === "turn.canceled"
+    );
+  const completedTurnId = latestTerminalEvent?.type === "turn.completed"
+    ? latestTerminalEvent.payload.identity?.canonicalTurnId ?? latestTerminalEvent.turnId ?? null
+    : null;
+  const terminalAtMs = latestTerminalEvent
+    ? parseTimestampMs(latestTerminalEvent.payload.completedAt ?? latestTerminalEvent.ts)
+    : null;
+  let bestEntryKey: string | null = null;
+  let bestTurnId: string | null = null;
+  let completedEntryKey: string | null = null;
+  let bestTimestampMs: number | null = null;
+  let bestOrder = -1;
+  let order = 0;
+  const consider = (
+    entryKey: string,
+    turnId: string | undefined,
+    timestamp: string | undefined,
+  ) => {
+    const candidateTimestampMs = parseTimestampMs(timestamp);
+    const candidateOrder = order++;
+    if (completedTurnId && turnId === completedTurnId) {
+      completedEntryKey = entryKey;
+    }
+    if (
+      bestEntryKey === null ||
+      (candidateTimestampMs !== null &&
+        (bestTimestampMs === null || candidateTimestampMs > bestTimestampMs)) ||
+      (candidateTimestampMs === bestTimestampMs && candidateOrder > bestOrder)
+    ) {
+      bestEntryKey = entryKey;
+      bestTurnId = turnId ?? null;
+      bestTimestampMs = candidateTimestampMs;
+      bestOrder = candidateOrder;
+    }
+  };
+
+  for (const entry of projection.feed) {
+    if (
+      entry.kind === "timeline" &&
+      entry.item.kind === "assistant_message" &&
+      entry.item.phase === "final_answer"
+    ) {
+      consider(
+        entry.canonicalItemId
+          ? conversationItemFeedKey(entry.canonicalItemId)
+          : entry.key,
+        entry.turnId,
+        entry.ts,
+      );
+    }
+  }
+  for (const turn of projection.conversation?.turns ?? []) {
+    const finalItem =
+      (turn.finalAnswerItemId
+        ? turn.items.find((item) => item.id === turn.finalAnswerItemId)
+        : undefined) ?? [...turn.items].reverse().find((item) => item.role === "final");
+    if (
+      finalItem?.content.kind !== "timeline" ||
+      finalItem.content.item.kind !== "assistant_message"
+    ) {
+      continue;
+    }
+    consider(
+      conversationItemFeedKey(finalItem.id),
+      turn.id,
+      finalItem.completedAt ?? finalItem.startedAt ?? turn.completedAt ?? turn.startedAt,
+    );
+  }
+  const terminalOwnsTarget = latestTerminalEvent &&
+    (bestTimestampMs === null || terminalAtMs === null ||
+      terminalAtMs + READ_EPSILON_MS >= bestTimestampMs);
+  if (terminalOwnsTarget) {
+    if (latestTerminalEvent.type !== "turn.completed") {
+      return null;
+    }
+    return {
+      entryKey: completedEntryKey,
+      turnId: completedTurnId,
+      replyTimestampMs: terminalAtMs,
+    };
+  }
+  return bestEntryKey
+    ? { entryKey: bestEntryKey, turnId: bestTurnId, replyTimestampMs: bestTimestampMs }
+    : null;
 }
 
 export function latestSessionActivityTimestampMs(projection: SessionProjection): number | null {
@@ -140,13 +258,34 @@ export function latestUnreadTimestampMs(projection: SessionProjection): number |
       latest = entryMs;
     }
   }
-  if (latest !== null) {
-    return latest;
+  for (const turn of projection.conversation?.turns ?? []) {
+    const hasFinalAnswer =
+      Boolean(turn.finalAnswerItemId) ||
+      turn.items.some(
+        (item) =>
+          item.role === "final" &&
+          item.status !== "pending" &&
+          item.status !== "running",
+      );
+    if (!hasFinalAnswer) {
+      continue;
+    }
+    const turnMs = parseTimestampMs(
+      turn.completedAt ??
+        [...turn.items]
+          .reverse()
+          .find((item) => item.role === "final")
+          ?.completedAt,
+    );
+    if (turnMs !== null && (latest === null || turnMs > latest)) {
+      latest = turnMs;
+    }
   }
-  if (projection.summary.session.status !== "running") {
-    return null;
-  }
-  return parseTimestampMs(projection.summary.session.updatedAt);
+  // `session.updatedAt` is lifecycle metadata, not conversation evidence.
+  // Running-session heartbeats, attachment changes, and foreground recovery
+  // all advance it, so using it here paints every background-running Session
+  // blue even when no assistant reply was produced.
+  return latest;
 }
 
 export function hasUnreadSinceReadState(

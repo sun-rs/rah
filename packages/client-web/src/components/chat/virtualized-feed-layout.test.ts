@@ -5,7 +5,10 @@ import {
   buildVirtualFeedLayout,
   estimateFeedEntryHeight,
   projectVirtualAnchorScrollTop,
+  resolveLeasedVirtualFeedWindow,
   resolveVirtualFeedWindow,
+  shouldVirtualizeFeedLayout,
+  VIRTUAL_FEED_MAX_EAGER_ROWS,
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
 
@@ -22,7 +25,31 @@ function messageEntry(key: string, text: string): FeedEntry {
 }
 
 describe("virtualized feed layout", () => {
-  test("estimates context compaction as a compact 20px process row", () => {
+  test("keeps the mounted virtual window stable for a native text-selection lease", () => {
+    const mountedWindow = {
+      startIndex: 12,
+      endIndex: 21,
+      topSpacerHeight: 640,
+      bottomSpacerHeight: 1_440,
+    };
+    const recomputedWindow = {
+      startIndex: 13,
+      endIndex: 22,
+      topSpacerHeight: 702,
+      bottomSpacerHeight: 1_380,
+    };
+
+    assert.strictEqual(
+      resolveLeasedVirtualFeedWindow(recomputedWindow, mountedWindow),
+      mountedWindow,
+    );
+    assert.strictEqual(
+      resolveLeasedVirtualFeedWindow(recomputedWindow, null),
+      recomputedWindow,
+    );
+  });
+
+  test("estimates context compaction on the shared 28px process-row rhythm", () => {
     const entry: FeedEntry = {
       key: "compaction",
       kind: "timeline",
@@ -30,7 +57,7 @@ describe("virtualized feed layout", () => {
       ts: "2026-04-22T00:00:00.000Z",
     };
 
-    assert.equal(estimateFeedEntryHeight(entry), 20);
+    assert.equal(estimateFeedEntryHeight(entry), 28);
   });
 
   test("prefers measured content heights while preserving cumulative offsets with row gaps", () => {
@@ -156,5 +183,44 @@ describe("virtualized feed layout", () => {
     const layout = buildVirtualFeedLayout([entry], new Map());
 
     assert.ok(layout.rows[0]!.height > 3_000);
+  });
+
+  test("enters bounded-DOM mode by either row count or estimated render height", () => {
+    const compactEntries = Array.from({ length: VIRTUAL_FEED_MAX_EAGER_ROWS + 1 }, (_, index) =>
+      messageEntry(`compact-${index}`, "short"),
+    );
+    assert.equal(
+      shouldVirtualizeFeedLayout({
+        layout: buildVirtualFeedLayout(
+          compactEntries,
+          new Map(compactEntries.map((entry) => [entry.key, 24] as const)),
+        ),
+        viewportHeight: 900,
+      }),
+      true,
+    );
+
+    const expensiveEntries = [messageEntry("long-a", "x".repeat(30_000))];
+    assert.equal(
+      shouldVirtualizeFeedLayout({
+        layout: buildVirtualFeedLayout(expensiveEntries, new Map()),
+        viewportHeight: 900,
+      }),
+      true,
+    );
+
+    const ordinaryEntries = Array.from({ length: 8 }, (_, index) =>
+      messageEntry(`ordinary-${index}`, "short"),
+    );
+    assert.equal(
+      shouldVirtualizeFeedLayout({
+        layout: buildVirtualFeedLayout(
+          ordinaryEntries,
+          new Map(ordinaryEntries.map((entry) => [entry.key, 80] as const)),
+        ),
+        viewportHeight: 900,
+      }),
+      false,
+    );
   });
 });

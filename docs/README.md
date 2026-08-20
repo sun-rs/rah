@@ -4,6 +4,7 @@
 
 ## 1. 当前稳定设计
 
+- [2026-08 全面架构审查与收敛记录](./architecture-review-2026-08.zh-CN.md)
 - [当前系统设计总览](./current-system-design.zh-CN.md)
 - [项目总览](./project-overview.zh-CN.md)
 - [Conversation 架构](./conversation-architecture.zh-CN.md)
@@ -39,6 +40,7 @@
 - [History Quality Boundary](./history-quality-boundary.zh-CN.md)
 - [Client Web Store Ownership](./client-web-store-ownership.zh-CN.md)
 - [Workbench Boundary](./workbench-boundary.md)
+- [架构对照与强化路线（含 Herdr）](./architecture-benchmark.zh-CN.md)
 
 ## 4. 发布与回归
 

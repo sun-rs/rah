@@ -18,6 +18,7 @@ import {
 import type {
   ProviderAdapter,
   ProviderConversationVisualArtifact,
+  ProviderConversationVisualArtifactSource,
   ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   RuntimeServices,
@@ -46,8 +47,7 @@ import {
 } from "./codex-app-server-turns-page";
 import { isSafeCodexVisualArtifactId } from "./codex-visual-artifacts";
 import {
-  resolveCodexVisualArtifactPath,
-  resolveCodexVisualArtifactRoot,
+  resolveCodexVisualArtifactCandidates,
 } from "./codex-visual-artifact-path";
 
 function isUnsupportedExperimentalListError(error: unknown): boolean {
@@ -62,6 +62,11 @@ function isBrokenPagingTransport(error: unknown): boolean {
 
 const DEFAULT_INDEXED_SUMMARY_THRESHOLD_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_VISUAL_ARTIFACT_BYTES = 2 * 1024 * 1024;
+
+type ResolvedCodexVisualArtifactSource = {
+  path: string;
+  sizeBytes: number;
+};
 
 async function containsSymbolicLinkBelowRoot(
   rootPath: string,
@@ -183,49 +188,84 @@ export class CodexStoredHistoryAdapter
     if (!record) {
       return undefined;
     }
-    const artifactPath = resolveCodexVisualArtifactPath(record, artifactId);
-    const artifactRootPath = resolveCodexVisualArtifactRoot(record);
-    if (!artifactPath || !artifactRootPath) {
+    const source = await this.resolveConversationVisualArtifactSource(
+      record,
+      artifactId,
+      { maxBytes: MAX_CODEX_VISUAL_ARTIFACT_BYTES },
+    );
+    if (!source) {
       return undefined;
     }
-    try {
-      if (
-        await containsSymbolicLinkBelowRoot(
-          artifactRootPath,
-          artifactPath,
-        )
-      ) {
-        return undefined;
-      }
-      const [artifactRoot, candidate] = await Promise.all([
-        realpath(artifactRootPath),
-        realpath(artifactPath),
-      ]);
-      const relative = path.relative(artifactRoot, candidate);
-      if (
-        relative === "" ||
-        relative.startsWith(`..${path.sep}`) ||
-        relative === ".." ||
-        path.isAbsolute(relative)
-      ) {
-        return undefined;
-      }
-      const metadata = await stat(candidate);
-      if (
-        !metadata.isFile() ||
-        metadata.size > MAX_CODEX_VISUAL_ARTIFACT_BYTES
-      ) {
-        return undefined;
-      }
-      return {
-        id: artifactId,
-        format: "interactive_html",
-        mimeType: "text/html",
-        fragment: await readFile(candidate, "utf8"),
-      };
-    } catch {
+    return {
+      id: artifactId,
+      format: "interactive_html",
+      mimeType: "text/html",
+      fragment: await readFile(source.path, "utf8"),
+    };
+  }
+
+  async getSessionConversationVisualArtifactSource(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<ProviderConversationVisualArtifactSource | undefined> {
+    if (!isSafeCodexVisualArtifactId(artifactId)) {
       return undefined;
     }
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const source = await this.resolveConversationVisualArtifactSource(
+      record,
+      artifactId,
+    );
+    return source ? { id: artifactId, path: source.path } : undefined;
+  }
+
+  private async resolveConversationVisualArtifactSource(
+    record: CodexStoredSessionRecord,
+    artifactId: string,
+    options?: { maxBytes?: number },
+  ): Promise<ResolvedCodexVisualArtifactSource | undefined> {
+    for (const candidatePath of resolveCodexVisualArtifactCandidates(record, artifactId)) {
+      try {
+        if (
+          await containsSymbolicLinkBelowRoot(
+            candidatePath.securityRootPath,
+            candidatePath.artifactPath,
+          )
+        ) {
+          continue;
+        }
+        const [artifactRoot, candidate] = await Promise.all([
+          realpath(candidatePath.securityRootPath),
+          realpath(candidatePath.artifactPath),
+        ]);
+        const relative = path.relative(artifactRoot, candidate);
+        if (
+          relative === "" ||
+          relative.startsWith(`..${path.sep}`) ||
+          relative === ".." ||
+          path.isAbsolute(relative)
+        ) {
+          continue;
+        }
+        const metadata = await stat(candidate);
+        if (
+          !metadata.isFile() ||
+          (options?.maxBytes !== undefined && metadata.size > options.maxBytes)
+        ) {
+          continue;
+        }
+        return {
+          path: candidate,
+          sizeBytes: metadata.size,
+        };
+      } catch {
+        // The workspace and provider-owned stores are independent fallbacks.
+      }
+    }
+    return undefined;
   }
 
   async getConversationSummaryEvidencePage(

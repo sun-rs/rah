@@ -33,6 +33,12 @@ import type { ProviderAdapter } from "./provider-adapter";
 import type { FrozenHistoryBoundary, FrozenHistoryPageLoader } from "./history-snapshots";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
 import { turnArtifactOwnerKey } from "./turn-artifact-store";
+import {
+  publishSessionInputAccepted,
+  publishSessionInputQueue,
+  runtimeQueuedInput,
+  type RuntimeQueuedInput,
+} from "./session-input-queue";
 
 const hasSqlite = (() => {
   try {
@@ -540,6 +546,7 @@ class MutableControlsAdapter extends CountingStoredSessionsAdapter {
   engine: RuntimeEngine | undefined;
   modeCalls = 0;
   modelCalls = 0;
+  inputRequests: Array<{ sessionId: string; request: SessionInputRequest }> = [];
 
   constructor() {
     super([]);
@@ -623,6 +630,17 @@ class MutableControlsAdapter extends CountingStoredSessionsAdapter {
       }),
     );
   }
+
+  override sendInput(sessionId: string, request: SessionInputRequest): void {
+    this.inputRequests.push({ sessionId, request });
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const queued = runtimeQueuedInput(request);
+    publishSessionInputQueue(this.engine, sessionId, [queued]);
+    publishSessionInputAccepted(this.engine, sessionId, queued);
+    publishSessionInputQueue(this.engine, sessionId, []);
+  }
 }
 
 class NativeLocalServerRoutingAdapter implements ProviderAdapter {
@@ -677,6 +695,13 @@ class NativeLocalServerRoutingAdapter implements ProviderAdapter {
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
     this.inputRequests.push({ sessionId, request });
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const queued = runtimeQueuedInput(request);
+    publishSessionInputQueue(this.engine, sessionId, [queued]);
+    publishSessionInputAccepted(this.engine, sessionId, queued);
+    publishSessionInputQueue(this.engine, sessionId, []);
   }
 
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
@@ -693,6 +718,45 @@ class NativeLocalServerRoutingAdapter implements ProviderAdapter {
 
   onPtyResize(_sessionId: string, _clientId: string, _cols: number, _rows: number): void {
     throw new Error("not implemented");
+  }
+}
+
+class ReceiptControlledRoutingAdapter extends NativeLocalServerRoutingAdapter {
+  private readonly pendingBySessionId = new Map<string, RuntimeQueuedInput>();
+
+  override sendInput(sessionId: string, request: SessionInputRequest): void {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    this.inputRequests.push({ sessionId, request });
+    const queued = runtimeQueuedInput(request);
+    this.pendingBySessionId.set(sessionId, queued);
+    publishSessionInputQueue(this.engine, sessionId, [queued]);
+  }
+
+  acknowledge(sessionId: string): void {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const queued = this.pendingBySessionId.get(sessionId);
+    if (!queued) {
+      throw new Error("pending input missing");
+    }
+    this.pendingBySessionId.delete(sessionId);
+    publishSessionInputAccepted(this.engine, sessionId, queued);
+    publishSessionInputQueue(this.engine, sessionId, []);
+  }
+}
+
+class RejectingInitialInputAdapter extends NativeLocalServerRoutingAdapter {
+  destroyedSessionIds: string[] = [];
+
+  override sendInput(): void {
+    throw new Error("provider rejected the first question");
+  }
+
+  destroySession(sessionId: string): void {
+    this.destroyedSessionIds.push(sessionId);
   }
 }
 
@@ -1531,6 +1595,11 @@ describe("RuntimeEngine", () => {
       assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
       assert.equal(started.session.session.runtime?.tuiRole, "client_view");
       assert.equal(started.session.session.runtime?.tuiContinuity, true);
+      assert.deepEqual(started.initialInputAcceptance, {
+        clientMessageId: "start-message-1",
+        clientTurnId: "start-turn-1",
+        acceptedAt: started.initialInputAcceptance?.acceptedAt,
+      });
       assert.deepEqual(adapter.inputRequests[0], {
         sessionId,
         request: {
@@ -1592,6 +1661,11 @@ describe("RuntimeEngine", () => {
       assert.equal(resumed.session.session.runtime?.structuredLiveEvents, true);
       assert.equal(resumed.session.session.runtime?.tuiRole, "client_view");
       assert.equal(resumed.session.session.runtime?.tuiContinuity, true);
+      assert.deepEqual(resumed.initialInputAcceptance, {
+        clientMessageId: "resume-message-1",
+        clientTurnId: "resume-turn-1",
+        acceptedAt: resumed.initialInputAcceptance?.acceptedAt,
+      });
       assert.deepEqual(adapter.inputRequests.at(-1), {
         sessionId: resumed.session.session.id,
         request: {
@@ -1602,6 +1676,118 @@ describe("RuntimeEngine", () => {
         },
       });
       assert.equal(resumed.session.session.runtimeState, "starting");
+    } finally {
+      await engine.shutdown();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("initial input waits for the explicit provider acceptance receipt", async () => {
+    const adapter = new ReceiptControlledRoutingAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+    try {
+      let settled = false;
+      const starting = engine
+        .startSession({
+          provider: "codex",
+          cwd: workDir,
+          liveBackend: "native_local_server",
+          initialInput: {
+            clientId: "web-client",
+            clientMessageId: "message-receipt",
+            text: "wait for provider acknowledgement",
+          },
+        })
+        .then((response) => {
+          settled = true;
+          return response;
+        });
+      starting.catch(() => undefined);
+
+      await waitFor(() => assert.equal(adapter.inputRequests.length, 1));
+      const sessionId = adapter.inputRequests[0]?.sessionId;
+      assert.ok(sessionId);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(settled, false);
+      assert.equal(
+        engine.getSessionSummary(sessionId).session.inputQueue?.[0]?.clientMessageId,
+        "message-receipt",
+      );
+
+      adapter.acknowledge(sessionId);
+      const started = await starting;
+      assert.equal(settled, true);
+      assert.equal(started.initialInputAcceptance?.clientMessageId, "message-receipt");
+      assert.equal(started.session.session.inputQueue?.length ?? 0, 0);
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
+  test("failed first-input acceptance discards new and resumed live shells", async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-initial-input-rollback-"));
+    workDirGlobal = workspace;
+    const adapter = new RejectingInitialInputAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+    const attach = {
+      client: {
+        id: "web-client",
+        kind: "web" as const,
+        connectionId: "web-connection",
+      },
+      mode: "interactive" as const,
+      claimControl: true,
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          engine.startSession({
+            provider: "codex",
+            cwd: workspace,
+            liveBackend: "native_local_server",
+            attach,
+            initialInput: {
+              clientId: "web-client",
+              clientMessageId: "rejected-start-message",
+              clientTurnId: "rejected-start-turn",
+              text: "must not leave a shell",
+            },
+          }),
+        /provider rejected the first question/,
+      );
+      await assert.rejects(
+        () =>
+          engine.resumeSession({
+            provider: "codex",
+            providerSessionId: "rejected-resume-provider",
+            cwd: workspace,
+            liveBackend: "native_local_server",
+            attach,
+            initialInput: {
+              clientId: "web-client",
+              clientMessageId: "rejected-resume-message",
+              clientTurnId: "rejected-resume-turn",
+              text: "resume must not leave a shell",
+            },
+          }),
+        /provider rejected the first question/,
+      );
+
+      assert.deepEqual(engine.sessionStore.listSessions(), []);
+      assert.equal(adapter.destroyedSessionIds.length, 2);
+      assert.equal(
+        engine
+          .listEvents({ eventTypes: ["session.closed"] })
+          .filter(
+            (event) =>
+              event.type === "session.closed" &&
+              event.payload.disposition === "discarded",
+          ).length,
+        2,
+      );
     } finally {
       await engine.shutdown();
       rmSync(workspace, { recursive: true, force: true });
@@ -1879,6 +2065,62 @@ describe("RuntimeEngine", () => {
     assert.equal(adapter.modelCalls, 1);
 
     await engine.shutdown();
+  });
+
+  test("attach applies requested controls before atomically accepting its first input", async () => {
+    const adapter = new MutableControlsAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workDirGlobal,
+      });
+      const sessionId = started.session.session.id;
+      const attached = await engine.attachSession(sessionId, {
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-connection",
+        },
+        mode: "interactive",
+        claimControl: true,
+        model: "beta",
+        optionValues: { model_reasoning_effort: "medium" },
+        modeId: "plan",
+        initialInput: {
+          clientId: "web-client",
+          clientMessageId: "attach-message-1",
+          clientTurnId: "attach-turn-1",
+          text: "continue through attach",
+        },
+      });
+
+      assert.equal(adapter.modeCalls, 1);
+      assert.equal(adapter.modelCalls, 1);
+      assert.equal(attached.session.session.mode?.currentModeId, "plan");
+      assert.equal(attached.session.session.model?.currentModelId, "beta");
+      assert.equal(attached.session.session.model?.currentReasoningId, "medium");
+      assert.deepEqual(attached.initialInputAcceptance, {
+        clientMessageId: "attach-message-1",
+        clientTurnId: "attach-turn-1",
+        acceptedAt: attached.initialInputAcceptance?.acceptedAt,
+      });
+      assert.deepEqual(adapter.inputRequests, [
+        {
+          sessionId,
+          request: {
+            clientId: "web-client",
+            clientMessageId: "attach-message-1",
+            clientTurnId: "attach-turn-1",
+            text: "continue through attach",
+          },
+        },
+      ]);
+    } finally {
+      await engine.shutdown();
+    }
   });
 
   test("blocks mode and model changes when runtime config is not available", async () => {
@@ -3447,14 +3689,42 @@ describe("RuntimeEngine", () => {
   });
 
   test("native TUI backend queues chat input while the native prompt is busy", async () => {
-    const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-queue-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
     const providerSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8555";
     const previousCodexBinary = process.env.RAH_CODEX_BINARY;
     const previousCodexHome = process.env.CODEX_HOME;
+    const previousMirrorInterval = process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
     process.env.CODEX_HOME = path.join(workspace, "codex-home");
-    mkdirSync(path.join(process.env.CODEX_HOME, "sessions"), { recursive: true });
+    process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = "25";
+    const rolloutDate = new Date();
+    const rolloutDirectory = path.join(
+      process.env.CODEX_HOME,
+      "sessions",
+      String(rolloutDate.getFullYear()),
+      String(rolloutDate.getMonth() + 1).padStart(2, "0"),
+      String(rolloutDate.getDate()).padStart(2, "0"),
+    );
+    mkdirSync(rolloutDirectory, { recursive: true });
+    // Match Codex's real dated rollout layout so live binding exercises the
+    // bounded provider-session resolver instead of depending on a full
+    // background catalog scan whose latency grows with unrelated histories.
+    const rolloutPath = path.join(
+      rolloutDirectory,
+      `rollout-queue-${providerSessionId}.jsonl`,
+    );
+    writeFileSync(
+      rolloutPath,
+      `${JSON.stringify({
+        timestamp: "2026-08-13T00:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: providerSessionId,
+          cwd: workspace,
+          timestamp: "2026-08-13T00:00:00.000Z",
+        },
+      })}\n`,
+    );
     writeFileSync(
       fakeCodex,
       [
@@ -3483,6 +3753,7 @@ describe("RuntimeEngine", () => {
     );
     chmodSync(fakeCodex, 0o755);
     process.env.RAH_CODEX_BINARY = fakeCodex;
+    const engine = new RuntimeEngine([]);
 
     try {
       const started = await engine.startSession({
@@ -3522,6 +3793,44 @@ describe("RuntimeEngine", () => {
       await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_QUEUE_INPUT_1:first queued prompt/);
         assert.match(transcript, /MOCK_NATIVE_TUI_QUEUE_PROMPT/);
+        assert.doesNotMatch(transcript, /MOCK_NATIVE_TUI_QUEUE_INPUT_2/);
+      });
+
+      appendFileSync(
+        rolloutPath,
+        [
+          {
+            timestamp: "2026-08-13T00:00:01.000Z",
+            type: "event_msg",
+            payload: { type: "task_started", turn_id: "turn-queue-first" },
+          },
+          {
+            timestamp: "2026-08-13T00:00:02.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "first queued prompt" }],
+            },
+          },
+          {
+            timestamp: "2026-08-13T00:00:03.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "first queued answer" }],
+            },
+          },
+          {
+            timestamp: "2026-08-13T00:00:04.000Z",
+            type: "event_msg",
+            payload: { type: "task_complete", turn_id: "turn-queue-first" },
+          },
+        ].map((row) => JSON.stringify(row)).join("\n") + "\n",
+      );
+
+      await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_QUEUE_INPUT_2:second queued prompt/);
         assert.ok(
           transcript.indexOf("MOCK_NATIVE_TUI_QUEUE_INPUT_2") >
@@ -3541,6 +3850,11 @@ describe("RuntimeEngine", () => {
         delete process.env.CODEX_HOME;
       } else {
         process.env.CODEX_HOME = previousCodexHome;
+      }
+      if (previousMirrorInterval === undefined) {
+        delete process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
+      } else {
+        process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = previousMirrorInterval;
       }
       await engine.shutdown();
       rmSync(workspace, { force: true, recursive: true });
@@ -3727,8 +4041,12 @@ describe("RuntimeEngine", () => {
         text: "chat still works after busy escape",
       });
       await waitFor(() => {
-        assert.match(transcript, /MOCK_NATIVE_TUI_ESCAPE:.*chat still works after busy escape/);
+        const queue = engine.getSessionSummary(sessionId).session.inputQueue;
+        assert.equal(queue?.length, 2);
+        assert.equal(queue?.[0]?.state, "submitting");
+        assert.equal(queue?.[1]?.state, "queued");
       });
+      assert.doesNotMatch(transcript, /chat still works after busy escape/);
 
       unsubscribe();
       await engine.closeSession(sessionId, { clientId: "web-native" });
@@ -4685,7 +5003,8 @@ describe("RuntimeEngine", () => {
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
       engine.sendInput(sessionId, { clientId: "web-native", text: "sent after draft" });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+      assert.equal(engine.getSessionSummary(sessionId).session.inputQueue?.[0]?.state, "submitting");
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
       assert.match(transcript, /sent after draft/);
 
@@ -4694,7 +5013,10 @@ describe("RuntimeEngine", () => {
         text: "queued after active Claude turn",
       });
       await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+        const queue = engine.getSessionSummary(sessionId).session.inputQueue;
+        assert.equal(queue?.length, 2);
+        assert.equal(queue?.[0]?.state, "submitting");
+        assert.equal(queue?.[1]?.state, "queued");
       });
       await new Promise((resolve) => setTimeout(resolve, 100));
       assert.doesNotMatch(transcript, /queued after active Claude turn/);
@@ -5045,7 +5367,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI mirror does not mark newer web input idle with stale OpenCode database rows", { skip: !hasSqlite }, async () => {
+  test("native TUI mirror does not mark newer web input idle with stale OpenCode message rows", { skip: !hasSqlite }, async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-opencode-stale-"));
     const fakeOpenCode = path.join(workspace, "fake-opencode-stale.js");
@@ -5071,6 +5393,7 @@ describe("RuntimeEngine", () => {
         "function writeStaleDb() {",
         "  if (historyWritten || !process.env.XDG_DATA_HOME || !sessionId) return;",
         "  historyWritten = true;",
+        "  const sessionCreatedAt = Date.now();",
         "  const db = path.join(process.env.XDG_DATA_HOME, 'opencode', 'opencode.db');",
         "  fs.mkdirSync(path.dirname(db), { recursive: true });",
         "  execFileSync('sqlite3', [db, `",
@@ -5081,7 +5404,7 @@ describe("RuntimeEngine", () => {
         "    create table if not exists part (id text primary key, message_id text, session_id text, time_created integer, time_updated integer, data text);",
         "    insert or replace into project (id, worktree, name, time_updated) values ('project_stale', ${sql(process.cwd())}, null, ${Date.now()});",
         "    insert or replace into session (id, project_id, parent_id, directory, title, time_created, time_updated, time_archived)",
-        "      values (${sql(sessionId)}, 'project_stale', null, ${sql(process.cwd())}, 'OpenCode stale DB session', ${staleBase}, ${Date.now()}, null);",
+        "      values (${sql(sessionId)}, 'project_stale', null, ${sql(process.cwd())}, 'OpenCode stale DB session', ${sessionCreatedAt}, ${Date.now()}, null);",
         "    insert or replace into message (id, session_id, time_created, time_updated, data)",
         "      values ('msg_user_stale', ${sql(sessionId)}, ${staleBase + 10}, ${staleBase + 10}, ${sql(JSON.stringify({ role: 'user', time: { created: staleBase + 10 } }))});",
         "    insert or replace into message (id, session_id, time_created, time_updated, data)",

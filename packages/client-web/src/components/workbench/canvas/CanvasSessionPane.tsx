@@ -105,7 +105,6 @@ export function CanvasSessionPane(props: {
     response: PermissionResponseRequest,
   ) => Promise<void>;
   onOpenLocalFile?: (sessionId: string, path: string) => void;
-  onOpenTurnFileChange?: (sessionId: string, turnId: string, path: string) => void;
   onLoadConversationItemDetail?: (
     sessionId: string,
     kind: ConversationItemDetailKind,
@@ -323,12 +322,6 @@ export function CanvasSessionPane(props: {
         ? {
             onOpenLocalFile: (path: string) =>
               props.onOpenLocalFile?.(props.summary.session.id, path),
-          }
-        : {})}
-      {...(props.onOpenTurnFileChange
-        ? {
-            onOpenTurnFileChange: (turnId: string, path: string) =>
-              props.onOpenTurnFileChange?.(props.summary.session.id, turnId, path),
           }
         : {})}
       composerSurface={composerSurface}

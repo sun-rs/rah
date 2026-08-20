@@ -6,7 +6,7 @@ const PWA_DISPLAY_MODE_QUERIES = [
   "(display-mode: minimal-ui)",
 ];
 
-function readPwaDisplayMode(): boolean {
+export function readPwaDisplayMode(): boolean {
   if (typeof window === "undefined") {
     return false;
   }

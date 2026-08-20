@@ -1,13 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FeedEntry } from "../../types";
 import type { SelectedConversationText } from "../../composer-annotations";
 import type {
@@ -34,12 +25,13 @@ import {
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
 import { AssistantTurnCopyAction } from "./AssistantTurnCopyAction";
+import { AssistantTurnModelMeta } from "./AssistantTurnModelMeta";
 import { AssistantProcessGroup } from "./AssistantProcessGroup";
-import { AssistantTurnHeader } from "./AssistantTurnHeader";
 import { ContextCompactionDivider } from "./ContextCompactionDivider";
 import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
 import { TaskSummaryDock } from "./TaskSummaryDock";
 import { ConversationFileChangesCard } from "./ConversationFileChangesCard";
+import { ConversationVisualOutputGallery } from "./ConversationVisualOutputGallery";
 import { ReviewDialog } from "../../inspector/ReviewDialog";
 import type { ReviewScope } from "../../inspector/ReviewSurface";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -51,15 +43,16 @@ import { Reasoning } from "./Reasoning";
 import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
+import { SelectedTextOverlay } from "./SelectedTextOverlay";
+import { useConversationTextSelection } from "./useConversationTextSelection";
 import {
-  SelectedTextOverlay,
-  type SelectedTextOverlayState,
-} from "./SelectedTextOverlay";
+  createReplyStartAlignmentController,
+  type ReplyStartAlignmentController,
+} from "./reply-start-alignment";
 import {
   defaultAssistantProcessGroupExpanded,
   type ChatDisplayRow,
 } from "./assistant-process-groups";
-import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
 import {
   buildConversationTurnNavigationItems,
   visibleConversationTurnKeys,
@@ -71,27 +64,38 @@ import {
   latestNavigableAssistantReplyKey,
   latestVisibleUserMessageKey,
   resolveLatestReplyStartTarget,
+  resolveRequestedReplyStartTarget,
+  suspendLatestReplyAutoNavigationState,
   type LatestReplyAutoNavigationState,
 } from "./latest-reply-navigation";
 import {
   buildVirtualFeedLayout,
   estimateFeedEntryHeight,
   projectVirtualAnchorScrollTop,
+  resolveLeasedVirtualFeedWindow,
   resolveVirtualFeedWindow,
+  shouldVirtualizeFeedLayout,
+  type VirtualFeedWindow,
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
-import { resolvePrependAnchorScrollTop } from "./prepend-scroll-anchor";
+import {
+  captureVisibleViewportAnchor,
+  resolvePrependAnchorScrollTop,
+  shouldMaintainDetachedReaderAnchor,
+  shouldRequestOlderConversationHistory,
+  type ViewportAnchorSnapshot,
+} from "./prepend-scroll-anchor";
 import { visibleFeedEntries } from "./chat-feed-filtering";
 import { latestCurrentPlan, withoutInlinePlans } from "./current-plan";
-import { usePwaDisplayMode } from "../../hooks/usePwaDisplayMode";
-import {
-  conversationDisplayRows,
-  conversationFinalAssistantKeys,
-} from "../../conversation-feed";
+import { readPwaDisplayMode, usePwaDisplayMode } from "../../hooks/usePwaDisplayMode";
+import { foregroundSurfaceHasAttention } from "../../foreground-recovery";
+import { conversationDisplayRows, conversationFinalAssistantKeys } from "../../conversation-feed";
 import {
   advanceBottomFollowSettle,
   createBottomFollowSettleState,
 } from "./bottom-follow-settling";
+import type { SessionConversationNavigationRequest } from "../../session-conversation-navigation";
+import { useChatViewportGestureOwnership } from "./use-chat-viewport-gesture-ownership";
 
 const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
@@ -101,12 +105,24 @@ const BOTTOM_RESIZE_SETTLE_FRAMES = 2;
 const BOTTOM_FOREGROUND_SETTLE_FRAMES = 4;
 const BOTTOM_USER_JUMP_SETTLE_FRAMES = 8;
 const NO_COPYABLE_ASSISTANT_KEYS: ReadonlySet<string> = new Set();
-const PROCESS_TO_FINAL_ROW_GAP_PX = 10;
+const PROCESS_TO_FINAL_ROW_GAP_PX = 8;
 const DESKTOP_CHAT_DISPLAY_ROW_GAP_PX = 14;
 const PWA_CHAT_DISPLAY_ROW_GAP_PX = 12;
 
 function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function isConversationSurfaceForeground(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return foregroundSurfaceHasAttention({
+    visibilityState: document.visibilityState,
+    documentHasFocus:
+      typeof document.hasFocus !== "function" || document.hasFocus(),
+    pwaDisplayMode: readPwaDisplayMode(),
+  });
 }
 
 function isScrollNearBottom(node: HTMLElement): boolean {
@@ -125,7 +141,7 @@ function chatDisplayRowGapPx(
   }
   if (
     row.kind === "feed_entry" &&
-    nextRow?.kind === "turn_file_changes"
+    (nextRow?.kind === "turn_visual_outputs" || nextRow?.kind === "turn_file_changes")
   ) {
     return 10;
   }
@@ -141,6 +157,9 @@ function estimateChatDisplayRowHeight(row: ChatDisplayRow): number {
   }
   if (row.kind === "turn_file_changes") {
     return 50;
+  }
+  if (row.kind === "turn_visual_outputs") {
+    return 172;
   }
   if (row.kind === "turn_copy_action") {
     return 28;
@@ -182,6 +201,7 @@ function renderTimelineItem(item: TimelineItem, options: {
   entryKey?: string;
   sessionId?: string;
   canCopyAssistant?: boolean;
+  userMessagePresentation?: "bubble" | "guidance";
   onOpenLocalFile?: (path: string) => void;
   onLoadDetail?: () => Promise<void> | void;
 } = {}) {
@@ -193,6 +213,7 @@ function renderTimelineItem(item: TimelineItem, options: {
           imageCount={item.imageCount}
           attachments={item.attachments}
           entryKey={options.entryKey}
+          presentation={options.userMessagePresentation}
           onOpenLocalFile={options.onOpenLocalFile}
           onLoadDetail={options.onLoadDetail}
         />
@@ -352,6 +373,7 @@ function renderEntry(
     | ((turnId: string) => Promise<void> | void)
     | undefined,
   copyableAssistantKeys: ReadonlySet<string>,
+  userMessagePresentation: "bubble" | "guidance" = "bubble",
 ) {
   switch (entry.kind) {
     case "timeline":
@@ -359,6 +381,7 @@ function renderEntry(
         entryKey: entry.key,
         sessionId,
         canCopyAssistant: copyableAssistantKeys.has(entry.key),
+        userMessagePresentation,
         ...(onOpenLocalFile ? { onOpenLocalFile } : {}),
         ...(entry.item.kind === "user_message" &&
         (entry.canonicalTurnId || entry.turnId) &&
@@ -481,6 +504,8 @@ function MeasuredFeedEntry(props: {
 export const ChatThread = memo(function ChatThread(props: {
   sessionId: string;
   navigationRevision?: number;
+  navigationRequest?: SessionConversationNavigationRequest;
+  onNavigationRequestConsumed?: (revision: number) => void;
   feed: FeedEntry[];
   conversationTurns: readonly ConversationTurnProjection[];
   hideToolCalls?: boolean;
@@ -504,16 +529,9 @@ export const ChatThread = memo(function ChatThread(props: {
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
-  onOpenTurnFileChange?: (turnId: string, path: string) => void;
   onAddSelectedText?: (selection: SelectedConversationText) => void;
   onSelectedTextMoreDetails?: (selection: SelectedConversationText) => void;
 }) {
-  type PrependAnchor = {
-    scrollHeight: number;
-    scrollTop: number;
-    entryKey: string | null;
-    offsetTop: number | null;
-  };
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -525,13 +543,14 @@ export const ChatThread = memo(function ChatThread(props: {
   const sessionSwitchBottomLockRef = useRef(true);
   const returnToBottomOnVisibleRef = useRef(true);
   const pendingVisibleBottomRestoreRef = useRef(false);
-  const prependAnchorRef = useRef<PrependAnchor | null>(null);
+  const prependAnchorRef = useRef<ViewportAnchorSnapshot | null>(null);
   const lastScrollTopRef = useRef(0);
   const lastClientHeightRef = useRef(0);
   const touchScrollYRef = useRef<number | null>(null);
+  const pointerScrollGestureRef = useRef(false);
   const topHistoryAutoLoadArmedRef = useRef(true);
   const textSelectionDragActiveRef = useRef(false);
-  const textSelectionListenerCleanupRef = useRef<(() => void) | null>(null);
+  const textSelectionVirtualWindowRef = useRef<VirtualFeedWindow | null>(null);
   const pendingMeasuredHeightUpdateRef = useRef(false);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
@@ -539,7 +558,9 @@ export const ChatThread = memo(function ChatThread(props: {
   const measuredHeightsRafRef = useRef<number | null>(null);
   const topHistoryLoadRafRef = useRef<number | null>(null);
   const prependAnchorRestoreRafRef = useRef<number | null>(null);
+  const replyStartAlignmentRef = useRef<ReplyStartAlignmentController | null>(null);
   const latestReplyStartTargetRef = useRef<ReturnType<typeof resolveLatestReplyStartTarget>>(null);
+  const pendingEntryReplyStartKeyRef = useRef<string | null>(null);
   const turnNavigationRafRef = useRef<number | null>(null);
   const turnNavigationReleaseRafRef = useRef<number | null>(null);
   const turnNavigationActiveRef = useRef(false);
@@ -549,19 +570,16 @@ export const ChatThread = memo(function ChatThread(props: {
     latestUserKey: null,
     latestReplyKey: null,
     generationActive: Boolean(props.generationActive),
-    armed: Boolean(props.generationActive),
+    armed: false,
     pendingReplyKey: null,
   });
+  const conversationSurfaceForegroundRef = useRef(isConversationSurfaceForeground());
   const consumePendingAutoLatestReplyScrollRef = useRef<() => boolean>(() => true);
   const autoNavigatedLatestReplyKeysRef = useRef(new Set<string>());
   const autoLoadedInterruptedTurnIdsRef = useRef(new Set<string>());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0, contentTopOffset: 0 });
-  const [textSelectionDragActive, setTextSelectionDragActive] = useState(false);
-  const [selectedTextOverlay, setSelectedTextOverlay] =
-    useState<SelectedTextOverlayState | null>(null);
-  const selectionCaptureRafRef = useRef<number | null>(null);
   const [processGroupExpansionOverrides, setProcessGroupExpansionOverrides] = useState(
     () => new Map<string, boolean>(),
   );
@@ -570,7 +588,10 @@ export const ChatThread = memo(function ChatThread(props: {
   );
   const loadingProcessTurnIdsRef = useRef(loadingProcessTurnIds);
   loadingProcessTurnIdsRef.current = loadingProcessTurnIds;
-  const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
+  const [reviewRequest, setReviewRequest] = useState<{
+    scope: ReviewScope;
+    initialPath?: string;
+  } | null>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
   const resolveChatDisplayRowGapPx = useCallback(
     (row: ChatDisplayRow, index: number, rows: readonly ChatDisplayRow[]) =>
@@ -615,16 +636,23 @@ export const ChatThread = memo(function ChatThread(props: {
     [props.conversationTurns],
   );
   const openTurnReview = useCallback(
-    (turnId: string, fileChanges: ConversationTurnFileChangesProjection) => {
-      setReviewScope({
-        kind: "turn",
-        sessionId: props.sessionId,
-        turnId,
-        workspaceRoot: "",
-        files: fileChanges.files,
-        totalAdditions: fileChanges.totalAdditions,
-        totalDeletions: fileChanges.totalDeletions,
-        truncated: false,
+    (
+      turnId: string,
+      fileChanges: ConversationTurnFileChangesProjection,
+      initialPath?: string,
+    ) => {
+      setReviewRequest({
+        scope: {
+          kind: "turn",
+          sessionId: props.sessionId,
+          turnId,
+          workspaceRoot: "",
+          files: fileChanges.files,
+          totalAdditions: fileChanges.totalAdditions,
+          totalDeletions: fileChanges.totalDeletions,
+          truncated: false,
+        },
+        ...(initialPath ? { initialPath } : {}),
       });
     },
     [props.sessionId],
@@ -636,21 +664,24 @@ export const ChatThread = memo(function ChatThread(props: {
     if (!currentPlanTurnId || !currentPlanFileChanges) {
       return;
     }
-    setReviewScope((current) => {
+    setReviewRequest((current) => {
       if (
-        current?.kind !== "turn" ||
-        current.turnId !== currentPlanTurnId ||
-        (current.files === currentPlanFileChanges.files &&
-          current.totalAdditions === currentPlanFileChanges.totalAdditions &&
-          current.totalDeletions === currentPlanFileChanges.totalDeletions)
+        current?.scope.kind !== "turn" ||
+        current.scope.turnId !== currentPlanTurnId ||
+        (current.scope.files === currentPlanFileChanges.files &&
+          current.scope.totalAdditions === currentPlanFileChanges.totalAdditions &&
+          current.scope.totalDeletions === currentPlanFileChanges.totalDeletions)
       ) {
         return current;
       }
       return {
         ...current,
-        files: currentPlanFileChanges.files,
-        totalAdditions: currentPlanFileChanges.totalAdditions,
-        totalDeletions: currentPlanFileChanges.totalDeletions,
+        scope: {
+          ...current.scope,
+          files: currentPlanFileChanges.files,
+          totalAdditions: currentPlanFileChanges.totalAdditions,
+          totalDeletions: currentPlanFileChanges.totalDeletions,
+        },
       };
     });
   }, [currentPlanFileChanges, currentPlanTurnId]);
@@ -669,27 +700,12 @@ export const ChatThread = memo(function ChatThread(props: {
   const renderProcessEntry = useCallback(
     (entry: FeedEntry) =>
       renderEntry(
-        entry,
-        props.sessionId,
-        props.canRespondToPermission,
-        props.onPermissionRespond,
-        props.onOpenLocalFile,
-        props.onLoadConversationItemDetail,
-        props.onLoadConversationTurnDetail,
-        NO_COPYABLE_ASSISTANT_KEYS,
+        entry, props.sessionId, props.canRespondToPermission, props.onPermissionRespond,
+        props.onOpenLocalFile, props.onLoadConversationItemDetail, props.onLoadConversationTurnDetail,
+        NO_COPYABLE_ASSISTANT_KEYS, "guidance",
       ),
-    [
-      props.canRespondToPermission,
-      props.onLoadConversationItemDetail,
-      props.onLoadConversationTurnDetail,
-      props.onOpenLocalFile,
-      props.onPermissionRespond,
-      props.sessionId,
-    ],
-  );
-  const assistantTurnHeaders = useMemo(
-    () => buildAssistantTurnHeaders(entries, copyableAssistantKeys),
-    [copyableAssistantKeys, entries],
+    [props.canRespondToPermission, props.onLoadConversationItemDetail, props.onLoadConversationTurnDetail,
+      props.onOpenLocalFile, props.onPermissionRespond, props.sessionId],
   );
   const latestVisibleUserKey = useMemo(
     () => latestVisibleUserMessageKey(entries),
@@ -699,6 +715,24 @@ export const ChatThread = memo(function ChatThread(props: {
     () => latestNavigableAssistantReplyKey(entries, copyableAssistantKeys),
     [copyableAssistantKeys, entries],
   );
+  const requestedReplyStartEntryKey =
+    props.navigationRequest?.sessionId === props.sessionId &&
+    props.navigationRequest.target.kind === "reply_start"
+      ? props.navigationRequest.target.entryKey
+      : null;
+  const requestedReplyStartTimestampMs =
+    props.navigationRequest?.sessionId === props.sessionId &&
+    props.navigationRequest.target.kind === "reply_start"
+      ? props.navigationRequest.target.replyTimestampMs
+      : null;
+  const requestedReplyStartTurnId =
+    props.navigationRequest?.sessionId === props.sessionId &&
+    props.navigationRequest.target.kind === "reply_start"
+      ? props.navigationRequest.target.turnId
+      : null;
+  const requestedReplyStartIntentKey =
+    requestedReplyStartEntryKey ?? requestedReplyStartTurnId ??
+    (requestedReplyStartTimestampMs === null ? null : `timestamp:${requestedReplyStartTimestampMs}`);
   const displayRows = useMemo(
     () =>
       conversationDisplayRows(props.conversationTurns, entries, activeEntries, {
@@ -775,8 +809,11 @@ export const ChatThread = memo(function ChatThread(props: {
       }),
     [turnNavigationItems, viewport.contentTopOffset, viewport.height, viewport.scrollTop],
   );
-  const shouldVirtualize =
-    displayRows.length > 140 && viewport.height > 0 && !textSelectionDragActive;
+  const shouldVirtualize = shouldVirtualizeFeedLayout({
+    layout: virtualLayout,
+    viewportHeight: viewport.height,
+    rowCount: displayRows.length,
+  });
   const virtualScrollTop = useMemo(() => {
     const anchor = prependAnchorRef.current;
     if (!anchor?.entryKey || anchor.offsetTop === null) {
@@ -791,7 +828,7 @@ export const ChatThread = memo(function ChatThread(props: {
       }) ?? viewport.scrollTop
     );
   }, [virtualLayout, viewport.contentTopOffset, viewport.scrollTop]);
-  const virtualWindow = useMemo(
+  const resolvedVirtualWindow = useMemo(
     () =>
       shouldVirtualize
         ? resolveVirtualFeedWindow({
@@ -807,19 +844,47 @@ export const ChatThread = memo(function ChatThread(props: {
           },
     [displayRows.length, shouldVirtualize, virtualLayout, viewport.height, virtualScrollTop],
   );
+  // Native selection must never swap the bounded window for the full transcript.
+  // Keep the already-mounted rows leased until selection capture has run instead.
+  const virtualWindow = resolveLeasedVirtualFeedWindow(
+    resolvedVirtualWindow,
+    textSelectionVirtualWindowRef.current,
+  );
   const visibleRowsWindow = displayRows.slice(virtualWindow.startIndex, virtualWindow.endIndex);
   const latestReplyStartTarget = useMemo(
     () =>
       resolveLatestReplyStartTarget({
         entries,
+        displayRows,
         layout: virtualLayout,
-        measuredHeights: measuredHeightsRef.current,
         scrollTop: viewport.scrollTop,
         viewportHeight: viewport.height,
         contentTopOffset: viewport.contentTopOffset,
         navigableAssistantKeys: copyableAssistantKeys,
       }),
-    [copyableAssistantKeys, entries, measuredHeightsVersion, virtualLayout, viewport.contentTopOffset, viewport.height, viewport.scrollTop],
+    [copyableAssistantKeys, displayRows, entries, measuredHeightsVersion, virtualLayout, viewport.contentTopOffset, viewport.height, viewport.scrollTop],
+  );
+  const requestedReplyStartTarget = useMemo(
+    () => requestedReplyStartIntentKey ? resolveRequestedReplyStartTarget({
+      entries, displayRows, layout: virtualLayout,
+      contentTopOffset: viewport.contentTopOffset,
+      navigableAssistantKeys: copyableAssistantKeys,
+      entryKey: requestedReplyStartEntryKey,
+      turnId: requestedReplyStartTurnId,
+      minimumTimestampMs: requestedReplyStartTimestampMs,
+    }) : null,
+    [
+      copyableAssistantKeys,
+      displayRows,
+      entries,
+      measuredHeightsVersion,
+      requestedReplyStartEntryKey,
+      requestedReplyStartIntentKey,
+      requestedReplyStartTimestampMs,
+      requestedReplyStartTurnId,
+      virtualLayout,
+      viewport.contentTopOffset,
+    ],
   );
 
   useLayoutEffect(() => {
@@ -870,6 +935,16 @@ export const ChatThread = memo(function ChatThread(props: {
       setMeasuredHeightsVersion((version) => version + 1);
     });
   }, []);
+
+  replyStartAlignmentRef.current ??= createReplyStartAlignmentController({
+    getContainer: () => containerRef.current,
+    onViewportChanged: (node) => {
+      lastScrollTopRef.current = node.scrollTop;
+      setShowScrollToBottom(node.scrollHeight > node.clientHeight);
+      syncViewport();
+    },
+  });
+  const replyStartAlignment = replyStartAlignmentRef.current;
 
   const scrollToBottomNow = useCallback(() => {
     const node = containerRef.current;
@@ -935,6 +1010,7 @@ export const ChatThread = memo(function ChatThread(props: {
     sessionSwitchBottomLockRef.current = false;
     returnToBottomOnVisibleRef.current = false;
     pendingVisibleBottomRestoreRef.current = false;
+    replyStartAlignment.clear();
     if (bottomFollowRafRef.current !== null) {
       cancelAnimationFrame(bottomFollowRafRef.current);
       bottomFollowRafRef.current = null;
@@ -942,7 +1018,7 @@ export const ChatThread = memo(function ChatThread(props: {
     if (node && node.scrollHeight > node.clientHeight) {
       setShowScrollToBottom(true);
     }
-  }, []);
+  }, [replyStartAlignment]);
 
   const captureProcessDisclosureAnchor = useCallback(
     (anchorElement: HTMLElement) => {
@@ -952,13 +1028,7 @@ export const ChatThread = memo(function ChatThread(props: {
         return;
       }
       detachBottomFollowing();
-      const containerTop = node.getBoundingClientRect().top;
-      prependAnchorRef.current = {
-        scrollHeight: node.scrollHeight,
-        scrollTop: node.scrollTop,
-        entryKey: row.dataset.feedEntryKey ?? null,
-        offsetTop: row.getBoundingClientRect().top - containerTop,
-      };
+      prependAnchorRef.current = captureVisibleViewportAnchor(node, anchorElement);
     },
     [detachBottomFollowing],
   );
@@ -1012,25 +1082,9 @@ export const ChatThread = memo(function ChatThread(props: {
     settleScrollToBottomOverFrames(BOTTOM_FOREGROUND_SETTLE_FRAMES);
   }, [settleScrollToBottomOverFrames]);
 
-  const captureVisiblePrependAnchor = useCallback((): PrependAnchor | null => {
+  const captureVisiblePrependAnchor = useCallback((): ViewportAnchorSnapshot | null => {
     const node = containerRef.current;
-    if (!node) {
-      return null;
-    }
-    const containerTop = node.getBoundingClientRect().top;
-    const entryNodes = Array.from(
-      node.querySelectorAll<HTMLElement>("[data-feed-entry-key]"),
-    );
-    const visibleNode =
-      entryNodes.find((entryNode) => entryNode.getBoundingClientRect().bottom > containerTop + 1) ??
-      entryNodes[0] ??
-      null;
-    return {
-      scrollHeight: node.scrollHeight,
-      scrollTop: node.scrollTop,
-      entryKey: visibleNode?.dataset.feedEntryKey ?? null,
-      offsetTop: visibleNode ? visibleNode.getBoundingClientRect().top - containerTop : null,
-    };
+    return node ? captureVisibleViewportAnchor(node) : null;
   }, []);
 
   const restoreVisiblePrependAnchor = useCallback((): boolean => {
@@ -1047,15 +1101,20 @@ export const ChatThread = memo(function ChatThread(props: {
         : Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
             (entryNode) => entryNode.dataset.feedEntryKey === anchor.entryKey,
           ) ?? null;
+    const anchorElement =
+      anchor.element?.isConnected && node.contains(anchor.element)
+        ? anchor.element
+        : anchorNode;
     const nextScrollTop = resolvePrependAnchorScrollTop({
       currentScrollTop: node.scrollTop,
       anchorScrollTop: anchor.scrollTop,
       currentScrollHeight: node.scrollHeight,
       anchorScrollHeight: anchor.scrollHeight,
-      currentViewportOffset: anchorNode
-        ? anchorNode.getBoundingClientRect().top - containerTop
+      currentViewportOffset: anchorElement
+        ? anchorElement.getBoundingClientRect().top - containerTop
         : null,
-      anchorViewportOffset: anchor.offsetTop,
+      anchorViewportOffset:
+        anchorElement === anchor.element ? anchor.elementOffsetTop : anchor.offsetTop,
     });
 
     if (Math.abs(node.scrollTop - nextScrollTop) >= 0.5) {
@@ -1087,7 +1146,24 @@ export const ChatThread = memo(function ChatThread(props: {
     }
   }, [processGroupExpansionOverrides, restoreVisiblePrependAnchor]);
 
-  const releaseSettledPrependAnchor = useCallback(() => {
+  const releaseReaderNavigationOwnership = useCallback(() => {
+    // A real reader gesture is the highest-priority viewport owner. Revoke
+    // the explicit unread-entry lease, the current turn's one-shot automatic
+    // reply-start ticket, and late reply re-alignment before the browser
+    // applies the first touch/pointer scroll delta. Suspending the whole auto
+    // state matters here: clearing only pendingReplyKey leaves an armed turn
+    // able to steal the viewport when its final arrives after the gesture.
+    const pendingRevision = pendingEntryReplyStartKeyRef.current
+      ? props.navigationRequest?.revision
+      : undefined;
+    pendingEntryReplyStartKeyRef.current = null;
+    if (pendingRevision !== undefined) {
+      props.onNavigationRequestConsumed?.(pendingRevision);
+    }
+    latestReplyAutoNavigationRef.current = suspendLatestReplyAutoNavigationState(
+      latestReplyAutoNavigationRef.current,
+    );
+    replyStartAlignment.clear();
     if (props.historyLoading || loadingOlderRef.current) {
       return;
     }
@@ -1096,7 +1172,12 @@ export const ChatThread = memo(function ChatThread(props: {
       cancelAnimationFrame(prependAnchorRestoreRafRef.current);
       prependAnchorRestoreRafRef.current = null;
     }
-  }, [props.historyLoading]);
+  }, [
+    props.historyLoading,
+    props.navigationRequest?.revision,
+    props.onNavigationRequestConsumed,
+    replyStartAlignment,
+  ]);
 
   const isInTopHistoryLoadZone = useCallback((node: HTMLElement): boolean => {
     return (
@@ -1111,6 +1192,7 @@ export const ChatThread = memo(function ChatThread(props: {
 
   const requestOlderHistoryLoad = useCallback((): boolean => {
     const node = containerRef.current;
+    const contentUnderfilled = node ? hasTooLittleHistoryContent(node) : false;
     if (
       !node ||
       !props.canLoadOlderHistory ||
@@ -1119,8 +1201,12 @@ export const ChatThread = memo(function ChatThread(props: {
       loadingOlderRef.current ||
       turnNavigationActiveRef.current ||
       textSelectionDragActiveRef.current ||
-      !topHistoryAutoLoadArmedRef.current ||
-      !isInTopHistoryLoadZone(node)
+      !shouldRequestOlderConversationHistory({
+        armed: topHistoryAutoLoadArmedRef.current,
+        inLoadZone: isInTopHistoryLoadZone(node),
+        contentUnderfilled,
+        userDetachedFromLatest: userDetachedFromBottomRef.current,
+      })
     ) {
       return false;
     }
@@ -1134,6 +1220,7 @@ export const ChatThread = memo(function ChatThread(props: {
     return true;
   }, [
     captureVisiblePrependAnchor,
+    hasTooLittleHistoryContent,
     isInTopHistoryLoadZone,
     props.canLoadOlderHistory,
     props.historyLoading,
@@ -1151,21 +1238,25 @@ export const ChatThread = memo(function ChatThread(props: {
   }, [requestOlderHistoryLoad]);
 
   useLayoutEffect(() => {
+    const shouldOpenAtReplyStart = requestedReplyStartIntentKey !== null;
     previousEntryCountRef.current = 0;
     loadingOlderRef.current = false;
-    stickToBottomRef.current = true;
-    userDetachedFromBottomRef.current = false;
-    sessionSwitchBottomLockRef.current = true;
+    stickToBottomRef.current = !shouldOpenAtReplyStart;
+    userDetachedFromBottomRef.current = shouldOpenAtReplyStart;
+    sessionSwitchBottomLockRef.current = !shouldOpenAtReplyStart;
+    returnToBottomOnVisibleRef.current = !shouldOpenAtReplyStart;
+    pendingVisibleBottomRestoreRef.current = false;
     prependAnchorRef.current = null;
+    replyStartAlignment.clear();
+    pendingEntryReplyStartKeyRef.current = requestedReplyStartIntentKey;
     lastScrollTopRef.current = 0;
     lastClientHeightRef.current = 0;
     touchScrollYRef.current = null;
+    pointerScrollGestureRef.current = false;
     topHistoryAutoLoadArmedRef.current = true;
     textSelectionDragActiveRef.current = false;
-    textSelectionListenerCleanupRef.current?.();
-    textSelectionListenerCleanupRef.current = null;
+    textSelectionVirtualWindowRef.current = null;
     pendingMeasuredHeightUpdateRef.current = false;
-    setTextSelectionDragActive(false);
     measuredHeightsRef.current = new Map();
     if (scrollRafRef.current !== null) {
       cancelAnimationFrame(scrollRafRef.current);
@@ -1196,6 +1287,7 @@ export const ChatThread = memo(function ChatThread(props: {
       turnNavigationReleaseRafRef.current = null;
     }
     turnNavigationActiveRef.current = false;
+    conversationSurfaceForegroundRef.current = isConversationSurfaceForeground();
     latestReplyAutoNavigationRef.current = createLatestReplyAutoNavigationState({
       latestUserKey: latestVisibleUserKey,
       latestReplyKey: latestNavigableReplyKey,
@@ -1208,11 +1300,22 @@ export const ChatThread = memo(function ChatThread(props: {
     setShowScrollToBottom(false);
     setProcessGroupExpansionOverrides(new Map());
     const node = containerRef.current;
+    // Tail is the only safe provisional position while a blue-dot target is
+    // still crossing the event/conversation projection boundary. If the row
+    // is already available, the later layout effect aligns it before paint.
     if (node) {
       node.scrollTop = node.scrollHeight;
       lastScrollTopRef.current = node.scrollTop;
     }
-  }, [props.navigationRevision, props.sessionId]);
+    if (!shouldOpenAtReplyStart) {
+      settleScrollToBottomOverFrames(BOTTOM_USER_JUMP_SETTLE_FRAMES);
+    }
+  }, [
+    props.navigationRevision,
+    props.sessionId,
+    replyStartAlignment,
+    settleScrollToBottomOverFrames,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1240,172 +1343,27 @@ export const ChatThread = memo(function ChatThread(props: {
         cancelAnimationFrame(turnNavigationReleaseRafRef.current);
         turnNavigationReleaseRafRef.current = null;
       }
+      replyStartAlignment.dispose();
       turnNavigationActiveRef.current = false;
-      textSelectionListenerCleanupRef.current?.();
-      textSelectionListenerCleanupRef.current = null;
+      textSelectionVirtualWindowRef.current = null;
       latestReplyAutoNavigationRef.current.pendingReplyKey = null;
     };
-  }, []);
+  }, [replyStartAlignment]);
 
-  const finishTextSelectionDrag = useCallback(() => {
-    textSelectionListenerCleanupRef.current?.();
-    textSelectionListenerCleanupRef.current = null;
-    if (!textSelectionDragActiveRef.current) {
-      return;
-    }
-    textSelectionDragActiveRef.current = false;
-    setTextSelectionDragActive(false);
-    if (pendingMeasuredHeightUpdateRef.current) {
-      pendingMeasuredHeightUpdateRef.current = false;
+  const textSelection = useConversationTextSelection({
+    sessionId: props.sessionId,
+    contentRef,
+    scrollContainerRef: containerRef,
+    resolvedVirtualWindow,
+    dragActiveRef: textSelectionDragActiveRef,
+    virtualWindowLeaseRef: textSelectionVirtualWindowRef,
+    pendingMeasurementRef: pendingMeasuredHeightUpdateRef,
+    canCapture: Boolean(props.onAddSelectedText && props.onSelectedTextMoreDetails),
+    onReleaseVirtualWindow: () => {
       setMeasuredHeightsVersion((version) => version + 1);
-    }
-    syncViewport();
-  }, [syncViewport]);
-
-  const handlePotentialTextSelectionStart = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || event.defaultPrevented) {
-      return;
-    }
-    setSelectedTextOverlay(null);
-    const target = event.target as HTMLElement | null;
-    const interactiveTarget = target?.closest(
-      "button,a,input,textarea,select,summary,[role='button'],[contenteditable='true']",
-    );
-    const selectableInteractiveText = target?.closest(
-      "[data-selectable-conversation-text='true']",
-    );
-    if (interactiveTarget && !selectableInteractiveText) {
-      return;
-    }
-
-    finishTextSelectionDrag();
-    const startX = event.clientX;
-    const startY = event.clientY;
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      if (textSelectionDragActiveRef.current) {
-        return;
-      }
-      const distance =
-        Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY);
-      if (distance < 4) {
-        return;
-      }
-      textSelectionDragActiveRef.current = true;
-      setTextSelectionDragActive(true);
-    };
-
-    const cleanup = () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", finishTextSelectionDrag);
-      window.removeEventListener("blur", finishTextSelectionDrag);
-    };
-
-    textSelectionListenerCleanupRef.current = cleanup;
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", finishTextSelectionDrag);
-    window.addEventListener("blur", finishTextSelectionDrag);
-  }, [finishTextSelectionDrag]);
-
-  const captureSelectedText = useCallback(() => {
-    selectionCaptureRafRef.current = null;
-    if (!props.onAddSelectedText && !props.onSelectedTextMoreDetails) {
-      return;
-    }
-    const selection = window.getSelection();
-    const contentNode = contentRef.current;
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !contentNode) {
-      setSelectedTextOverlay(null);
-      return;
-    }
-    const range = selection.getRangeAt(0);
-    if (
-      !contentNode.contains(range.startContainer) ||
-      !contentNode.contains(range.endContainer)
-    ) {
-      setSelectedTextOverlay(null);
-      return;
-    }
-    const sourceForNode = (node: Node) =>
-      (node.nodeType === Node.ELEMENT_NODE
-        ? (node as Element)
-        : node.parentElement
-      )?.closest<HTMLElement>("[data-selection-source='conversation-message']") ?? null;
-    const startSource = sourceForNode(range.startContainer);
-    const endSource = sourceForNode(range.endContainer);
-    if (!startSource || startSource !== endSource) {
-      setSelectedTextOverlay(null);
-      return;
-    }
-    const text = selection.toString().trim();
-    const rect = range.getClientRects().item(0) ?? range.getBoundingClientRect();
-    if (!text || (rect.width <= 0 && rect.height <= 0)) {
-      setSelectedTextOverlay(null);
-      return;
-    }
-    const role = startSource.dataset.selectionRole;
-    setSelectedTextOverlay({
-      selection: {
-        text,
-        source: {
-          sessionId: props.sessionId,
-          ...(startSource.dataset.selectionEntryKey
-            ? { entryKey: startSource.dataset.selectionEntryKey }
-            : {}),
-          ...(role === "assistant" || role === "user" ? { role } : {}),
-        },
-      },
-      anchor: { left: rect.left, top: rect.top, bottom: rect.bottom },
-    });
-  }, [props.onAddSelectedText, props.onSelectedTextMoreDetails, props.sessionId]);
-
-  const handlePotentialTextSelectionEnd = useCallback(() => {
-    if (selectionCaptureRafRef.current !== null) {
-      cancelAnimationFrame(selectionCaptureRafRef.current);
-    }
-    selectionCaptureRafRef.current = requestAnimationFrame(captureSelectedText);
-  }, [captureSelectedText]);
-
-  useEffect(() => {
-    const node = containerRef.current;
-    if (!node) {
-      return;
-    }
-    const dismiss = () => setSelectedTextOverlay(null);
-    node.addEventListener("scroll", dismiss, { passive: true });
-    window.addEventListener("resize", dismiss);
-    return () => {
-      node.removeEventListener("scroll", dismiss);
-      window.removeEventListener("resize", dismiss);
-      if (selectionCaptureRafRef.current !== null) {
-        cancelAnimationFrame(selectionCaptureRafRef.current);
-        selectionCaptureRafRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    setSelectedTextOverlay(null);
-    window.getSelection()?.removeAllRanges();
-  }, [props.sessionId]);
-
-  useEffect(() => {
-    if (!selectedTextOverlay) {
-      return;
-    }
-    const dismissOutsideOverlay = (event: PointerEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest("[data-selected-text-overlay='true']")
-      ) {
-        return;
-      }
-      setSelectedTextOverlay(null);
-    };
-    document.addEventListener("pointerdown", dismissOutsideOverlay, true);
-    return () => document.removeEventListener("pointerdown", dismissOutsideOverlay, true);
-  }, [selectedTextOverlay]);
+      syncViewport();
+    },
+  });
 
   useEffect(() => {
     const node = containerRef.current;
@@ -1441,16 +1399,29 @@ export const ChatThread = memo(function ChatThread(props: {
       if (isExactlyAtBottom && !scrollingUp) {
         userDetachedFromBottomRef.current = false;
       }
-      const shouldStickToBottom = isAtBottom && !userDetachedFromBottomRef.current;
+      let shouldStickToBottom = isAtBottom && !userDetachedFromBottomRef.current;
       const contentNeedsMoreHistory = hasTooLittleHistoryContent(node);
+      if (
+        scrollingUp &&
+        pointerScrollGestureRef.current &&
+        !sessionSwitchBottomLockRef.current
+      ) {
+        detachBottomFollowing();
+        // The measurement above may still be inside the near-bottom threshold.
+        // A real pointer drag nevertheless owns the viewport, so do not let the
+        // stale measurement immediately re-arm bottom following below.
+        shouldStickToBottom = false;
+      } else if (
+        !isDocumentHidden() &&
+        (shouldStickToBottom || sessionSwitchBottomLockRef.current)
+      ) {
+        // Near-bottom is a measurement, not ownership. A slow history/image
+        // reflow or iOS scroll restoration may temporarily move the element
+        // far from its new extent. Keep the explicit bottom-follow lease until
+        // an actual user gesture detaches it.
+        returnToBottomOnVisibleRef.current = true;
+      }
       stickToBottomRef.current = shouldStickToBottom;
-      if (!isDocumentHidden()) {
-        returnToBottomOnVisibleRef.current =
-          shouldStickToBottom || sessionSwitchBottomLockRef.current;
-      }
-      if (!shouldStickToBottom) {
-        sessionSwitchBottomLockRef.current = false;
-      }
       setShowScrollToBottom(
         !shouldStickToBottom && node.scrollHeight > node.clientHeight,
       );
@@ -1464,7 +1435,23 @@ export const ChatThread = memo(function ChatThread(props: {
       ) {
         requestOlderHistoryLoad();
       }
+      if (shouldMaintainDetachedReaderAnchor({
+        userDetachedFromLatest: userDetachedFromBottomRef.current,
+        historyLoadActive: props.historyLoading || loadingOlderRef.current,
+        explicitAlignmentActive:
+          turnNavigationActiveRef.current || replyStartAlignment.hasAnchor(),
+      })) {
+        prependAnchorRef.current = captureVisiblePrependAnchor();
+      }
       lastScrollTopRef.current = node.scrollTop;
+      if (
+        !shouldStickToBottom &&
+        !userDetachedFromBottomRef.current &&
+        returnToBottomOnVisibleRef.current &&
+        !isDocumentHidden()
+      ) {
+        scheduleScrollToBottom();
+      }
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
       }
@@ -1486,71 +1473,36 @@ export const ChatThread = memo(function ChatThread(props: {
     hasTooLittleHistoryContent,
     isInTopHistoryLoadZone,
     requestOlderHistoryLoad,
+    captureVisiblePrependAnchor,
+    detachBottomFollowing,
+    replyStartAlignment,
     props.sessionId,
+    scheduleScrollToBottom,
     settleScrollToBottomAfterResize,
     syncViewport,
   ]);
 
-  useEffect(() => {
-    const node = containerRef.current;
-    if (!node) {
-      return;
-    }
-    const handleWheel = (event: WheelEvent) => {
-      releaseSettledPrependAnchor();
-      if (event.deltaY < 0) {
-        detachBottomFollowing();
-      }
-    };
-    const handleTouchStart = (event: TouchEvent) => {
-      releaseSettledPrependAnchor();
-      touchScrollYRef.current = event.touches[0]?.clientY ?? null;
-    };
-    const handlePointerDown = () => {
-      releaseSettledPrependAnchor();
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key === "ArrowUp" ||
-        event.key === "ArrowDown" ||
-        event.key === "PageUp" ||
-        event.key === "PageDown" ||
-        event.key === "Home" ||
-        event.key === "End" ||
-        event.key === " "
-      ) {
-        releaseSettledPrependAnchor();
-      }
-    };
-    const handleTouchMove = (event: TouchEvent) => {
-      const nextY = event.touches[0]?.clientY ?? null;
-      const previousY = touchScrollYRef.current;
-      if (nextY !== null && previousY !== null && nextY - previousY > 2) {
-        detachBottomFollowing();
-      }
-      touchScrollYRef.current = nextY;
-    };
-    const handleTouchEnd = () => {
-      touchScrollYRef.current = null;
-    };
+  useChatViewportGestureOwnership({
+    containerRef,
+    touchScrollYRef,
+    pointerScrollGestureRef,
+    releaseAnchors: releaseReaderNavigationOwnership,
+    detachBottomFollowing,
+  });
 
-    node.addEventListener("wheel", handleWheel, { passive: true });
-    node.addEventListener("touchstart", handleTouchStart, { passive: true });
-    node.addEventListener("touchmove", handleTouchMove, { passive: true });
-    node.addEventListener("touchend", handleTouchEnd, { passive: true });
-    node.addEventListener("touchcancel", handleTouchEnd, { passive: true });
-    node.addEventListener("pointerdown", handlePointerDown, { passive: true });
-    node.addEventListener("keydown", handleKeyDown);
-    return () => {
-      node.removeEventListener("wheel", handleWheel);
-      node.removeEventListener("touchstart", handleTouchStart);
-      node.removeEventListener("touchmove", handleTouchMove);
-      node.removeEventListener("touchend", handleTouchEnd);
-      node.removeEventListener("touchcancel", handleTouchEnd);
-      node.removeEventListener("pointerdown", handlePointerDown);
-      node.removeEventListener("keydown", handleKeyDown);
+  useEffect(() => {
+    // Conversation identity, rather than a generic effect re-subscription,
+    // owns this lease. Switching sessions or unmounting the chat must revoke
+    // any deferred jump to the beginning of a reply that may finish later.
+    const suspendOnConversationDeparture = () => {
+      latestReplyAutoNavigationRef.current = suspendLatestReplyAutoNavigationState(
+        latestReplyAutoNavigationRef.current,
+      );
     };
-  }, [detachBottomFollowing, releaseSettledPrependAnchor]);
+    return () => {
+      suspendOnConversationDeparture();
+    };
+  }, [props.sessionId]);
 
   useEffect(() => {
     const rememberHiddenStickiness = () => {
@@ -1564,27 +1516,42 @@ export const ChatThread = memo(function ChatThread(props: {
         (!userDetachedFromBottomRef.current && isScrollNearBottom(node));
     };
 
-    const handleVisibilityChange = () => {
-      if (isDocumentHidden()) {
-        rememberHiddenStickiness();
+    const suspendAutoReplyNavigation = () => {
+      conversationSurfaceForegroundRef.current = false;
+      rememberHiddenStickiness();
+      latestReplyAutoNavigationRef.current = suspendLatestReplyAutoNavigationState(
+        latestReplyAutoNavigationRef.current,
+      );
+    };
+
+    const restoreForeground = () => {
+      if (!isConversationSurfaceForeground()) {
         return;
       }
+      conversationSurfaceForegroundRef.current = true;
       restoreBottomAfterForeground();
       requestAnimationFrame(() => consumePendingAutoLatestReplyScrollRef.current());
     };
 
-    const handleForeground = () => {
-      if (!isDocumentHidden()) {
-        restoreBottomAfterForeground();
-        requestAnimationFrame(() => consumePendingAutoLatestReplyScrollRef.current());
+    const handleVisibilityChange = () => {
+      if (isDocumentHidden()) {
+        suspendAutoReplyNavigation();
+        return;
       }
+      restoreForeground();
+    };
+
+    const handleForeground = () => {
+      restoreForeground();
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", suspendAutoReplyNavigation);
     window.addEventListener("focus", handleForeground);
     window.addEventListener("pageshow", handleForeground);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", suspendAutoReplyNavigation);
       window.removeEventListener("focus", handleForeground);
       window.removeEventListener("pageshow", handleForeground);
     };
@@ -1602,7 +1569,14 @@ export const ChatThread = memo(function ChatThread(props: {
         Math.abs(node.clientHeight - previousClientHeight) > VIEWPORT_RESIZE_EPSILON_PX;
       lastClientHeightRef.current = node.clientHeight;
       if (!clientHeightChanged) {
+        if (replyStartAlignment.hasAnchor()) {
+          replyStartAlignment.alignNow();
+        }
         syncViewport();
+        return;
+      }
+      if (replyStartAlignment.hasAnchor()) {
+        replyStartAlignment.alignNow();
         return;
       }
       const shouldFollowBottom =
@@ -1624,7 +1598,12 @@ export const ChatThread = memo(function ChatThread(props: {
     observer.observe(node);
     syncViewport();
     return () => observer.disconnect();
-  }, [props.sessionId, settleScrollToBottomAfterResize, syncViewport]);
+  }, [
+    props.sessionId,
+    replyStartAlignment,
+    settleScrollToBottomAfterResize,
+    syncViewport,
+  ]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -1638,13 +1617,21 @@ export const ChatThread = memo(function ChatThread(props: {
         schedulePrependAnchorRestore();
         return;
       }
+      if (replyStartAlignment.hasAnchor()) {
+        replyStartAlignment.alignNow();
+        return;
+      }
       if (textSelectionDragActiveRef.current) {
         return;
       }
       if (userDetachedFromBottomRef.current) {
         return;
       }
-      if (!stickToBottomRef.current && !sessionSwitchBottomLockRef.current) {
+      if (
+        !stickToBottomRef.current &&
+        !returnToBottomOnVisibleRef.current &&
+        !sessionSwitchBottomLockRef.current
+      ) {
         return;
       }
       if (isDocumentHidden()) {
@@ -1652,15 +1639,13 @@ export const ChatThread = memo(function ChatThread(props: {
         return;
       }
       scheduleScrollToBottom();
-      if (!props.historyLoading) {
-        sessionSwitchBottomLockRef.current = false;
-      }
     });
     observer.observe(content);
     return () => observer.disconnect();
   }, [
     props.historyLoading,
     props.sessionId,
+    replyStartAlignment,
     schedulePrependAnchorRestore,
     scheduleScrollToBottom,
   ]);
@@ -1707,9 +1692,13 @@ export const ChatThread = memo(function ChatThread(props: {
       returnToBottomOnVisibleRef.current = true;
       setShowScrollToBottom(false);
       if (!props.historyLoading) {
+        settleScrollToBottomOverFrames(BOTTOM_USER_JUMP_SETTLE_FRAMES);
         sessionSwitchBottomLockRef.current = false;
       }
-    } else if (displayRows.length > previousEntryCountRef.current && stickToBottomRef.current) {
+    } else if (
+      displayRows.length > previousEntryCountRef.current &&
+      (stickToBottomRef.current || returnToBottomOnVisibleRef.current)
+    ) {
       if (isDocumentHidden()) {
         pendingVisibleBottomRestoreRef.current = true;
         previousEntryCountRef.current = displayRows.length;
@@ -1730,9 +1719,11 @@ export const ChatThread = memo(function ChatThread(props: {
     restoreVisiblePrependAnchor,
     scrollToBottomNow,
     scheduleTopHistoryLoad,
+    settleScrollToBottomOverFrames,
   ]);
 
   const handleScrollToBottom = () => {
+    replyStartAlignment.clear();
     stickToBottomRef.current = true;
     userDetachedFromBottomRef.current = false;
     sessionSwitchBottomLockRef.current = false;
@@ -1758,21 +1749,23 @@ export const ChatThread = memo(function ChatThread(props: {
       cancelAnimationFrame(bottomFollowRafRef.current);
       bottomFollowRafRef.current = null;
     }
+    replyStartAlignment.start(target);
+  }, [replyStartAlignment]);
 
-    const containerTop = node.getBoundingClientRect().top;
-    const targetNode =
-      Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
-        (entryNode) => entryNode.dataset.feedEntryKey === target.entryKey,
-      ) ?? null;
-    if (targetNode) {
-      node.scrollTop += targetNode.getBoundingClientRect().top - containerTop;
-    } else {
-      node.scrollTop = target.targetScrollTop;
+  useLayoutEffect(() => {
+    const pendingEntryKey = pendingEntryReplyStartKeyRef.current;
+    if (!pendingEntryKey || !requestedReplyStartTarget) {
+      return;
     }
-    lastScrollTopRef.current = node.scrollTop;
-    setShowScrollToBottom(node.scrollHeight > node.clientHeight);
-    syncViewport();
-  }, [syncViewport]);
+    // Consume the explicit blue-dot entry lease exactly once. The alignment
+    // controller keeps the reply row stable through late measurements until
+    // the first real reader gesture revokes it.
+    pendingEntryReplyStartKeyRef.current = null;
+    if (props.navigationRequest) {
+      props.onNavigationRequestConsumed?.(props.navigationRequest.revision);
+    }
+    scrollToLatestReplyStart(requestedReplyStartTarget);
+  }, [props.navigationRequest, props.onNavigationRequestConsumed, requestedReplyStartTarget, scrollToLatestReplyStart]);
 
   const handleScrollToLatestReplyStart = () => {
     if (!latestReplyStartTarget) {
@@ -1786,7 +1779,7 @@ export const ChatThread = memo(function ChatThread(props: {
     if (!pendingReplyKey) {
       return true;
     }
-    if (isDocumentHidden()) {
+    if (!conversationSurfaceForegroundRef.current || !isConversationSurfaceForeground()) {
       return false;
     }
     if (
@@ -1815,11 +1808,14 @@ export const ChatThread = memo(function ChatThread(props: {
 
   useEffect(() => {
     const previous = latestReplyAutoNavigationRef.current;
-    const next = advanceLatestReplyAutoNavigationState(previous, {
+    const advanced = advanceLatestReplyAutoNavigationState(previous, {
       latestUserKey: latestVisibleUserKey,
       latestReplyKey: latestNavigableReplyKey,
       generationActive: Boolean(props.generationActive),
     });
+    const next = conversationSurfaceForegroundRef.current
+      ? advanced
+      : suspendLatestReplyAutoNavigationState(advanced);
     latestReplyAutoNavigationRef.current = next;
     if (!next.pendingReplyKey || next.pendingReplyKey === previous.pendingReplyKey) {
       return;
@@ -1960,8 +1956,8 @@ export const ChatThread = memo(function ChatThread(props: {
           ref={containerRef}
           data-testid="chat-thread-scroll-container"
           className="chat-thread-scroll-container h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
-          onMouseDownCapture={handlePotentialTextSelectionStart}
-          onMouseUpCapture={handlePotentialTextSelectionEnd}
+          onMouseDownCapture={textSelection.handleMouseDownCapture}
+          onMouseUpCapture={textSelection.handleMouseUpCapture}
         >
           <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
           {props.historyError ? (
@@ -1998,23 +1994,6 @@ export const ChatThread = memo(function ChatThread(props: {
           ) : null}
           {visibleRowsWindow.map((row, windowIndex) => {
             const absoluteEntryIndex = virtualWindow.startIndex + windowIndex;
-            const assistantHeaderKey =
-              row.kind === "feed_entry"
-                ? row.key
-                : row.kind === "assistant_process_group"
-                  ? row.entries.find((entry) => assistantTurnHeaders.has(entry.key))?.key
-                  : undefined;
-            const showAssistantTurnHeader =
-              Boolean(props.showModelInfo && props.provider) &&
-              assistantHeaderKey !== undefined &&
-              assistantTurnHeaders.has(assistantHeaderKey);
-            const runtimeModel =
-              row.kind === "assistant_process_group"
-                ? row.runtimeModel ??
-                  (assistantHeaderKey ? assistantTurnHeaders.get(assistantHeaderKey) : undefined)
-                : row.kind === "feed_entry"
-                  ? assistantTurnHeaders.get(row.key)
-                  : undefined;
             const rowGapPx =
               absoluteEntryIndex >= displayRows.length - 1
                 ? 0
@@ -2031,15 +2010,22 @@ export const ChatThread = memo(function ChatThread(props: {
                 rowGapPx={rowGapPx}
                 onHeightChange={handleEntryHeightChange}
               >
-                {showAssistantTurnHeader && props.provider ? (
-                  <AssistantTurnHeader
-                    provider={props.provider}
-                    {...(runtimeModel ? { runtimeModel } : {})}
-                  />
-                ) : null}
                 {row.kind === "assistant_process_group" ? (
                   <AssistantProcessGroup
                     group={row}
+                    {...(props.showModelInfo === true &&
+                    props.provider
+                      ? {
+                          modelMeta: (
+                            <AssistantTurnModelMeta
+                              provider={props.provider}
+                              {...(row.runtimeModel
+                                ? { runtimeModel: row.runtimeModel }
+                                : {})}
+                            />
+                          ),
+                        }
+                      : {})}
                     detailLoading={Boolean(
                       row.turnId && loadingProcessTurnIds.has(row.turnId)
                     )}
@@ -2056,19 +2042,26 @@ export const ChatThread = memo(function ChatThread(props: {
                       : {})}
                     renderEntry={renderProcessEntry}
                   />
+                ) : row.kind === "turn_visual_outputs" ? (
+                  <ConversationVisualOutputGallery
+                    outputs={row.outputs}
+                    omittedCount={row.omittedCount}
+                    {...(props.onOpenLocalFile
+                      ? { onOpenLocalFile: props.onOpenLocalFile }
+                      : {})}
+                  />
                 ) : row.kind === "turn_file_changes" ? (
                   <ConversationFileChangesCard
                     fileChanges={row.fileChanges}
                     onReview={() => openTurnReview(row.turnId, row.fileChanges)}
-                    {...(props.onOpenTurnFileChange
-                      ? {
-                          onOpenFile: (path: string) =>
-                            props.onOpenTurnFileChange?.(row.turnId, path),
-                        }
-                      : {})}
+                    onOpenFile={(path) =>
+                      openTurnReview(row.turnId, row.fileChanges, path)
+                    }
                   />
                 ) : row.kind === "turn_copy_action" ? (
-                  <AssistantTurnCopyAction content={row.content} />
+                  <AssistantTurnCopyAction
+                    content={row.content}
+                  />
                 ) : (
                   renderEntry(
                     row.entry,
@@ -2131,12 +2124,12 @@ export const ChatThread = memo(function ChatThread(props: {
           </div>
         ) : null}
       </div>
-      {selectedTextOverlay && props.onAddSelectedText && props.onSelectedTextMoreDetails ? (
+      {textSelection.overlay && props.onAddSelectedText && props.onSelectedTextMoreDetails ? (
         <SelectedTextOverlay
-          state={selectedTextOverlay}
+          state={textSelection.overlay}
           onAddToTask={props.onAddSelectedText}
           onMoreDetails={props.onSelectedTextMoreDetails}
-          onDismiss={() => setSelectedTextOverlay(null)}
+          onDismiss={textSelection.dismiss}
         />
       ) : null}
       {currentPlan ? (
@@ -2152,10 +2145,13 @@ export const ChatThread = memo(function ChatThread(props: {
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
         />
       ) : null}
-      {reviewScope ? (
+      {reviewRequest ? (
         <ReviewDialog
-          scope={reviewScope}
-          onClose={() => setReviewScope(null)}
+          scope={reviewRequest.scope}
+          {...(reviewRequest.initialPath
+            ? { initialPath: reviewRequest.initialPath }
+            : {})}
+          onClose={() => setReviewRequest(null)}
         />
       ) : null}
     </div>

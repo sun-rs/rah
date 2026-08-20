@@ -6,13 +6,13 @@
 }
 
 .assistant-process-compaction {
-  min-height: 1.25rem;
+  min-height: 1.5rem;
   padding-block: 0;
 }
 
 .assistant-process-details {
   margin-top: 0.25rem;
-  padding-bottom: 0.375rem;
+  padding-bottom: 0;
 }
 
 .assistant-process-details > * + * {
@@ -22,4 +22,93 @@
 .assistant-process-details > .assistant-process-compaction-slot,
 .assistant-process-details > .assistant-process-compaction-slot + * {
   margin-top: 0.125rem;
+}
+
+/* PWA keeps the roomier touch-reading rhythm; only desktop is tightened. */
+.chat-thread-shell[data-chat-density="mobile"] .assistant-process-compaction {
+  min-height: 1.75rem;
+  padding-block: 0.125rem;
+}
+
+.chat-thread-shell[data-chat-density="mobile"]
+  .assistant-process-details > .assistant-process-compaction-slot,
+.chat-thread-shell[data-chat-density="mobile"]
+  .assistant-process-details > .assistant-process-compaction-slot + * {
+  margin-top: 0.25rem;
+}
+
+:where(
+  .assistant-process-details.assistant-process-final-divider,
+  .assistant-process-final-divider-line
+) {
+  /*
+   * The compact 28px disclosure row and an expanded 14/22px detail row leave
+   * different glyph-to-edge space. Compensate each process-side edge so the
+   * rule remains optically centered; the feed row owns the 8px final-side gap.
+   */
+  --assistant-process-final-divider-collapsed-space: 0.25rem;
+  --assistant-process-final-divider-expanded-space: 0.4375rem;
+}
+
+.assistant-process-details.assistant-process-final-divider {
+  border-bottom: 1px solid var(--app-border);
+  padding-bottom: var(--assistant-process-final-divider-expanded-space);
+}
+
+.assistant-process-final-divider-line {
+  margin-top: var(--assistant-process-final-divider-collapsed-space);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.prose-chat-final > :first-child > h1:first-child,
+.prose-chat-final > :first-child > h2:first-child,
+.prose-chat-final > :first-child > h3:first-child,
+.prose-chat-final > :first-child > h4:first-child {
+  margin-top: 0;
+}
+
+.assistant-process-guidance-entry {
+  margin-top: 0.375rem;
+  border-left: 2px solid color-mix(in srgb, var(--app-accent) 55%, var(--app-border));
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, var(--app-subtle-bg) 38%, transparent);
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.assistant-process-guidance-entry:hover {
+  background: var(--app-subtle-bg);
+  border-left-color: var(--app-accent);
+}
+
+.assistant-process-active-text {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--app-hint) 0%,
+    var(--app-hint) 35%,
+    color-mix(in srgb, var(--app-fg) 82%, white) 50%,
+    var(--app-hint) 65%,
+    var(--app-hint) 100%
+  );
+  background-position: -120% 0;
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: assistant-process-text-sweep 1.8s linear infinite;
+}
+
+@keyframes assistant-process-text-sweep {
+  to {
+    background-position: 120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-process-active-text {
+    color: inherit;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
 }

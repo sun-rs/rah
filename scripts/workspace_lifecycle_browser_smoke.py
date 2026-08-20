@@ -40,7 +40,9 @@ CASE_IDS = [
     "PWA-TURN-CHANGE-PREVIEW-001",
     "COMPOSER-UNIFIED-SURFACE-001",
     "CHAT-MARKDOWN-IMAGES-001",
+    "CHAT-VISUAL-OUTPUTS-001",
     "SIDEBAR-DENSITY-001",
+    "CANVAS-SESSION-DROP-001",
 ]
 
 
@@ -232,8 +234,15 @@ def write_history_fixture(
     gallery_paths = [
         workspace / "rah-gallery-overview.svg",
         workspace / "rah-gallery-breakdown.svg",
+        workspace / "rah-output-equity.svg",
+        workspace / "rah-output-correlation.svg",
     ]
-    gallery_colors = [("#2563eb", "Overview"), ("#059669", "Breakdown")]
+    gallery_colors = [
+        ("#2563eb", "Overview"),
+        ("#059669", "Breakdown"),
+        ("#7c3aed", "Equity"),
+        ("#ea580c", "Correlation"),
+    ]
     for image_path, (color, label) in zip(gallery_paths, gallery_colors):
         image_path.write_text(
             "".join(
@@ -293,6 +302,26 @@ def write_history_fixture(
         },
         {
             "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {"type": "context_compacted"},
+        },
+        {
+            "timestamp": timestamp,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "压缩后继续核对真实文字边界，避免分隔行占用过多垂直空间。",
+                    }
+                ],
+                "phase": "commentary",
+            },
+        },
+        {
+            "timestamp": timestamp,
             "type": "response_item",
             "payload": {
                 "type": "message",
@@ -303,7 +332,9 @@ def write_history_fixture(
                         "text": (
                             f"{title} answer\n\n"
                             f"![Overview]({gallery_paths[0]})\n\n"
-                            f"![Breakdown]({gallery_paths[1]})"
+                            f"![Breakdown]({gallery_paths[1]})\n\n"
+                            f"资金曲线：[rah-output-equity.svg]({gallery_paths[2]})\n\n"
+                            f"相关性图：[rah-output-correlation.svg]({gallery_paths[3]})"
                         ),
                     }
                 ],
@@ -329,15 +360,10 @@ def write_turn_change_artifact(
 ) -> None:
     turn_id = f"workspace-lifecycle-{provider_session_id}"
     owner_id = f"provider:codex\0{provider_session_id}"
-    changed_path = "src/pwa-turn-review.ts"
-    unified_diff = (
-        f"diff --git a/{changed_path} b/{changed_path}\n"
-        "new file mode 100644\n"
-        "--- /dev/null\n"
-        f"+++ b/{changed_path}\n"
-        "@@ -0,0 +1 @@\n"
-        "+export const pwaTurnReview = true;\n"
-    )
+    changed_paths = [
+        "src/pwa-turn-review.ts",
+        *[f"src/reply-navigation-fixture-{index:02d}.ts" for index in range(1, 13)],
+    ]
 
     def digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
@@ -350,8 +376,33 @@ def write_turn_change_artifact(
         / digest(turn_id)
     )
     turn_dir.mkdir(parents=True, exist_ok=True)
-    diff_file = "workspace-lifecycle-fixture.diff"
-    (turn_dir / diff_file).write_text(unified_diff, encoding="utf-8")
+    changed_files: list[dict[str, Any]] = []
+    manifest_files: list[dict[str, Any]] = []
+    for index, changed_path in enumerate(changed_paths):
+        diff_file = f"workspace-lifecycle-fixture-{index:02d}.diff"
+        unified_diff = (
+            f"diff --git a/{changed_path} b/{changed_path}\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            f"+++ b/{changed_path}\n"
+            "@@ -0,0 +1 @@\n"
+            f"+export const replyNavigationFixture{index} = true;\n"
+        )
+        (turn_dir / diff_file).write_text(unified_diff, encoding="utf-8")
+        changed_files.append(
+            {
+                "path": changed_path,
+                "additions": 1,
+                "deletions": 0,
+            }
+        )
+        manifest_files.append(
+            {
+                "path": changed_path,
+                "diffFile": diff_file,
+                "truncated": False,
+            }
+        )
     (turn_dir / "manifest.json").write_text(
         json.dumps(
             {
@@ -360,24 +411,12 @@ def write_turn_change_artifact(
                 "turnId": turn_id,
                 "capturedAt": "2026-07-31T10:00:01.000Z",
                 "fileChanges": {
-                    "files": [
-                        {
-                            "path": changed_path,
-                            "additions": 1,
-                            "deletions": 0,
-                        }
-                    ],
-                    "totalAdditions": 1,
+                    "files": changed_files,
+                    "totalAdditions": len(changed_files),
                     "totalDeletions": 0,
                 },
                 "truncated": False,
-                "files": [
-                    {
-                        "path": changed_path,
-                        "diffFile": diff_file,
-                        "truncated": False,
-                    }
-                ],
+                "files": manifest_files,
             },
             ensure_ascii=False,
         )
@@ -388,6 +427,122 @@ def write_turn_change_artifact(
 
 def workspace_row(page, workspace: pathlib.Path):
     return page.locator(f'[data-workspace-dir="{workspace}"]')
+
+
+def assert_compaction_geometry(compaction, expected: dict[str, Any], label: str) -> None:
+    metrics = compaction.evaluate(
+        """
+        element => {
+          const slot = element.closest('.assistant-process-compaction-slot');
+          const next = slot?.nextElementSibling;
+          if (!slot || !next) return null;
+          const style = getComputedStyle(element);
+          const slotStyle = getComputedStyle(slot);
+          const nextStyle = getComputedStyle(next);
+          const rect = element.getBoundingClientRect();
+          return {
+            height: Math.round(rect.height * 100) / 100,
+            minHeight: style.minHeight,
+            paddingTop: style.paddingTop,
+            paddingBottom: style.paddingBottom,
+            leadingMargin: slotStyle.marginTop,
+            trailingMargin: nextStyle.marginTop,
+          };
+        }
+        """
+    )
+    if metrics != expected:
+        raise AssertionError(
+            f"{label} context-compaction rhythm drifted: "
+            f"expected={expected!r} actual={metrics!r}"
+        )
+
+
+def assert_latest_reply_start_navigation(
+    page,
+    artifact_dir: pathlib.Path,
+    *,
+    label: str,
+    screenshot_name: str,
+) -> None:
+    container = page.locator(
+        '[data-testid="chat-thread-scroll-container"]:visible'
+    ).first
+    final_answer = page.locator(".prose-chat-final:visible").last
+    expect(container).to_be_visible(timeout=20_000)
+    expect(final_answer).to_be_visible(timeout=20_000)
+    file_changes_footer = page.locator(
+        '[data-testid="conversation-turn-file-changes-footer"]:visible'
+    ).last
+    if file_changes_footer.count() > 0:
+        file_changes_footer.click(timeout=10_000)
+        expect(file_changes_footer).to_have_text("Collapse files", timeout=10_000)
+    geometry = final_answer.evaluate(
+        """
+        element => {
+          const row = element.closest('[data-feed-entry-key]');
+          const container = element.closest(
+            '[data-testid="chat-thread-scroll-container"]'
+          );
+          if (!row || !container) return null;
+          const containerRect = container.getBoundingClientRect();
+          const rowRect = row.getBoundingClientRect();
+          const desiredOcclusion = 24;
+          const desiredScrollTop = Math.max(
+            0,
+            Math.min(
+              container.scrollHeight - container.clientHeight,
+              container.scrollTop + rowRect.top - containerRect.top + desiredOcclusion,
+            ),
+          );
+          container.scrollTop = desiredScrollTop;
+          container.dispatchEvent(new Event('scroll', { bubbles: true }));
+          const positionedRowRect = row.getBoundingClientRect();
+          return {
+            rowHeight: rowRect.height,
+            viewportHeight: container.clientHeight,
+            viewportOffset: positionedRowRect.top - containerRect.top,
+          };
+        }
+        """
+    )
+    if geometry is None or geometry["viewportOffset"] > -20:
+        raise AssertionError(
+            f"{label} fixture could not occlude the latest reply start: {geometry!r}"
+        )
+    if geometry["rowHeight"] > geometry["viewportHeight"] - 24:
+        raise AssertionError(
+            f"{label} fixture no longer covers the short-reply regression: {geometry!r}"
+        )
+
+    latest_reply_button = page.get_by_role(
+        "button", name="Read latest reply from start", exact=True
+    )
+    expect(latest_reply_button).to_be_visible(timeout=10_000)
+    save_browser_screenshot(page, artifact_dir, screenshot_name)
+    latest_reply_button.click(timeout=10_000)
+    expect(latest_reply_button).to_have_count(0, timeout=10_000)
+
+    aligned_offset = final_answer.evaluate(
+        """
+        element => {
+          const row = element.closest('[data-feed-entry-key]');
+          const container = element.closest(
+            '[data-testid="chat-thread-scroll-container"]'
+          );
+          if (!row || !container) return null;
+          return (
+            row.getBoundingClientRect().top -
+            container.getBoundingClientRect().top
+          );
+        }
+        """
+    )
+    if aligned_offset is None or abs(aligned_offset) > 1:
+        raise AssertionError(
+            f"{label} latest-reply action did not align the mounted row: "
+            f"offset={aligned_offset!r}"
+        )
 
 
 def hover_workspace_header(page, workspace: pathlib.Path) -> None:
@@ -622,6 +777,10 @@ def main() -> int:
                   const actionStyle = actionGroup
                     ? getComputedStyle(actionGroup)
                     : null;
+                  const title = element.querySelector(
+                    '.rah-sidebar-session-title'
+                  );
+                  const titleStyle = title ? getComputedStyle(title) : null;
                   const rowStyle = getComputedStyle(element);
                   const visibleActions = [...element.querySelectorAll(
                     '.coarse-pointer-action-target'
@@ -635,6 +794,16 @@ def main() -> int:
                     rowBackground: rowStyle.backgroundColor,
                     actionBackground: actionStyle?.backgroundColor ?? null,
                     actionShadow: actionStyle?.boxShadow ?? null,
+                    visibleActionCountContract: element.getAttribute(
+                      'data-sidebar-visible-action-count'
+                    ),
+                    titleActionCoverCount: element.getAttribute(
+                      'data-sidebar-title-action-cover-count'
+                    ),
+                    titleActionCover: titleStyle?.getPropertyValue(
+                      '--rah-sidebar-session-action-cover'
+                    ).trim() ?? null,
+                    titleMaskImage: titleStyle?.maskImage ?? null,
                     visibleActionCount: visibleActions.length,
                   };
                 }
@@ -663,6 +832,31 @@ def main() -> int:
             if desktop_session_actions["visibleActionCount"] != 2:
                 raise AssertionError(
                     "Desktop Session hover did not reveal both actions: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["visibleActionCountContract"] != "2":
+                raise AssertionError(
+                    "Desktop Session did not reserve both trailing actions: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["titleActionCoverCount"] != "2":
+                raise AssertionError(
+                    "Stopped desktop Session did not cover both overlapping actions: "
+                    f"{desktop_session_actions!r}"
+                )
+            if desktop_session_actions["titleActionCover"] != "calc(28px + 28px)":
+                raise AssertionError(
+                    "Desktop Session title did not reserve a 56px action cover: "
+                    f"{desktop_session_actions!r}"
+                )
+            if (
+                "calc(100% - 56px)"
+                not in desktop_session_actions["titleMaskImage"]
+                or "calc(100% - 44px)"
+                not in desktop_session_actions["titleMaskImage"]
+            ):
+                raise AssertionError(
+                    "Desktop Session title did not fade below Pin and Archive: "
                     f"{desktop_session_actions!r}"
                 )
             save_browser_screenshot(
@@ -703,6 +897,32 @@ def main() -> int:
             expect(page.locator('[role="tooltip"]')).to_have_count(1)
             page.mouse.move(1_000, 700)
             expect(desktop_second_session_tooltip).to_have_count(0, timeout=1_000)
+
+            page.get_by_role("button", name="Canvas", exact=True).click(
+                timeout=10_000
+            )
+            stopped_session_drag_source = page.locator(
+                '[data-sidebar-session-provider="codex"]'
+            ).filter(has_text=parent_title).get_by_role(
+                "button", name=parent_title, exact=True
+            )
+            expect(stopped_session_drag_source).to_have_attribute(
+                "draggable", "true", timeout=10_000
+            )
+            canvas_first_pane = page.locator("[data-canvas-pane-id]").first
+            expect(canvas_first_pane).to_be_visible(timeout=10_000)
+            stopped_session_drag_source.drag_to(canvas_first_pane)
+            expect(
+                canvas_first_pane.get_by_text(parent_title, exact=True)
+            ).to_be_visible(timeout=20_000)
+            save_browser_screenshot(
+                page,
+                artifact_dir,
+                "02b-desktop-canvas-stopped-session-drop",
+            )
+            page.get_by_role(
+                "button", name="Close canvas view", exact=True
+            ).click(timeout=10_000)
 
             child_row = workspace_row(page, child_workspace)
             hover_workspace_header(page, child_workspace)
@@ -890,6 +1110,27 @@ def main() -> int:
             page.locator("button:visible").filter(has_text=parent_title).click(
                 timeout=10_000
             )
+            desktop_process_toggle = page.locator(
+                '[data-testid="assistant-process-group-toggle"]'
+            ).last
+            expect(desktop_process_toggle).to_be_enabled(timeout=20_000)
+            desktop_process_toggle.click(timeout=10_000)
+            desktop_compaction = page.locator(
+                '[data-testid="context-compaction-divider"]'
+            ).last
+            expect(desktop_compaction).to_be_visible(timeout=10_000)
+            assert_compaction_geometry(
+                desktop_compaction,
+                {
+                    "height": 24,
+                    "minHeight": "24px",
+                    "paddingTop": "0px",
+                    "paddingBottom": "0px",
+                    "leadingMargin": "2px",
+                    "trailingMargin": "2px",
+                },
+                "Desktop",
+            )
             desktop_gallery = page.locator(
                 '[data-markdown-image-grid="true"]'
             ).last
@@ -938,10 +1179,39 @@ def main() -> int:
                 raise AssertionError(
                     f"Desktop local thumbnail exceeded 160px: {desktop_gallery_metrics!r}"
                 )
+            desktop_output_gallery = page.locator(
+                '[data-testid="conversation-visual-output-gallery"]'
+            ).last
+            expect(desktop_output_gallery).to_be_visible(timeout=20_000)
+            expect(
+                desktop_output_gallery.locator(
+                    '[data-testid="conversation-inline-image"][data-image-state="ready"]'
+                )
+            ).to_have_count(2, timeout=20_000)
+            desktop_output_rects = desktop_output_gallery.locator(
+                '[data-testid="conversation-inline-image"]'
+            ).evaluate_all(
+                "elements => elements.map(element => element.getBoundingClientRect())"
+            )
+            if (
+                len(desktop_output_rects) != 2
+                or abs(desktop_output_rects[0]["top"] - desktop_output_rects[1]["top"]) > 1
+                or max(rect["height"] for rect in desktop_output_rects) > 160.5
+            ):
+                raise AssertionError(
+                    "Desktop visual outputs are not a compact two-up thumbnail row: "
+                    f"{desktop_output_rects!r}"
+                )
             save_browser_screenshot(
                 page,
                 artifact_dir,
                 "03a-desktop-markdown-thumbnail-gallery",
+            )
+            assert_latest_reply_start_navigation(
+                page,
+                artifact_dir,
+                label="Desktop",
+                screenshot_name="03b-desktop-latest-reply-start-action",
             )
 
             page.locator('button[aria-label="Settings"]:visible').click(
@@ -1028,6 +1298,21 @@ def main() -> int:
                 '[data-workbench-callout-variant="pwa-compact"]'
             )
             expect(pwa_notice).to_be_visible(timeout=10_000)
+            expect(pwa_notice).to_contain_text("Restart RAH to update")
+            expect(pwa_notice).to_contain_text(
+                "Restart it on the host, then refresh this page."
+            )
+            expect(
+                pwa_notice.get_by_role("button", name="Mute today", exact=True)
+            ).to_be_visible(timeout=10_000)
+            expect(
+                pwa_notice.get_by_role("button", name="Retry", exact=True)
+            ).to_have_count(0)
+            expect(
+                pwa_notice.get_by_text(
+                    "RAH daemon restart required", exact=False
+                )
+            ).to_have_count(0)
             pwa_workspace_trigger = pwa_page.locator(
                 'button[aria-label="Select workspace"]:visible'
             )
@@ -1680,24 +1965,68 @@ def main() -> int:
                 '.chat-thread-shell[data-chat-density="mobile"]'
             )
             expect(pwa_shell).to_be_visible(timeout=20_000)
+            pwa_output_gallery = pwa_page.locator(
+                '[data-testid="conversation-visual-output-gallery"]'
+            ).last
+            expect(pwa_output_gallery).to_be_visible(timeout=20_000)
+            expect(
+                pwa_output_gallery.locator(
+                    '[data-testid="conversation-inline-image"][data-image-state="ready"]'
+                )
+            ).to_have_count(2, timeout=20_000)
+            pwa_output_gallery.locator(
+                '[data-testid="conversation-inline-image"]'
+            ).first.click(timeout=10_000)
+            pwa_output_viewer = pwa_page.locator(
+                '[data-testid="inspector-file-viewer"]:visible'
+            )
+            expect(pwa_output_viewer).to_have_count(1, timeout=10_000)
+            pwa_output_viewer.get_by_role(
+                "button", name="Close", exact=True
+            ).click(timeout=10_000)
+            expect(pwa_output_viewer).to_have_count(0, timeout=10_000)
+            expect(pwa_page.get_by_text("Inspector", exact=True)).to_have_count(
+                0, timeout=10_000
+            )
             pwa_turn_change_card = pwa_page.locator(
                 '[data-testid="conversation-turn-file-changes"]'
             )
             expect(pwa_turn_change_card).to_be_visible(timeout=20_000)
-            pwa_turn_change_card.locator('button[title^="Open "]').first.click(
+            pwa_turn_file_button = pwa_turn_change_card.locator(
+                'button[title^="Open "]'
+            ).first
+            pwa_turn_file_path = (
+                pwa_turn_file_button.get_attribute("title") or ""
+            ).removeprefix("Open ")
+            pwa_turn_file_button.click(
                 timeout=10_000
             )
-            pwa_turn_file_viewer = pwa_page.locator(
-                '[data-testid="inspector-file-viewer"]:visible'
+            expect(
+                pwa_page.get_by_text("Review this turn", exact=True)
+            ).to_be_visible(timeout=10_000)
+            expect(
+                pwa_page.locator('[data-testid="inspector-file-viewer"]:visible')
+            ).to_have_count(0, timeout=10_000)
+            pwa_review_file_toggle = pwa_page.locator(
+                'button[aria-controls="review-mobile-file-list"]:visible'
             )
-            expect(pwa_turn_file_viewer).to_have_count(1, timeout=10_000)
+            expect(pwa_review_file_toggle).to_contain_text(
+                pathlib.PurePosixPath(pwa_turn_file_path).name,
+                timeout=10_000,
+            )
             expect(
                 pwa_page.get_by_text("Inspector", exact=True)
             ).to_have_count(0, timeout=10_000)
-            pwa_turn_file_viewer.get_by_role(
-                "button", name="Close", exact=True
+            expect(
+                pwa_page.locator('#review-mobile-file-list:visible')
+            ).to_have_count(0, timeout=10_000)
+            pwa_review_file_toggle.click(timeout=10_000)
+            expect(
+                pwa_page.locator('#review-mobile-file-list:visible')
+            ).to_have_count(1, timeout=10_000)
+            pwa_page.get_by_role(
+                "button", name="Close review", exact=True
             ).click(timeout=10_000)
-            expect(pwa_turn_file_viewer).to_have_count(0, timeout=10_000)
             expect(pwa_shell).to_be_visible(timeout=10_000)
             expect(
                 pwa_page.get_by_text("Inspector", exact=True)
@@ -1709,6 +2038,9 @@ def main() -> int:
             expect(
                 pwa_page.get_by_text("Review this turn", exact=True)
             ).to_be_visible(timeout=10_000)
+            expect(
+                pwa_page.locator('#review-mobile-file-list:visible')
+            ).to_have_count(0, timeout=10_000)
             pwa_page.get_by_role(
                 "button", name="Close review", exact=True
             ).click(timeout=10_000)
@@ -1718,6 +2050,12 @@ def main() -> int:
             expect(
                 pwa_page.get_by_text("Inspector", exact=True)
             ).to_have_count(0, timeout=10_000)
+            assert_latest_reply_start_navigation(
+                pwa_page,
+                artifact_dir,
+                label="PWA",
+                screenshot_name="03c-pwa-latest-reply-start-action",
+            )
             pwa_user_message = pwa_page.locator(
                 '[data-testid="chat-user-message"]'
             ).last
@@ -1775,7 +2113,98 @@ def main() -> int:
                 '[data-testid="assistant-process-group-toggle"]'
             ).last
             expect(process_toggle).to_be_enabled(timeout=10_000)
+
+            def read_process_final_divider_gaps():
+                return process_toggle.evaluate(
+                    """
+                    toggle => {
+                      const group = toggle.closest('[data-testid="assistant-process-group"]');
+                      const divider = group?.querySelector(
+                        '[data-testid="assistant-process-final-divider"]'
+                      );
+                      const row = group?.closest('[data-feed-entry-key]');
+                      const finalRoot = row?.nextElementSibling?.querySelector(
+                        '.prose-chat-final'
+                      );
+                      if (!group || !divider || !finalRoot) {
+                        return null;
+                      }
+                      const textRects = root => {
+                        const pending = [root];
+                        const rects = [];
+                        while (pending.length > 0) {
+                          const node = pending.shift();
+                          if (node.nodeType === 3 && (node.textContent || '').trim()) {
+                            const range = document.createRange();
+                            range.selectNodeContents(node);
+                            const rect = range.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                              rects.push({ top: rect.top, bottom: rect.bottom });
+                            }
+                            continue;
+                          }
+                          pending.push(...node.childNodes);
+                        }
+                        return rects;
+                      };
+                      const details = group.querySelector('.assistant-process-details');
+                      const processTextRects = textRects(details || toggle);
+                      const finalTextRects = textRects(finalRoot);
+                      const previousText = processTextRects.sort(
+                        (left, right) => right.bottom - left.bottom
+                      )[0];
+                      const nextText = finalTextRects.sort(
+                        (left, right) => left.top - right.top
+                      )[0];
+                      if (!previousText || !nextText) {
+                        return null;
+                      }
+                      const dividerRect = divider.getBoundingClientRect();
+                      const dividerStyle = getComputedStyle(divider);
+                      const borderWidth = Number.parseFloat(
+                        dividerStyle.borderBottomWidth
+                      ) || dividerRect.height;
+                      const lineTop = details
+                        ? dividerRect.bottom - borderWidth
+                        : dividerRect.top;
+                      return {
+                        leading: lineTop - previousText.bottom,
+                        trailing: nextText.top - dividerRect.bottom,
+                      };
+                    }
+                    """
+                )
+
+            collapsed_divider_gaps = read_process_final_divider_gaps()
+            if (
+                collapsed_divider_gaps is None
+                or abs(
+                    collapsed_divider_gaps["leading"]
+                    - collapsed_divider_gaps["trailing"]
+                )
+                > 1.5
+            ):
+                raise AssertionError(
+                    "Collapsed process/final divider is not optically centered: "
+                    f"{collapsed_divider_gaps!r}"
+                )
             process_toggle.click(timeout=10_000)
+            pwa_compaction = pwa_page.locator(
+                '[data-testid="context-compaction-divider"]'
+            ).last
+            expect(pwa_compaction).to_be_visible(timeout=10_000)
+            assert_compaction_geometry(
+                pwa_compaction,
+                {
+                    "height": 28,
+                    "minHeight": "28px",
+                    "paddingTop": "2px",
+                    "paddingBottom": "2px",
+                    "leadingMargin": "4px",
+                    "trailingMargin": "4px",
+                },
+                "PWA",
+            )
             pwa_process_message = pwa_page.locator(
                 ".assistant-process-message"
             ).last
@@ -1810,6 +2239,19 @@ def main() -> int:
                 raise AssertionError(
                     "PWA process-message density contract drifted: "
                     f"expected={expected_process_metrics!r} actual={pwa_process_metrics!r}"
+                )
+            expanded_divider_gaps = read_process_final_divider_gaps()
+            if (
+                expanded_divider_gaps is None
+                or abs(
+                    expanded_divider_gaps["leading"]
+                    - expanded_divider_gaps["trailing"]
+                )
+                > 1.5
+            ):
+                raise AssertionError(
+                    "Expanded process/final divider is not optically centered: "
+                    f"{expanded_divider_gaps!r}"
                 )
             pwa_chat_surface = pwa_page.locator(
                 '.rah-unified-composer[data-surface="chat"][data-pwa="true"]'
@@ -1908,6 +2350,97 @@ def main() -> int:
             pwa_chat_input = pwa_chat_surface.locator(
                 ".rah-chat-composer-input"
             )
+
+            def assert_first_expansion_gesture_does_not_activate(
+                control, pointer_id, label
+            ):
+                pwa_chat_input.evaluate(
+                    """
+                    (element, pointerId) => element.dispatchEvent(new PointerEvent(
+                      'pointerdown',
+                      {
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                        pointerId,
+                        pointerType: 'touch',
+                        isPrimary: true,
+                        button: 0,
+                      },
+                    ))
+                    """,
+                    pointer_id,
+                )
+                expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
+                expect(control).to_be_visible(timeout=10_000)
+                dispatch_result = control.evaluate(
+                    """
+                    (element, pointerId) => {
+                      element.dispatchEvent(new PointerEvent('pointerup', {
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                        pointerId,
+                        pointerType: 'touch',
+                        isPrimary: true,
+                        button: 0,
+                      }));
+                      const click = new MouseEvent('click', {
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                        button: 0,
+                        detail: 1,
+                      });
+                      const dispatched = element.dispatchEvent(click);
+                      return {
+                        defaultPrevented: click.defaultPrevented,
+                        dispatched,
+                      };
+                    }
+                    """,
+                    pointer_id,
+                )
+                if dispatch_result != {
+                    "defaultPrevented": True,
+                    "dispatched": False,
+                }:
+                    raise AssertionError(
+                        "The first collapsed PWA Composer gesture was allowed to "
+                        f"click through to {label}: {dispatch_result!r}"
+                    )
+
+            pwa_model_control = pwa_chat_surface.locator(
+                '[data-composer-control="model"]'
+            )
+            assert_first_expansion_gesture_does_not_activate(
+                pwa_model_control, 701, "the model control"
+            )
+            expect(pwa_model_control).to_have_attribute("aria-expanded", "false")
+            expect(
+                pwa_page.get_by_role(
+                    "dialog", name="Model and parameters", exact=True
+                )
+            ).to_have_count(0, timeout=10_000)
+            pwa_page.mouse.click(4, 400)
+            pwa_page.wait_for_timeout(120)
+
+            pwa_context_control = pwa_chat_surface.locator(
+                '[data-composer-control="context"]'
+            )
+            if pwa_context_control.count() > 0:
+                assert_first_expansion_gesture_does_not_activate(
+                    pwa_context_control, 702, "the context indicator"
+                )
+                pwa_context_control.dispatch_event(
+                    "pointerenter", {"pointerId": 702, "pointerType": "touch"}
+                )
+                expect(
+                    pwa_page.locator('[data-testid="composer-context-tooltip"]')
+                ).to_have_count(0, timeout=10_000)
+                pwa_page.mouse.click(4, 400)
+                pwa_page.wait_for_timeout(120)
+
             pwa_chat_input.click(position={"x": 4, "y": 18}, timeout=10_000)
             expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             long_chat_draft = "\n".join(
@@ -2034,6 +2567,7 @@ def main() -> int:
             expect(pwa_mode_control).to_be_enabled(timeout=10_000)
             previous_mode_title = pwa_mode_control.get_attribute("title")
             pwa_mode_control.click(timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             pwa_mode_listbox = pwa_page.get_by_role(
                 "listbox", name="Session mode", exact=True
             )
@@ -2044,6 +2578,7 @@ def main() -> int:
             expect(alternate_mode).to_be_visible(timeout=10_000)
             alternate_mode.click(timeout=10_000)
             expect(pwa_mode_listbox).to_have_count(0, timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             if pwa_mode_control.get_attribute("title") == previous_mode_title:
                 raise AssertionError("PWA permission control did not apply its selection")
 
@@ -2053,10 +2588,12 @@ def main() -> int:
             expect(pwa_plan_control).to_be_enabled(timeout=10_000)
             previous_plan_state = pwa_plan_control.get_attribute("aria-pressed")
             pwa_plan_control.click(timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             expect(pwa_plan_control).not_to_have_attribute(
                 "aria-pressed", previous_plan_state, timeout=10_000
             )
             pwa_plan_control.click(timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             expect(pwa_plan_control).to_have_attribute(
                 "aria-pressed", previous_plan_state, timeout=10_000
             )
@@ -2066,6 +2603,7 @@ def main() -> int:
             )
             expect(pwa_model_control).to_be_enabled(timeout=10_000)
             pwa_model_control.click(timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
             expect(pwa_model_control).to_have_attribute("aria-expanded", "true")
             pwa_page.wait_for_timeout(220)
             pwa_chat_menu_open = read_pwa_chat_composer_metrics()
@@ -2091,11 +2629,29 @@ def main() -> int:
                 pwa_model_dialog.get_by_role(
                     "button", name="Medium", exact=True
                 ).click(timeout=10_000)
+                expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
                 expect(pwa_model_control).to_have_attribute(
                     "title", "gpt-5.6-sol / Medium", timeout=10_000
                 )
             else:
                 pwa_model_control.click(timeout=10_000)
+                expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
+
+            pwa_attachment_control = pwa_chat_surface.locator(
+                ".rah-chat-composer-attach"
+            )
+            pwa_attachment_control.click(timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
+            pwa_attachment_dialog = pwa_page.get_by_role(
+                "dialog", name="Add to message", exact=True
+            )
+            expect(pwa_attachment_dialog).to_be_visible(timeout=10_000)
+            pwa_attachment_dialog.get_by_role(
+                "button", name="Close attachment menu", exact=True
+            ).click(timeout=10_000)
+            expect(pwa_attachment_dialog).to_have_count(0, timeout=10_000)
+            expect(pwa_chat_textarea).to_be_focused(timeout=10_000)
+
             pwa_page.mouse.click(4, 400)
             pwa_page.wait_for_timeout(260)
             if pwa_chat_textarea.evaluate(
@@ -2135,6 +2691,14 @@ def main() -> int:
                 artifact_dir,
                 "03d-pwa-chat-composer-folded-draft",
             )
+
+            expect(pwa_notice).to_be_visible(timeout=10_000)
+            pwa_notice.get_by_role(
+                "button", name="Mute today", exact=True
+            ).click(timeout=10_000)
+            expect(pwa_notice).to_have_count(0, timeout=10_000)
+            pwa_page.reload(wait_until="domcontentloaded")
+            expect(pwa_notice).to_have_count(0, timeout=10_000)
             pwa_context.close()
 
             page.reload(wait_until="domcontentloaded")
@@ -2194,8 +2758,9 @@ def main() -> int:
                         "Nested stored sessions move to the most-specific registered workspace.",
                         "User-owned Codex Desktop roots remain visible for both supported originators.",
                         "Desktop and PWA sidebars compute the same codex-compact-v1 header, typography, row, inset, gap, icon, action, and vertical-centering metrics.",
-                        "Desktop Session hover actions reuse the row surface without a separate background plate or shadow.",
+                        "Desktop Session hover actions reuse the row surface without a separate background plate or shadow, and long stopped titles fade beneath both Pin/Unpin and Archive slots.",
                         "Desktop Session tooltips have one owner: cross-row hover replaces the active card, leaving clears it, and pending timers cannot reopen it after a page pointerdown.",
+                        "A stopped provider-history Session is a native draggable source and its stable provider identity fills the target Canvas pane without removing the Sidebar row.",
                         "Workspace New task selects that exact workspace in the composer.",
                         "Desktop and iOS PWA New task tuck a compact 40px workspace accessory 8px beneath the composer with the composer owning the overlap, use a 28px trigger, and keep long-name marquee bounded.",
                         "Desktop and touch New task provider modules stay borderless and item backgrounds stay transparent; Desktop selection uses a blue text-width marker, touch uses 48px targets with a blue 24x2 icon marker, and the single grouped pointer hover surface disappears after leave.",
@@ -2205,8 +2770,13 @@ def main() -> int:
                         "iOS PWA turn-file and shared turn-review flows close directly back to Chat without exposing a full-screen Inspector.",
                         "Desktop and iOS PWA share one right-anchored composer rail: model/effort stays beside Send, narrow containers replace permission/Plan labels with icons, unsupported provider Plan toggles stay hidden, and overflowing models marquee.",
                         "iOS PWA conversation copy uses the shared 12-20px conversation setting, 75% user bubbles, 12px turn gaps, and flat process text.",
+                        "Desktop and iOS PWA show Read latest reply whenever the latest final-answer start is genuinely occluded, even when the final row itself fits the viewport; clicking aligns the mounted row exactly and removes the action.",
+                        "Desktop context compaction uses a 24px row with 2px adjacent gaps, while iOS PWA retains its 28px row with 4px gaps.",
+                        "Collapsed and expanded process/final dividers remain optically centered against the actual surrounding glyph bounds.",
                         "iOS PWA Chat uses a 48–52px idle pill with 36px visible controls and a preserved 44px hit area, then stays expanded for focus or open model menus.",
-                        "Desktop Markdown images wrap as a 12px-gap thumbnail gallery capped at 160px for local resources.",
+                        "iOS PWA permissions, Plan, model, and attachment controls preserve the active textarea editing session; only a true outside pointer releases it.",
+                        "Mute today survives a full PWA reload while the forced Web/daemon generation mismatch remains active.",
+                        "Desktop Markdown images and terminal visual outputs use distinct, lazy, two-up thumbnail galleries capped at 160px; PWA reuses the output gallery without exposing Inspector on close.",
                         "Appearance exposes only a persisted 12-20px Session/Council text setting, derives code size proportionally, updates conversation type immediately, and leaves navigation unchanged.",
                         "Reload preserves workspace count, order, and unique rows.",
                         "Removing a parent hides its sessions immediately without hiding a registered child.",

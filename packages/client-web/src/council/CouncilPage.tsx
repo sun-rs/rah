@@ -49,10 +49,7 @@ import { COMPOSER_LAYOUT } from "../composer-contract";
 import { insertTextAtSelection } from "../composer-text-insertion";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "../components/workbench/dialogs/RenameSessionDialog";
-import {
-  HEADER_MENU_DANGER_ITEM_CLASS,
-  HEADER_MENU_ITEM_CLASS,
-} from "../components/workbench/header-button-styles";
+import { HEADER_ACTION_ICON_SIZE, HEADER_MENU_DANGER_ITEM_CLASS, HEADER_MENU_ITEM_CLASS } from "../components/workbench/header-button-styles";
 import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
@@ -1496,7 +1493,7 @@ export function CouncilPage(props: {
                 aria-label="Chats"
                 title="Chats"
               >
-                <ListTree size={14} />
+                <ListTree size={HEADER_ACTION_ICON_SIZE} aria-hidden="true" />
               </ConversationHeaderIconButton>
               <ConversationHeaderIconButton
                 onClick={() => setNewCouncilDialogOpen(true)}
@@ -1504,7 +1501,7 @@ export function CouncilPage(props: {
                 title="New Council"
                 aria-label="New Council"
               >
-                <Plus size={15} />
+                <Plus size={HEADER_ACTION_ICON_SIZE} aria-hidden="true" />
               </ConversationHeaderIconButton>
               {selectedCouncil?.status === "running" ? (
                 <ConversationHeaderStopButton

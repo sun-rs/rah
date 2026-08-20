@@ -1,8 +1,10 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type ClipboardEventHandler,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -29,6 +31,14 @@ import {
 } from "../../../composer-contract";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import type { ComposerAttachmentItem } from "../../../hooks/useComposerAttachments";
+import {
+  COMPOSER_FOCUS_PRESERVE_SELECTOR,
+  COMPOSER_FOCUS_RELEASE_SELECTOR,
+  COMPOSER_INTERACTIVE_SELECTOR,
+  composerPointerPathMatches,
+  composerPointerTargetElement,
+  resolveComposerPointerFocusIntent,
+} from "../../../composer-focus-ownership";
 
 function MarqueeText(props: { text: string; shouldMarquee: boolean }) {
   return (
@@ -153,6 +163,72 @@ export function NewSessionComposer(props: {
     props.onSend();
   };
 
+  const preservePwaComposerFocus = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const textarea = props.composerRef.current;
+    const target = composerPointerTargetElement(event.nativeEvent);
+    const intent = resolveComposerPointerFocusIntent({
+      isPwa: isPwaDisplayMode,
+      textareaIsActive: document.activeElement === textarea,
+      insideComposer: true,
+      onTextarea: target === textarea,
+      onInteractiveControl: composerPointerPathMatches(
+        event.nativeEvent,
+        COMPOSER_INTERACTIVE_SELECTOR,
+      ),
+      onFocusPreservingPortal: false,
+      explicitlyReleasesFocus: composerPointerPathMatches(
+        event.nativeEvent,
+        COMPOSER_FOCUS_RELEASE_SELECTOR,
+      ),
+    });
+    if (
+      intent === "none" ||
+      intent === "textarea" ||
+      intent === "release-textarea"
+    ) {
+      return;
+    }
+    if (intent === "preserve-textarea") {
+      event.preventDefault();
+    }
+    if (textarea && !textarea.disabled && document.activeElement !== textarea) {
+      textarea.focus({ preventScroll: true });
+    }
+  };
+
+  useEffect(() => {
+    const preservePortaledControlFocus = (event: PointerEvent) => {
+      const textarea = props.composerRef.current;
+      const intent = resolveComposerPointerFocusIntent({
+        isPwa: isPwaDisplayMode,
+        textareaIsActive: document.activeElement === textarea,
+        insideComposer: false,
+        onTextarea: composerPointerTargetElement(event) === textarea,
+        onInteractiveControl: false,
+        onFocusPreservingPortal: composerPointerPathMatches(
+          event,
+          COMPOSER_FOCUS_PRESERVE_SELECTOR,
+        ),
+        explicitlyReleasesFocus: composerPointerPathMatches(
+          event,
+          COMPOSER_FOCUS_RELEASE_SELECTOR,
+        ),
+      });
+      if (intent !== "preserve-textarea") {
+        return;
+      }
+      event.preventDefault();
+      if (textarea && !textarea.disabled && document.activeElement !== textarea) {
+        textarea.focus({ preventScroll: true });
+      }
+    };
+    window.addEventListener("pointerdown", preservePortaledControlFocus, true);
+    return () =>
+      window.removeEventListener("pointerdown", preservePortaledControlFocus, true);
+  }, [isPwaDisplayMode, props.composerRef]);
+
   return (
     <div
       className={
@@ -192,6 +268,7 @@ export function NewSessionComposer(props: {
             surface="new-task"
             isPwa={isPwaDisplayMode}
             className={COMPOSER_LAYOUT.composeGridClassName}
+            onPointerDownCapture={preservePwaComposerFocus}
           >
           <ComposerAttachmentBadge
             items={draftAttachments}

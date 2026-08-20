@@ -19,6 +19,7 @@ import {
   requestErrorStatus,
 } from "./http-server-response";
 import {
+  parseAttachSessionRequest,
   parseCreateCouncilRequest,
   parsePermissionResponseRequest,
   parseResumeSessionRequest,
@@ -420,6 +421,34 @@ describe("startRahDaemon", () => {
     assert.match(document, /<html lang="en" data-theme="dark">/);
     assert.match(document, /id="equity-curve"/);
     assert.match(document, /rah\.visual\.resize/);
+  });
+
+  test("returns a daemon-resolved conversation visual source for file preview", async () => {
+    engine.getSessionConversationVisualArtifactSource = async (
+      sessionId,
+      artifactId,
+    ) => {
+      assert.equal(sessionId, "visual-session");
+      assert.equal(artifactId, "equity-curve.html");
+      return {
+        sessionId,
+        artifactId,
+        path: "/workspace/.codex/visualizations/equity-curve.html",
+      };
+    };
+
+    const response = await requestJson({
+      port,
+      path: "/api/sessions/visual-session/conversation/visual-artifacts/equity-curve.html/source",
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      sessionId: "visual-session",
+      artifactId: "equity-curve.html",
+      path: "/workspace/.codex/visualizations/equity-curve.html",
+    });
   });
 
   test("streams canonical conversation deltas with live events", async () => {
@@ -1106,6 +1135,34 @@ describe("startRahDaemon", () => {
         initialInput,
       }).initialInput,
       initialInput,
+    );
+    assert.deepEqual(
+      parseAttachSessionRequest({
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-connection",
+        },
+        mode: "interactive",
+        claimControl: true,
+        model: "gpt-5.6-sol",
+        optionValues: { model_reasoning_effort: "medium" },
+        modeId: "plan",
+        initialInput,
+      }),
+      {
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-connection",
+        },
+        mode: "interactive",
+        claimControl: true,
+        model: "gpt-5.6-sol",
+        optionValues: { model_reasoning_effort: "medium" },
+        modeId: "plan",
+        initialInput,
+      },
     );
   });
 

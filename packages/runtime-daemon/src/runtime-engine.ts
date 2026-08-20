@@ -9,10 +9,6 @@ import type {
   AttachSessionResponse,
   ClaimControlRequest,
   CloseSessionRequest,
-  ConversationItemDetailResponse,
-  ConversationResourceIndexResponse,
-  ConversationTurnDetailResponse,
-  ConversationTurnProjection,
   ConversationTurnsPageResponse,
   CouncilAgentTuiResponse,
   CouncilMessagesPageResponse,
@@ -62,8 +58,6 @@ import type {
   SetInputQueuePolicyRequest,
   SetSessionModelRequest,
   SessionFileSearchResponse,
-  ConversationEvidenceDetailMode,
-  ConversationEvidencePage,
   ConversationTurnDirectoryResponse,
   SessionInputRequest,
   SessionSummary,
@@ -86,22 +80,10 @@ import {
 } from "@rah/runtime-protocol";
 import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import { nativeTuiInputText } from "./session-input-attachments";
-import { projectConversation } from "./conversation-projector";
 import { ConversationProjectionStore } from "./conversation-projection-store";
-import { ConversationPageHotCache } from "./conversation-page-hot-cache";
-import { ConversationResourceIndexStore } from "./conversation-resource-index";
-import { summarizeConversationTurnsForTransport } from "./conversation-transport-summary";
-import { buildConversationTurnDirectory } from "./conversation-turn-directory";
 import { conversationEventBelongsToLiveProjection } from "./conversation-live-policy";
-import { approximateJsonByteLength } from "./bounded-json-size";
 import { EventBus } from "./event-bus";
 import { HistorySnapshotStore } from "./history-snapshots";
-import {
-  chatHistoryPage,
-  fullHistoryPage,
-  historyEventMatchesItem,
-  summarizeHistoryPage,
-} from "./history-event-projection";
 import type {
   ProviderActionCapabilityAdapter,
   ProviderAdapter,
@@ -156,7 +138,7 @@ import { releaseTimelineReconcilerSession } from "./timeline-reconciler";
 import { RuntimeSessionLifecycle } from "./runtime-session-lifecycle";
 import {
   createInitialSessionInputAcceptor,
-  markAcceptedSessionInput,
+  markSessionInputPending,
 } from "./runtime-input-acceptance";
 import { runShutdownStep } from "./runtime-shutdown-step";
 import { SessionInputQueueConflictError } from "./session-input-queue";
@@ -221,11 +203,10 @@ import {
   deleteManualProviderModelOption,
   listManualProviderModels,
 } from "./manual-provider-models";
-import { shouldSuppressCouncilManagedHistoryEvent } from "./provider-activity";
+import { RuntimeConversationPages } from "./runtime-conversation-pages";
 
 import { SYSTEM_SOURCE } from "./runtime-session-events";
 
-const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 const STORED_SESSION_DELTA_LOG_LIMIT = 200;
 const PROVIDER_MODEL_CATALOG_STARTUP_REFRESH_DELAY_MS = 1_000;
 const PROVIDER_MODEL_CATALOG_REFRESH_INTERVAL_MS = 30 * 60 * 1_000;
@@ -277,19 +258,6 @@ type CompletedForkSessionOperation = {
   expiresAt: number;
 };
 
-function filterCouncilManagedHistoryPage(
-  session: ManagedSession | undefined,
-  page: ConversationEvidencePage,
-): ConversationEvidencePage {
-  if (session?.origin?.kind !== "council") {
-    return page;
-  }
-  return {
-    ...page,
-    events: page.events.filter((event) => !shouldSuppressCouncilManagedHistoryEvent(event)),
-  };
-}
-
 const FORK_SESSION_OPERATION_TTL_MS = 5 * 60_000;
 
 export class RuntimeEngine {
@@ -302,8 +270,7 @@ export class RuntimeEngine {
   readonly sessionLibrary: StoredSessionLibraryStore;
   readonly historySnapshots: HistorySnapshotStore;
   readonly turnArtifacts: TurnArtifactStore;
-  private readonly conversationPages = new ConversationPageHotCache();
-  private readonly conversationResourceIndexes = new ConversationResourceIndexStore();
+  private readonly conversationPages: RuntimeConversationPages;
   private readonly acceptInitialSessionInput = createInitialSessionInputAcceptor(this);
   private rememberedSessions: StoredSessionRef[];
   private rememberedRecentSessions: StoredSessionRef[];
@@ -476,6 +443,16 @@ export class RuntimeEngine {
           this.sessionStore.getSession(event.sessionId)?.session,
           event,
         ),
+    });
+    this.conversationPages = new RuntimeConversationPages({
+      sessionStore: this.sessionStore,
+      conversationStore: this.conversationStore,
+      eventBus: this.eventBus,
+      historySnapshots: this.historySnapshots,
+      processOutputs: this.processOutputs,
+      turnArtifacts: this.turnArtifacts,
+      storedHistoryAdapterForSession: (sessionId) =>
+        this.storedHistoryAdapterForSession(sessionId),
     });
     const restored = this.workbenchState.load();
     this.rememberedSessions = restored.sessions;
@@ -1440,48 +1417,54 @@ export class RuntimeEngine {
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
     this.assertTuiMuxBackendAllowed(request);
-    if (this.shouldUseNativeLocalServerBackend(request)) {
-      return this.acceptInitialSessionInput(
-        this.applyCanonicalSessionTitleToResponse(
+    let started: StartSessionResponse | null = null;
+    try {
+      if (this.shouldUseNativeLocalServerBackend(request)) {
+        started = this.applyCanonicalSessionTitleToResponse(
           await this.structuredProviders.startSession(request),
-        ),
-        request.initialInput,
-      );
-    }
-    if (this.shouldUseTuiMuxBackend(request)) {
-      await assertExistingWorkingDirectory(request.cwd, "Session working directory");
-      this.pruneOrphanSessions();
-      return this.acceptInitialSessionInput(
-        this.applyCanonicalSessionTitleToResponse(
+        );
+      } else if (this.shouldUseTuiMuxBackend(request)) {
+        await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+        this.pruneOrphanSessions();
+        started = this.applyCanonicalSessionTitleToResponse(
           await this.terminals.startTuiMuxSession({
             launch: await this.nativeTuiProviders.startLaunchSpec(request),
             ...(request.attach !== undefined ? { attach: request.attach } : {}),
             ...(request.origin !== undefined ? { origin: request.origin } : {}),
           }),
-        ),
-        request.initialInput,
-      );
-    }
-    if (this.shouldUseNativeTuiBackend(request)) {
-      await assertExistingWorkingDirectory(request.cwd, "Session working directory");
-      this.pruneOrphanSessions();
-      return this.acceptInitialSessionInput(
-        this.applyCanonicalSessionTitleToResponse(
+        );
+      } else if (this.shouldUseNativeTuiBackend(request)) {
+        await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+        this.pruneOrphanSessions();
+        started = this.applyCanonicalSessionTitleToResponse(
           await this.terminals.startNativeTuiSession({
             launch: await this.nativeTuiProviders.startLaunchSpec(request),
             ...(request.attach !== undefined ? { attach: request.attach } : {}),
             ...(request.origin !== undefined ? { origin: request.origin } : {}),
           }),
-        ),
-        request.initialInput,
-      );
+        );
+      } else {
+        started = this.applyCanonicalSessionTitleToResponse(
+          await this.structuredProviders.startSession(request),
+        );
+      }
+      return await this.acceptInitialSessionInput(started, request.initialInput);
+    } catch (error) {
+      if (started && request.initialInput) {
+        try {
+          await this.sessionLifecycle.discardUnacceptedSession(
+            started.session.session.id,
+            request.attach?.client.id ?? request.initialInput.clientId,
+          );
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            "Session startup failed and its unaccepted shell could not be discarded.",
+          );
+        }
+      }
+      throw error;
     }
-    return this.acceptInitialSessionInput(
-      this.applyCanonicalSessionTitleToResponse(
-        await this.structuredProviders.startSession(request),
-      ),
-      request.initialInput,
-    );
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
@@ -1492,92 +1475,122 @@ export class RuntimeEngine {
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
     this.assertTuiMuxBackendAllowed(request);
-    if (request.preferStoredReplay === true) {
-      return this.acceptInitialSessionInput(
-        this.applyCanonicalSessionTitleToResponse(
-          await this.resumeStoredReplaySession(request),
-        ),
-        request.initialInput,
-      );
-    }
-    const releaseReservation = this.reserveLiveProviderSessionResume(request);
+    const sessionIdsBeforeActivation = new Set(
+      this.sessionStore.listSessions().map((state) => state.session.id),
+    );
+    let activatedSessionId: string | null = null;
+    const acceptActivatedSession = async (
+      response: ResumeSessionResponse,
+    ): Promise<ResumeSessionResponse> => {
+      activatedSessionId = response.session.session.id;
+      return await this.acceptInitialSessionInput(response, request.initialInput);
+    };
     try {
-      if (this.shouldUseNativeLocalServerBackend(request)) {
-        return this.acceptInitialSessionInput(
+      if (request.preferStoredReplay === true) {
+        return await acceptActivatedSession(
+          this.applyCanonicalSessionTitleToResponse(
+            await this.resumeStoredReplaySession(request),
+          ),
+        );
+      }
+      const releaseReservation = this.reserveLiveProviderSessionResume(request);
+      try {
+        if (this.shouldUseNativeLocalServerBackend(request)) {
+          return await acceptActivatedSession(
+            this.applyCanonicalSessionTitleToResponse(
+              await this.structuredProviders.resumeSession(request),
+            ),
+          );
+        }
+        if (this.shouldUseTuiMuxBackend(request)) {
+          if (request.cwd) {
+            await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+          }
+          this.pruneOrphanSessions();
+          const preparedResume = prepareProviderSessionResume({
+            services: this,
+            provider: request.provider,
+            providerSessionId: request.providerSessionId,
+            preferStoredReplay: request.preferStoredReplay,
+            ...(request.historySourceSessionId
+              ? { historySourceSessionId: request.historySourceSessionId }
+              : {}),
+            rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
+          });
+          try {
+            return await acceptActivatedSession(
+              this.applyCanonicalSessionTitleToResponse(
+                await this.terminals.startTuiMuxSession({
+                  launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+                  ...(request.attach !== undefined ? { attach: request.attach } : {}),
+                  providerSessionId: request.providerSessionId,
+                  ...(request.origin !== undefined ? { origin: request.origin } : {}),
+                }),
+              ),
+            );
+          } catch (error) {
+            preparedResume.rollback();
+            throw error;
+          }
+        }
+        if (this.shouldUseNativeTuiBackend(request)) {
+          if (request.cwd) {
+            await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+          }
+          this.pruneOrphanSessions();
+          const preparedResume = prepareProviderSessionResume({
+            services: this,
+            provider: request.provider,
+            providerSessionId: request.providerSessionId,
+            preferStoredReplay: request.preferStoredReplay,
+            ...(request.historySourceSessionId
+              ? { historySourceSessionId: request.historySourceSessionId }
+              : {}),
+            rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
+          });
+          try {
+            return await acceptActivatedSession(
+              this.applyCanonicalSessionTitleToResponse(
+                await this.terminals.startNativeTuiSession({
+                  launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+                  ...(request.attach !== undefined ? { attach: request.attach } : {}),
+                  providerSessionId: request.providerSessionId,
+                  ...(request.origin !== undefined ? { origin: request.origin } : {}),
+                }),
+              ),
+            );
+          } catch (error) {
+            preparedResume.rollback();
+            throw error;
+          }
+        }
+        return await acceptActivatedSession(
           this.applyCanonicalSessionTitleToResponse(
             await this.structuredProviders.resumeSession(request),
           ),
-          request.initialInput,
         );
+      } finally {
+        releaseReservation();
       }
-      if (this.shouldUseTuiMuxBackend(request)) {
-        if (request.cwd) {
-          await assertExistingWorkingDirectory(request.cwd, "Session working directory");
-        }
-        this.pruneOrphanSessions();
-        const preparedResume = prepareProviderSessionResume({
-          services: this,
-          provider: request.provider,
-          providerSessionId: request.providerSessionId,
-          preferStoredReplay: request.preferStoredReplay,
-          ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
-          rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
-        });
+    } catch (error) {
+      if (
+        request.initialInput &&
+        activatedSessionId &&
+        !sessionIdsBeforeActivation.has(activatedSessionId)
+      ) {
         try {
-          return this.acceptInitialSessionInput(
-            this.applyCanonicalSessionTitleToResponse(
-              await this.terminals.startTuiMuxSession({
-                launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-                ...(request.attach !== undefined ? { attach: request.attach } : {}),
-                providerSessionId: request.providerSessionId,
-                ...(request.origin !== undefined ? { origin: request.origin } : {}),
-              }),
-            ),
-            request.initialInput,
+          await this.sessionLifecycle.discardUnacceptedSession(
+            activatedSessionId,
+            request.attach?.client.id ?? request.initialInput.clientId,
           );
-        } catch (error) {
-          preparedResume.rollback();
-          throw error;
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            "Session resume failed and its unaccepted live shell could not be discarded.",
+          );
         }
       }
-      if (this.shouldUseNativeTuiBackend(request)) {
-        if (request.cwd) {
-          await assertExistingWorkingDirectory(request.cwd, "Session working directory");
-        }
-        this.pruneOrphanSessions();
-        const preparedResume = prepareProviderSessionResume({
-          services: this,
-          provider: request.provider,
-          providerSessionId: request.providerSessionId,
-          preferStoredReplay: request.preferStoredReplay,
-          ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
-          rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
-        });
-        try {
-          return this.acceptInitialSessionInput(
-            this.applyCanonicalSessionTitleToResponse(
-              await this.terminals.startNativeTuiSession({
-                launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-                ...(request.attach !== undefined ? { attach: request.attach } : {}),
-                providerSessionId: request.providerSessionId,
-                ...(request.origin !== undefined ? { origin: request.origin } : {}),
-              }),
-            ),
-            request.initialInput,
-          );
-        } catch (error) {
-          preparedResume.rollback();
-          throw error;
-        }
-      }
-      return this.acceptInitialSessionInput(
-        this.applyCanonicalSessionTitleToResponse(
-          await this.structuredProviders.resumeSession(request),
-        ),
-        request.initialInput,
-      );
-    } finally {
-      releaseReservation();
+      throw error;
     }
   }
 
@@ -1862,12 +1875,37 @@ export class RuntimeEngine {
     return isTuiMuxFallbackProvider(request.provider) && this.nativeTuiProviders.supports(request.provider);
   }
 
-  attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
-    const response = this.sessionLifecycle.attachSession(sessionId, request);
-    return {
-      ...response,
-      session: this.applyCanonicalSessionTitle(response.session),
-    };
+  async attachSession(
+    sessionId: string,
+    request: AttachSessionRequest,
+  ): Promise<AttachSessionResponse> {
+    this.assertAcceptingWork();
+    const attached = this.sessionLifecycle.attachSession(sessionId, request);
+    let session = attached.session;
+    if (
+      request.modeId &&
+      session.session.mode?.currentModeId !== request.modeId
+    ) {
+      session = await this.sessionLifecycle.setSessionMode(sessionId, request.modeId);
+    }
+    if (
+      request.model &&
+      (session.session.model?.currentModelId !== request.model ||
+        request.optionValues !== undefined)
+    ) {
+      session = await this.sessionLifecycle.setSessionModel(sessionId, {
+        modelId: request.model,
+        ...(request.optionValues !== undefined
+          ? { optionValues: request.optionValues }
+          : {}),
+      });
+    }
+    return this.acceptInitialSessionInput(
+      {
+        session: this.applyCanonicalSessionTitle(session),
+      },
+      request.initialInput,
+    );
   }
 
   claimControl(sessionId: string, request: ClaimControlRequest): SessionSummary {
@@ -1911,11 +1949,11 @@ export class RuntimeEngine {
         ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
       })
     ) {
-      markAcceptedSessionInput(this.sessionStore, this.eventBus, sessionId);
+      markSessionInputPending(this.sessionStore, this.eventBus, sessionId);
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).sendInput(sessionId, request);
-    markAcceptedSessionInput(this.sessionStore, this.eventBus, sessionId);
+    markSessionInputPending(this.sessionStore, this.eventBus, sessionId);
   }
 
   private sendStructuredInput(sessionId: string, request: SessionInputRequest): void {
@@ -2040,7 +2078,7 @@ export class RuntimeEngine {
     const closingProvider = closingState?.session.provider;
     const stoppedRef = stoppedSessionRef(closingState);
     await this.sessionLifecycle.closeSession(sessionId, request);
-    this.conversationResourceIndexes.invalidate(sessionId);
+    this.conversationPages.invalidate(sessionId);
     if (stoppedRef) {
       this.updateStoredSessionsCache(
         [
@@ -2183,44 +2221,6 @@ export class RuntimeEngine {
     );
   }
 
-  private async restorePersistedTurnFileChanges(
-    sessionId: string,
-    turns: readonly ConversationTurnProjection[],
-  ): Promise<ConversationTurnProjection[]> {
-    const ownerId = turnArtifactOwnerKey(
-      sessionId,
-      this.sessionStore.getSession(sessionId)?.session,
-    );
-    return await Promise.all(turns.map(async (turn) => {
-      // The card summary and the clicked file content must be two views of the
-      // same frozen artifact. Never retain an unbacked history projection:
-      // rollout patch activity is not an aggregate turn diff, and current
-      // workspace state is not historical evidence.
-      const { fileChanges: _unbackedFileChanges, ...turnWithoutFileChanges } = turn;
-      const artifactTurnIds = [
-        turn.providerTurnId,
-        turn.id,
-      ].filter(
-        (turnId, index, values): turnId is string =>
-          typeof turnId === "string" && values.indexOf(turnId) === index,
-      );
-      for (const artifactTurnId of artifactTurnIds) {
-        const persisted = await this.turnArtifacts.findTurnFileChanges(
-          ownerId,
-          artifactTurnId,
-          sessionId,
-        );
-        if (persisted) {
-          return {
-            ...turnWithoutFileChanges,
-            fileChanges: persisted.fileChanges,
-          };
-        }
-      }
-      return turnWithoutFileChanges;
-    }));
-  }
-
   async getWorkspaceGitStatus(dir: string, options?: { baseBranch?: string }) {
     return await this.workspaceOperations.getWorkspaceGitStatus(dir, options);
   }
@@ -2280,283 +2280,41 @@ export class RuntimeEngine {
 
   getConversationEvidencePage(
     sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: ConversationEvidenceDetailMode },
-  ): ConversationEvidencePage {
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    if (!adapter?.getConversationEvidencePage) {
-      return { sessionId, events: [] };
-    }
-    const session = this.sessionStore.getSession(sessionId)?.session;
-    const page = this.historySnapshots.getPage({
-      sessionId,
-      ...(options?.cursor ? { cursor: options.cursor } : {}),
-      ...(options?.limit ? { limit: options.limit } : {}),
-      loadFrozenPage: () => adapter.createFrozenHistoryPageLoader?.(sessionId),
-      loadEvents: () =>
-        adapter.getConversationEvidencePage!(
-          sessionId,
-          options?.beforeTs
-            ? { beforeTs: options.beforeTs, limit: MAX_MATERIALIZED_HISTORY_EVENTS }
-            : { limit: MAX_MATERIALIZED_HISTORY_EVENTS },
-        ).events,
-    });
-    const filtered = filterCouncilManagedHistoryPage(session, page);
-    if (options?.detail === "full") {
-      return fullHistoryPage(filtered);
-    }
-    if (options?.detail === "chat") {
-      return chatHistoryPage(filtered);
-    }
-    return summarizeHistoryPage(filtered);
+    options?: Parameters<RuntimeConversationPages["getEvidencePage"]>[1],
+  ) {
+    return this.conversationPages.getEvidencePage(sessionId, options);
   }
 
   async getSessionConversationTurns(
     sessionId: string,
     options?: { cursor?: string; limit?: number; liveOnly?: boolean },
   ): Promise<ConversationTurnsPageResponse> {
-    const turnLimit = Math.max(1, Math.min(options?.limit ?? 20, 100));
-    if (options?.liveOnly) {
-      const resident = this.conversationStore.snapshot(sessionId);
-      const response: ConversationTurnsPageResponse = {
-        ...resident,
-        turns: summarizeConversationTurnsForTransport(
-          resident.turns.slice(-turnLimit),
-        ),
-        liveRevision: resident.liveRevision,
-      };
-      response.approximateBytes = approximateJsonByteLength(response);
-      return response;
-    }
-    const historyEventLimit = Math.min(500, Math.max(100, turnLimit * 40));
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    const liveRevisionAtRequest = this.conversationStore.snapshot(sessionId).liveRevision;
-    const sourceRevisionAtRequest =
-      await adapter?.getSessionConversationSourceRevision?.(sessionId);
-    const cacheAddress = {
-      sessionId,
-      ...(options?.cursor ? { cursor: options.cursor } : {}),
-      limit: turnLimit,
-    };
-    if (sourceRevisionAtRequest) {
-      const cached = this.conversationPages.get(cacheAddress, {
-        sourceRevision: sourceRevisionAtRequest,
-        liveRevision: liveRevisionAtRequest,
-      });
-      if (cached) {
-        return cached;
-      }
-    }
-    const nativeTurnPage = await adapter?.getConversationSummaryEvidencePage?.(sessionId, {
-      ...(options?.cursor ? { cursor: options.cursor } : {}),
-      limit: turnLimit,
-    });
-    const historyPage =
-      nativeTurnPage ??
-      this.getConversationEvidencePage(sessionId, {
-        ...(options?.cursor ? { cursor: options.cursor } : {}),
-        limit: historyEventLimit,
-        detail: "summary",
-      });
-    const session = this.sessionStore.getSession(sessionId)?.session;
-    const seenEventIds = new Set<string>();
-    const events = historyPage.events
-      .filter((event) => {
-        if (event.turnId === undefined || seenEventIds.has(event.id)) {
-          return false;
-        }
-        seenEventIds.add(event.id);
-        return true;
-      })
-      // Stored history and the live EventBus own independent sequence spaces.
-      // The history page establishes an isolated baseline projection.
-      .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
-    const projectedHistory = projectConversation(sessionId, events, {
-      // Native turn pages already carry provider lifecycle. Do not close their
-      // trailing in-progress turn merely because it is being viewed through a
-      // stored-history projection.
-      assumeSettled:
-        nativeTurnPage === undefined &&
-        (session?.status === "stopped" || session?.runtime?.kind === "stored_history"),
-      partial: Boolean(historyPage.nextCursor ?? historyPage.nextBeforeTs),
-    });
-    const projection = nativeTurnPage
-      ? {
-          ...projectedHistory,
-          turns: projectedHistory.turns.map((turn) => ({
-            ...turn,
-            itemsView: "summary" as const,
-            ...(turn.providerTurnId !== undefined &&
-            historyPage.turnProcessDetailsAvailable?.[turn.providerTurnId] !==
-              undefined
-              ? {
-                  processDetailsAvailable:
-                    historyPage.turnProcessDetailsAvailable[
-                      turn.providerTurnId
-                    ],
-                }
-              : {}),
-          })),
-        }
-      : projectedHistory;
-    // History paging may await provider I/O. Read the resident overlay only
-    // after that await, and return its content plus live revision atomically.
-    const liveSnapshot = options?.cursor
-      ? {
-          ...projection,
-          liveRevision: this.conversationStore.snapshot(sessionId).liveRevision,
-        }
-      : this.conversationStore.overlayLiveSnapshot(projection);
-    const { liveRevision, ...responseProjection } = liveSnapshot;
-    const pageTurns = await this.restorePersistedTurnFileChanges(
-      sessionId,
-      nativeTurnPage
-      ? responseProjection.turns
-      : responseProjection.turns.slice(-turnLimit),
-    );
-    // The client compares this token with the lightweight provider revision
-    // endpoint. Prefer that same token family over a pager's private frozen
-    // boundary; mixing the two makes an unchanged source look stale forever.
-    // The pre-read token is intentionally conservative if the source grows
-    // during materialization: the next lightweight probe will schedule one
-    // more canonical refresh instead of falsely declaring the page current.
-    const responseSourceRevision =
-      sourceRevisionAtRequest ?? historyPage.sourceRevision;
-    const response: ConversationTurnsPageResponse = {
-      ...responseProjection,
-      liveRevision,
-      ...(responseSourceRevision
-        ? { sourceRevision: responseSourceRevision }
-        : {}),
-      // A native page owns its cursor boundary. A live turn may be appended on
-      // top of that page, so trimming it again could create a pagination gap.
-      turns: summarizeConversationTurnsForTransport(pageTurns),
-      ...(historyPage.nextCursor || historyPage.nextBeforeTs
-        ? { nextCursor: historyPage.nextCursor ?? historyPage.nextBeforeTs }
-        : {}),
-    };
-    response.approximateBytes = approximateJsonByteLength(response);
-    if (response.sourceRevision) {
-      this.conversationPages.set(
-        cacheAddress,
-        {
-          sourceRevision: response.sourceRevision,
-          liveRevision,
-        },
-        response,
-      );
-    }
-    return response;
+    return await this.conversationPages.getTurns(sessionId, options);
   }
 
   async getSessionConversationSourceRevision(sessionId: string) {
-    const sourceRevision =
-      await this.storedHistoryAdapterForSession(
-        sessionId,
-      )?.getSessionConversationSourceRevision?.(sessionId);
-    return {
-      sessionId,
-      sourceRevision: sourceRevision ?? null,
-    };
+    return await this.conversationPages.getSourceRevision(sessionId);
   }
 
   async getSessionConversationVisualArtifact(
     sessionId: string,
     artifactId: string,
   ) {
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    const artifact =
-      await adapter?.getSessionConversationVisualArtifact?.(
-        sessionId,
-        artifactId,
-      );
-    if (!artifact) {
-      throw new Error(
-        `Unknown conversation visual artifact ${artifactId} for session ${sessionId}.`,
-      );
-    }
-    return artifact;
+    return await this.conversationPages.getVisualArtifact(sessionId, artifactId);
   }
-
+  getSessionConversationVisualArtifactSource(sessionId: string, artifactId: string) { return this.conversationPages.getVisualArtifactSource(sessionId, artifactId); }
   async getSessionConversationTurnDetail(
     sessionId: string,
     options: { turnId: string; providerTurnId: string },
-  ): Promise<ConversationTurnDetailResponse | undefined> {
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    const nativePage = await adapter?.getSessionConversationTurnDetail?.(sessionId, {
-      providerTurnId: options.providerTurnId,
-    });
-    if (!nativePage) {
-      return undefined;
-    }
-    const events = nativePage.events
-      .filter((event) => event.turnId !== undefined)
-      .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
-    const projection = projectConversation(sessionId, events, {
-      assumeSettled: true,
-      partial: true,
-    });
-    const projectedTurn = projection.turns.find(
-      (candidate) => candidate.providerTurnId === options.providerTurnId,
-    );
-    if (!projectedTurn) {
-      return undefined;
-    }
-    const [turn] = await this.restorePersistedTurnFileChanges(sessionId, [{
-      ...projectedTurn,
-      id: options.turnId,
-      itemsView: "full" as const,
-      items: projectedTurn.items.map((item) => ({ ...item, turnId: options.turnId })),
-    }]);
-    if (!turn) {
-      return undefined;
-    }
-    const response: ConversationTurnDetailResponse = {
-      sessionId,
-      turnId: options.turnId,
-      turn,
-    };
-    response.approximateBytes = approximateJsonByteLength(response);
-    return response;
+  ) {
+    return await this.conversationPages.getTurnDetail(sessionId, options);
   }
 
   async getSessionConversationResourceIndex(
     sessionId: string,
     options?: { refresh?: boolean },
-  ): Promise<ConversationResourceIndexResponse> {
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    const historyRevision =
-      (await adapter?.getSessionConversationSourceRevision?.(sessionId)) ??
-      adapter?.createFrozenHistoryPageLoader?.(sessionId)?.boundary?.sourceRevision;
-    const state = this.sessionStore.getSession(sessionId);
-    const liveRevision = this.conversationStore.snapshot(sessionId).liveRevision;
-    const sourceRevision = JSON.stringify({
-      history: historyRevision ?? null,
-      providerSessionId: state?.session.providerSessionId ?? null,
-      liveRevision,
-      status: state?.session.status ?? null,
-      fallbackActivity:
-        historyRevision === undefined
-          ? state?.conversationActivityAt ?? state?.session.updatedAt ?? sessionId
-          : null,
-    });
-    return this.conversationResourceIndexes.load({
-      sessionId,
-      sourceRevision,
-      progressive: true,
-      ...(options?.refresh ? { refresh: true } : {}),
-      readTurns: (cursor) =>
-        this.getSessionConversationTurns(sessionId, {
-          ...(cursor ? { cursor } : {}),
-          limit: 100,
-        }),
-      readTurnDetail: (turn) =>
-        turn.providerTurnId
-          ? this.getSessionConversationTurnDetail(sessionId, {
-              turnId: turn.id,
-              providerTurnId: turn.providerTurnId,
-            })
-          : Promise.resolve(undefined),
-    });
+  ) {
+    return await this.conversationPages.getResourceIndex(sessionId, options);
   }
 
   async getSessionConversationItemDetail(
@@ -2567,171 +2325,19 @@ export class RuntimeEngine {
       providerTurnId: string;
       providerItemId: string;
     },
-  ): Promise<ConversationItemDetailResponse | undefined> {
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    const nativePage = await adapter?.getSessionConversationItemDetail?.(sessionId, {
-      providerTurnId: options.providerTurnId,
-      providerItemId: options.providerItemId,
-    });
-    const page = nativePage ?? (() => {
-      const eventsById = new Map<string, RahEvent>();
-      for (const kind of ["tool_call", "observation"] as const) {
-        for (const event of this.getSessionHistoryItemDetail(sessionId, {
-          kind,
-          itemId: options.providerItemId,
-        }).events) {
-          eventsById.set(event.id, event);
-        }
-      }
-      return eventsById.size > 0
-        ? { sessionId, events: [...eventsById.values()] }
-        : undefined;
-    })();
-    if (!page) {
-      return undefined;
-    }
-    const events = page.events
-      .filter((event) => event.turnId !== undefined)
-      .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
-    const projection = projectConversation(sessionId, events, { partial: true });
-    const turn = projection.turns.find(
-      (candidate) => candidate.providerTurnId === options.providerTurnId,
-    );
-    const item = turn?.items.find(
-      (candidate) =>
-        candidate.id === options.itemId ||
-        candidate.providerItemId === options.providerItemId,
-    );
-    if (!turn || !item) {
-      return undefined;
-    }
-    const turnId = options.turnId ?? turn.id;
-    const storedProcessOutput = await this.processOutputs.read(
-      sessionId,
-      options.providerItemId,
-    );
-    const hydratedItem = storedProcessOutput
-      ? (() => {
-          if (item.content.kind === "tool") {
-            const toolCall = item.content.toolCall;
-            const retainedArtifacts = (toolCall.detail?.artifacts ?? []).filter(
-              (artifact) =>
-                !(
-                  artifact.kind === "text" &&
-                  (artifact.label === "output" || artifact.label === "stdout")
-                ),
-            );
-            return {
-              ...item,
-              detailAvailable: true,
-              content: {
-                ...item.content,
-                toolCall: {
-                  ...toolCall,
-                  detailAvailable: true,
-                  detailSizeBytes: storedProcessOutput.output.totalBytes,
-                  detail: {
-                    ...toolCall.detail,
-                    artifacts: [
-                      ...retainedArtifacts,
-                      {
-                        kind: "text" as const,
-                        label: "output",
-                        text: storedProcessOutput.text,
-                      },
-                    ],
-                  },
-                },
-              },
-            };
-          }
-          if (item.content.kind === "observation") {
-            const observation = item.content.observation;
-            const retainedArtifacts = (
-              observation.detail?.artifacts ?? []
-            ).filter(
-              (artifact) =>
-                !(
-                  artifact.kind === "text" &&
-                  (artifact.label === "output" || artifact.label === "stdout")
-                ),
-            );
-            return {
-              ...item,
-              detailAvailable: true,
-              content: {
-                ...item.content,
-                observation: {
-                  ...observation,
-                  detailAvailable: true,
-                  detailSizeBytes: storedProcessOutput.output.totalBytes,
-                  detail: {
-                    ...observation.detail,
-                    artifacts: [
-                      ...retainedArtifacts,
-                      {
-                        kind: "text" as const,
-                        label: "output",
-                        text: storedProcessOutput.text,
-                      },
-                    ],
-                  },
-                },
-              },
-            };
-          }
-          return item;
-        })()
-      : item;
-    const response: ConversationItemDetailResponse = {
-      sessionId,
-      turnId,
-      itemId: options.itemId,
-      item: {
-        ...hydratedItem,
-        id: options.itemId,
-        turnId,
-      },
-    };
-    response.approximateBytes = approximateJsonByteLength(response);
-    return response;
+  ) {
+    return await this.conversationPages.getItemDetail(sessionId, options);
   }
 
   async getSessionConversationDirectory(sessionId: string): Promise<ConversationTurnDirectoryResponse> {
-    const adapter = this.storedHistoryAdapterForSession(sessionId);
-    if (adapter?.getSessionConversationDirectory) {
-      return adapter.getSessionConversationDirectory(sessionId);
-    }
-    return buildConversationTurnDirectory({
-      sessionId,
-      loadPage: (cursor) => this.getSessionConversationTurns(sessionId, {
-        ...(cursor ? { cursor } : {}),
-        limit: 100,
-      }),
-    });
+    return await this.conversationPages.getDirectory(sessionId);
   }
 
   getSessionHistoryItemDetail(
     sessionId: string,
     options: { kind: "tool_call" | "observation"; itemId: string },
   ) {
-    const eventsById = new Map<string, RahEvent>();
-    const matches = (event: RahEvent) =>
-      historyEventMatchesItem(event, options.kind, options.itemId);
-    for (const event of this.historySnapshots.findCachedEvents(sessionId, matches)) {
-      eventsById.set(event.id, event);
-    }
-    for (const event of this.eventBus.list({ sessionIds: [sessionId] })) {
-      if (matches(event)) {
-        eventsById.set(event.id, event);
-      }
-    }
-    return {
-      sessionId,
-      kind: options.kind,
-      itemId: options.itemId,
-      events: [...eventsById.values()],
-    };
+    return this.conversationPages.getHistoryItemDetail(sessionId, options);
   }
 
   private storedHistoryAdapterForSession(
@@ -2849,7 +2455,7 @@ export class RuntimeEngine {
     await runShutdownStep("turn artifact flush", () => this.turnArtifacts.flush());
     await runShutdownStep("process output flush", () => this.processOutputs.flush());
     await runShutdownStep("conversation resource index flush", () =>
-      this.conversationResourceIndexes.flushPersistence(),
+      this.conversationPages.flushPersistence(),
     );
     await runShutdownStep("native local-server cleanup", async () => {
       const closedNativeServerPids = await cleanupRahNativeServerOrphans({

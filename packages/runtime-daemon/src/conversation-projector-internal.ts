@@ -12,6 +12,7 @@ import type {
   TimelineItem,
   TimelineTurnIdentity,
 } from "@rah/runtime-protocol";
+import { orderConversationTurnItems } from "@rah/runtime-protocol";
 import { stableTimelineHash } from "./timeline-identity";
 
 export interface MutableConversationTurn {
@@ -187,12 +188,13 @@ export function mergeTurn(
 }
 
 export function orderedItems(turn: MutableConversationTurn): ConversationItemProjection[] {
-  return [...turn.items.values()].sort((left, right) => {
+  const eventOrdered = [...turn.items.values()].sort((left, right) => {
     const orderDelta =
       (turn.itemOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
       (turn.itemOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER);
     return orderDelta || left.id.localeCompare(right.id);
   });
+  return orderConversationTurnItems(eventOrdered);
 }
 
 export function chooseFinalAnswer(turn: MutableConversationTurn) {

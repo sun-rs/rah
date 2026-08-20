@@ -1,302 +1,9 @@
 @import "./assistant-process-styles.css";
+@import "./composer-styles.css";
 /* Minimal custom CSS for code/diff and things Tailwind utilities don't cover cleanly */
 
 .chat-thread-shell {
   container: chat-thread / inline-size;
-}
-
-.rah-unified-composer {
-  container: rah-composer / inline-size;
-  width: 100%;
-  border: 1px solid color-mix(in srgb, var(--app-border) 88%, transparent);
-  border-radius: 1.5rem;
-  background: var(--app-bg);
-  box-shadow:
-    0 10px 30px rgba(15, 23, 42, 0.07),
-    0 1px 3px rgba(15, 23, 42, 0.04);
-  transition:
-    width 180ms cubic-bezier(0.23, 1, 0.32, 1),
-    margin-inline 180ms cubic-bezier(0.23, 1, 0.32, 1),
-    border-color 140ms ease,
-    box-shadow 140ms ease;
-}
-
-.rah-responsive-composer-shell {
-  container: rah-composer / inline-size;
-}
-
-.rah-composer-toolbar {
-  gap: 0.5rem;
-}
-
-.rah-composer-toolbar-leading {
-  flex: 1 1 auto;
-}
-
-.rah-composer-toolbar-trailing {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-inline-start: auto;
-}
-
-.rah-composer-plan-compact-glyph {
-  display: none;
-}
-
-:is(.rah-new-task-model-control, .rah-chat-composer-model-control) {
-  flex: 0 1 13rem;
-  width: min(13rem, 100%);
-  min-width: 3.5rem;
-  max-width: 13rem;
-  overflow: hidden;
-}
-
-:is(.rah-new-task-model-control, .rah-chat-composer-model-control)
-  .rah-composer-model-trigger {
-  width: 100%;
-  max-width: 100%;
-  white-space: nowrap;
-}
-
-@container rah-composer (max-width: 44rem) {
-  .rah-composer-toolbar {
-    gap: 0.25rem;
-  }
-
-  .rah-composer-toolbar-leading,
-  .rah-composer-toolbar-trailing,
-  .rah-composer-mode-controls {
-    gap: 0.125rem;
-  }
-
-  :is(.rah-new-task-model-control, .rah-chat-composer-model-control) {
-    flex-basis: 10.5rem;
-    max-width: 10.5rem;
-  }
-
-  .rah-composer-model-trigger,
-  .rah-composer-permission-trigger,
-  .rah-composer-plan-toggle {
-    font-size: 0.78125rem;
-  }
-}
-
-@container rah-composer (max-width: 34rem) {
-  .rah-composer-control-label {
-    display: none;
-  }
-
-  .rah-composer-permission-trigger,
-  .rah-composer-plan-toggle {
-    flex: 0 0 2.5rem;
-    width: 2.5rem;
-    justify-content: center;
-    gap: 0;
-    padding-inline: 0;
-  }
-
-  .rah-composer-plan-icon {
-    display: none;
-  }
-
-  .rah-composer-plan-compact-glyph {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .rah-composer-plan-toggle[data-plan-active="true"]
-    .rah-composer-plan-compact-glyph {
-    font-weight: 700;
-  }
-
-  :is(.rah-new-task-model-control, .rah-chat-composer-model-control) {
-    flex-basis: 8.5rem;
-    max-width: 8.5rem;
-  }
-
-  :is(.rah-new-task-model-control, .rah-chat-composer-model-control)
-    .rah-composer-model-trigger {
-    padding-inline: 0.375rem;
-  }
-}
-
-@container rah-composer (max-width: 25rem) {
-  :is(.rah-new-task-model-control, .rah-chat-composer-model-control) {
-    flex-basis: 7.5rem;
-    max-width: 7.5rem;
-  }
-
-  :is(.rah-new-task-model-control, .rah-chat-composer-model-control)
-    .rah-composer-model-trigger {
-    padding-inline: 0.25rem;
-  }
-}
-
-.rah-unified-composer[data-surface="chat"]:focus-within {
-  border-color: color-mix(in srgb, var(--app-fg) 22%, var(--app-border));
-  box-shadow:
-    0 14px 36px rgba(15, 23, 42, 0.09),
-    0 1px 4px rgba(15, 23, 42, 0.05);
-}
-
-.rah-unified-composer[data-surface="chat"][data-pwa="true"] {
-  width: calc(100% - 2rem);
-  margin-inline: 1rem;
-}
-
-.rah-unified-composer[data-surface="chat"][data-pwa="true"]:is(
-    [data-composer-expanded="true"], :focus-within,
-    :has([data-composer-control][aria-expanded="true"])
-  ) {
-  width: 100%;
-  margin-inline: 0;
-}
-
-.rah-unified-composer[data-pwa="true"] {
-  border-color: color-mix(in srgb, var(--app-border) 72%, transparent);
-  border-radius: 1.5rem;
-  box-shadow:
-    0 8px 26px rgba(15, 23, 42, 0.055),
-    0 1px 2px rgba(15, 23, 42, 0.035);
-}
-
-.rah-unified-composer[data-surface="chat"][data-pwa="true"]:focus-within {
-  border-color: color-mix(in srgb, var(--app-border) 72%, transparent);
-  box-shadow:
-    0 8px 26px rgba(15, 23, 42, 0.055),
-    0 1px 2px rgba(15, 23, 42, 0.035);
-}
-
-.rah-composer-plan-toggle[data-plan-active="true"] {
-  color: var(--app-resource-link);
-}
-
-.rah-new-task-composer-stack {
-  position: relative;
-}
-
-.rah-new-task-composer-stack > .rah-unified-composer {
-  position: relative;
-  z-index: 2;
-}
-
-.rah-new-task-workspace-strip {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  height: 2.5rem;
-  align-items: center;
-  gap: 0.375rem;
-  margin: -0.5rem 0.75rem 0;
-  padding: 0.5rem 0.5rem 0;
-  border-radius: 0 0 1rem 1rem;
-  background: var(--app-subtle-bg);
-}
-
-.provider-choice-module {
-  border: 0;
-  border-radius: 0.75rem;
-  background: transparent;
-  box-shadow: none;
-  transition: background-color 140ms ease;
-}
-
-.provider-choice-option {
-  position: relative;
-  color: var(--app-hint);
-  background: transparent;
-  box-shadow: none;
-}
-
-.provider-choice-option:hover {
-  color: var(--app-fg);
-  background: transparent;
-}
-
-.provider-choice-option:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.provider-choice-option.is-selected {
-  color: var(--app-fg);
-  background: transparent;
-  box-shadow: none;
-  font-weight: 600;
-}
-
-.provider-choice-option::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: 0.1875rem;
-  width: 1.25rem;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--app-resource-link);
-  opacity: 0;
-  transform: translateX(-50%);
-  transition:
-    width 140ms ease,
-    opacity 140ms ease;
-}
-
-.provider-choice-option.is-selected::after,
-.provider-choice-option:focus-visible::after {
-  opacity: 1;
-}
-
-.provider-choice-module[data-touch="true"] .provider-choice-option::after {
-  bottom: 0.25rem;
-  width: 1.5rem;
-}
-
-.provider-choice-option:focus-visible::after {
-  width: 1.5rem;
-}
-
-.provider-choice-label-text {
-  position: relative;
-}
-
-.provider-choice-label-text::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: -0.5rem;
-  left: 0;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--app-resource-link);
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
-
-.provider-choice-option-with-label.is-selected
-  .provider-choice-label-text::after,
-.provider-choice-option-with-label:focus-visible
-  .provider-choice-label-text::after {
-  opacity: 1;
-}
-
-@media (min-width: 43.75rem) {
-  .provider-choice-option-with-label::after {
-    display: none;
-  }
-}
-
-.provider-choice-module:has(.provider-choice-option:focus-visible) {
-  background: color-mix(in srgb, var(--app-subtle-bg) 58%, transparent);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .provider-choice-module:hover {
-    background: color-mix(in srgb, var(--app-subtle-bg) 58%, transparent);
-  }
 }
 
 .rah-recovery-notice {
@@ -312,81 +19,6 @@
 
 .rah-recovery-notice-symbol {
   color: color-mix(in srgb, var(--rah-recovery-orange) 82%, var(--app-fg));
-}
-
-@media (max-width: 699px) {
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"])) {
-    display: grid;
-    grid-template-columns: 2.25rem minmax(0, 1fr) 2.25rem;
-    grid-template-rows: 2.25rem;
-    column-gap: 0.375rem;
-    row-gap: 0;
-    padding: 0.375rem 0.625rem;
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-composer-toolbar,
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-composer-toolbar-leading,
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-composer-toolbar-trailing {
-    display: contents;
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-chat-composer-attach {
-    grid-column: 1;
-    grid-row: 1;
-    position: relative;
-    width: 2.25rem;
-    height: 2.25rem;
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    :is(.rah-chat-composer-attach, .rah-chat-composer-primary)::after {
-    position: absolute;
-    inset: -0.25rem;
-    content: "";
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-chat-composer-secondary,
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-chat-composer-context {
-    display: none;
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-chat-composer-input {
-    grid-column: 2;
-    grid-row: 1;
-    align-self: center;
-    overflow: hidden;
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-chat-composer-input textarea {
-    height: 2.25rem !important;
-    min-height: 2.25rem !important;
-    max-height: 2.25rem !important;
-    overflow: hidden;
-    white-space: nowrap;
-  }
-
-  .rah-unified-composer[data-surface="chat"][data-pwa="true"]:not([data-composer-expanded="true"]):not(:focus-within):not(:has([data-composer-control][aria-expanded="true"]))
-    .rah-chat-composer-primary {
-    grid-column: 3;
-    grid-row: 1;
-    position: relative;
-    width: 2.25rem;
-    height: 2.25rem;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .rah-unified-composer {
-    transition-duration: 0s;
-  }
 }
 
 .chat-turn-navigator {
@@ -1118,10 +750,8 @@ html[data-theme="light"] .code-block {
 
 .prose-chat h1:not(:first-child),
 .prose-chat h2:not(:first-child),
-.prose-chat h3:not(:first-child),
 .prose-chat-block:not(:first-child) > h1:first-child,
-.prose-chat-block:not(:first-child) > h2:first-child,
-.prose-chat-block:not(:first-child) > h3:first-child {
+.prose-chat-block:not(:first-child) > h2:first-child {
   border-top: 1px solid var(--app-border);
   padding-top: 1.15rem;
   margin-top: 1.35rem;
@@ -1741,6 +1371,19 @@ html[data-theme="light"] .code-block {
     color-mix(in oklab, var(--app-fg) 5%, var(--app-sidebar-bg));
 }
 
+.rah-sidebar-session-row {
+  --rah-sidebar-session-action-cover: 0px;
+}
+
+.rah-sidebar-session-row[data-sidebar-title-action-cover-count="1"] {
+  --rah-sidebar-session-action-cover: var(--rah-sidebar-action-size);
+}
+
+.rah-sidebar-session-row[data-sidebar-title-action-cover-count="2"] {
+  --rah-sidebar-session-action-cover:
+    calc(var(--rah-sidebar-action-size) + var(--rah-sidebar-action-size));
+}
+
 .rah-sidebar-row:hover,
 .rah-sidebar-row-selected,
 .rah-sidebar-row:focus-visible,
@@ -1792,6 +1435,32 @@ html[data-theme="light"] .code-block {
     top: 50%;
     right: 0;
     transform: translateY(-50%);
+  }
+
+  .rah-sidebar-row:hover:not([data-sidebar-title-action-cover-count="0"])
+    .rah-sidebar-session-title,
+  .rah-sidebar-row:not([data-sidebar-pointer-focus]):not(
+      [data-sidebar-title-action-cover-count="0"]
+    ):has(:focus-visible)
+    .rah-sidebar-session-title,
+  .rah-sidebar-row[data-sidebar-archive-armed="true"]:not(
+      [data-sidebar-title-action-cover-count="0"]
+    )
+    .rah-sidebar-session-title {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      black 0,
+      black calc(100% - var(--rah-sidebar-session-action-cover)),
+      transparent calc(100% - var(--rah-sidebar-session-action-cover) + 12px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      black 0,
+      black calc(100% - var(--rah-sidebar-session-action-cover)),
+      transparent calc(100% - var(--rah-sidebar-session-action-cover) + 12px),
+      transparent 100%
+    );
   }
 
   .rah-sidebar-row:hover

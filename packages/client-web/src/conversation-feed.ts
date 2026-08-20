@@ -5,11 +5,13 @@ import type {
   SessionQueuedInput,
   TimelineRuntimeModel,
 } from "@rah/runtime-protocol";
+import { orderConversationTurnItems } from "@rah/runtime-protocol";
 import type { FeedEntry } from "./types";
 import {
   buildProcessDetailRows,
   type ChatDisplayRow,
 } from "./components/chat/assistant-process-groups";
+import { conversationVisualOutputs } from "./conversation-visual-outputs";
 
 const feedEntriesByTurn = new WeakMap<
   ConversationTurnProjection,
@@ -19,6 +21,33 @@ const displayRowsByTurn = new WeakMap<
   ConversationTurnProjection,
   readonly ChatDisplayRow[]
 >();
+
+/**
+ * Older daemons could project a completed nested-agent observation under the
+ * nested turn id after the public main turn had already finished. The result
+ * is an impossible top-level turn: derived + in progress, but containing only
+ * terminal subagent lifecycle observations and no provider-session identity.
+ * Keep that corrupt compatibility shape out of every chat-facing projection.
+ */
+export function isDetachedTerminalSubagentTurn(
+  turn: ConversationTurnProjection,
+): boolean {
+  return (
+    turn.status === "in_progress" &&
+    turn.statusAuthority === "derived" &&
+    turn.providerSessionId === undefined &&
+    turn.finalAnswerItemId === undefined &&
+    turn.items.length > 0 &&
+    turn.items.every(
+      (item) =>
+        item.role === "process" &&
+        item.status !== "pending" &&
+        item.status !== "running" &&
+        item.content.kind === "observation" &&
+        item.content.observation.kind === "subagent.lifecycle",
+    )
+  );
+}
 
 export function conversationItemFeedKey(itemId: string): string {
   return `conversation:${itemId}`;
@@ -150,7 +179,7 @@ function canonicalFeedEntriesForTurn(
   if (cached) {
     return cached;
   }
-  const entries = turn.items
+  const entries = orderConversationTurnItems(turn.items)
     .map((item) => itemToFeedEntry(turn, item))
     .filter((entry): entry is FeedEntry => entry !== null);
   feedEntriesByTurn.set(turn, entries);
@@ -254,6 +283,9 @@ export function conversationTurnsToFeed(
   const feed: FeedEntry[] = [];
   const canonicalUserEntries: UserTimelineEntry[] = [];
   for (const turn of turns) {
+    if (isDetachedTerminalSubagentTurn(turn)) {
+      continue;
+    }
     for (const entry of canonicalFeedEntriesForTurn(turn)) {
       feed.push(entry);
       if (isUserTimelineEntry(entry)) {
@@ -339,16 +371,18 @@ export function conversationFeedWithInputQueue(
   return next;
 }
 
-function runtimeModelFromEntries(entries: readonly FeedEntry[]): TimelineRuntimeModel | undefined {
-  for (const entry of entries) {
+function runtimeModelFromItems(
+  items: readonly ConversationItemProjection[],
+): TimelineRuntimeModel | undefined {
+  for (const item of items) {
     if (
-      entry.kind === "timeline" &&
-      (entry.item.kind === "assistant_message" ||
-        entry.item.kind === "reasoning" ||
-        entry.item.kind === "step") &&
-      entry.item.runtimeModel
+      item.content.kind === "timeline" &&
+      (item.content.item.kind === "assistant_message" ||
+        item.content.item.kind === "reasoning" ||
+        item.content.item.kind === "step") &&
+      item.content.item.runtimeModel
     ) {
-      return entry.item.runtimeModel;
+      return item.content.item.runtimeModel;
     }
   }
   return undefined;
@@ -403,6 +437,15 @@ function sameDisplayRow(
       left.turnStatus === right.turnStatus &&
       left.turnId === right.turnId &&
       left.detailsAvailable === right.detailsAvailable
+    );
+  }
+  if (
+    left.kind === "turn_visual_outputs" &&
+    right.kind === "turn_visual_outputs"
+  ) {
+    return (
+      sameReferences(left.outputs, right.outputs) &&
+      left.omittedCount === right.omittedCount
     );
   }
   if (
@@ -467,6 +510,9 @@ export function conversationDisplayRows(
   activeVisibleEntries: readonly FeedEntry[] = visibleEntries,
   options: { generationActive?: boolean } = {},
 ): ChatDisplayRow[] {
+  const displayTurns = turns.filter(
+    (turn) => !isDetachedTerminalSubagentTurn(turn),
+  );
   const entryByKey = new Map(visibleEntries.map((entry) => [entry.key, entry]));
   const activeEntryByKey = new Map(
     activeVisibleEntries.map((entry) => [entry.key, entry]),
@@ -479,17 +525,25 @@ export function conversationDisplayRows(
         entry.key.startsWith("optimistic:user:"),
     )
     .sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
-  const supplementalUsersByTurn = new Map<string, UserTimelineEntry[]>();
+  const supplementalInitialUsersByTurn = new Map<string, UserTimelineEntry[]>();
+  const supplementalGuidesByTurn = new Map<string, UserTimelineEntry[]>();
   const pendingUserEntries: UserTimelineEntry[] = [];
   for (const entry of supplementalUserEntries) {
-    const ownerTurn = turns.find((turn) => userEntryBelongsToTurn(entry, turn));
+    const ownerTurn = displayTurns.find((turn) => userEntryBelongsToTurn(entry, turn));
     if (!ownerTurn) {
       pendingUserEntries.push(entry);
       continue;
     }
-    const current = supplementalUsersByTurn.get(ownerTurn.id) ?? [];
+    // A locally owned first prompt can be accepted before its canonical user
+    // item arrives (notably when the turn interrupts during handoff). Keep
+    // that row at the top-level turn boundary. Only a later user message in a
+    // turn that already has its first user item is an in-process Guide.
+    const ownerMap = ownerTurn.items.some((item) => item.role === "user")
+      ? supplementalGuidesByTurn
+      : supplementalInitialUsersByTurn;
+    const current = ownerMap.get(ownerTurn.id) ?? [];
     current.push(entry);
-    supplementalUsersByTurn.set(ownerTurn.id, current);
+    ownerMap.set(ownerTurn.id, current);
   }
   let pendingUserIndex = 0;
 
@@ -509,32 +563,54 @@ export function conversationDisplayRows(
     }
   };
 
-  for (const turn of turns) {
+  for (const turn of displayTurns) {
     insertPendingUsersBefore(turn);
-    for (const entry of supplementalUsersByTurn.get(turn.id) ?? []) {
+    const turnRowsStart = rows.length;
+    for (const entry of supplementalInitialUsersByTurn.get(turn.id) ?? []) {
       rows.push({ kind: "feed_entry", key: entry.key, entry });
     }
-    const turnRowsStart = rows.length;
+    const turnItems = orderConversationTurnItems(turn.items);
     const finalItem =
       (turn.finalAnswerItemId
-        ? turn.items.find((item) => item.id === turn.finalAnswerItemId)
-        : undefined) ?? [...turn.items].reverse().find((item) => item.role === "final");
+        ? turnItems.find((item) => item.id === turn.finalAnswerItemId)
+        : undefined) ?? [...turnItems].reverse().find((item) => item.role === "final");
     const processSettled = turn.status !== "in_progress" || finalItem !== undefined;
     // Process groups are already collapsed once a turn settles. Keep their
     // complete entry set available so an explicit Worked expansion cannot
     // disappear merely because completed tool cards are hidden globally.
     const processEntryByKey = activeEntryByKey;
-    const processEntries = turn.items
-      .filter((item) => item.role === "process")
+    const firstUserItemId = turnItems.find((item) => item.role === "user")?.id;
+    const isInTurnGuideItem = (item: ConversationItemProjection) =>
+      item.role === "user" && item.id !== firstUserItemId;
+    const canonicalProcessEntries = turnItems
+      .filter((item) => item.role === "process" || isInTurnGuideItem(item))
       .map((item) => processEntryByKey.get(conversationItemFeedKey(item.id)))
       .filter((entry): entry is FeedEntry => entry !== undefined);
-    const firstProcessItemId = turn.items.find((item) => item.role === "process")?.id;
+    // Once Guide is pressed, the client already knows which active turn owns
+    // the queued input. Merge that optimistic row into Worked immediately so
+    // it never flashes below the final reply while the native echo and
+    // conversation delta are still in flight. The canonical item replaces it
+    // by clientMessageId without changing the visual location.
+    const processEntries = [
+      ...canonicalProcessEntries,
+      ...(supplementalGuidesByTurn.get(turn.id) ?? []),
+    ];
+    const finalRuntimeModel =
+      finalItem?.content.kind === "timeline" &&
+      finalItem.content.item.kind === "assistant_message"
+        ? finalItem.content.item.runtimeModel
+        : undefined;
+    const runtimeModel = finalRuntimeModel ?? runtimeModelFromItems(turnItems);
+    const firstProcessItemId = turnItems.find(
+      (item) => item.role === "process" || isInTurnGuideItem(item),
+    )?.id;
     const processCompletedAt =
       turn.completedAt ??
       (finalItem ? itemTimestamp(turn, finalItem) : undefined);
     const durationMs =
       turn.durationMs ?? durationBetween(turn.startedAt, processCompletedAt);
     let processInserted = false;
+    let visualOutputsInserted = false;
     let fileChangesInserted = false;
     let copyActionInserted = false;
     const insertProcessGroup = () => {
@@ -561,7 +637,6 @@ export function conversationDisplayRows(
       ) {
         return;
       }
-      const runtimeModel = runtimeModelFromEntries(processEntries);
       rows.push({
         kind: "assistant_process_group",
         key: `conversation-process:${turn.id}`,
@@ -589,9 +664,18 @@ export function conversationDisplayRows(
     };
 
     const insertTurnArtifacts = () => {
-      // Outputs belong to the session resource index (Inspector). Rendering
-      // them here duplicates deliverables already linked from the answer.
-      // The chat stream owns only the completed turn's file-change summary.
+      if (!visualOutputsInserted) {
+        const visuals = conversationVisualOutputs(turn, finalItem?.id);
+        if (visuals.outputs.length > 0) {
+          rows.push({
+            kind: "turn_visual_outputs",
+            key: `conversation-visual-outputs:${turn.id}`,
+            outputs: visuals.outputs,
+            omittedCount: visuals.omittedCount,
+          });
+        }
+        visualOutputsInserted = true;
+      }
       if (
         !fileChangesInserted &&
         turn.status !== "in_progress" &&
@@ -627,9 +711,9 @@ export function conversationDisplayRows(
       copyActionInserted = true;
     };
 
-    for (const item of turn.items) {
+    for (const item of turnItems) {
       const entry = entryByKey.get(conversationItemFeedKey(item.id));
-      if (item.role === "process") {
+      if (item.role === "process" || isInTurnGuideItem(item)) {
         if (!processInserted && item.id === firstProcessItemId && processEntries.length > 0) {
           insertProcessGroup();
         }
@@ -665,7 +749,7 @@ export function conversationDisplayRows(
   }
 
   const latestPendingUser = supplementalUserEntries.at(-1);
-  const hasCanonicalActiveTurn = turns.some(
+  const hasCanonicalActiveTurn = displayTurns.some(
     (turn) => turn.status === "in_progress" && turn.finalAnswerItemId === undefined,
   );
   if (options.generationActive && latestPendingUser && !hasCanonicalActiveTurn) {

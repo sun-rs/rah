@@ -2,10 +2,11 @@ import { Menu } from "lucide-react";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
+  HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS,
 } from "../header-button-styles";
 
 export const MOBILE_SIDEBAR_TOGGLE_POSITION_CLASS =
-  "fixed left-2 top-[calc(env(safe-area-inset-top,0px)+0.5rem)] z-40";
+  `fixed left-2 ${HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS} z-40`;
 
 export function MobileSidebarToggleButton(props: {
   className?: string;

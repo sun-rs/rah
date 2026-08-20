@@ -1,7 +1,10 @@
 import type { TimelineVisualArtifact } from "@rah/runtime-protocol";
-import { AlertCircle, LoaderCircle } from "lucide-react";
+import { AlertCircle, FileCode2, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { readSessionConversationVisualArtifactDocument } from "../../api";
+import {
+  readSessionConversationVisualArtifactDocument,
+  readSessionConversationVisualArtifactSource,
+} from "../../api";
 import { useTheme } from "../../hooks/useTheme";
 
 const INITIAL_VISUAL_HEIGHT_PX = 240;
@@ -18,20 +21,66 @@ function boundedVisualHeight(value: unknown): number | undefined {
   );
 }
 
+export function InteractiveVisualArtifactError(props: {
+  artifact: TimelineVisualArtifact;
+  error: string;
+  onOpenLocalFile?: (path: string) => void;
+  sourcePath: string | null | undefined;
+}) {
+  return (
+    <div
+      className="flex min-h-20 w-full items-start gap-2 px-1 py-3 text-sm text-[var(--app-hint)]"
+      data-testid="interactive-visual-error"
+      title={props.error}
+    >
+      <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <div className="min-w-0">
+        <div>Interactive visual could not be displayed.</div>
+        {props.sourcePath && props.onOpenLocalFile ? (
+          <button
+            type="button"
+            className="mt-1 inline-flex max-w-full items-center gap-1 text-left text-[var(--app-link)] underline decoration-current/35 underline-offset-2 outline-none hover:decoration-current focus-visible:decoration-current"
+            title={props.sourcePath}
+            onClick={() => {
+              if (props.sourcePath) {
+                props.onOpenLocalFile?.(props.sourcePath);
+              }
+            }}
+          >
+            <FileCode2 size={14} className="shrink-0" aria-hidden="true" />
+            <span className="truncate">
+              {props.artifact.label ?? props.artifact.id}
+            </span>
+          </button>
+        ) : props.sourcePath === null ? (
+          <div className="mt-1 truncate text-xs" title={props.artifact.id}>
+            HTML source not found: {props.artifact.id}
+          </div>
+        ) : (
+          <div className="mt-1 text-xs">Locating HTML source…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function InteractiveVisualArtifact(props: {
   sessionId: string;
   artifact: TimelineVisualArtifact;
+  onOpenLocalFile?: (path: string) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { colorScheme } = useTheme();
   const [documentHtml, setDocumentHtml] = useState<string>();
   const [error, setError] = useState<string>();
+  const [sourcePath, setSourcePath] = useState<string | null>();
   const [height, setHeight] = useState(INITIAL_VISUAL_HEIGHT_PX);
 
   useEffect(() => {
     const controller = new AbortController();
     setError(undefined);
     setDocumentHtml(undefined);
+    setSourcePath(undefined);
     setHeight(INITIAL_VISUAL_HEIGHT_PX);
     void readSessionConversationVisualArtifactDocument(
       props.sessionId,
@@ -56,6 +105,24 @@ export function InteractiveVisualArtifact(props: {
               ? requestError.message
               : "The visual could not be loaded.",
           );
+          void readSessionConversationVisualArtifactSource(
+            props.sessionId,
+            props.artifact.id,
+            { signal: controller.signal },
+          )
+            .then((source) => {
+              if (!controller.signal.aborted) {
+                setSourcePath(source.path);
+              }
+            })
+            .catch((sourceError: unknown) => {
+              if (
+                !controller.signal.aborted &&
+                !(sourceError instanceof DOMException && sourceError.name === "AbortError")
+              ) {
+                setSourcePath(null);
+              }
+            });
         }
       });
     return () => controller.abort();
@@ -84,14 +151,14 @@ export function InteractiveVisualArtifact(props: {
 
   if (error) {
     return (
-      <div
-        className="flex min-h-20 w-full items-center gap-2 px-1 py-3 text-sm text-[var(--app-hint)]"
-        data-testid="interactive-visual-error"
-        title={error}
-      >
-        <AlertCircle size={16} aria-hidden="true" />
-        <span>This visual is no longer available.</span>
-      </div>
+      <InteractiveVisualArtifactError
+        artifact={props.artifact}
+        error={error}
+        sourcePath={sourcePath}
+        {...(props.onOpenLocalFile
+          ? { onOpenLocalFile: props.onOpenLocalFile }
+          : {})}
+      />
     );
   }
 

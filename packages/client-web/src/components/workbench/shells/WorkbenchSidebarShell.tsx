@@ -14,6 +14,7 @@ import {
 import type { WorkspaceSortMode } from "../../../session-browser";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS,
+  HEADER_EDGE_TOGGLE_DESKTOP_TOP_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
 } from "../header-button-styles";
 
@@ -88,7 +89,7 @@ export function WorkbenchSidebarShell(props: {
     <>
       <button
         type="button"
-        className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} fixed left-2 top-2 z-40 hidden md:inline-flex`}
+        className={`${HEADER_EDGE_TOGGLE_BUTTON_BASE_CLASS} fixed left-2 ${HEADER_EDGE_TOGGLE_DESKTOP_TOP_CLASS} z-40 hidden md:inline-flex`}
         onClick={props.sidebarOpen ? props.onCollapseSidebar : props.onExpandSidebar}
         aria-label={props.sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
         title={props.sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}

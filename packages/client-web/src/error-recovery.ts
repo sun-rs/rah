@@ -11,9 +11,6 @@ export type RecoveryAction = "refresh" | "claim_control" | "dismiss";
 export interface ErrorRecoveryDescriptor {
   title: string;
   body: string;
-  compactTitle?: string;
-  compactBody?: string;
-  compactPrimaryLabel?: string;
   presentation?: "callout" | "passive";
   primaryAction?: RecoveryAction;
   primaryLabel?: string;

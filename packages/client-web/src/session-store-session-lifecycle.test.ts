@@ -4,6 +4,8 @@ import type { SessionSummary } from "@rah/runtime-protocol";
 import {
   applyClosedSessionState,
   isPendingResumeProjectionTransferTarget,
+  mergeResumedHistoryProjection,
+  mergeStartedSessionProjection,
 } from "./session-store-session-lifecycle";
 import { type FeedEntry, type SessionProjection } from "./types";
 
@@ -92,6 +94,132 @@ test("defers automatic history loading for the live target of a pending Resume t
   assert.equal(isPendingResumeProjectionTransferTarget(state, "live"), true);
   live.session.providerSessionId = "provider-2";
   assert.equal(isPendingResumeProjectionTransferTarget(state, "live"), false);
+});
+
+test("resume HTTP completion cannot roll an event-fresh live projection backwards", () => {
+  const preservedSummary = summary();
+  preservedSummary.session.id = "history";
+  preservedSummary.session.status = "stopped";
+  preservedSummary.session.phase = "ended";
+  preservedSummary.session.runtimeState = "stopped";
+  const preserved = projection(preservedSummary);
+
+  const eventSummary = summary();
+  eventSummary.session.id = "live";
+  eventSummary.session.status = "running";
+  eventSummary.session.phase = "working";
+  eventSummary.session.runtimeState = "running";
+  eventSummary.session.updatedAt = "2026-05-01T11:00:02.000Z";
+  eventSummary.session.nativeTui = {
+    terminalId: "live",
+    viewAvailable: true,
+    promptState: "prompt_clean",
+    queuedInputCount: 0,
+  };
+  eventSummary.session.capabilities.nativeTui = true;
+  eventSummary.attachedClients = [];
+  eventSummary.controlLease = { sessionId: "live" };
+  const live = projection(eventSummary);
+  live.lastSeq = 42;
+  live.currentRuntimeStatus = "thinking";
+
+  const responseSummary = summary();
+  responseSummary.session.id = "live";
+  responseSummary.session.status = "running";
+  responseSummary.session.phase = "ready";
+  responseSummary.session.runtimeState = "idle";
+  // Equal timestamps are possible because lifecycle mutations can share a
+  // millisecond. A projection with applied event sequence still wins the tie.
+  responseSummary.session.updatedAt = "2026-05-01T11:00:02.000Z";
+  delete responseSummary.session.nativeTui;
+  responseSummary.session.capabilities.nativeTui = false;
+  responseSummary.attachedClients = [
+    {
+      id: "web-client",
+      kind: "web",
+      sessionId: "live",
+      connectionId: "web-connection",
+      attachMode: "interactive",
+      focus: true,
+      lastSeenAt: "2026-05-01T11:00:03.000Z",
+    },
+  ];
+  responseSummary.controlLease = {
+    sessionId: "live",
+    holderClientId: "web-client",
+    holderKind: "web",
+    grantedAt: "2026-05-01T11:00:03.000Z",
+  };
+
+  const merged = mergeResumedHistoryProjection(
+    responseSummary,
+    preserved,
+    live,
+  );
+
+  assert.equal(merged.summary.session.phase, "working");
+  assert.equal(merged.summary.session.runtimeState, "running");
+  assert.equal(merged.summary.session.nativeTui?.viewAvailable, true);
+  assert.equal(merged.summary.attachedClients[0]?.id, "web-client");
+  assert.equal(merged.summary.controlLease.holderClientId, "web-client");
+  assert.equal(merged.currentRuntimeStatus, "thinking");
+});
+
+test("New Task handoff keeps the canonical live conversation over a temporary projection error", () => {
+  const provisionalSummary = summary();
+  provisionalSummary.session.id = "starting-session:client-1";
+  provisionalSummary.session.providerSessionId = undefined;
+  provisionalSummary.session.phase = "starting";
+  const provisional = projection(provisionalSummary);
+  provisional.conversation = {
+    phase: "error",
+    loadedScope: "live",
+    turns: [],
+    nextCursor: null,
+    revision: 1,
+    daemonRevision: null,
+    pendingDeltas: [],
+    needsRefresh: false,
+    approximateBytes: 0,
+    sourceRevision: null,
+    loadedAt: null,
+    lastError: "temporary Session not found",
+  };
+
+  const liveSummary = summary();
+  liveSummary.session.id = "live";
+  const live = projection(liveSummary);
+  live.conversation = {
+    phase: "ready",
+    loadedScope: "live",
+    turns: [
+      {
+        id: "turn-1",
+        provider: "codex",
+        status: "completed",
+        statusAuthority: "native",
+        identityConfidence: "authoritative",
+        items: [],
+        activities: [],
+        failedItemCount: 0,
+      },
+    ],
+    nextCursor: null,
+    revision: 4,
+    daemonRevision: 4,
+    pendingDeltas: [],
+    needsRefresh: false,
+    approximateBytes: 512,
+    sourceRevision: null,
+    loadedAt: "2026-05-01T11:00:00.000Z",
+    lastError: null,
+  };
+
+  const merged = mergeStartedSessionProjection(liveSummary, provisional, live);
+
+  assert.equal(merged.conversation, live.conversation);
+  assert.equal(merged.conversation?.turns[0]?.id, "turn-1");
+  assert.equal(merged.conversation?.lastError, null);
 });
 
 test("remembers closed sessions using visible conversation activity, not runtime updatedAt", () => {

@@ -1,5 +1,5 @@
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { AlertTriangle, LoaderCircle, RefreshCcw, X } from "lucide-react";
+import { AlertTriangle, BellOff, LoaderCircle, RefreshCcw, X } from "lucide-react";
 import type { ErrorRecoveryDescriptor } from "../../../error-recovery";
 import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import type { ResponsiveTier } from "../../../responsive-layout";
@@ -18,6 +18,7 @@ export interface GlobalWorkbenchNotice {
   onRefresh: () => void;
   onClaimControl: (sessionId: string) => void;
   onDismiss: () => void;
+  dismissLabel?: string;
 }
 
 export function resolveGlobalWorkbenchCalloutPlacement(
@@ -63,12 +64,9 @@ export function GlobalWorkbenchCallout(
         : undefined;
 
   if (props.compact) {
-    const title = props.errorDescriptor.compactTitle ?? props.errorDescriptor.title;
-    const body = props.errorDescriptor.compactBody ?? props.errorDescriptor.body;
-    const primaryLabel =
-      props.errorDescriptor.compactPrimaryLabel ??
-      props.errorDescriptor.primaryLabel ??
-      "Retry";
+    const title = props.errorDescriptor.title;
+    const body = props.errorDescriptor.body;
+    const primaryLabel = props.errorDescriptor.primaryLabel ?? "Retry";
     return (
       <div
         role="alert"
@@ -87,7 +85,7 @@ export function GlobalWorkbenchCallout(
             <div className="truncate text-[13px] font-semibold leading-4 text-[var(--app-fg)]">
               {title}
             </div>
-            <div className="mt-0.5 line-clamp-2 text-xs leading-4 text-[var(--app-hint)]">
+            <div className="mt-0.5 hidden line-clamp-2 text-xs leading-4 text-[var(--app-hint)] sm:block">
               {body}
             </div>
           </div>
@@ -101,27 +99,37 @@ export function GlobalWorkbenchCallout(
               <span>{primaryLabel}</span>
             </button>
           ) : null}
-          <button
-            type="button"
-            className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] active:bg-[var(--app-border)]"
-            onClick={props.onDismiss}
-            aria-label="Dismiss notice"
-            title="Dismiss"
-          >
-            <X size={14} aria-hidden="true" />
-          </button>
+          {props.dismissLabel ? (
+            <button
+              type="button"
+              className="icon-click-feedback inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-xs font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] active:bg-[var(--app-border)]"
+              onClick={props.onDismiss}
+              aria-label={props.dismissLabel}
+              title={props.dismissLabel}
+            >
+              <BellOff size={13} aria-hidden="true" />
+              <span>{props.dismissLabel}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] active:bg-[var(--app-border)]"
+              onClick={props.onDismiss}
+              aria-label="Dismiss notice"
+              title="Dismiss"
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
   if (props.cornerCompact) {
-    const title = props.errorDescriptor.compactTitle ?? props.errorDescriptor.title;
-    const body = props.errorDescriptor.compactBody ?? props.errorDescriptor.body;
-    const primaryLabel =
-      props.errorDescriptor.compactPrimaryLabel ??
-      props.errorDescriptor.primaryLabel ??
-      "Retry";
+    const title = props.errorDescriptor.title;
+    const body = props.errorDescriptor.body;
+    const primaryLabel = props.errorDescriptor.primaryLabel ?? "Retry";
     return (
       <div
         role="alert"
@@ -156,15 +164,28 @@ export function GlobalWorkbenchCallout(
               <span>{primaryLabel}</span>
             </button>
           ) : null}
+          {props.dismissLabel ? (
+            <button
+              type="button"
+              className="icon-click-feedback inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              onClick={props.onDismiss}
+              aria-label={props.dismissLabel}
+              title={props.dismissLabel}
+            >
+              <BellOff size={12} aria-hidden="true" />
+              <span>{props.dismissLabel}</span>
+            </button>
+          ) : (
             <button
               type="button"
               className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-            onClick={props.onDismiss}
-            aria-label="Dismiss notice"
-            title="Dismiss"
-          >
-            <X size={12} aria-hidden="true" />
-          </button>
+              onClick={props.onDismiss}
+              aria-label="Dismiss notice"
+              title="Dismiss"
+            >
+              <X size={12} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
     );
@@ -187,7 +208,7 @@ export function GlobalWorkbenchCallout(
                 onPrimary: () => props.onClaimControl(props.selectedSummary!.session.id),
               }
             : {})}
-        secondaryLabel="Dismiss"
+        secondaryLabel={props.dismissLabel ?? "Dismiss"}
         onSecondary={props.onDismiss}
       />
     </div>

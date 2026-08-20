@@ -1,6 +1,6 @@
 # RAH Agent Handover
 
-> 生成时间：2026-08-05（Asia/Shanghai）
+> 复核时间：2026-08-13（Asia/Shanghai）
 > 仓库：`/Users/sun/Code/repos/rah`
 > 用途：让下一位 Agent 在不依赖超长对话历史的情况下，快速理解 RAH 的架构、产品约束、当前工作区和接手顺序。
 > 注意：这是交接快照，不替代代码、协议测试和 [`docs/README.md`](./docs/README.md) 中列出的权威文档。
@@ -22,7 +22,7 @@ RAH 是一个 **local-first、多 Provider、daemon-owned runtime 的 AI 工作�
 7. **本轮 Changes 不能用当前 Git 状态伪造**：只接受 Provider 权威的 per-turn diff artifact；旧历史没有 artifact 时明确显示 unavailable。
 8. **Provider 子进程必须和 RAH 隔离**：单个 Codex/Claude/OpenCode 高 CPU、海量 stdout 或卡死，不应拖死 daemon 和 Web；只有整机资源耗尽是不可避免边界。
 9. **不要补丁式修复**：先确定 canonical owner、identity、状态机和不变量，再补单元测试、协议测试、真实浏览器回归门禁。
-10. **本轮连续修复已经形成可追溯基线**：Runtime/历史收敛为 `9384c5b`，Workspace/PWA 为 `b12c1ce`，统一 Conversation UX、Session 连续性与最新发布门禁为 `30a3df1`；本文件作为独立 handover 提交跟随其后。不要 reset/revert 这些事故修复。
+10. **先守入口，再扩功能**：New / Resume / Attach 的首问只有收到同 identity 的 `session.input.accepted` 才算成功；进程启动、PTY 写入、RPC 返回或队列消失都不是交付。相关架构审查见 [`docs/architecture-review-2026-08.zh-CN.md`](./docs/architecture-review-2026-08.zh-CN.md)。
 
 ---
 
@@ -31,10 +31,10 @@ RAH 是一个 **local-first、多 Provider、daemon-owned runtime 的 AI 工作�
 ### 1.1 Git
 
 - 当前分支：`main`
-- 当前功能基线：`30a3df1`（`feat: unify conversation UX and session continuity`）。
+- 当前已推送基线：`7959805`（`fix: make session startup delivery atomic`）。
 - Web/Workspace 前置基线：`b12c1ce`（`fix(web): stabilize workspace lifecycle and PWA layout`）。
 - Runtime/历史前置基线：`9384c5b`（`fix(runtime): stabilize Codex catalog and history convergence`）。
-- 本 handover 作为 `30a3df1` 之后的独立文档提交；交付完成后 `main` 与 `origin/main` 应同时包含两者，`git status --short` 应为空。若现场不符，先审查来源，不能 reset/revert 用户改动。
+- 本轮工作可能位于未提交工作树；任何 Agent 都必须先用 `git status --short` 和 `git diff` 审查来源，不能 reset/revert 用户改动，也不能根据本文声称 worktree clean、已 push 或已 restart。
 
 近期已提交的重要提交：
 
@@ -53,7 +53,7 @@ RAH 是一个 **local-first、多 Provider、daemon-owned runtime 的 AI 工作�
 - PID 文件：`/Users/sun/.rah/runtime-daemon/daemon-43111.pid`
 - 日志：`/Users/sun/.rah/runtime-daemon/daemon-43111.log`
 - PID、Runtime ID 与 Web build ID 都是重启即变化的运行态，不再固化到 handover。读取 `node bin/rah.mjs status`、`/api/runtime` 与 `packages/client-web/dist/.rah-web-build.json` 获取当前值。
-- 本次交付要求：最终文档提交推送后执行一次用户授权的安全重启；验收必须同时满足 daemon `running`、Runtime source 为最终 `HEAD` 且 clean、首页 HTTP 200、daemon 与 dist 的 `webBuildId` 一致。
+- 只有用户明确授权时才重启；代码审查、构建和隔离 browser smoke 不构成重启授权。本轮明确要求过程中不重启在线 RAH。
 
 不要无故重启 daemon。重启会打断由 RAH 管理的 live Provider runtime；只有用户明确要求、构建 generation 不一致或修复确实需要进程重载时才做。
 
@@ -187,7 +187,7 @@ Timeline 主 identity 来自：
 
 用户已明确锁定以下行为：
 
-- New task 输入发送后直接进入 Chat，不出现中转页；首问文本、附件、注释及稳定 message/turn identity 必须作为 `initialInput` 原子进入 `/sessions/start`，禁止依赖跳转后的第二次 `/input`。启动期间 daemon 必须把唯一输入接入该 Session 的 canonical queue；HTTP 成功必须晚于 Provider 对这条 identity 的明确接收，不能只代表 Session 已创建或内存队列已接管。只有 provider-bound startup 成功才转移草稿所有权，任何拒绝都恢复问题与附件，且同一提交在完成前必须互斥。
+- New task 输入发送后直接进入 Chat，不出现中转页；首问文本、附件、注释及稳定 message/turn identity 必须作为 `initialInput` 原子进入 `/sessions/start`，禁止依赖跳转后的第二次 `/input`。发出 mutation 前客户端必须等待当前 event transport 的 initial replay 完成，以建立 baseline -> activation -> live delta 的因果顺序，不能用重连代替这一屏障。启动期间 daemon 必须把唯一输入接入该 Session 的 canonical queue；HTTP 成功必须晚于 Provider 对这条 identity 的明确接收，不能只代表 Session 已创建或内存队列已接管。只有 provider-bound startup 成功才转移草稿所有权，任何拒绝都恢复问题与附件，且同一提交在完成前必须互斥。临时 New projection 交接时只保留乐观草稿/配置，canonical conversation 以真实 Session 已收到的 live projection 为准；历史 Resume 相反，以 resident stopped transcript 为 baseline 再叠加 live lifecycle/delta，二者禁止共用不区分权威的 spread/merge。
 - 历史 Session 第一次发送后，问题气泡立即乐观出现，不等待 Resume 完成。
 - Composer 立即在原 Send 槽位切换为黑底白色、无动画的 Stop；用户继续输入时同槽恢复 Send。
 - Chat 过程行与 Sidebar 运行指示先显示 `Starting/Working`；Provider 接管后继续沿用同一 daemon-owned 状态，不能依赖标题栏临时文案。
@@ -204,12 +204,16 @@ Timeline 主 identity 来自：
 ### 5.3 Composer 草稿与队列
 
 - 每个 Session 必须有独立未发送 draft；A 输入后切到 B，B 是自己的 draft，再回 A 原内容仍在。
+  普通 Session Chat 与 Canvas 中指向同一 `{provider, providerSessionId}` 的 pane 必须共享这份仅内存
+  draft、附件和注释；Canvas 不能创建第二个 composer state owner。
 - running turn 中的追问进入显式 per-session FIFO queue。
 - 队列行位于 Composer 上方，支持排序、编辑、删除。
 - `Guide` 表示把消息插入当前 turn，而不是等待下一轮。
+- Guide 成功后必须以同一 `clientMessageId/clientTurnId` 形成当前 Provider turn 内的 canonical `user_message`，并按 Provider 事件顺序夹在 thinking/activity 之间；不能作为下一轮气泡留在 final 后面。`turn/steer` 与 turn 完成竞态时 queue 继续拥有消息并自动转为下一轮输入，重复点击 Guide 必须幂等，不能报“已不在等待”并丢弃消息。
 - `Side` 以该消息打开 side chat。
 - 因 `Guide` 已表达“立即插入”，全局“开启/关闭排队”开关没有足够独立语义，倾向移除。
-- queue row 与 Provider 接管后的 canonical user row 必须共享稳定 `clientMessageId/clientTurnId`，不能重复显示。
+- queue row 与 Provider 接管后的 canonical user row 必须共享稳定 `clientMessageId/clientTurnId`，不能重复显示。`submitting` 已经属于 Conversation row，Composer queue 只显示仍为 `queued` 的项。
+- standalone PWA 中 permission、Plan、model/effort、附件、context usage 及其 Portal 菜单都属于同一个 composer 编辑会话：统一由 `composer-focus-ownership.ts` 判定 pointer 所有权，内部交互默认在 `pointerdown` 阶段保留 textarea 焦点，不能关闭输入法或触发单行回缩；只有真正点击 composer/menu 之外或显式标记为 release 的遮罩才允许 blur 与收缩。新增 composer 控件不得自行另写一套 focus/outside-click 分支。
 
 ---
 
@@ -222,10 +226,23 @@ Timeline 主 identity 来自：
 - `useSessionStore.ts` 只组合 owner，不实现另一套 reducer。
 - auxiliary events 不能重建 Conversation。
 - raw Provider history 不能在 canonical error 后作为 UI fallback。
+- [`conversation-item-order.ts`](./packages/runtime-protocol/src/conversation-item-order.ts) 是 turn 内
+  语义展示顺序的唯一 owner。Resume 允许 Provider 先持久化 compaction/启动过程、后回写首问，
+  但 daemon projector、resident/history overlay、Web baseline/delta 与 renderer 都必须收敛为
+  “初始 user → process/后续 Guide → final”；不得把物理 arrival order 当作 UI 顺序，也不得在
+  各页面另写 timestamp/CSS 修正。
 - 大历史先加载 tail；上滚再取更早分页。
 - 不能一次传完整 JSONL/DB 到浏览器。
-- 浏览器内存负责页面生命周期内的 Session A→B→A；整页 reload 由 daemon-owned canonical page
-  hot cache 加速。该 cache 仅接受 terminal page，按 Runtime Session/cursor/limit、provider
+- 浏览器内存负责页面生命周期内的 Session A→B→A：独立的 bounded Conversation LRU 以
+  `{provider, providerSessionId}` 为键，和 daemon Session catalog/sidebar 拓扑分离。catalog refresh、
+  stopped replay 回收或 replay gap 不能清空此前已读正文；重选时先同步显示旧 tail，再只对当前可见
+  Session 做 canonical tail 校准，失败仍保留旧内容。跨 Runtime ID 恢复不复用旧 revision/cursor，
+  replay gap 禁止并发刷新所有非可见 Session。该内存层最多 16 项、单项约 8 MiB、总计约 32 MiB、
+  30 分钟 LRU，不得产生 Sidebar row，也不得写 localStorage/IndexedDB。校准响应中的
+  `itemsView=summary` 是有界传输视图，缺少旧 process/reasoning item 不是删除证据；同一 provider turn
+  必须保留已经展示的 thinking，仅显式 delta removal 或 full canonical view 才能删除。
+- 整页 reload 或 iOS 回收 Web 进程后由 daemon-owned canonical page hot cache 加速。该 cache 仅接受
+  terminal page，按 Runtime Session/cursor/limit、provider
   `sourceRevision` 与 resident `liveRevision` 精确命中，并受 1 MiB/条、128 条、32 MiB、30 分钟
   LRU 约束。任一 revision 变化即失效；不得把 Conversation 正文放进 localStorage/IndexedDB，
   也不得把旧热页与新 baseline 合并。当前 tab 只在 `sessionStorage` 保存最后选中 Session 的
@@ -258,6 +275,10 @@ Timeline 主 identity 来自：
 - 最终回复存在时，Worked 底部用细线和 final answer 分隔；仍在 Working、尚无 final answer 时不画该线。
 - 折叠状态也显示细线，但应紧贴 Worked 行和 final answer，不能留下大空白。
 - Interrupted 默认展开，以便用户知道中断位置；中断说明只能在 Worked/Interrupted 标题之下。
+- 每个 turn 的 provider/model/effort 入口是 `Working / Worked / Interrupted` 状态行最左侧的
+  provider 图标；它与状态文字共享一行，不能再占用 final footer 或独立标题行。Desktop 悬停图标、
+  PWA 点按图标显示完整 provider/model/effort 与来源；模型事实尚未到达时仍保留 provider 图标。
+  final footer 只保留 Copy 等回复动作。
 
 ---
 
@@ -294,6 +315,7 @@ Chats 的 Council tab 另按 Running / Stopped 分组；左侧 Council 区域只
 - Session 行尾 action 只能复用整行 hover surface；按钮与 action rail 均保持透明、无投影，不能再叠加独立灰色底板。action 出现时状态点暂时隐藏，离开后恢复，避免两层图标重叠。
 - PWA/touch：action 持续可见，排列为 status → pin → archive。
 - status 位于最右侧：spinner=working、蓝点=turn 完成未读、红点=error、绿点=running idle。
+- 点击蓝点必须在清除未读前冻结对应终态 turn/final identity，并一次性定位未读 final 顶部；final 慢到时以 tail 占位，不能替换成旧回复。首次真实滚动手势会在 capture 阶段撤销所有延迟校准，已消费 intent 不能因 Chat/TUI 重挂载而重放。
 - Desktop hover action 覆盖 status，而不是与 status 三者并排；PWA 才并排。
 - title overflow 用半透明 fade，不用 `...`。
 - 标题再长也不能推动 status/action 的固定位置。
@@ -364,6 +386,9 @@ Inspector tab 只能消费 cache。主 Chat 与每个可见 Canvas Session pane 
 - Task Summary 可以在 Working 时打开实时 turn review，但仍必须读取该轮权威 artifact/cache。
 - 默认列表 3 项，Show more 每次有界追加；顺序与 Provider/Codex Desktop 权威顺序一致，不自行按名称重排。
 - 审查按钮是文字按钮，透明底 + 1px 边框；hover 浅灰，active 更深。
+- `审查` 与列表中的文件行都打开同一个 turn-scoped `ReviewDialog`；点文件时 Review 直接选中该文件。
+  per-turn Changed Files 不再打开或维护右侧 Inspector。compact/PWA 的 Review 文件列表收进顶部可折叠
+  选择条，展开后仍复用同一冻结 artifact。
 - 整段回复 Copy 按钮位于 final answer + Outputs + Changed files 的最末尾，不能夹在正文和卡片之间。
 
 ### 8.5 Outputs 与 Sources
@@ -375,6 +400,7 @@ Inspector tab 只能消费 cache。主 Chat 与每个可见 Canvas Session pane 
 - 普通 `.rs/.ts/.py` 即使 final answer 中被引用，通常仍只属于 Changes。
 - 文档、媒体、数据、归档只有在成功产出且 final answer 明确交付时才可兼容推断。
 - Outputs 与 Changed files 可重叠，因为一个交付文档也可能是本轮改动。
+- 静态图片遵循三条互斥显示通道：显式 Markdown 图片由正文 renderer 原位显示；Provider-native image artifact/attachment 通过 `turn.outputs` 在 final answer 后显示有界缩略图组；普通 Markdown 图片文件链接保持链接，禁止在 Markdown renderer 内按扩展名全局改写为 `<img>`。兼容旧历史时，仅允许 daemon 将“独占一行、指向绝对本地图片路径”的链接推断为低置信度 image output，读取时还必须校验真实图片签名。
 
 **Sources**：Provider 历史中记录的输入/外部来源。
 
@@ -398,6 +424,7 @@ Resource index 是 daemon-owned、持久化、带版本的派生数据：
 ### 8.7 文件浏览器
 
 - 默认 Unified diff；支持 Split。
+- `.html` / `.htm` 文件提供 `Preview / Source` 双视图。Preview 只渲染静态 HTML、内联 CSS、内联 SVG 与 data media；文件脚本、外链资源、表单和跨页导航在 opaque sandbox 与严格 CSP 中被移除或阻断，不能访问 RAH 主页面。超过读取上限的截断 HTML 只显示源码前缀，不能把不完整文档伪装成有效预览。
 - 默认 Wrap；关闭 Wrap 时必须出现横向滚动条。
 - Whitespace 控制空格/Tab/行尾等不可见字符标记，默认关闭。
 - Wide Desktop 不用 backdrop 阻断其它界面；文件窗口打开时右侧 Inspector 仍可操作。
@@ -405,7 +432,9 @@ Resource index 是 daemon-owned、持久化、带版本的派生数据：
 - 用户当前打开期间可拖拽/缩放；关闭后位置重置。
 - 只有标题行可拖动；详细路径可选择复制。
 - PWA 竖屏占满可用屏幕。
-- Wide Desktop 的本轮单文件入口保留 Inspector + 文件查看器工作流；compact/medium/PWA 必须改走独立临时查看器并显式保持两种 Inspector panel state 关闭。关闭查看器直接回到 Chat，不能露出全屏 Inspector。回复审查与 active Task 中的 `Changed files` 共用不修改 Inspector 的 `ReviewDialog`。响应式 shell 同一时刻只能挂载一份 Inspector 内容，禁止隐藏 mobile Sheet 与 desktop panel 重复创建 viewer。
+- Workspace/Files/Outputs/Sources 继续使用 Inspector；per-turn Changed Files 专属于 Review，不得在
+  Desktop、PWA 或 Canvas 上分流到 Inspector/临时文件查看器。响应式 shell 同一时刻只能挂载一份
+  Inspector 内容，禁止隐藏 mobile Sheet 与 desktop panel 重复创建 viewer。
 - Insert file/folder picker 必须有 viewport 高度上限、内部滚动和不重叠的固定 footer。
 
 ---
@@ -417,7 +446,7 @@ Resource index 是 daemon-owned、持久化、带版本的派生数据：
 - Appearance 只控制 Session/Council 对话正文，不改变 Sidebar、菜单、标题或其它 UI。允许值为 12–20px，修改时立即应用并持久化；代码字号不向用户暴露独立设置，而是随正文从 11–16px 有界联动。Desktop 与 iOS standalone/PWA 读取同一对话字号 token，不再由 PWA 自动额外增加 2px。
 - 默认对话正文使用 Codex Desktop 规格的 14px/22px 系统 UI 字体、约 430 正文字重和 12px 代码；用户气泡保持 75%，Desktop/PWA 普通 turn gap 分别为 14px/12px，用户 Copy action 不占永久空白行，assistant commentary 使用无背景、无 padding 的连续正文，Markdown 块末间距收敛为 12px。
 - Home New task workspace selector 已移出 composer，成为左右内收 12px 的低对比附属条；条高 40px，顶部 8px 被 composer 覆盖、实际露出 32px，内部按钮 28px。按钮保留文件夹、完整 workspace 名和下拉入口，名称超过 18 字符才启用共享跑马灯。它不能挤占权限、Plan、模型或发送动作，也不能造成横向溢出。
-- iOS standalone/PWA 的全局恢复提示固定在顶部 safe-area 控制行下方，390×844 下高度不超过 72px，不覆盖 composer；版本不一致时使用精简文案和同一行 Retry/关闭动作。PWA 与 Wide Desktop 共享低对比橙色混色：orange-500 仅以 8% 混入页面底色、18% 混入普通边框且不使用投影，主要橙色留给小图标，不能退回土黄色。Session Chat、Council、Canvas 与提示锚点共用 `WORKBENCH_HEADER_LAYOUT` 的 40px/2.5rem 单行 token，提示必须位于标题分割线以下。notice host 留有 4px 内边距，不能裁掉四角。Wide Desktop 使用最大 24rem 的横向紧凑 toast，固定右/下 16px，完全脱离 composer/floating anchor；当前 1280×720 实测单提示为 384×49px。
+- iOS standalone/PWA 的全局恢复提示固定在顶部 safe-area 控制行下方，390×844 下高度不超过 72px，不覆盖 composer；Web/daemon generation 不一致在所有尺寸只使用同一份 `Restart RAH to update` / `Restart it on the host, then refresh this page.` 文案，不显示 PID 或 generation，不再维护 full/compact 两套语义。唯一操作为 `Mute today`，不提供 Retry；静音必须先立即写入本页内存，再尽力同步 localStorage、sessionStorage 与到本地午夜过期的同源 cookie，任一浏览器存储失败或随后发生的异步 compatibility probe 都不能让提示在当日重新出现，完整 reload 后仍须保持静音。PWA 与 Wide Desktop 共享低对比橙色混色：orange-500 仅以 8% 混入页面底色、18% 混入普通边框且不使用投影，主要橙色留给小图标，不能退回土黄色。Session Chat、Council、Canvas 与提示锚点共用 `WORKBENCH_HEADER_LAYOUT` 的 40px/2.5rem 单行 token，提示必须位于标题分割线以下。notice host 留有 4px 内边距，不能裁掉四角。Wide Desktop 使用最大 24rem 的横向紧凑 toast，固定右/下 16px，完全脱离 composer/floating anchor；当前 1280×720 实测单提示为 384×49px。
 - Sidebar 已收口为 `sidebar-layout-contract.ts` 的单一 `codex-compact-v1` 协议，Desktop 与 compact/PWA Sheet 都消费同一组 CSS variables，响应式只允许改变 action 可见时机。默认宽度 272px，双击 divider 恢复并持久化 272px；两种 surface 都是 40px 无下划线 header、首个 New task 顶距 4px、内容边界左右 8px。RAH/导航/分组/workspace/session 固定 `16/15/13/14/14px` 与 `600/500/550/500/450`；导航图标 18px、workspace 图标 20px 槽内 16px，workspace/session 行高 30px、pill 圆角 10px，同组/工作区组/大分区间距固定 2/6/12px，动作单元固定 28px。PWA 侧栏滚动不再预留 scrollbar gutter；Workspace/Session 标题垂直中心偏差为 0。New task、Council、Canvas、Chats 与 Session 共用浅灰 hover/选中 surface；Codex session 不显示左侧 provider 图标，Claude/OpenCode session 显示各自 16px bare logo，状态仍统一留在右侧；pin/archive rail 透明无投影。Session tooltip 为 160ms、sidebar 级单例。
 - Home New task 与 Session Chat 必须复用白底、细边框、24px 圆角、轻阴影的统一 composer surface 和 `UnifiedComposerToolbar`；placeholder 统一为 `Work with Rah`。能力 catalog 在页面/Session 可见时后台加载，与用户是否点击 composer、Session 是否 running 解耦；权限、Plan、完整模型 ID 与灰色 effort 默认都可见。工具栏采用 Codex Desktop 的 ghost 层级：静止态不画 pill 边框或独立底板，仅 hover/open 使用轻微底色；`+` 固定为最左侧 20px/1.75 细描边，权限与 Plan 随后，模型紧贴最右 Send/Stop。Plan 激活只使用资源蓝文字和更高字重，背景保持透明且无阴影；PWA 空间不足时同一控件压缩为加粗 `P`。权限菜单只显示有间距的文字选项与必要图标/选中标记，不显示说明。provider selector 固定为 36px 单层选择条：没有常驻宿主灰底、外框、滑动块或单项底板；Desktop 当前项以 600 字重和与文字实际等宽的蓝色 2px 横线表示，PWA 隐藏文字时使用蓝色 `24×2px` 图标标记。pointer hover 的整组轻背景移开立即隐藏，只有键盘 `focus-visible` 期间允许继续保留。Chat 最右只保留一个黑白主动作槽：working 空白态为无动画 Stop，新文本或附件出现后同槽替换为 Send。PWA Chat 失焦时为左右各 16px inset 的单行 pill，长 draft 也折叠；聚焦或任一 composer 菜单保持展开时横向扩展、显示配置与有界多行文本，关闭/失焦后恢复。New task 聚焦前后几何与强调不变，所有宽度复用同一条右对齐 toolbar rail；窄屏通过压缩 permission/Plan 标签和 model 宽度保持单行，不能建立独立移动布局。
 - Session/Council 标题不再重复显示 `Stopped` 等侧栏已表达的运行状态。若 Provider 提供 context usage，composer 在模型左侧显示圆环；Desktop hover、PWA 点击打开 token 详情。
@@ -431,7 +460,7 @@ Resource index 是 daemon-owned、持久化、带版本的派生数据：
 ### 9.2 用户消息与历史附件
 
 - 用户气泡 padding 更紧凑、底色更浅。
-- 当前和历史中的图片都应显示可点击缩略图；本地 Markdown 图片最高 160px，远程图片最高 200px，连续的纯图片段落以 12px 间距在同一行自动排列并按宽度换行，不能恢复为全宽大图纵向堆叠。真实文件已失效时至少显示统一图片占位，不得把整段注入的 `Files mentioned…` 与绝对路径当普通正文展开。
+- 当前和历史中的图片都应显示可点击缩略图；本地 Markdown 图片最高 160px，远程图片最高 200px，连续的纯图片段落以 12px 间距在同一行自动排列并按宽度换行，不能恢复为全宽大图纵向堆叠。独立 image outputs 同样以 12px gap 并排、每轮最多内联 8 项，其余只显示省略计数并继续保留在 Inspector；只在 turn 终态显示，进入 viewport 后才读取。真实文件已失效或内容签名不是图片时至少显示统一图片占位，不得把整段注入的 `Files mentioned…` 与绝对路径当普通正文展开。
 - `Show more` 紧接淡出区域，复用普通行距，不能制造大空白；截断尾部使用 gradient fade，不显示孤立 `...`。
 - 单条输入最多 10 个附件、单文件 25 MiB；浏览器只持有 metadata + opaque id，不把 base64/data URL 放进 prompt 或 WS。
 
@@ -441,6 +470,12 @@ Resource index 是 daemon-owned、持久化、带版本的派生数据：
 - Codex Desktop 的交互曲线并不等同于 PNG：当回复/Provider artifact 提供结构化 visual spec、HTML/JSON/CSV 数据或可识别图表 payload 时，UI 装载对应 renderer，提供 hover crosshair、tooltip、坐标值。
 - RAH 不应通过额外 prompt 注入要求 Agent 生成特定格式；正确方向是在协议层支持 Provider 已经返回的 visual artifact，再复用 renderer。
 - 静态 PNG 仍按图片显示；只有结构化 artifact 才能稳定提供交互。
+- Codex inline visual 同时兼容新 `::codex-inline-vis` 与旧 `visualize{...}` provider
+  指令。旧指令携带的精确路径、以及同一 provider turn 的命令/文件变更证据中明确出现的
+  `.codex/visualizations/.../<safe-name>.html` 路径会编码为 opaque artifact id；只有没有路径证据的旧
+  basename 才使用 date/session 固定候选。所有分支继续执行 workspace/provider-root realpath 包含性、
+  symlink、普通文件和 2 MiB 上限检查，不能扫描整个 workspace 猜文件。
+- 若 iframe 文档读取失败，Web 必须再请求 daemon 解析过的 visual source；源文件仍存在时显示可点击 HTML 文件入口并复用本地文件预览器，源文件确实不存在时才显示明确的 `HTML source not found`，不能把所有 404/尺寸/网络错误压成无入口的 “visual no longer available”。source 路径同样只能来自上述安全解析链，客户端不得从 opaque artifact id 自行拼接宿主机路径。
 
 ---
 
@@ -547,13 +582,14 @@ Changed files 权威性收敛包括：
 - Session Composer 的 model / effort / optionValues 现在以 `provider + providerSessionId` 为稳定身份写入有界浏览器配置（最多 256 项），刷新、Stop 与 Resume 都读取同一项；New task / Canvas New 在 daemon 创建真实 Session id 的同一回调就把启动 draft 绑定到该稳定身份，不再等用户二次点击。它不依赖只在 React 内存中的 `resumeModelDrafts`，也不会回退到 catalog 最后一档 effort。Plan 选中态使用资源蓝文字和更高字重，保持透明背景、无阴影的 ghost 控件结构；PWA 使用同一状态的加粗 `P`。
 - stopped Chat 的生命周期已改为原地降级：显式 Stop 与 `session.closed` event 都保留当前 resident feed/conversation/turn directory，清除 live lease 与 runtime-only 能力，再由 catalog refresh 校准 metadata；用户仍停留在 Chat。Close HTTP 与 event 竞态时，命令持有启动前 projection 作为仅限当前仍选中对象的 fallback；同一 `session.closed` 经实时流、恢复或重放重复到达时必须幂等保留该 replay，不能二次删除后跳回 New task。若无输入激活正在进行时又按 Send，输入加入同一 Resume 并只发送一次。composer 在 resume 配置、starting 与 live 配置之间保持同一控件树，默认 effort、权限和 Plan 不闪退；需要先显式 Resume/取得控制权的分支也直接展示这三项，不再折叠进设置弹层。Sidebar 的 provider 标识只给 Claude/OpenCode，Codex 保持纯标题。
 - Canvas remembered target 只把成功解析到当前 projection 的 id 交给 visible-session recovery。缺少稳定 provider ref 的旧 Runtime Session id 在初始 catalog 到达后直接清为空 pane；带 ref 的目标按 provider identity 恢复。未知 id 绝不能进入 conversation loader、Inspector 或全局错误提示；provider 已删除等恢复失败只归属该 pane 的 `Session unavailable` 状态，后台 Promise 即使在用户已切到 Council/Chat 后结束，也不能把错误泄漏到全局 notice。
+- Chat 的 detached-reader anchor 已从仅 row identity 收紧为“视口内稳定正文后代 + 像素偏移，canonical row 兜底”；同一超长 assistant row 内的 lazy image/Markdown 迟到布局不能再推动读者。Sidebar→Canvas drag target 同时支持 running runtime id 与 stopped/history provider ref；所有 Session 标题按钮都是拖动源，并使用专用 MIME + WebKit 纯文本回退与 copy drop 语义。
 - Active task summary 已收敛为 32px 进度胶囊；1280×720 真实 working session 实测只显示 `3/5 · 当前步骤`，无固定标题、状态或箭头，Desktop 点击后不获得 focus、不会锁住浮层。详情行在存在本轮权威 artifact 时固定以可点击的 `Changed N files` 开头，不存在时完全省略；当前真实 running session 的 DOM 顺序为 `Changed 26 files`、`Used 11 tools`、`Run 70 commands`、`Read 58 files`。
-- PWA 本轮文件入口已与 Inspector panel state 解耦：390×844 standalone gate 使用真实冻结 artifact，依次验证“回复文件行 → 临时 viewer → 关闭 → Chat”和“共享 turn Review → 关闭 → Chat”，两条路径结束后可见 Inspector 数量都为 0。Wide Desktop 实测只挂载 1 份 viewer，关闭后保留右侧 Inspector，保持鼠标大屏工作流。
+- per-turn Changed Files 入口已与 Inspector panel state 解耦：390×844 standalone gate 使用真实冻结 artifact，验证“回复文件行 → 共享 Review（精确预选该文件）→ 关闭 → Chat”和“turn 审查 → 同一 Review → 关闭 → Chat”；两条路径结束后可见 Inspector 数量都为 0。Desktop、PWA 与 Canvas 均不得再为单个 turn 挂载临时 viewer 或右侧 Changed Files sidebar。PWA Review 的文件列表默认折叠在顶部下拉区，展开后可容纳更多文件，选择文件后自动收起。
 - 蓝色本地文件链接和行内文件路径已恢复原生文本选择；真实会话 27 个文件按钮的计算样式均为 `user-select: text`，普通点击仍能打开 Inspector，选区相交时的点击由确定性单测锁定为不打开。
 - 全局恢复提示已从完整 warning 底色/边框与重阴影收敛为低对比橙色混色、无投影 surface：orange-500 仅以 8% 混入页面底色、18% 混入普通边框。真页面量测：PWA 为 68px 高且不遮挡 New task；1280×720 Desktop 仍为 `384×49px`、右/下各 16px。Session Chat、Council、Canvas 现在共用单一 `WORKBENCH_HEADER_LAYOUT` 40px 单行标题栏协议，PWA gate 已跨三页断言标题高度一致且提示位于分割线下至少 4px。统一 composer 的 `+` 已收敛为正文色、20px/1.75 描边；权限/模型使用 15px/1.8 的 ghost 控件层级，PWA deterministic gate 与 Desktop 真页面均已核验。
 - 2026-08-05 零行为清理删除了没有生产 owner 的旧 `SessionControlPopover`、`ConversationOutputsCard`、`NativeTerminalProcess` 与 OpenCode ACP client/activity 整文件，并移除 `ProviderSelector` 已无 caller 的 rail/dialog 分支及配套 CSS；当前 OpenCode native local-server/API 路径、统一 composer 与资源卡片路径未改。新增 `check:source-reachability` 从三个 package 入口证明 409/411 个生产源码可达，另 2 个测试 helper 显式豁免；`check:repo-hygiene` 也会拒绝文档中失效的本地链接和 `npm run` 命令，避免后续重构再次形成无 owner 的代码或漂移文档。
 - 第二阶段把 `App.tsx` 的 lazy page registry、New Session draft persistence、foreground Session recovery 和 file preview error boundary 等价移入独立 owner，`App.tsx` 从 4,242 行降到 3,610 行；`RuntimeEngine` 的 workspace/git/file inspection 也移入 `RuntimeWorkspaceOperations`，HTTP/engine 公共签名仍原样转发。`check:source-architecture` 对普通生产文件采用 1,600 行上限，并把当前 12 个超限文件登记为只减不增的 debt budget；它还会拒绝把刚拆出的 owner 重新塞回 `App` 或 `RuntimeEngine`。
-- 聚焦回归、三包 TypeScript typecheck、Protocol/Web/Runtime 全量测试、生产构建、61 项 regression manifest、确定性 Chromium/PWA browser gate、repo hygiene 与依赖审计均已从头复跑通过。首次审计发现的 3 个传递依赖问题已用兼容补丁版本收敛到 `package-lock.json`；升级后再次完整执行 `npm run test:ci`，最终 `npm audit --omit=dev` 为 0。
+- 聚焦回归、三包 TypeScript typecheck、Protocol/Web/Runtime 全量测试、生产构建、regression manifest、确定性 Chromium/PWA browser gate、repo hygiene 与依赖审计均已从头复跑通过。首次审计发现的 3 个传递依赖问题已用兼容补丁版本收敛到 `package-lock.json`；升级后再次完整执行 `npm run test:ci`，最终 `npm audit --omit=dev` 为 0。
 
 当前 checkout 最近一次已通过：
 
@@ -563,10 +599,10 @@ Changed files 权威性收敛包括：
 - Web 生产构建
 - 本轮 sidebar / composer / Appearance / header 收口后再次执行完整 `npm run test:web`，全部通过；`npm run typecheck`、目标 composer 契约测试与生产 `build:web` 也已通过
 - 本轮 stopped/resume 与 composer 常驻控制修复后再次执行完整 `npm run test:web`、三包 `npm run typecheck`、生产 `npm run build:web` 和 `npm run test:p0:browser`，均通过；真实 stopped Codex Chat DOM 同时可见 permission、Plan 与 `gpt-5.6-sol Ultra`，Codex sidebar 行无 provider logo
-- E2E manifest：61 cases / 45 P0（含统一 composer、回复选区注释、Markdown 图片缩略图组、PWA 本轮文件临时查看、sidebar/task summary 密度、stopped Send 不丢输入、Stop 留在 Chat 与后台 resume 不抢焦点）
+- E2E manifest：62 cases / 45 P0（含统一 composer、回复选区注释、Markdown/结构化图片缩略图组、PWA 本轮文件临时查看、sidebar/task summary 密度、stopped Send 不丢输入、Stop 留在 Chat 与后台 resume 不抢焦点）
 - release gate contract：3/3
 - deterministic Workspace/PWA lifecycle 真浏览器 gate；Wide Desktop 断言 14/22/430 正文和图片缩略图组，并把 Appearance 扩展到 12–20px；standalone PWA 锁定 Chat 的单行 idle / 聚焦或菜单展开 / 失焦重折叠，并核验模型在主动作左侧。New task workspace 外置与窄屏单行响应式 rail 由最新 composer contract 和 390×844 真页面复验覆盖。该 gate 还覆盖低对比 recovery toast、统一 40px 单行页面标题栏，以及本轮文件临时 viewer 关闭后直接返回 Chat。
-- PWA generation mismatch 手工真浏览器验证：`390 x 844` 下顶部 toast 高 68px，与 New task composer 无交叠；Retry/关闭可用，重启并 reload 后 notice 为 0；同一几何/底色边界现在也进入上述 deterministic gate
+- PWA generation mismatch 手工真浏览器验证：`390 x 844` 下顶部 toast 高 68px，与 New task composer 无交叠；`Mute today` 可用，重启并 reload 后 notice 为 0；同一几何/底色边界现在也进入上述 deterministic gate
 - Desktop generation mismatch 真浏览器验证：`1280 x 720` 下 toast 为 `384 x 49px`，右边距与底边距均为 16px；不再读取 `--workbench-callout-anchor`
 - repo hygiene
 - `npm audit --omit=dev`：0 vulnerabilities

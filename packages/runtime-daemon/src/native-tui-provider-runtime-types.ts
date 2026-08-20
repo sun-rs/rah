@@ -16,6 +16,7 @@ export type NativeTuiProviderRuntimeSession = {
   cwd: string;
   startupTimestampMs: number;
   providerSessionId?: string;
+  excludedProviderSessionIds?: readonly string[];
   launchEnv?: Record<string, string>;
 };
 
@@ -33,6 +34,7 @@ export type NativeTuiBindingRecord = {
 export type NativeTuiBindingCandidate = {
   providerSessionId: string;
   record: NativeTuiBindingRecord | null;
+  authority: "provider_output" | "history_probe";
 };
 
 export type NativeTuiOutputObservation = {

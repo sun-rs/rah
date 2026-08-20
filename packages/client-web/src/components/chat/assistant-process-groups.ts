@@ -3,6 +3,7 @@ import type {
   ConversationActivityDescriptor,
   ConversationActivityKind,
   ConversationActivitySummary,
+  ConversationOutputProjection,
   ConversationTurnFileChangesProjection,
   ConversationTurnStatus,
   TimelineRuntimeModel,
@@ -34,6 +35,12 @@ export type AssistantProcessGroup = {
 export type ChatDisplayRow =
   | { kind: "feed_entry"; key: string; entry: FeedEntry }
   | AssistantProcessGroup
+  | {
+      kind: "turn_visual_outputs";
+      key: string;
+      outputs: readonly ConversationOutputProjection[];
+      omittedCount: number;
+    }
   | {
       kind: "turn_file_changes";
       key: string;

@@ -1,6 +1,6 @@
 import type { SessionConfigValue } from "@rah/runtime-protocol";
 
-type RememberableStartOptions = {
+export type RememberableStartOptions = {
   model?: string;
   reasoningId?: string;
   optionValues?: Record<string, SessionConfigValue>;

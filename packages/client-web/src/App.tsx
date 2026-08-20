@@ -10,11 +10,9 @@ import {
 import { Eraser, MessageCircleMore, Plus, RotateCcw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import type { CouncilSnapshot, PermissionResponseRequest, SessionQueuedInput, StoredSessionRef } from "@rah/runtime-protocol";
-import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
 import { providerModelCatalogKey, useSessionStore } from "./useSessionStore";
 import { readErrorMessage } from "./session-store-bootstrap";
-import { deriveRuntimeCompatibilityDescriptor } from "./runtime-compatibility";
 import type { ProviderChoice } from "./components/ProviderSelector";
 import {
   GlobalWorkbenchNoticeHost,
@@ -52,6 +50,8 @@ import {
   useForegroundWakeRecovery,
 } from "./hooks/useForegroundSessionRecovery";
 import { useWorkbenchPageController } from "./hooks/useWorkbenchPageController";
+import { useSessionModelDrafts } from "./hooks/useSessionModelDrafts";
+import { useRuntimeCompatibilityNotice } from "./hooks/useRuntimeCompatibilityNotice";
 import {
   useHistoryWorkspaceSortModeState,
   useWorkbenchSidebarPreferences,
@@ -90,21 +90,17 @@ import { latestCompletedProviderTurnId } from "./session-branch-boundary";
 import {
   resolveResponsiveTier,
   resolveSidePanelOpenForTier,
-  resolveTurnFileOpenSurface,
 } from "./responsive-layout";
 import { resolveStoredSessionRef } from "./session-store-session-lifecycle";
 import { isStoredSessionArchived } from "./session-history-grouping";
+import { latestFinalReplyNavigationTarget } from "./session-read-state";
+import { TAIL_SESSION_NAVIGATION_TARGET } from "./session-conversation-navigation";
 import {
   sameWorkspaceDirectory,
 } from "./session-store-workspace";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import type { InspectorOpenFileRequest } from "./inspector/shared";
 import { preloadSelectedSessionView } from "./session-view-preload";
-import {
-  readSessionModelPreference,
-  rememberSessionModelPreference,
-} from "./session-model-preferences";
-import { startSessionAndRememberModel } from "./session-start-model-preferences";
 import {
   CANVAS_PANE_IDS,
   canvasPaneLabel,
@@ -136,6 +132,7 @@ import {
   WorkbenchTerminalDialog,
 } from "./app-lazy-components";
 import { FilePreviewDialogErrorBoundary } from "./components/workbench/dialogs/FilePreviewDialogErrorBoundary";
+import type { CanvasSessionDragTarget } from "./components/workbench/canvas/canvas-session-drag";
 import {
   PROVIDER_CHOICES,
   createDefaultModeDrafts,
@@ -165,14 +162,6 @@ type ArchiveConfirmationTarget =
       title: string;
       running: false;
     };
-
-type TurnFileOpenRequest = {
-  id: number;
-  kind: "turn_changes";
-  sessionId: string;
-  turnId: string;
-  path: string;
-};
 
 export function App() {
   const {
@@ -319,13 +308,9 @@ export function App() {
   const [renamingCouncilId, setRenamingCouncilId] = useState<string | null>(null);
   const [modeChangeSessionId, setModeChangeSessionId] = useState<string | null>(null);
   const [modelChangeSessionId, setModelChangeSessionId] = useState<string | null>(null);
-  const [startModelDrafts, setStartModelDrafts] = useState<Record<ProviderChoice, ModelDraft>>(
-    () => readRememberedModelDrafts(),
-  );
   const [startModeDrafts, setStartModeDrafts] =
     useState<Record<ProviderChoice, SessionModeDraft>>(() => createDefaultModeDrafts());
   const [resumeModeDrafts, setResumeModeDrafts] = useState<Record<string, SessionModeDraft>>({});
-  const [resumeModelDrafts, setResumeModelDrafts] = useState<Record<string, ModelDraft>>({});
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const [sideLayoutByParentId, setSideLayoutByParentId] = useState<
@@ -335,10 +320,6 @@ export function App() {
       typeof window === "undefined" ? undefined : window.localStorage,
     ),
   );
-  const [runtimeCompatibilityDescriptor, setRuntimeCompatibilityDescriptor] =
-    useState<ReturnType<typeof deriveRuntimeCompatibilityDescriptor>>(null);
-  const [runtimeCompatibilityDismissed, setRuntimeCompatibilityDismissed] =
-    useState(false);
   useEffect(() => {
     rememberSessionSideLayouts(
       typeof window === "undefined" ? undefined : window.localStorage,
@@ -346,66 +327,14 @@ export function App() {
     );
   }, [sideLayoutByParentId]);
 
-  const readPersistedSessionModelDraft = useCallback(
-    (sessionId: string): ModelDraft | undefined => {
-      const summary = projections.get(sessionId)?.summary;
-      if (!summary) {
-        return undefined;
-      }
-      return readSessionModelPreference(
-        typeof window === "undefined" ? undefined : window.localStorage,
-        summary.session,
-      );
-    },
-    [projections],
-  );
-
-  const modelDraftForSession = useCallback(
-    (sessionId: string): ModelDraft | undefined =>
-      resumeModelDrafts[sessionId] ?? readPersistedSessionModelDraft(sessionId),
-    [readPersistedSessionModelDraft, resumeModelDrafts],
-  );
-
-  const updateResumeModelDraft = useCallback(
-    (sessionId: string, nextDraft: ModelDraft) => {
-      const summary = projections.get(sessionId)?.summary;
-      if (summary) {
-        rememberSessionModelPreference(
-          typeof window === "undefined" ? undefined : window.localStorage,
-          summary.session,
-          nextDraft,
-        );
-      }
-      setResumeModelDrafts((current) => ({ ...current, [sessionId]: nextDraft }));
-    },
-    [projections],
-  );
-  const startSessionWithRememberedModel = useCallback(
-    (options?: Parameters<typeof startSession>[0]) =>
-      startSessionAndRememberModel(startSession, updateResumeModelDraft, options),
-    [startSession, updateResumeModelDraft],
-  );
-
-  useEffect(() => {
-    setResumeModelDrafts((current) => {
-      let next: Record<string, ModelDraft> | null = null;
-      for (const [sessionId, projection] of projections) {
-        if (current[sessionId]?.modelId) {
-          continue;
-        }
-        const remembered = readSessionModelPreference(
-          typeof window === "undefined" ? undefined : window.localStorage,
-          projection.summary.session,
-        );
-        if (!remembered?.modelId) {
-          continue;
-        }
-        next ??= { ...current };
-        next[sessionId] = remembered;
-      }
-      return next ?? current;
-    });
-  }, [projections]);
+  const {
+    startModelDrafts,
+    setStartModelDrafts,
+    setResumeModelDrafts,
+    modelDraftForSession,
+    updateResumeModelDraft,
+    startSessionWithRememberedModel,
+  } = useSessionModelDrafts({ projections, startSession });
   const pendingBranchOperationsRef = useRef(new Map<string, BranchOperationKind>());
   const [pendingBranchOperations, setPendingBranchOperations] = useState<
     Map<string, BranchOperationKind>
@@ -433,11 +362,8 @@ export function App() {
       createEmptyCanvasNewSessionDrafts(),
     );
   const [linkedFilePreviewPath, setLinkedFilePreviewPath] = useState<string | null>(null);
-  const inspectorOpenRequestIdRef = useRef(0);
   const [mainInspectorOpenRequest, setMainInspectorOpenRequest] =
     useState<InspectorOpenFileRequest | null>(null);
-  const [transientTurnFileOpenRequest, setTransientTurnFileOpenRequest] =
-    useState<TurnFileOpenRequest | null>(null);
   const [canvasInspectorOpenRequests, setCanvasInspectorOpenRequests] = useState<
     Partial<Record<CanvasPaneId, InspectorOpenFileRequest>>
   >({});
@@ -545,27 +471,7 @@ export function App() {
     void init();
   }, [init]);
 
-  const checkRuntimeCompatibility = useCallback(async () => {
-    try {
-      const identity = await api.readRuntimeIdentity();
-      const descriptor = deriveRuntimeCompatibilityDescriptor(
-        __RAH_WEB_BUILD_ID__,
-        identity,
-      );
-      setRuntimeCompatibilityDescriptor(descriptor);
-      if (!descriptor) {
-        setRuntimeCompatibilityDismissed(false);
-      }
-    } catch {
-      // Authentication and transport recovery own their existing callouts.
-      // Compatibility is advisory and must not obscure those higher-priority
-      // states when the identity probe itself is unavailable.
-    }
-  }, []);
-
-  useEffect(() => {
-    void checkRuntimeCompatibility();
-  }, [checkRuntimeCompatibility]);
+  const runtimeCompatibilityNotice = useRuntimeCompatibilityNotice();
 
   useEffect(() => {
     if (!isInitialLoaded) {
@@ -862,58 +768,8 @@ export function App() {
     setLinkedFilePreviewPath(path);
   }, []);
 
-  const createTurnFileOpenRequest = useCallback(
-    (sessionId: string, turnId: string, path: string): TurnFileOpenRequest => {
-      inspectorOpenRequestIdRef.current += 1;
-      return {
-        id: inspectorOpenRequestIdRef.current,
-        kind: "turn_changes",
-        sessionId,
-        turnId,
-        path,
-      };
-    },
-    [],
-  );
-
-  const openMainTurnFile = useCallback(
-    (sessionId: string, turnId: string, path: string) => {
-      const request = createTurnFileOpenRequest(sessionId, turnId, path);
-      if (resolveTurnFileOpenSurface(viewportTier) === "transient-viewer") {
-        setMainInspectorOpenRequest(null);
-        setTransientTurnFileOpenRequest(request);
-        setRightSidebarOpen(false);
-        setRightOpen(false);
-        return;
-      }
-      setTransientTurnFileOpenRequest(null);
-      setMainInspectorOpenRequest(request);
-      setRightSidebarOpen(true);
-      setRightOpen(false);
-    },
-    [
-      createTurnFileOpenRequest,
-      setRightOpen,
-      setRightSidebarOpen,
-      viewportTier,
-    ],
-  );
-
-  const openCanvasTurnFile = useCallback(
-    (paneId: CanvasPaneId, sessionId: string, turnId: string, path: string) => {
-      const request = createTurnFileOpenRequest(sessionId, turnId, path);
-      setCanvasInspectorOpenRequests((current) => ({
-        ...current,
-        [paneId]: request,
-      }));
-      setCanvasPaneRightPanelOpen(paneId, true);
-    },
-    [createTurnFileOpenRequest, setCanvasPaneRightPanelOpen],
-  );
-
   useEffect(() => {
     setMainInspectorOpenRequest(null);
-    setTransientTurnFileOpenRequest(null);
   }, [selectedSessionId]);
 
   const setCanvasPaneSession = (paneId: CanvasPaneId, sessionId: string) => {
@@ -939,6 +795,24 @@ export function App() {
       return next;
     });
     setCanvasPaneTarget(paneId, { kind: "stored", ref });
+  };
+
+  const setCanvasPaneSessionTarget = (
+    paneId: CanvasPaneId,
+    target: CanvasSessionDragTarget,
+  ) => {
+    if (target.kind === "runtime") {
+      setCanvasPaneSession(paneId, target.sessionId);
+      return;
+    }
+    const ref = storedSessions.find(
+      (session) =>
+        session.provider === target.provider &&
+        session.providerSessionId === target.providerSessionId,
+    );
+    if (ref) {
+      setCanvasPaneStoredRef(paneId, ref);
+    }
   };
 
   const setCanvasPaneCouncil = (paneId: CanvasPaneId, councilId: string) => {
@@ -1193,17 +1067,16 @@ export function App() {
   });
   const interactionNotice = noticeState.interactionNotice;
   const errorDescriptor = noticeState.errorDescriptor;
-  const visibleRuntimeCompatibilityDescriptor =
-    runtimeCompatibilityDismissed ? null : runtimeCompatibilityDescriptor;
   const globalWorkbenchNotices: GlobalWorkbenchNotice[] = [];
-  if (visibleRuntimeCompatibilityDescriptor) {
+  if (runtimeCompatibilityNotice.descriptor) {
     globalWorkbenchNotices.push({
       id: "runtime-compatibility",
-      errorDescriptor: visibleRuntimeCompatibilityDescriptor,
+      errorDescriptor: runtimeCompatibilityNotice.descriptor,
       selectedSummary: null,
-      onRefresh: () => void checkRuntimeCompatibility(),
+      onRefresh: () => void runtimeCompatibilityNotice.refresh(),
       onClaimControl: () => undefined,
-      onDismiss: () => setRuntimeCompatibilityDismissed(true),
+      dismissLabel: "Mute today",
+      onDismiss: runtimeCompatibilityNotice.muteToday,
     });
   }
   if (errorDescriptor) {
@@ -1815,8 +1688,19 @@ export function App() {
       erroredSessionIds={erroredSessionIds}
       councils={councils}
       unreadCouncilIds={unreadCouncilIds}
-      onSelectSession={(workspaceDir, id) => {
-        pageController.openSession(workspaceDir, id);
+      onSelectSession={(workspaceDir, id, entryIntent) => {
+        const projection = projections.get(id);
+        const unreadReplyTarget =
+          entryIntent === "latest_unread_reply" && projection
+            ? latestFinalReplyNavigationTarget(projection)
+            : null;
+        pageController.openSession(
+          workspaceDir,
+          id,
+          unreadReplyTarget
+            ? { kind: "reply_start", ...unreadReplyTarget }
+            : TAIL_SESSION_NAVIGATION_TARGET,
+        );
       }}
       onSelectStoredSession={(_workspaceDir, session) => {
         pageController.prepareHistorySession();
@@ -1996,9 +1880,6 @@ export function App() {
           respondToPermission(sessionId, requestId, response)
         }
         onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
-        onOpenTurnFileChange={(sessionId, turnId, path) =>
-          openMainTurnFile(sessionId, turnId, path)
-        }
         onLoadConversationItemDetail={(sessionId, kind, itemId) =>
           loadConversationItemDetail(sessionId, kind, itemId)
         }
@@ -2425,7 +2306,7 @@ export function App() {
               onClearAllPanes={clearAllCanvasPanes}
               clearAllPanesDisabled={!hasAnyCanvasPaneTarget(canvasPaneTargets)}
               onExitCanvas={exitCanvasMode}
-              onDropSession={setCanvasPaneSession}
+              onDropSession={setCanvasPaneSessionTarget}
               onDropCouncil={setCanvasPaneCouncil}
               renderPane={(paneId) => {
                 const typedPaneId = paneId;
@@ -2955,9 +2836,6 @@ export function App() {
                       respondToPermission(sessionId, requestId, response)
                     }
                     onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
-                    onOpenTurnFileChange={(sessionId, turnId, path) =>
-                      openCanvasTurnFile(typedPaneId, sessionId, turnId, path)
-                    }
                     onLoadConversationItemDetail={(sessionId, kind, itemId) =>
                       loadConversationItemDetail(sessionId, kind, itemId)
                     }
@@ -3080,6 +2958,8 @@ export function App() {
               clientId={clientId}
               selectedProjection={selectedProjection}
               conversationNavigationRevision={pageController.sessionNavigationRevision}
+              conversationNavigationRequest={pageController.sessionNavigationRequest}
+              onConversationNavigationConsumed={pageController.acknowledgeSessionNavigation}
               selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
               sidebarOpen={sidebarOpen}
               rightSidebarOpen={rightSidebarOpen}
@@ -3099,9 +2979,6 @@ export function App() {
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
               onOpenLocalFile={openLinkedFilePreview}
-              onOpenTurnFileChange={(turnId, path) =>
-                openMainTurnFile(selectedSummary.session.id, turnId, path)
-              }
               onLoadConversationItemDetail={(kind, itemId) =>
                 loadConversationItemDetail(selectedSummary.session.id, kind, itemId)
               }
@@ -3556,26 +3433,6 @@ export function App() {
 
         </div>
       </WorkbenchErrorBoundary>
-
-      {transientTurnFileOpenRequest ? (
-        <FilePreviewDialogErrorBoundary
-          resetKey={`turn:${transientTurnFileOpenRequest.id}:${transientTurnFileOpenRequest.path}`}
-          onClose={() => setTransientTurnFileOpenRequest(null)}
-        >
-          <InspectorFileDetailDialog
-            sessionId={transientTurnFileOpenRequest.sessionId}
-            workspaceRoot={selectedInspectorWorkspaceDir}
-            selection={{
-              path: transientTurnFileOpenRequest.path,
-              source: "turn_changes",
-              sessionId: transientTurnFileOpenRequest.sessionId,
-              turnId: transientTurnFileOpenRequest.turnId,
-            }}
-            onRefreshChanges={() => undefined}
-            onClose={() => setTransientTurnFileOpenRequest(null)}
-          />
-        </FilePreviewDialogErrorBoundary>
-      ) : null}
 
       {linkedFilePreviewPath ? (
         <FilePreviewDialogErrorBoundary

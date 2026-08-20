@@ -1,19 +1,41 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { SessionInputAnnotation } from "@rah/runtime-protocol";
 import {
   appendComposerAnnotation,
   MAX_COMPOSER_ANNOTATIONS,
 } from "../composer-annotations";
 
+const itemsByScope = new Map<string, SessionInputAnnotation[]>();
+const revisionByScope = new Map<string, number>();
+const listenersByScope = new Map<string, Set<() => void>>();
+
+function refreshScope(scopeKey: string): void {
+  revisionByScope.set(scopeKey, (revisionByScope.get(scopeKey) ?? 0) + 1);
+  for (const listener of listenersByScope.get(scopeKey) ?? []) listener();
+}
+
+function subscribeScope(scopeKey: string, listener: () => void): () => void {
+  const listeners = listenersByScope.get(scopeKey) ?? new Set<() => void>();
+  listeners.add(listener);
+  listenersByScope.set(scopeKey, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) listenersByScope.delete(scopeKey);
+  };
+}
+
 export function useComposerAnnotations(scopeKey = "default") {
-  const [, setRevision] = useState(0);
-  const itemsByScopeRef = useRef(new Map<string, SessionInputAnnotation[]>());
-  const refresh = useCallback(() => setRevision((current) => current + 1), []);
-  const items = itemsByScopeRef.current.get(scopeKey) ?? [];
+  useSyncExternalStore(
+    (listener) => subscribeScope(scopeKey, listener),
+    () => revisionByScope.get(scopeKey) ?? 0,
+    () => revisionByScope.get(scopeKey) ?? 0,
+  );
+  const refresh = useCallback(() => refreshScope(scopeKey), [scopeKey]);
+  const items = itemsByScope.get(scopeKey) ?? [];
 
   const add = useCallback((annotation: SessionInputAnnotation) => {
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
-    itemsByScopeRef.current.set(
+    const current = itemsByScope.get(scopeKey) ?? [];
+    itemsByScope.set(
       scopeKey,
       appendComposerAnnotation(current, annotation),
     );
@@ -21,8 +43,8 @@ export function useComposerAnnotations(scopeKey = "default") {
   }, [refresh, scopeKey]);
 
   const remove = useCallback((id: string) => {
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
-    itemsByScopeRef.current.set(
+    const current = itemsByScope.get(scopeKey) ?? [];
+    itemsByScope.set(
       scopeKey,
       current.filter((item) => item.id !== id),
     );
@@ -30,13 +52,13 @@ export function useComposerAnnotations(scopeKey = "default") {
   }, [refresh, scopeKey]);
 
   const clear = useCallback(() => {
-    itemsByScopeRef.current.set(scopeKey, []);
+    itemsByScope.set(scopeKey, []);
     refresh();
   }, [refresh, scopeKey]);
 
   const take = useCallback((): SessionInputAnnotation[] => {
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
-    itemsByScopeRef.current.set(scopeKey, []);
+    const current = itemsByScope.get(scopeKey) ?? [];
+    itemsByScope.set(scopeKey, []);
     refresh();
     return current;
   }, [refresh, scopeKey]);
@@ -45,8 +67,8 @@ export function useComposerAnnotations(scopeKey = "default") {
     if (restored.length === 0) {
       return;
     }
-    const current = itemsByScopeRef.current.get(scopeKey) ?? [];
-    itemsByScopeRef.current.set(
+    const current = itemsByScope.get(scopeKey) ?? [];
+    itemsByScope.set(
       scopeKey,
       [...restored, ...current].slice(-MAX_COMPOSER_ANNOTATIONS),
     );

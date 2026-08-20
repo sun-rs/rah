@@ -210,7 +210,7 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/sessions\/([^/]+)\/attach$/,
       handler: async (req, res, match, body) => {
-        const result = engine.attachSession(match[1]!, parseAttachSessionRequest(body));
+        const result = await engine.attachSession(match[1]!, parseAttachSessionRequest(body));
         writeJson(req, res, 200, result);
       },
     },
@@ -1301,6 +1301,32 @@ export async function handleHttpRequest(args: {
         {
           contentSecurityPolicy: visualArtifactContentSecurityPolicy(),
         },
+      );
+      return;
+    }
+
+    const conversationVisualArtifactSourceMatch =
+      /^\/api\/sessions\/([^/]+)\/conversation\/visual-artifacts\/([^/]+)\/source$/.exec(
+        pathname,
+      );
+    if (req.method === "GET" && conversationVisualArtifactSourceMatch) {
+      let artifactId: string;
+      try {
+        artifactId = decodeURIComponent(conversationVisualArtifactSourceMatch[2]!);
+      } catch {
+        writeJson(req, res, 400, {
+          error: "Conversation visual artifact id is invalid.",
+        });
+        return;
+      }
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getSessionConversationVisualArtifactSource(
+          conversationVisualArtifactSourceMatch[1]!,
+          artifactId,
+        ),
       );
       return;
     }

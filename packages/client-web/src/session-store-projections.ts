@@ -45,9 +45,6 @@ function queuedInputFeedState(projection: SessionProjection): {
       entry.key === `optimistic:user:${clientMessageId}` &&
       entry.sourceProvider === undefined &&
       entry.canonicalItemId === undefined &&
-      entry.canonicalTurnId === undefined &&
-      entry.providerTurnId === undefined &&
-      entry.turnId === undefined &&
       entry.item.messageId === undefined;
     if (isUnresolvedOptimisticMessage && !canonical.has(clientMessageId)) {
       unresolved.add(clientMessageId);
@@ -171,6 +168,76 @@ function reconcileReplacementInputQueues(
       result = new Map(next);
     }
     result.set(sessionId, { ...fresh, summary });
+  }
+  return result;
+}
+
+function conversationForAuthoritativeReplacement(
+  conversation: SessionProjection["conversation"],
+  runtimeIdentityChanged: boolean,
+): SessionProjection["conversation"] {
+  if (!conversation || conversation.phase !== "ready" || conversation.turns.length === 0) {
+    return undefined;
+  }
+  return {
+    ...conversation,
+    needsRefresh: true,
+    lastError: null,
+    ...(runtimeIdentityChanged
+      ? {
+          nextCursor: null,
+          daemonRevision: null,
+          pendingDeltas: [],
+          detachedBaseline: true,
+        }
+      : {}),
+  };
+}
+
+/**
+ * A replay-gap rebuild replaces lifecycle/feed state from the authoritative
+ * daemon catalog, but the catalog is not a conversation payload. Preserve the
+ * already rendered canonical Conversation for sessions that still exist and
+ * mark it for a tail revalidation. Stable provider identity also covers a
+ * daemon runtime-id handoff without allowing browser memory to create a
+ * sidebar/catalog entry of its own.
+ */
+function preserveConversationBaselinesForReplacement(
+  next: Map<string, SessionProjection>,
+  current: Map<string, SessionProjection>,
+): Map<string, SessionProjection> {
+  const currentByProviderSession = new Map<string, [string, SessionProjection]>();
+  for (const [sessionId, projection] of current) {
+    const key = providerSessionKey(projection.summary);
+    if (key && projection.conversation?.phase === "ready") {
+      currentByProviderSession.set(key, [sessionId, projection]);
+    }
+  }
+
+  let result = next;
+  for (const [sessionId, fresh] of next) {
+    const sameRuntime = current.get(sessionId);
+    const key = providerSessionKey(fresh.summary);
+    const previousEntry = sameRuntime
+      ? ([sessionId, sameRuntime] as const)
+      : key
+        ? currentByProviderSession.get(key)
+        : undefined;
+    if (!previousEntry) {
+      continue;
+    }
+    const [previousSessionId, previous] = previousEntry;
+    const conversation = conversationForAuthoritativeReplacement(
+      previous.conversation,
+      previousSessionId !== sessionId,
+    );
+    if (!conversation) {
+      continue;
+    }
+    if (result === next) {
+      result = new Map(next);
+    }
+    result.set(sessionId, { ...fresh, conversation });
   }
   return result;
 }
@@ -340,23 +407,10 @@ type ProjectionReplay = {
 
 function shouldMarkSessionUnread(event: RahEvent): boolean {
   switch (event.type) {
-    case "timeline.item.added":
-    case "timeline.item.updated":
-    case "message.part.added":
-    case "message.part.updated":
-    case "message.part.delta":
-    case "tool.call.completed":
-    case "tool.call.failed":
-    case "observation.completed":
-    case "observation.failed":
-    case "permission.requested":
-    case "notification.emitted":
     case "turn.completed":
     case "turn.failed":
     case "turn.canceled":
       return true;
-    case "session.side.state.changed":
-      return event.payload.state === "expired" || event.payload.state === "cleanup_failed";
     default:
       return false;
   }
@@ -628,7 +682,10 @@ export function replaceSessionsResponse(
   const projections = preserveSelectedReadOnlyReplayProjection(
     preservePendingLiveStartupProjections(
       preservePendingStoredReplayProjections(
-        reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
+        preserveConversationBaselinesForReplacement(
+          reconcileReplacementInputQueues(sessionMap.sessions, state.projections),
+          state.projections,
+        ),
         state.projections,
       ),
       state.projections,

@@ -7,9 +7,14 @@ import {
   deleteQueuedInputCommand,
   sendInputCommand,
   serializeSessionTransportCommand,
+  steerQueuedInputCommand,
   updateQueuedInputCommand,
 } from "./session-store-session-commands";
-import { appendOptimisticUserMessage, type SessionProjection } from "./types";
+import {
+  appendOptimisticUserMessage,
+  initialConversationSyncState,
+  type SessionProjection,
+} from "./types";
 
 const originalFetch = globalThis.fetch;
 
@@ -210,6 +215,65 @@ test("a follow-up submitted during structured work is queued even for a legacy s
       }),
     );
     await sending;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Guide immediately binds its optimistic message to the active canonical turn", async () => {
+  const summary = sessionSummaryWithQueuedInput("guide this turn");
+  const projection: SessionProjection = {
+    ...sessionProjection(10),
+    summary,
+    conversation: {
+      ...initialConversationSyncState(),
+      phase: "ready",
+      loadedScope: "live",
+      turns: [
+        {
+          id: "canonical-turn",
+          provider: "codex",
+          providerSessionId: "provider-session",
+          providerTurnId: "provider-turn",
+          status: "in_progress",
+          statusAuthority: "native",
+          items: [],
+          activities: [],
+          failedItemCount: 0,
+          revision: 1,
+        },
+      ],
+    },
+  };
+  let state = commandState(projection);
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ session: summary }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+  try {
+    const steering = steerQueuedInputCommand({
+      get: () => state,
+      set: (partial) => {
+        const patch = typeof partial === "function" ? partial(state) : partial;
+        state = { ...state, ...patch };
+      },
+      sessionId: "session-queue",
+      clientMessageId: "client-message-1",
+    });
+    const optimistic = state.projections.get("session-queue")?.feed.at(-1);
+    assert.equal(optimistic?.kind, "timeline");
+    assert.equal(optimistic?.turnId, "provider-turn");
+    assert.equal(
+      optimistic?.kind === "timeline" ? optimistic.canonicalTurnId : undefined,
+      "canonical-turn",
+    );
+    assert.equal(
+      optimistic?.kind === "timeline" ? optimistic.providerTurnId : undefined,
+      "provider-turn",
+    );
+    await steering;
   } finally {
     globalThis.fetch = originalFetch;
   }

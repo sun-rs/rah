@@ -47,6 +47,13 @@ import type {
   SessionLiveBackend,
   SessionRuntimeState,
 } from "./session";
+import {
+  type SessionInputContractIssue,
+  validateSessionInputAcceptedContract,
+  validateSessionInputAttachmentsContract,
+  validateSessionInputQueueContract,
+  validateSessionInputQueuePolicyContract,
+} from "./session-input-contract";
 
 export const RAH_EVENT_PROTOCOL_VERSION = 1;
 
@@ -84,6 +91,7 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "session.side.state.changed": "session",
   "session.native_tui.prompt_state.changed": "session",
   "session.input_queue.changed": "session",
+  "session.input.accepted": "session",
   "session.input_queue.policy_changed": "session",
   "session.exited": "session",
   "session.failed": "session",
@@ -491,6 +499,15 @@ function addIssue(
     ...(sink.event?.type !== undefined ? { eventType: sink.event.type } : {}),
     ...(path !== undefined ? { path } : {}),
   });
+}
+
+function addSessionInputIssues(
+  sink: IssueSink,
+  issues: readonly SessionInputContractIssue[],
+) {
+  for (const entry of issues) {
+    addIssue(sink, "error", entry.code, entry.message, entry.path);
+  }
 }
 
 function validateEventSource(source: unknown, sink: IssueSink, path: string) {
@@ -2123,13 +2140,11 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
   }
   if (!PROVIDERS.has(session.provider as ProviderKind | "system") || session.provider === "system") {
     addIssue(
-      sink,
-      "error",
-      "session.provider.invalid",
-      "session provider must be a managed provider",
-      `${path}.provider`,
+      sink, "error", "session.provider.invalid",
+      "session provider must be a managed provider", `${path}.provider`,
     );
   }
+  if (session.modelProvider !== undefined && !isNonEmptyString(session.modelProvider)) addIssue(sink, "error", "session.model_provider.invalid", "session modelProvider must be non-empty when present", `${path}.modelProvider`);
   if (!SESSION_LAUNCH_SOURCES.has(session.launchSource as SessionLaunchSource)) {
     addIssue(
       sink,
@@ -2274,7 +2289,10 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
     }
   }
   if (session.inputQueue !== undefined) {
-    validateSessionInputQueue(session.inputQueue, sink, `${path}.inputQueue`);
+    addSessionInputIssues(
+      sink,
+      validateSessionInputQueueContract(session.inputQueue, `${path}.inputQueue`),
+    );
   }
   if (
     session.inputQueuePolicy !== undefined &&
@@ -2388,80 +2406,6 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
   validateSessionCapabilities(session.capabilities, sink, `${path}.capabilities`);
 }
 
-function validateSessionInputQueue(queue: unknown, sink: IssueSink, path: string) {
-  if (!Array.isArray(queue)) {
-    addIssue(sink, "error", "session.input_queue.invalid", "session inputQueue must be an array", path);
-    return;
-  }
-  queue.forEach((entry, index) => {
-    const entryPath = `${path}[${index}]`;
-    if (!isRecord(entry)) {
-      addIssue(sink, "error", "session.input_queue.entry.invalid", "queued input must be an object", entryPath);
-      return;
-    }
-    if (!isNonEmptyString(entry.clientMessageId)) {
-      addIssue(sink, "error", "session.input_queue.message_id.invalid", "queued input clientMessageId must be non-empty", `${entryPath}.clientMessageId`);
-    }
-    if (entry.clientTurnId !== undefined && !isNonEmptyString(entry.clientTurnId)) {
-      addIssue(sink, "error", "session.input_queue.turn_id.invalid", "queued input clientTurnId must be non-empty", `${entryPath}.clientTurnId`);
-    }
-    if (typeof entry.text !== "string") {
-      addIssue(sink, "error", "session.input_queue.text.invalid", "queued input text must be a string", `${entryPath}.text`);
-    }
-    if (entry.attachments !== undefined) {
-      validateSessionInputAttachments(entry.attachments, sink, `${entryPath}.attachments`);
-    }
-    if (!isNonEmptyString(entry.queuedAt) || Number.isNaN(Date.parse(entry.queuedAt))) {
-      addIssue(sink, "error", "session.input_queue.timestamp.invalid", "queued input queuedAt must be a valid timestamp", `${entryPath}.queuedAt`);
-    }
-    if (!Number.isInteger(entry.position) || (entry.position as number) < 1) {
-      addIssue(sink, "error", "session.input_queue.position.invalid", "queued input position must be a positive integer", `${entryPath}.position`);
-    }
-    if (
-      entry.state !== undefined
-      && entry.state !== "queued"
-      && entry.state !== "submitting"
-    ) {
-      addIssue(
-        sink,
-        "error",
-        "session.input_queue.state.invalid",
-        "queued input state must be queued or submitting",
-        `${entryPath}.state`,
-      );
-    }
-  });
-}
-
-function validateSessionInputAttachments(value: unknown, sink: IssueSink, path: string) {
-  if (!Array.isArray(value)) {
-    addIssue(sink, "error", "session.attachments.invalid", "attachments must be an array", path);
-    return;
-  }
-  value.forEach((attachment, index) => {
-    const attachmentPath = `${path}[${index}]`;
-    if (!isRecord(attachment)) {
-      addIssue(sink, "error", "session.attachment.invalid", "attachment must be an object", attachmentPath);
-      return;
-    }
-    if (!isNonEmptyString(attachment.id)) {
-      addIssue(sink, "error", "session.attachment.id.invalid", "attachment id must be non-empty", `${attachmentPath}.id`);
-    }
-    if (attachment.kind !== "image" && attachment.kind !== "file") {
-      addIssue(sink, "error", "session.attachment.kind.invalid", "attachment kind must be image or file", `${attachmentPath}.kind`);
-    }
-    if (!isNonEmptyString(attachment.name)) {
-      addIssue(sink, "error", "session.attachment.name.invalid", "attachment name must be non-empty", `${attachmentPath}.name`);
-    }
-    if (!isNonEmptyString(attachment.mediaType)) {
-      addIssue(sink, "error", "session.attachment.media_type.invalid", "attachment mediaType must be non-empty", `${attachmentPath}.mediaType`);
-    }
-    if (!Number.isInteger(attachment.size) || (attachment.size as number) < 0) {
-      addIssue(sink, "error", "session.attachment.size.invalid", "attachment size must be a non-negative integer", `${attachmentPath}.size`);
-    }
-  });
-}
-
 function validateTurnFileChanges(value: unknown, sink: IssueSink, path: string) {
   if (!isRecord(value) || !Array.isArray(value.files)) {
     addIssue(sink, "error", "turn.file_changes.invalid", "turn fileChanges must contain a files array", path);
@@ -2507,7 +2451,10 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
         addIssue(sink, "error", "timeline.image_count.invalid", "timeline imageCount must be a non-negative integer", `${path}.imageCount`);
       }
       if (item.attachments !== undefined) {
-        validateSessionInputAttachments(item.attachments, sink, `${path}.attachments`);
+        addSessionInputIssues(
+          sink,
+          validateSessionInputAttachmentsContract(item.attachments, `${path}.attachments`),
+        );
       }
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
@@ -3401,18 +3348,22 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
       }
       break;
     case "session.input_queue.changed":
-      validateSessionInputQueue(payload.items, sink, "payload.items");
+      addSessionInputIssues(
+        sink,
+        validateSessionInputQueueContract(payload.items, "payload.items"),
+      );
+      break;
+    case "session.input.accepted":
+      addSessionInputIssues(
+        sink,
+        validateSessionInputAcceptedContract(payload, "payload"),
+      );
       break;
     case "session.input_queue.policy_changed":
-      if (payload.policy !== "queue" && payload.policy !== "steer") {
-        addIssue(
-          sink,
-          "error",
-          "session.input_queue_policy.invalid",
-          "session input queue policy must be queue or steer",
-          "payload.policy",
-        );
-      }
+      addSessionInputIssues(
+        sink,
+        validateSessionInputQueuePolicyContract(payload.policy, "payload.policy"),
+      );
       break;
     case "session.exited":
       if (!isOptionalInteger(payload.exitCode)) {

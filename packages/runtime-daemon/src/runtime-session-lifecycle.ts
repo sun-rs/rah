@@ -312,6 +312,30 @@ export class RuntimeSessionLifecycle {
     );
   }
 
+  /**
+   * Roll back a newly-created live Session whose transactional first input was
+   * not accepted. Unlike an ordinary Stop this never remembers the shell as
+   * history: creation and first-input acceptance are one user-visible commit.
+   */
+  async discardUnacceptedSession(sessionId: string, clientId: string): Promise<void> {
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) return;
+    if (!(await this.deps.terminals.closeNativeTuiSession(sessionId))) {
+      await this.deps.terminals.closeNativeLocalServerTuiClient(sessionId).catch(() => false);
+      const adapter = this.deps.requireStructuredLifecycleAdapter(sessionId);
+      if (typeof adapter.destroySession === "function") {
+        await adapter.destroySession(sessionId);
+      } else if (typeof adapter.closeSession === "function") {
+        await adapter.closeSession(sessionId, { clientId });
+      } else {
+        throw new Error(
+          `Provider ${state.session.provider} cannot discard unaccepted Session ${sessionId}.`,
+        );
+      }
+    }
+    this.removeConfirmedSession(sessionId, { clientId }, "discarded");
+  }
+
   detachSession(sessionId: string, request: DetachSessionRequest): SessionSummary {
     const state = this.deps.sessionStore.detachClient(sessionId, request.clientId);
     this.deps.eventBus.publish({

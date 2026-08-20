@@ -774,6 +774,7 @@ export function SessionModelControls(props: {
         aria-expanded={open}
         title={label}
         data-composer-control={composerAppearance ? "model" : undefined}
+        data-composer-focus-preserve={composerAppearance ? "true" : undefined}
       >
         {props.loading && models.length === 0 ? (
           <LoaderCircle size={12} className="animate-spin text-[var(--app-hint)]" />
@@ -820,6 +821,7 @@ export function SessionModelControls(props: {
           <div
             ref={panelRef}
             data-session-model-panel="true"
+            data-composer-focus-preserve="true"
             className="rah-popover-panel pointer-events-auto fixed z-[100] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none"
             style={panelStyle}
             role="dialog"

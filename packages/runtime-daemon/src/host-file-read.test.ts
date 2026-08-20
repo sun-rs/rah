@@ -49,6 +49,23 @@ describe("host file reads", () => {
     }
   });
 
+  test("does not trust an image extension when the file is not an image", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-fake-image-"));
+    try {
+      const target = path.join(dir, "not-really.png");
+      await writeFile(target, "plain text", "utf8");
+
+      const file = await readHostFileDataAsync(target);
+
+      assert.equal(file.mimeType, undefined);
+      assert.equal(file.binary, false);
+      assert.equal(file.content, "plain text");
+      assert.equal(file.contentBase64, undefined);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("returns a bounded inline preview for large host images", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-large-image-"));
     try {
@@ -119,6 +136,22 @@ describe("host file reads", () => {
       assert.equal(file.binary, false);
       assert.equal(file.mimeType, "text/markdown");
       assert.equal(file.content, "# Title\n\nBody");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("tags HTML files for isolated rendered previews", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-html-"));
+    try {
+      const target = path.join(dir, "report.html");
+      await writeFile(target, "<!doctype html><h1>Report</h1>", "utf8");
+
+      const file = await readHostFileDataAsync(target);
+
+      assert.equal(file.binary, false);
+      assert.equal(file.mimeType, "text/html");
+      assert.equal(file.content, "<!doctype html><h1>Report</h1>");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

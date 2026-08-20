@@ -18,7 +18,11 @@ import {
 } from "./provider-activity";
 import { SessionStore } from "./session-store";
 import { selectSemanticRecentWindow } from "./semantic-history-window";
-import { readLeadingLines, readTrailingLinesWindow } from "./file-snippets";
+import {
+  readLeadingLines,
+  readTrailingLineRecordsWindow,
+  readTrailingLinesWindow,
+} from "./file-snippets";
 import type {
   FrozenHistoryBoundary,
   FrozenHistoryPageLoader,
@@ -79,7 +83,7 @@ const INTERNAL_CLAUDE_EVENT_TYPES = new Set([
   "file-history-snapshot",
   "change",
 ]);
-export const CLAUDE_STORED_SESSION_CACHE_VERSION = 1;
+export const CLAUDE_STORED_SESSION_CACHE_VERSION = 2;
 
 type ClaudeUsage = {
   input_tokens?: number;
@@ -92,6 +96,7 @@ type ClaudeRawRecord =
   | {
       type: "user";
       uuid: string;
+      isMeta?: boolean;
       parentUuid?: string | null;
       timestamp?: string;
       cwd?: string;
@@ -244,6 +249,16 @@ function stripClaudeTurnAbortedContext(value: string): string {
   return value.replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, "");
 }
 
+const CLAUDE_INTERNAL_USER_CONTEXT_PATTERN =
+  /<(system-reminder|local-command-caveat|local-command-stdout|local-command-stderr|command-name|command-message|command-args)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
+function stripClaudeInternalUserContext(value: string): string {
+  return stripClaudeTurnAbortedContext(value).replace(
+    CLAUDE_INTERNAL_USER_CONTEXT_PATTERN,
+    "",
+  );
+}
+
 function isClaudeInterruptPlaceholderText(value: unknown): boolean {
   const normalized = normalizeClaudeTranscriptText(value);
   return normalized !== null && /^\[Request interrupted by user(?:[^\]]*)\]$/.test(normalized);
@@ -332,16 +347,16 @@ function isClaudeNoResponsePlaceholderContent(content: unknown): boolean {
 function extractUserMessageText(content: unknown): string | null {
   if (typeof content === "string") {
     const text = trimClaudeTranscriptBlankLines(
-      parseResponseAnnotationEnvelope(stripClaudeTurnAbortedContext(content)).text,
+      parseResponseAnnotationEnvelope(stripClaudeInternalUserContext(content)).text,
     );
     if (!text.trim() || isClaudeTranscriptNoiseText(text)) {
       return null;
     }
     return text;
   }
-  const parts = collectClaudeTextContentParts(content).filter(
-    (part) => !isClaudeTranscriptNoiseText(part),
-  ).map(stripClaudeTurnAbortedContext);
+  const parts = collectClaudeTextContentParts(content)
+    .map(stripClaudeInternalUserContext)
+    .filter((part) => part.trim() && !isClaudeTranscriptNoiseText(part));
   if (parts.length === 0) {
     return null;
   }
@@ -458,6 +473,90 @@ function readClaudeHistoryWindowWithToolContext(
   }
 }
 
+export type ClaudeStoredSessionTurnWindow = {
+  events: RahEvent[];
+  turnStartOffsets: ReadonlyMap<string, number>;
+  endOffset: number;
+  nextEndOffset?: number;
+  bytesRead: number;
+};
+
+/**
+ * Reads one semantic turn page directly from a Claude JSONL transcript.
+ *
+ * A visible user record is the only legal turn boundary. Reading backwards to
+ * `limit + 1` such records makes the next cursor a stable byte boundary and
+ * guarantees that assistant/tool records belonging to a selected turn stay
+ * together. The caller can therefore page across fresh worker processes and
+ * across harmless appends without materializing the complete transcript.
+ */
+export function readClaudeStoredSessionTurnWindow(args: {
+  sessionId: string;
+  record: ClaudeStoredSessionRecord;
+  endOffset: number;
+  limit: number;
+}): ClaudeStoredSessionTurnWindow {
+  const safeLimit = Math.max(1, Math.min(Math.trunc(args.limit), 100));
+  let lineBudget = Math.max(128, safeLimit * 8);
+  let bytesRead = 0;
+
+  for (;;) {
+    const window = readTrailingLineRecordsWindow(args.record.filePath, {
+      endOffset: args.endOffset,
+      maxLines: lineBudget,
+    });
+    bytesRead += window.bytesRead;
+    const visibleTurnLines = window.lines.flatMap((line) => {
+      const record = safeParseClaudeRecord(line.text);
+      return record?.type === "user" && hasClaudeUserTurn(record.message.content)
+        ? [{ line, turnId: `turn:${record.uuid}` }]
+        : [];
+    });
+    const enoughTurns = visibleTurnLines.length > safeLimit;
+    if (!enoughTurns && window.startOffset > 0) {
+      const nextLineBudget = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        Math.max(lineBudget + 128, lineBudget * 2),
+      );
+      if (nextLineBudget === lineBudget) {
+        throw new Error("Claude history line budget could not advance.");
+      }
+      lineBudget = nextLineBudget;
+      continue;
+    }
+
+    const selectedTurnLines = visibleTurnLines.slice(-safeLimit);
+    const selectedStartOffset = selectedTurnLines[0]?.line.startOffset;
+    if (selectedStartOffset === undefined) {
+      return {
+        events: [],
+        turnStartOffsets: new Map(),
+        endOffset: window.endOffset,
+        bytesRead,
+      };
+    }
+    const parsed = window.lines
+      .filter((line) => line.startOffset >= selectedStartOffset)
+      .map((line) => safeParseClaudeRecord(line.text))
+      .filter(
+        (record): record is ClaudeRawRecord =>
+          record !== null && record.type !== "custom-title",
+      );
+    const turnStartOffsets = new Map(
+      selectedTurnLines.map(({ turnId, line }) => [turnId, line.startOffset] as const),
+    );
+    return {
+      events: translateClaudeRecords(parsed, {
+        providerSessionId: args.record.ref.providerSessionId,
+      }),
+      turnStartOffsets,
+      endOffset: window.endOffset,
+      ...(enoughTurns ? { nextEndOffset: selectedStartOffset } : {}),
+      bytesRead,
+    };
+  }
+}
+
 export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
   sessionId: string;
   record: ClaudeStoredSessionRecord;
@@ -505,7 +604,12 @@ function safeParseClaudeRecord(line: string): ClaudeRawRecord | ClaudeCustomTitl
     if (INTERNAL_CLAUDE_EVENT_TYPES.has(parsed.type)) {
       return null;
     }
-    if (parsed.type === "user" && typeof parsed.uuid === "string" && parsed.message) {
+    if (
+      parsed.type === "user" &&
+      parsed.isMeta !== true &&
+      typeof parsed.uuid === "string" &&
+      parsed.message
+    ) {
       return parsed as ClaudeRawRecord;
     }
     if (parsed.type === "assistant" && typeof parsed.uuid === "string") {

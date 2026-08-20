@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
+import { codexVisualArtifactIdForPath } from "./codex-visual-artifacts";
 import {
+  resolveCodexVisualArtifactCandidates,
   resolveCodexVisualArtifactPath,
   resolveCodexVisualArtifactRoot,
 } from "./codex-visual-artifact-path";
@@ -43,6 +45,29 @@ test("resolves archived rollout visuals from the date encoded in the filename", 
   );
 });
 
+test("prefers the exact workspace visualization path and retains provider storage fallback", () => {
+  const stored = record(
+    "/Users/test/.codex/sessions/2026/07/20/rollout.jsonl",
+  );
+  stored.ref.cwd = "/Volumes/Data/skew";
+
+  assert.deepEqual(
+    resolveCodexVisualArtifactCandidates(stored, "curve.html"),
+    [
+      {
+        securityRootPath: "/Volumes/Data/skew",
+        artifactPath:
+          "/Volumes/Data/skew/.codex/visualizations/2026/07/20/019f7d82-3eaa-7093-8d75-27a51b60e2cf/curve.html",
+      },
+      {
+        securityRootPath: "/Users/test/.codex/visualizations",
+        artifactPath:
+          "/Users/test/.codex/visualizations/2026/07/20/019f7d82-3eaa-7093-8d75-27a51b60e2cf/curve.html",
+      },
+    ],
+  );
+});
+
 test("rejects unsafe artifact ids and unsafe provider session ids", () => {
   const stored = record(
     "/Users/test/.codex/sessions/2026/07/20/rollout.jsonl",
@@ -58,4 +83,23 @@ test("rejects unsafe artifact ids and unsafe provider session ids", () => {
     ),
     undefined,
   );
+  assert.deepEqual(resolveCodexVisualArtifactCandidates(stored, "../curve.html"), []);
+});
+
+test("resolves provider-evidenced visualization paths without guessing the session directory", () => {
+  const stored = record(
+    "/Users/test/.codex/sessions/2026/08/15/rollout.jsonl",
+  );
+  stored.ref.cwd = "/Volumes/Data/skew";
+  const artifactId = codexVisualArtifactIdForPath(
+    ".codex/visualizations/2026/08/15/sxx-optimal-combinations/optimal-candidate-combinations.html",
+  )!;
+
+  assert.deepEqual(resolveCodexVisualArtifactCandidates(stored, artifactId), [
+    {
+      securityRootPath: "/Volumes/Data/skew/.codex/visualizations",
+      artifactPath:
+        "/Volumes/Data/skew/.codex/visualizations/2026/08/15/sxx-optimal-combinations/optimal-candidate-combinations.html",
+    },
+  ]);
 });

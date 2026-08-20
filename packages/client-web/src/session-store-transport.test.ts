@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   connectSessionStoreTransport,
+  ensureSessionStoreTransportReady,
   restartSessionStoreTransport,
   sessionStoreSocketCloseDecision,
   sessionStoreTransportIsHealthy,
@@ -69,6 +70,16 @@ test("only the active socket decides whether to reconnect", () => {
   assert.equal(sessionStoreSocketCloseDecision(true, 4001), "stop");
 });
 
+test("activation readiness is a no-op when no browser event surface exists", async () => {
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+  try {
+    delete (globalThis as typeof globalThis & { window?: unknown }).window;
+    await ensureSessionStoreTransportReady();
+  } finally {
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  }
+});
+
 test("transport recovery waits for the restarted socket initial replay boundary", async () => {
   const originalWebSocket = globalThis.WebSocket;
   FakeWebSocket.instances = [];
@@ -129,6 +140,57 @@ test("transport recovery waits for the restarted socket initial replay boundary"
 
     restarted.close(4001);
     assert.equal(sessionStoreTransportIsHealthy(), false);
+  } finally {
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: originalWebSocket,
+    });
+  }
+});
+
+test("activation readiness waits on the current socket instead of replacing it", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  FakeWebSocket.instances = [];
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    writable: true,
+    value: FakeWebSocket,
+  });
+
+  try {
+    connectSessionStoreTransport({
+      getReplayFromSeq: () => undefined,
+      isInitialLoaded: () => true,
+      onBatch: () => undefined,
+      onError: () => undefined,
+      onOpen: () => undefined,
+      onReplayGap: () => undefined,
+      onStoredSessionsRefresh: () => undefined,
+    });
+    const socket = FakeWebSocket.instances[0]!;
+    let ready = false;
+    const readiness = ensureSessionStoreTransportReady().then(() => {
+      ready = true;
+    });
+
+    assert.equal(FakeWebSocket.instances.length, 1);
+    socket.open();
+    await Promise.resolve();
+    assert.equal(ready, false);
+    socket.message({
+      events: [],
+      conversationDeltas: [],
+      initial: true,
+      replay: true,
+      replayComplete: true,
+    });
+    await readiness;
+
+    assert.equal(ready, true);
+    assert.equal(FakeWebSocket.instances.length, 1);
+    assert.equal(sessionStoreTransportIsHealthy(), true);
+    socket.close(4001);
   } finally {
     Object.defineProperty(globalThis, "WebSocket", {
       configurable: true,

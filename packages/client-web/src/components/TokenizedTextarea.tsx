@@ -14,6 +14,53 @@ import {
 const TEXTAREA_TEXT_LAYOUT_CLASS_NAME =
   "whitespace-pre-wrap break-words";
 
+export type ExternalTextareaValueSync =
+  | { kind: "ignore" }
+  | { kind: "defer"; value: string }
+  | { kind: "apply"; value: string; discardCompositionEnd: boolean };
+
+export function resolveExternalTextareaValueSync(args: {
+  externalValue: string;
+  lastEmittedValue: string;
+  isComposing: boolean;
+}): ExternalTextareaValueSync {
+  if (args.externalValue === args.lastEmittedValue) {
+    return { kind: "ignore" };
+  }
+  if (args.isComposing && args.externalValue !== "") {
+    return { kind: "defer", value: args.externalValue };
+  }
+  return {
+    kind: "apply",
+    value: args.externalValue,
+    // Clicking Send can make Mobile Safari emit compositionend before React
+    // commits the parent-owned clear. Remember every accepted non-empty ->
+    // empty transition, not only the subset that still reports composing.
+    discardCompositionEnd:
+      args.externalValue === "" && args.lastEmittedValue !== "",
+  };
+}
+
+export function preserveDiscardedCompositionAcrossScopeChange(args: {
+  discardCompositionEnd: boolean;
+  isComposing: boolean;
+}): boolean {
+  return args.discardCompositionEnd || args.isComposing;
+}
+
+export function shouldDiscardOrphanedCompositionInput(args: {
+  externalValue: string;
+  compositionStartedHere: boolean;
+  nativeIsComposing?: boolean;
+  inputType?: string | null;
+}): boolean {
+  return (
+    args.externalValue === "" &&
+    !args.compositionStartedHere &&
+    (args.nativeIsComposing === true || args.inputType === "insertCompositionText")
+  );
+}
+
 export const TokenizedTextarea = forwardRef<
   HTMLTextAreaElement,
   {
@@ -37,7 +84,10 @@ export const TokenizedTextarea = forwardRef<
   const lastEmittedValueRef = useRef(props.value);
   const isComposingRef = useRef(false);
   const pendingExternalValueRef = useRef<string | null>(null);
+  const discardCompositionEndRef = useRef(false);
+  const externalValueRef = useRef(props.value);
   const scopeKeyRef = useRef(props.scopeKey);
+  externalValueRef.current = props.value;
 
   useImperativeHandle(forwardedRef, () => textareaRef.current as HTMLTextAreaElement, []);
 
@@ -55,24 +105,50 @@ export const TokenizedTextarea = forwardRef<
       return;
     }
     scopeKeyRef.current = props.scopeKey;
+    // A stored-history Resume replaces the temporary replay id with a new
+    // live runtime id. That scope change can happen between an accepted Send
+    // and Mobile Safari's late compositionend/input pair. Preserve the
+    // discard boundary across the identity handoff or the submitted question
+    // is written back into the new live Session composer.
+    discardCompositionEndRef.current = preserveDiscardedCompositionAcrossScopeChange({
+      discardCompositionEnd: discardCompositionEndRef.current,
+      isComposing: isComposingRef.current,
+    });
     isComposingRef.current = false;
     pendingExternalValueRef.current = null;
     lastEmittedValueRef.current = props.value;
+    if (textareaRef.current && props.value === "") {
+      textareaRef.current.value = "";
+    }
     setLocalTextareaValue(props.value);
   }, [props.scopeKey, props.value, setLocalTextareaValue]);
 
-  useEffect(() => {
-    if (isComposingRef.current) {
-      if (props.value !== lastEmittedValueRef.current) {
-        pendingExternalValueRef.current = props.value;
-      }
+  useLayoutEffect(() => {
+    const sync = resolveExternalTextareaValueSync({
+      externalValue: props.value,
+      lastEmittedValue: lastEmittedValueRef.current,
+      isComposing: isComposingRef.current,
+    });
+    if (sync.kind === "ignore") {
       return;
     }
-    if (props.value === lastEmittedValueRef.current) {
+    if (sync.kind === "defer") {
+      pendingExternalValueRef.current = sync.value;
       return;
     }
-    lastEmittedValueRef.current = props.value;
-    setLocalTextareaValue(props.value);
+    if (sync.discardCompositionEnd) {
+      discardCompositionEndRef.current = true;
+      isComposingRef.current = false;
+      pendingExternalValueRef.current = null;
+    }
+    lastEmittedValueRef.current = sync.value;
+    if (textareaRef.current && sync.value === "") {
+      // Mobile Safari can retain the native composition buffer even after the
+      // controlled value changes. Clear the live control at the same boundary
+      // as the accepted Send so stale text cannot remain editable.
+      textareaRef.current.value = "";
+    }
+    setLocalTextareaValue(sync.value);
   }, [props.value, setLocalTextareaValue]);
 
   // Measure the live control instead of a detached clone. Mobile Safari can
@@ -163,8 +239,28 @@ export const TokenizedTextarea = forwardRef<
         aria-label={props.ariaLabel}
         placeholder={props.placeholder}
         onChange={(event) => {
-          const nextValue = event.currentTarget.value;
           const nativeEvent = event.nativeEvent as InputEvent;
+          if (
+            (discardCompositionEndRef.current &&
+              (nativeEvent.isComposing ||
+                nativeEvent.inputType === "insertCompositionText")) ||
+            shouldDiscardOrphanedCompositionInput({
+              externalValue: externalValueRef.current,
+              compositionStartedHere: isComposingRef.current,
+              nativeIsComposing: nativeEvent.isComposing,
+              inputType: nativeEvent.inputType,
+            })
+          ) {
+            // iOS may dispatch one final input event after Send cleared the
+            // controlled draft but before compositionend. That event belongs
+            // to the already-submitted composition and must not repopulate the
+            // parent draft or the live textarea.
+            const externalValue = externalValueRef.current;
+            event.currentTarget.value = externalValue;
+            setLocalTextareaValue(externalValue);
+            return;
+          }
+          const nextValue = event.currentTarget.value;
           setLocalTextareaValue(nextValue);
           if (!isComposingRef.current && !nativeEvent.isComposing) {
             emitChange(nextValue);
@@ -172,6 +268,7 @@ export const TokenizedTextarea = forwardRef<
         }}
         onCompositionStart={() => {
           isComposingRef.current = true;
+          discardCompositionEndRef.current = false;
           pendingExternalValueRef.current = null;
         }}
         onCompositionUpdate={() => {
@@ -179,6 +276,27 @@ export const TokenizedTextarea = forwardRef<
           scheduleHeightAdjustment();
         }}
         onCompositionEnd={(event) => {
+          if (
+            discardCompositionEndRef.current ||
+            shouldDiscardOrphanedCompositionInput({
+              externalValue: externalValueRef.current,
+              compositionStartedHere: isComposingRef.current,
+            })
+          ) {
+            discardCompositionEndRef.current = false;
+            isComposingRef.current = false;
+            pendingExternalValueRef.current = null;
+            const externalValue = externalValueRef.current;
+            // The native composition event mutates the textarea before React
+            // receives it. State is already the submitted empty value, so a
+            // no-op setState cannot repair that DOM mutation; reset the live
+            // control explicitly at the event boundary.
+            event.currentTarget.value = externalValue;
+            lastEmittedValueRef.current = externalValue;
+            setLocalTextareaValue(externalValue);
+            scheduleHeightAdjustment();
+            return;
+          }
           isComposingRef.current = false;
           const pendingExternalValue = pendingExternalValueRef.current;
           if (pendingExternalValue !== null) {
@@ -202,9 +320,15 @@ export const TokenizedTextarea = forwardRef<
           ) {
             return;
           }
+          // A trusted non-IME key begins a new edit after the accepted Send.
+          // Do not let the old composition tombstone consume it.
+          discardCompositionEndRef.current = false;
           props.onKeyDown?.(event);
         }}
-        onPaste={props.onPaste}
+        onPaste={(event) => {
+          discardCompositionEndRef.current = false;
+          props.onPaste?.(event);
+        }}
         disabled={props.disabled}
         rows={props.rows}
         spellCheck={props.spellCheck}
@@ -212,7 +336,23 @@ export const TokenizedTextarea = forwardRef<
           adjustHeight();
           scheduleHeightAdjustment();
         }}
-        onInput={() => {
+        onInput={(event) => {
+          const nativeEvent = event.nativeEvent as InputEvent;
+          const orphanedComposition = shouldDiscardOrphanedCompositionInput({
+            externalValue: externalValueRef.current,
+            compositionStartedHere: isComposingRef.current,
+            nativeIsComposing: nativeEvent.isComposing,
+            inputType: nativeEvent.inputType,
+          });
+          const discardedSubmittedComposition =
+            discardCompositionEndRef.current &&
+            (nativeEvent.isComposing ||
+              nativeEvent.inputType === "insertCompositionText");
+          if (discardedSubmittedComposition || orphanedComposition) {
+            event.currentTarget.value = externalValueRef.current;
+          } else if (!isComposingRef.current) {
+            discardCompositionEndRef.current = false;
+          }
           adjustHeight();
           scheduleHeightAdjustment();
         }}

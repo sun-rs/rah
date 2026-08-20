@@ -57,6 +57,9 @@ function selectClaudeBindingRecord(
   historyCatalog: NativeTuiHistoryCatalog,
 ) {
   const records = claudeRecords(historyCatalog);
+  const excludedProviderSessionIds = new Set(
+    session.excludedProviderSessionIds ?? [],
+  );
   if (session.providerSessionId) {
     const boundRecord = records.find(
       (candidate) =>
@@ -71,6 +74,10 @@ function selectClaudeBindingRecord(
     return boundRecord;
   }
   const candidate = records
+    .filter(
+      (record) =>
+        !excludedProviderSessionIds.has(record.ref.providerSessionId),
+    )
     .filter((record) =>
       sameNativeTuiDirectory(record.ref.cwd ?? record.ref.rootDir, session.cwd),
     )
@@ -108,6 +115,7 @@ function probeClaudeBinding(
   return {
     providerSessionId: record.ref.providerSessionId,
     record,
+    authority: "history_probe" as const,
   };
 }
 

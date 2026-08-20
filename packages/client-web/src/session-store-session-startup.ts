@@ -15,6 +15,12 @@ import {
   isCoreLiveProvider,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
+import {
+  createSessionActivationInput,
+  requireSessionActivationAcceptance,
+  sessionActivationInputRequest,
+  type SessionActivationInput,
+} from "./session-activation-transaction";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
 import {
@@ -25,6 +31,7 @@ import {
   applyStartedSessionState,
   resolveStoredSessionRef,
   createEmptySessionProjection,
+  mergeStartedSessionProjection,
   mergeResumedHistoryProjection,
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
@@ -58,6 +65,7 @@ import {
   initialConversationSyncState,
   providerLabel,
   removeOptimisticUserMessage,
+  type ConversationSyncState,
   type SessionProjection,
 } from "./types";
 
@@ -131,6 +139,7 @@ type SessionStartupSetState = (
 type SessionStartupDeps = {
   get: () => SessionStartupState;
   set: SessionStartupSetState;
+  ensureEventTransportReady: () => Promise<void>;
   ensureConversationLoaded: (sessionId: string) => Promise<void>;
   initializeLiveConversationProjection: (sessionId: string) => Promise<void>;
   sendInput: (
@@ -146,6 +155,7 @@ type SessionStartupDeps = {
   ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   resumeStoredSession: (ref: StoredSessionRef, options?: ResumeStoredSessionOptions) => Promise<void>;
+  restoreCachedConversation?: (ref: StoredSessionRef) => ConversationSyncState | undefined;
   applySessionsResponse: (
     state: Pick<
       SessionStartupState,
@@ -390,15 +400,12 @@ export async function startSessionCommand(
       deps.set({ pendingSessionTransition: null, error });
       throw new Error(error);
     }
-    const initialInput = options?.initialInput?.trim();
-    const initialAttachments = options?.initialAttachments ?? [];
-    const initialAnnotations = options?.initialAnnotations ?? [];
-    const hasInitialInput = Boolean(
-      initialInput || initialAttachments.length > 0 || initialAnnotations.length > 0,
-    );
+    const activationInput = createSessionActivationInput({
+      text: options?.initialInput?.trim() ?? "",
+      attachments: options?.initialAttachments,
+      annotations: options?.initialAnnotations,
+    });
     const title = options?.title ?? `${providerLabel(provider)} session`;
-    const clientMessageId = createClientSideId("client-message");
-    const clientTurnId = createClientSideId("client-turn");
     const startupConfiguration = createPendingSessionStartupConfiguration({
       ...(options?.model ? { modelId: options.model } : {}),
       ...(options?.reasoningId !== undefined
@@ -414,7 +421,7 @@ export async function startSessionCommand(
       cwd,
       ...(options?.title ? { title: options.title } : {}),
     });
-    if (initialInput || initialAttachments.length > 0 || initialAnnotations.length > 0) {
+    if (activationInput.hasInput) {
       provisionalSessionId = createClientSideId("starting-session");
       const provisionalProjection = createPendingLiveSessionProjection({
         sessionId: provisionalSessionId,
@@ -423,10 +430,10 @@ export async function startSessionCommand(
         title,
         clientId: state.clientId,
         connectionId: state.connectionId,
-        text: initialInput ?? "",
-        attachments: initialAttachments,
-        clientMessageId,
-        clientTurnId,
+        text: activationInput.text,
+        attachments: activationInput.attachments,
+        clientMessageId: activationInput.clientMessageId,
+        clientTurnId: activationInput.clientTurnId,
         ...(startupConfiguration ? { startupConfiguration } : {}),
       });
       deps.set((current) => {
@@ -462,6 +469,7 @@ export async function startSessionCommand(
       }
       return null;
     }
+    await deps.ensureEventTransportReady();
     const liveBackend = options?.liveBackend ?? defaultLiveBackendForProvider(provider);
     const response = await api.startSession({
       provider,
@@ -471,24 +479,13 @@ export async function startSessionCommand(
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
-      ...(hasInitialInput
-        ? {
-            initialInput: {
-              clientId: state.clientId,
-              text: initialInput ?? "",
-              clientMessageId,
-              clientTurnId,
-              ...(initialAttachments.length
-                ? { attachments: initialAttachments }
-                : {}),
-              ...(initialAnnotations.length
-                ? { annotations: initialAnnotations }
-                : {}),
-            },
-          }
-        : {}),
+      ...(() => {
+        const initialInput = sessionActivationInputRequest(state.clientId, activationInput);
+        return initialInput ? { initialInput } : {};
+      })(),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
+    requireSessionActivationAcceptance(response, activationInput);
     if (consumeCanceledSessionStartup(provisionalSessionId)) {
       await api.closeSession(response.session.session.id, { clientId: state.clientId });
       deps.set((current) => {
@@ -539,7 +536,7 @@ export async function startSessionCommand(
       if (provisionalProjection) {
         startedProjections.set(
           configuredSession.session.id,
-          mergeResumedHistoryProjection(
+          mergeStartedSessionProjection(
             configuredSession,
             provisionalProjection,
             existingLiveProjection,
@@ -739,7 +736,10 @@ export async function resumeStoredSessionCommand(
       return;
     }
     if (preferStoredReplay) {
-      deps.set((current) => applyPendingStoredReplaySessionState(current, ref));
+      const cachedConversation = deps.restoreCachedConversation?.(ref);
+      deps.set((current) =>
+        applyPendingStoredReplaySessionState(current, ref, cachedConversation),
+      );
     } else {
       deps.set({
         pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
@@ -818,7 +818,9 @@ export async function resumeStoredSessionCommand(
         ref,
         {
           projections: next,
-          replayProjection: createEmptySessionProjection(response.session),
+          replayProjection:
+            next.get(response.session.session.id) ??
+            createEmptySessionProjection(response.session),
           ...(provisionalSessionId ? { replaceSessionId: provisionalSessionId } : {}),
           selectSession: shouldSelectResponse,
         },
@@ -913,42 +915,17 @@ type ResumeHistorySessionOptions = {
   initialAnnotations?: SessionInputAnnotation[];
 };
 
-type ResumeHistoryInitialInput = {
-  text: string;
-  attachments: SessionInputAttachment[];
-  annotations: SessionInputAnnotation[];
-  hasInput: boolean;
-  clientMessageId: string;
-  clientTurnId: string;
-};
-
 type ResumeHistoryOperation = {
   promise: Promise<string | null>;
 };
 
 const resumeHistoryOperations = new Map<string, ResumeHistoryOperation>();
 
-function createResumeHistoryInitialInput(
-  options: ResumeHistorySessionOptions | undefined,
-): ResumeHistoryInitialInput {
-  const text = options?.initialInput ?? "";
-  const attachments = options?.initialAttachments ?? [];
-  const annotations = options?.initialAnnotations ?? [];
-  return {
-    text,
-    attachments,
-    annotations,
-    hasInput: Boolean(text.trim() || attachments.length > 0 || annotations.length > 0),
-    clientMessageId: createClientSideId("client-message"),
-    clientTurnId: createClientSideId("client-turn"),
-  };
-}
-
 function stageResumeHistoryInitialInput(
   deps: SessionStartupDeps,
   sessionId: string,
   previousProjection: SessionProjection | undefined,
-  input: ResumeHistoryInitialInput,
+  input: SessionActivationInput,
   startupConfiguration?: PendingSessionStartupConfiguration,
 ): void {
   if (!input.hasInput || !previousProjection) {
@@ -1023,7 +1000,7 @@ function stageResumeHistoryInitialInput(
 async function sendResumeHistoryInitialInput(
   deps: SessionStartupDeps,
   resumedSessionId: string,
-  input: ResumeHistoryInitialInput,
+  input: SessionActivationInput,
 ): Promise<void> {
   if (!input.hasInput) {
     return;
@@ -1039,7 +1016,7 @@ async function sendResumeHistoryInitialInput(
 function rollbackResumeHistoryInitialInput(
   deps: SessionStartupDeps,
   resumedSessionId: string,
-  input: ResumeHistoryInitialInput,
+  input: SessionActivationInput,
   baselineSeq: number | undefined,
 ): void {
   deps.set((state) => {
@@ -1071,7 +1048,11 @@ export function resumeHistorySessionCommand(
   options?: ResumeHistorySessionOptions,
 ): Promise<string | null> {
   const operationKey = resumeHistoryOperationKey(deps, sessionId);
-  const initial = createResumeHistoryInitialInput(options);
+  const initial = createSessionActivationInput({
+    text: options?.initialInput,
+    attachments: options?.initialAttachments,
+    annotations: options?.initialAnnotations,
+  });
   const startupConfiguration = createPendingSessionStartupConfiguration({
     ...(options?.modelId ? { modelId: options.modelId } : {}),
     ...(options?.reasoningId !== undefined
@@ -1220,7 +1201,7 @@ async function resumeHistorySessionCommandInternal(
   deps: SessionStartupDeps,
   sessionId: string,
   options?: ResumeHistorySessionOptions,
-  initialInput?: ResumeHistoryInitialInput,
+  initialInput?: SessionActivationInput,
 ): Promise<string | null> {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
@@ -1419,26 +1400,23 @@ async function resumeHistorySessionCommandInternal(
   const resumeExistingRunning = async (
     running: SessionSummary,
   ): Promise<string> => {
-    const finishExistingResume = async (
-      configured: SessionSummary,
-    ): Promise<string> => {
-      if (initialInput?.hasInput) {
-        await sendResumeHistoryInitialInput(
-          deps,
-          configured.session.id,
-          initialInput,
-        );
-      }
-      return configured.session.id;
-    };
-    const mode = resolveHistoryActivationMode({
+    const requestedControlsAlreadyActive =
+      (!options?.modeId || running.session.mode?.currentModeId === options.modeId) &&
+      (!options?.modelId ||
+        (running.session.model?.currentModelId === options.modelId &&
+          (options.reasoningId === undefined ||
+            running.session.model?.currentReasoningId === options.reasoningId)));
+    const activationMode = resolveHistoryActivationMode({
       existingRunningSummary: running,
       clientId: deps.get().clientId,
     });
-    if (mode === "select") {
+    if (
+      activationMode === "select" &&
+      !initialInput?.hasInput &&
+      requestedControlsAlreadyActive
+    ) {
       applyResumedSession(running);
-      const configured = await applyRequestedResumeConfiguration(running);
-      return await finishExistingResume(configured);
+      return running.session.id;
     }
     deps.set({
       pendingSessionAction: pendingResumeAction,
@@ -1446,13 +1424,32 @@ async function resumeHistorySessionCommandInternal(
       error: null,
     });
     try {
+      await deps.ensureEventTransportReady();
       const attachResponse = await api.attachSession(
         running.session.id,
-        createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
+        {
+          ...createInteractiveAttachRequest(
+            deps.get().clientId,
+            deps.get().connectionId,
+          ),
+          ...(options?.modelId ? { model: options.modelId } : {}),
+          ...(options?.optionValues !== undefined
+            ? { optionValues: options.optionValues }
+            : {}),
+          ...(options?.modeId ? { modeId: options.modeId } : {}),
+          ...(() => {
+            const inputRequest = initialInput
+              ? sessionActivationInputRequest(state.clientId, initialInput)
+              : undefined;
+            return inputRequest ? { initialInput: inputRequest } : {};
+          })(),
+        },
       );
+      if (initialInput) {
+        requireSessionActivationAcceptance(attachResponse, initialInput);
+      }
       applyResumedSession(attachResponse.session);
-      const configured = await applyRequestedResumeConfiguration(attachResponse.session);
-      return await finishExistingResume(configured);
+      return attachResponse.session.session.id;
     } catch (attachError) {
       deps.set({
         pendingSessionAction: null,
@@ -1479,6 +1476,7 @@ async function resumeHistorySessionCommandInternal(
       pendingSessionTransition: null,
       error: null,
     });
+    await deps.ensureEventTransportReady();
     const request: ResumeSessionRequest = {
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
@@ -1492,28 +1490,21 @@ async function resumeHistorySessionCommandInternal(
       preferStoredReplay: false,
       historyReplay: "skip",
       historySourceSessionId: sessionId,
-      ...(initialInput?.hasInput
-        ? {
-            initialInput: {
-              clientId: state.clientId,
-              text: initialInput.text,
-              clientMessageId: initialInput.clientMessageId,
-              clientTurnId: initialInput.clientTurnId,
-              ...(initialInput.attachments.length
-                ? { attachments: initialInput.attachments }
-                : {}),
-              ...(initialInput.annotations.length
-                ? { annotations: initialInput.annotations }
-                : {}),
-            },
-          }
-        : {}),
+      ...(() => {
+        const inputRequest = initialInput
+          ? sessionActivationInputRequest(state.clientId, initialInput)
+          : undefined;
+        return inputRequest ? { initialInput: inputRequest } : {};
+      })(),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     };
     if (targetDir !== null) {
       request.cwd = targetDir;
     }
     const response = await api.resumeSession(request);
+    if (initialInput) {
+      requireSessionActivationAcceptance(response, initialInput);
+    }
     let session = response.session;
     applyResumedSession(session);
     session = await applyRequestedResumeConfiguration(session);

@@ -6,6 +6,7 @@ import { describe, test } from "node:test";
 import type { ToolFamily } from "@rah/runtime-protocol";
 import type { FeedEntry } from "../../types";
 import { AssistantProcessGroup } from "./AssistantProcessGroup";
+import { ContextCompactionDivider } from "./ContextCompactionDivider";
 import {
   buildProcessDetailRows,
   defaultAssistantProcessGroupExpanded,
@@ -63,6 +64,21 @@ function reasoning(
     kind: "timeline",
     item: { kind: "reasoning", text, ...(presentation ? { presentation } : {}) },
     ts: "2026-07-10T00:00:02.000Z",
+    turnId: "turn-1",
+  };
+}
+
+function guidance(key: string, text: string): FeedEntry {
+  return {
+    key,
+    kind: "timeline",
+    item: {
+      kind: "user_message",
+      text,
+      messageId: key,
+      clientMessageId: key,
+    },
+    ts: "2026-07-10T00:00:02.500Z",
     turnId: "turn-1",
   };
 }
@@ -177,6 +193,44 @@ describe("assistant process groups", () => {
     assert.doesNotMatch(html, /raw:read-1|raw:command-1|raw:edit-1/);
     assert.doesNotMatch(html, /rounded-lg border border-\[var\(--app-border\)\] bg-\[var\(--app-subtle-bg\)\]/);
     assert.doesNotMatch(html, /pl-5/);
+  });
+
+  test("keeps an in-turn Guide visible when settled work details are folded", () => {
+    const html = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-guided",
+          entries: [
+            reasoning("before-guide"),
+            guidance("guide-message", "Focus on the lab folder"),
+            reasoning("after-guide"),
+          ],
+          completed: true,
+          active: false,
+          hasFinalAnswer: true,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          completedAt: "2026-07-10T00:00:03.000Z",
+          durationMs: 3_000,
+          activities: [],
+          turnStatus: "completed",
+        },
+        expanded: false,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) =>
+          createElement(
+            "span",
+            null,
+            entry.kind === "timeline" && entry.item.kind === "user_message"
+              ? entry.item.text
+              : entry.key,
+          ),
+      }),
+    );
+
+    assert.match(html, /assistant-process-guidance-slot/);
+    assert.match(html, /Focus on the lab folder/);
+    assert.doesNotMatch(html, />before-guide<|>after-guide</);
   });
 
   test("keeps the Worked header stable when lazy detail reveals reviewable results", () => {
@@ -367,10 +421,7 @@ describe("assistant process groups", () => {
         html,
         /data-testid="assistant-process-final-divider"/,
       );
-      assert.doesNotMatch(
-        html,
-        /border-b border-\[var\(--app-border\)\]/,
-      );
+      assert.doesNotMatch(html, /assistant-process-final-divider/);
     }
     for (const html of [expandedWithFinalHtml, collapsedWithFinalHtml]) {
       assert.equal(
@@ -384,7 +435,7 @@ describe("assistant process groups", () => {
       assert.equal(
         (
           html.match(
-            /border-b border-\[var\(--app-border\)\]/g,
+            /class="[^"]*assistant-process-final-divider(?:-line)?[^"]*"/g,
           ) ?? []
         ).length,
         1,
@@ -396,7 +447,7 @@ describe("assistant process groups", () => {
     assert.doesNotMatch(expandedWithFinalHtml, /space-y-2\.5 pb-3|mt-3/);
   });
 
-  test("keeps ordinary process rows at 28px and compaction at a tighter 20px rhythm", () => {
+  test("tightens only the desktop compaction row and preserves the PWA rhythm", () => {
     const styles = readFileSync(
       new URL("../../assistant-process-styles.css", import.meta.url),
       "utf8",
@@ -408,11 +459,11 @@ describe("assistant process groups", () => {
     );
     assert.match(
       styles,
-      /\.assistant-process-compaction\s*\{[\s\S]*min-height:\s*1\.25rem;[\s\S]*padding-block:\s*0;/,
+      /\.assistant-process-compaction\s*\{[\s\S]*min-height:\s*1\.5rem;[\s\S]*padding-block:\s*0;/,
     );
     assert.match(
       styles,
-      /\.assistant-process-details\s*\{[\s\S]*margin-top:\s*0\.25rem;[\s\S]*padding-bottom:\s*0\.375rem;/,
+      /\.assistant-process-details\s*\{[\s\S]*margin-top:\s*0\.25rem;[\s\S]*padding-bottom:\s*0;/,
     );
     assert.match(
       styles,
@@ -421,6 +472,26 @@ describe("assistant process groups", () => {
     assert.match(
       styles,
       /\.assistant-process-details\s*>\s*\.assistant-process-compaction-slot,[\s\S]*\.assistant-process-compaction-slot\s*\+\s*\*\s*\{[\s\S]*margin-top:\s*0\.125rem;/,
+    );
+    assert.match(
+      styles,
+      /\.chat-thread-shell\[data-chat-density="mobile"\]\s+\.assistant-process-compaction\s*\{[\s\S]*min-height:\s*1\.75rem;[\s\S]*padding-block:\s*0\.125rem;/,
+    );
+    assert.match(
+      styles,
+      /\.chat-thread-shell\[data-chat-density="mobile"\][\s\S]*\.assistant-process-details\s*>\s*\.assistant-process-compaction-slot,[\s\S]*\.chat-thread-shell\[data-chat-density="mobile"\][\s\S]*\.assistant-process-compaction-slot\s*\+\s*\*\s*\{[\s\S]*margin-top:\s*0\.25rem;/,
+    );
+    assert.match(
+      styles,
+      /:where\([\s\S]*\.assistant-process-details\.assistant-process-final-divider,[\s\S]*\.assistant-process-final-divider-line[\s\S]*\)\s*\{[\s\S]*--assistant-process-final-divider-collapsed-space:\s*0\.25rem;[\s\S]*--assistant-process-final-divider-expanded-space:\s*0\.4375rem;/,
+    );
+    assert.match(
+      styles,
+      /\.assistant-process-details\.assistant-process-final-divider\s*\{[\s\S]*padding-bottom:\s*var\(--assistant-process-final-divider-expanded-space\);/,
+    );
+    assert.match(
+      styles,
+      /\.assistant-process-final-divider-line\s*\{[\s\S]*margin-top:\s*var\(--assistant-process-final-divider-collapsed-space\);/,
     );
   });
 
@@ -440,6 +511,55 @@ describe("assistant process groups", () => {
       source,
       /assistant-process-compaction[^"\n]*text-\[11px\]/,
     );
+  });
+
+  test("sweeps only active process and compaction labels", () => {
+    const activeCompaction = renderToStaticMarkup(
+      createElement(ContextCompactionDivider, {
+        item: { kind: "compaction", status: "started" },
+      }),
+    );
+    const completedCompaction = renderToStaticMarkup(
+      createElement(ContextCompactionDivider, {
+        item: { kind: "compaction", status: "completed" },
+      }),
+    );
+    const activeProcess = renderToStaticMarkup(
+      createElement(AssistantProcessGroup, {
+        group: {
+          kind: "assistant_process_group",
+          key: "process-active-sweep",
+          entries: [command("command-active", "running")],
+          completed: false,
+          active: true,
+          hasFinalAnswer: false,
+          startedAt: "2026-07-10T00:00:00.000Z",
+          activities: [],
+          turnStatus: "in_progress",
+        },
+        expanded: true,
+        onExpandedChange: () => undefined,
+        renderEntry: (entry) => createElement("span", null, entry.key),
+      }),
+    );
+    const completedEntry = renderToStaticMarkup(
+      createElement(ProcessActivityEntry, { entry: command("command-complete") }),
+    );
+
+    assert.match(activeCompaction, /data-status="running"/);
+    assert.match(activeCompaction, /assistant-process-active-text/);
+    assert.doesNotMatch(completedCompaction, /assistant-process-active-text/);
+    assert.equal((activeProcess.match(/assistant-process-active-text/g) ?? []).length >= 2, true);
+    assert.doesNotMatch(completedEntry, /assistant-process-active-text/);
+
+    const styles = readFileSync(
+      new URL("../../assistant-process-styles.css", import.meta.url),
+      "utf8",
+    );
+    assert.match(styles, /@keyframes assistant-process-text-sweep/);
+    assert.match(styles, /background-position:\s*-120% 0;/);
+    assert.match(styles, /background-position:\s*120% 0;/);
+    assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
   });
 
   test("does not draw a final divider while work is still active", () => {
@@ -624,16 +744,10 @@ describe("assistant process groups", () => {
     );
 
     assert.match(activeHtml, /Estimating lazy loading scope/);
-    assert.doesNotMatch(
-      activeHtml,
-      /border-b border-\[var\(--app-border\)\]/,
-    );
+    assert.doesNotMatch(activeHtml, /assistant-process-final-divider/);
     assert.doesNotMatch(settledHtml, /Estimating lazy loading scope/);
     assert.match(settledHtml, /The stable boundary is the complete conversation pane/);
-    assert.match(
-      settledHtml,
-      /border-b border-\[var\(--app-border\)\]/,
-    );
+    assert.match(settledHtml, /assistant-process-final-divider/);
   });
 
   test("removes duplicate provider reasoning parts when a canonical reasoning row exists", () => {

@@ -6,7 +6,10 @@ import type {
   ConversationTurnDelta,
   ConversationTurnProjection,
 } from "@rah/runtime-protocol";
-import { summarizeConversationActivities } from "@rah/runtime-protocol";
+import {
+  orderConversationTurnItems,
+  summarizeConversationActivities,
+} from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
   mergeConversationTurnResources,
@@ -98,7 +101,7 @@ function createLinkedAbortController(signal: AbortSignal | undefined): {
 function normalizeConversationTurn(
   turn: ConversationTurnProjection,
 ): ConversationTurnProjection {
-  const items = Array.isArray(turn.items) ? turn.items : [];
+  const items = orderConversationTurnItems(Array.isArray(turn.items) ? turn.items : []);
   return {
     ...turn,
     items,
@@ -302,15 +305,16 @@ function mergeTurnWithRetainedItems(
   }
   items.push(...newFinal);
 
-  const final = lastFinalItem(items);
+  const orderedItems = orderConversationTurnItems(items);
+  const final = lastFinalItem(orderedItems);
   const resources = mergeConversationTurnResources(current, incoming);
   const merged: ConversationTurnProjection = {
     ...incoming,
-    items,
+    items: orderedItems,
     ...resources,
     itemsView,
-    failedItemCount: items.filter((item) => item.status === "failed").length,
-    activities: summarizeConversationActivities(items),
+    failedItemCount: orderedItems.filter((item) => item.status === "failed").length,
+    activities: summarizeConversationActivities(orderedItems),
     revision: Math.max(current.revision, incoming.revision),
   };
   if (final) {
@@ -332,6 +336,17 @@ function mergeTurnWithoutDetailDowngrade(
   current: ConversationTurnProjection,
   incoming: ConversationTurnProjection,
 ): ConversationTurnProjection {
+  // A summary is a bounded transport view, not an authoritative item set.
+  // Its omissions can come from the byte/item budget, so they must never be
+  // interpreted as deletions—even when both the resident and incoming views
+  // are summaries. Explicit removals arrive through ConversationProjectionDelta.
+  if (incoming.itemsView === "summary") {
+    return mergeTurnWithRetainedItems(
+      current,
+      incoming,
+      current.itemsView === "full" ? "full" : "summary",
+    );
+  }
   if (current.itemsView === "full" && incoming.itemsView !== "full") {
     return mergeFullTurnWithSummary(current, incoming);
   }
@@ -416,6 +431,38 @@ function mergeNewerTurns(
     }),
     ...incoming.filter((turn) => !existingIds.has(turn.id)),
   ];
+}
+
+function replaceDetachedBaselineTurns(
+  current: readonly ConversationTurnProjection[],
+  incoming: readonly ConversationTurnProjection[],
+): ConversationTurnProjection[] {
+  return incoming.map((incomingTurn) => {
+    const currentTurn = current.find(
+      (candidate) =>
+        candidate.id === incomingTurn.id ||
+        Boolean(
+          candidate.providerTurnId &&
+            incomingTurn.providerTurnId &&
+            candidate.providerTurnId === incomingTurn.providerTurnId,
+        ),
+    );
+    if (!currentTurn) {
+      return incomingTurn;
+    }
+    const merged = mergeTurnWithoutDetailDowngrade(currentTurn, incomingTurn);
+    if (currentTurn.id === incomingTurn.id) {
+      return merged;
+    }
+    return {
+      ...merged,
+      items: merged.items.map((item) =>
+        item.turnId === incomingTurn.id
+          ? item
+          : { ...item, turnId: incomingTurn.id },
+      ),
+    };
+  });
 }
 
 function mergeOlderTurns(
@@ -558,9 +605,14 @@ function applyPendingDeltas(
   );
   let appliedCount = 0;
   for (const delta of pending) {
-    if (delta.baseRevision !== nextRevision) {
+    if (delta.baseRevision > nextRevision) {
       break;
     }
+    // Websocket transport may compose 0→N while a concurrent resident HTTP
+    // snapshot already represents an intermediate revision. A composed delta
+    // contains the latest upserts plus idempotent removals for that whole
+    // interval, so it is safe—and required—to apply when its interval overlaps
+    // the current baseline. Requiring exact equality strands the newest items.
     nextTurns = applyProjectionDelta(nextTurns, delta);
     nextRevision = delta.revision;
     appliedCount += 1;
@@ -628,11 +680,19 @@ export function applyConversationDeltasToProjectionMap(
   let next: Map<string, SessionProjection> | null = null;
   for (const delta of deltas) {
     const projection = (next ?? current).get(delta.sessionId);
-    if (!projection?.conversation) {
+    if (!projection) {
       continue;
     }
-    const conversation = applyDeltaToConversation(projection.conversation, delta);
-    if (conversation === projection.conversation) {
+    // A session.created event and its first canonical conversation delta can
+    // arrive in the same websocket batch, before Start/Resume HTTP completion
+    // has initialized the conversation baseline. Dropping that delta makes the
+    // daemon canonical state correct while the browser permanently renders
+    // only its optimistic user message. Establish an idle, bounded baseline
+    // here so applyDeltaToConversation can retain the revision chain until the
+    // resident HTTP snapshot arrives.
+    const currentConversation = projection.conversation ?? initialConversationSyncState();
+    const conversation = applyDeltaToConversation(currentConversation, delta);
+    if (projection.conversation && conversation === projection.conversation) {
       continue;
     }
     next ??= new Map(current);
@@ -691,7 +751,9 @@ async function performLoadTurns(
       replaceProjectionState(state, sessionId, (value) => {
         const responseTurns = response.turns.map(normalizeConversationTurn);
         const pageTurns =
-          mode === "initial"
+          mode === "refresh" && value.detachedBaseline
+            ? replaceDetachedBaselineTurns(value.turns, responseTurns)
+            : mode === "initial"
             ? responseTurns
             : mode === "older"
               ? mergeOlderTurns(value.turns, responseTurns)
@@ -734,7 +796,9 @@ async function performLoadTurns(
           turns: pending.turns,
           nextCursor:
             mode === "refresh"
-              ? value.nextCursor
+              ? value.detachedBaseline
+                ? response.nextCursor ?? null
+                : value.nextCursor
               : response.nextCursor ?? null,
           revision: value.revision + 1,
           daemonRevision: pending.daemonRevision,
@@ -826,6 +890,10 @@ export function ensureConversationLoadedCommand(
   deps: ConversationDeps,
   sessionId: string,
 ): Promise<boolean> {
+  const conversation = deps.get().projections.get(sessionId)?.conversation;
+  if (conversation?.phase === "ready" && conversation.needsRefresh) {
+    return loadTurns(deps, sessionId, "refresh", { suppressError: true });
+  }
   return loadTurns(deps, sessionId, "initial");
 }
 

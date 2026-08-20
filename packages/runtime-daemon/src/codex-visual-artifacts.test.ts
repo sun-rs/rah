@@ -2,9 +2,55 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   codexAssistantContentSignature,
+  codexVisualArtifactIdForPath,
+  codexVisualArtifactPathFromId,
+  collectCodexVisualArtifactPathEvidence,
   isSafeCodexVisualArtifactId,
   parseCodexAssistantContent,
 } from "./codex-visual-artifacts";
+
+test("parses legacy visualize directives with an opaque exact-path artifact id", () => {
+  const visualPath =
+    "/Volumes/Data/skew/.codex/visualizations/2026/08/16/causal-dynamic-weights/equal-vs-causal-dynamic.html";
+  const parsed = parseCodexAssistantContent(
+    `visualize${JSON.stringify({ path: visualPath, mode: "wide" })}`,
+  );
+  const artifact = parsed.content?.[0]?.kind === "visual"
+    ? parsed.content[0].artifact
+    : undefined;
+
+  assert.ok(artifact);
+  assert.equal(codexVisualArtifactPathFromId(artifact.id), visualPath);
+  assert.equal(artifact.label, "equal vs causal dynamic");
+  assert.equal(parsed.text, "");
+});
+
+test("uses explicit provider path evidence for basename-only visual directives", () => {
+  const paths = new Map<string, string>();
+  const visualPath =
+    ".codex/visualizations/2026/08/15/sxx-optimal-combinations/optimal-candidate-combinations.html";
+  collectCodexVisualArtifactPathEvidence(
+    { output: `-rw-r--r-- 1 user staff 269K ${visualPath}` },
+    paths,
+  );
+  const parsed = parseCodexAssistantContent(
+    '::codex-inline-vis{file="optimal-candidate-combinations.html"}',
+    {
+      resolveVisualArtifactId: (fileName) => {
+        const evidencedPath = paths.get(fileName);
+        return evidencedPath
+          ? codexVisualArtifactIdForPath(evidencedPath)
+          : undefined;
+      },
+    },
+  );
+  const artifact = parsed.content?.[0]?.kind === "visual"
+    ? parsed.content[0].artifact
+    : undefined;
+
+  assert.ok(artifact);
+  assert.equal(codexVisualArtifactPathFromId(artifact.id), visualPath);
+});
 
 test("parses provider-native inline visuals without changing their order", () => {
   const parsed = parseCodexAssistantContent(
@@ -64,6 +110,14 @@ test("leaves malformed and unsafe directives as ordinary text", () => {
     assert.deepEqual(parseCodexAssistantContent(value), { text: value });
   }
   assert.equal(isSafeCodexVisualArtifactId("chart.html"), true);
+  assert.equal(
+    isSafeCodexVisualArtifactId(
+      codexVisualArtifactIdForPath(
+        "/workspace/.codex/visualizations/2026/08/20/example/chart.html",
+      )!,
+    ),
+    true,
+  );
   assert.equal(isSafeCodexVisualArtifactId("../chart.html"), false);
 });
 

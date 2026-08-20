@@ -1,6 +1,6 @@
 # client-web store ownership
 
-复核日期：2026-07-29
+复核日期：2026-08-16
 
 ## 原则
 
@@ -46,6 +46,22 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 - unread 事件归属。
 - provider-session projection adopt。
 
+蓝点只表示“终态 turn 完成但本浏览器尚未读”：实时路径只接受
+`turn.completed/failed/canceled`，前台重建只接受 canonical final answer。`session.updatedAt`、
+running heartbeat、commentary、tool/process、permission 与 notification 都不是完成证据，不能把多个
+仍在工作的 Session 批量染成蓝点。
+
+这里的“本浏览器”是浏览器或 standalone PWA 的当前 `localStorage` 容器，不是 daemon/account
+级已读状态，也不承诺等同于物理设备 identity。Mac 读过某个 final 不能清除 iOS PWA 的蓝点；同一
+final 可以在两个客户端各自保持未读，并在各自点击蓝点时各获得一次回复顶部定位。清除蓝点、消费
+导航资格和读者手势所有权均只作用于当前客户端，禁止通过 daemon event 或共享 cursor 跨设备传播。
+
+蓝点的颜色状态与点击后的 viewport intent 是同一条因果链：`SessionSidebar` 只声明
+`latest_unread_reply`，`App` 必须在 `setSelectedSessionId` 清除未读之前，从当前 projection 冻结最新
+终态 turn/final identity，`useWorkbenchPageController` 再把它作为有 revision 的一次性导航事务交给
+Chat。终态事件与 canonical final 可以分批到达；等待期间只能用 tail 占位，旧 final 不能充当新 turn
+目标。Chat 精确对齐或读者开始真实滚动后确认消费该 revision，后续 TUI/Chat 重挂载不得重放。
+
 不得从 auxiliary feed 重建 Conversation 历史。
 
 ### `session-store-sync.ts`
@@ -53,6 +69,19 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 - WebSocket transport sync。
 - replay gap recovery orchestration。
 - foreground catch-up。
+
+replay gap 只重建 daemon-owned topology/auxiliary feed。仍存在于权威 catalog 的 Session 必须保留
+已渲染 Conversation 并标记 `needsRefresh`；只立即校准 selected/visible Session，禁止对所有历史投影
+发起 `Promise.all` 请求风暴。
+
+### `session-conversation-memory-cache.ts`
+
+- 拥有当前页面生命周期内 A→B→A 的有界 Conversation LRU。
+- 只按稳定 provider identity 保存/恢复可读投影；不拥有 Session 存在性、Workspace 或 Sidebar。
+- 恢复结果是 `detachedBaseline`：同步可读、后台 canonical tail 校准、失败不清空。
+- canonical tail 的 `itemsView=summary` omission 不拥有删除权；同一 provider turn 已显示的 thinking
+  必须按 item identity 合并保留，只有显式 delta removal 或 full view 可以移除。
+- 不写 localStorage/IndexedDB；浏览器 reload 或 iOS 进程回收后由 daemon hot page 接管。
 
 ### `session-store-session-lifecycle.ts`
 
@@ -64,6 +93,42 @@ workspace、session lifecycle 和 catalog 各自只有一个 owner。
 - start scenario/session。
 - activate stored session。
 - Resume/attach/claim 决策。
+
+### `session-activation-transaction.ts`
+
+- 生成稳定的 `clientMessageId/clientTurnId` 并提交完整 `initialInput + config`。
+- 只在 daemon 返回相同 identity 的 acceptance 后 commit draft。
+- 失败时恢复文本、附件与原 projection。
+- 迟到完成只更新目标 Session，不拥有全局页面导航。
+
+### `components/workbench/panes/ComposerInputQueue.tsx`
+
+- 只显示仍为 `queued` 的输入。
+- `submitting` 已由 Conversation optimistic/canonical row 唯一呈现，不能在 Composer 再复制一行。
+- Guide 被 daemon 接受后，同 identity 的 canonical `user_message` 归入当前 turn 的 process timeline；它在 Worked 折叠时仍可见，不能被移到 final 后方或复制为新的顶层 turn。
+
+### `composer-draft-store.ts`
+
+- 以稳定 `{provider, providerSessionId}` 为 key，仅在浏览器内存中拥有未发送文本；附件与注释使用同一
+  scope key。普通 Session Chat 与 Canvas pane 消费同一份状态，不能各自在 hook 内创建私有 map。
+- 不进入 localStorage、IndexedDB 或 daemon transcript；发送 acceptance 后由 composer 事务清除。
+
+### Chat viewport 与 Canvas session drop
+
+- `ChatThread` 只拥有当前挂载 viewport 的阅读位置。读者脱离 tail 后，anchor 必须优先使用可见正文后代
+  的真实像素位置，并以 canonical row identity 兜底；同一大行内部的图片/Markdown 慢布局不得改变阅读位置。
+- Sidebar 到 Canvas 的拖动使用稳定 session target：running 使用 runtime id，stopped/history 使用
+  `{provider, providerSessionId}`。所有可见 session 都是可拖动源，Canvas 只消费该 target 并复用既有
+  `setCanvasPaneSession` / `setCanvasPaneStoredRef` owner，不能要求 Session 先 running。
+- drag payload 同时写入 RAH 专用 MIME 与带命名空间的纯文本回退，drop 语义为 copy；普通文本和非法
+  provider payload 不得被当成 session。
+
+### PWA Composer 焦点
+
+- permission、Plan、model/effort trigger 及其 Portal menu 都属于 textarea 的同一编辑会话。
+- iOS/standalone PWA 在这些控件的 `pointerdown` 阶段保留 textarea focus；打开、选择或关闭菜单不能隐藏输入法、压缩 composer 或造成 viewport 跳动。
+- 单行 composer 的首次非控件触摸是一笔“展开 + 聚焦”事务；布局重排后落到同一手指下的 context、permission、Plan 或 model 控件不得消费该次合成 click，只有下一次独立触摸才能激活控件。
+- 只有 pointer 真正落在 composer 与其 Portal 控件之外时，workbench 才 blur textarea 并恢复单行 composer。
 
 ### `session-store-session-commands.ts`
 

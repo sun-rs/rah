@@ -55,6 +55,23 @@ test("keeps short user messages fully visible without an expansion control", () 
   assert.doesNotMatch(html, /Show more/);
 });
 
+test("renders an in-turn Guide as a compact hover row instead of a user bubble", () => {
+  const html = renderToStaticMarkup(
+    createElement(UserMessage, {
+      content: "Use the first SimNow group",
+      presentation: "guidance",
+      entryKey: "guide-1",
+    }),
+  );
+
+  assert.match(html, /data-testid="chat-guidance-message"/);
+  assert.match(html, />Guide</);
+  assert.match(html, /Use the first SimNow group/);
+  assert.match(html, /aria-label="Copy Guide"/);
+  assert.doesNotMatch(html, /data-testid="chat-user-message"/);
+  assert.doesNotMatch(html, /rounded-2xl rounded-tr-md/);
+});
+
 test("collapses large user messages without truncating their source text", () => {
   const content = `Start\n${"long input ".repeat(140)}\nEnd marker`;
   const html = renderToStaticMarkup(

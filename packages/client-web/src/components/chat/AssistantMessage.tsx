@@ -50,6 +50,9 @@ export function AssistantMessage(props: {
                 key={`visual:${part.artifact.id}:${index}`}
                 sessionId={props.sessionId}
                 artifact={part.artifact}
+                {...(props.onOpenLocalFile
+                  ? { onOpenLocalFile: props.onOpenLocalFile }
+                  : {})}
               />
             ) : null,
           )

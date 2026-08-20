@@ -46,6 +46,31 @@ function event(
 }
 
 describe("conversation projector", () => {
+  test("presents a late Resume prompt before startup compaction and work", () => {
+    const projection = projectConversation("session-1", [
+      event(1, "turn.started", CODEX_SOURCE, "turn-resume", {}),
+      event(2, "timeline.item.added", CODEX_SOURCE, "turn-resume", {
+        item: { kind: "compaction", status: "completed", count: 1 },
+      }),
+      event(3, "timeline.item.added", CODEX_SOURCE, "turn-resume", {
+        item: { kind: "user_message", text: "Continue the audit" },
+      }),
+      event(4, "timeline.item.added", CODEX_SOURCE, "turn-resume", {
+        item: {
+          kind: "assistant_message",
+          phase: "final_answer",
+          text: "Audit resumed",
+        },
+      }),
+      event(5, "turn.completed", CODEX_SOURCE, "turn-resume", {}),
+    ]);
+
+    assert.deepEqual(
+      projection.turns[0]?.items.map((item) => item.role),
+      ["user", "process", "final"],
+    );
+  });
+
   test("projects process-scoped system notices inside the work group", () => {
     const projection = projectConversation("session-1", [
       event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),

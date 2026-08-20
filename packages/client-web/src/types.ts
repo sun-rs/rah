@@ -138,6 +138,12 @@ export interface ConversationSyncState {
   sourceRevision: string | null;
   loadedAt: string | null;
   lastError: string | null;
+  /**
+   * The rendered turns came from the browser's bounded memory cache and are a
+   * stale-while-revalidate baseline. They remain readable while the daemon
+   * supplies a fresh tail page and runtime revision.
+   */
+  detachedBaseline?: boolean;
 }
 
 export function initialConversationSyncState(): ConversationSyncState {
@@ -2382,6 +2388,9 @@ export function appendOptimisticUserMessage(
     clientTurnId?: string;
     imageCount?: number;
     attachments?: SessionInputAttachment[];
+    turnId?: string;
+    canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
+    providerTurnId?: string;
   },
 ): SessionProjection {
   const ts = new Date().toISOString();
@@ -2408,6 +2417,13 @@ export function appendOptimisticUserMessage(
         kind: "timeline",
         item,
         ts,
+        ...(options?.turnId !== undefined ? { turnId: options.turnId } : {}),
+        ...(options?.canonicalTurnId !== undefined
+          ? { canonicalTurnId: options.canonicalTurnId }
+          : {}),
+        ...(options?.providerTurnId !== undefined
+          ? { providerTurnId: options.providerTurnId }
+          : {}),
       },
     ],
   };

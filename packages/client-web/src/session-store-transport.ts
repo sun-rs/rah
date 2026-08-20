@@ -112,6 +112,29 @@ export function sessionStoreTransportIsHealthy(): boolean {
   );
 }
 
+/**
+ * Establish the causal boundary required before a command can create new
+ * Session events. Waiting on the current socket is important: restarting a
+ * CONNECTING socket here would create another blind window and could discard
+ * the very replay that closes it.
+ */
+export function ensureSessionStoreTransportReady(
+  options: RestartSessionStoreTransportOptions = {},
+): Promise<void> {
+  // Store commands are also exercised in non-browser adapters and unit tests,
+  // where there is no event transport and therefore no replay boundary to
+  // await. In an actual browser, an uninitialized transport remains a hard
+  // error so activation can never silently bypass the causal barrier.
+  if (typeof window === "undefined" && callbacks === null) {
+    return Promise.resolve();
+  }
+  const socket = eventsSocket;
+  if (socket && socket.readyState < WebSocket.CLOSING) {
+    return waitForInitialReplay(socket, options.signal);
+  }
+  return restartSessionStoreTransport(options);
+}
+
 function nextReconnectDelayMs(): number {
   const delay = Math.min(30_000, 750 * 2 ** reconnectAttempt);
   reconnectAttempt += 1;

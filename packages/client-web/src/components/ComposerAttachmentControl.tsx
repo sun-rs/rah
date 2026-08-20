@@ -51,6 +51,7 @@ export function ComposerAttachmentControl(props: {
     <>
       <button
         type="button"
+        data-composer-focus-preserve="true"
         onClick={() => {
           if (useMobileMenu) {
             setMenuOpen(true);
@@ -99,8 +100,16 @@ export function ComposerAttachmentControl(props: {
 
       <Dialog.Root open={menuOpen} onOpenChange={setMenuOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-[80] bg-black/35" />
-          <Dialog.Content className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] z-[81] rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 shadow-2xl outline-none sm:left-1/2 sm:right-auto sm:w-80 sm:-translate-x-1/2">
+          <Dialog.Overlay
+            data-composer-focus-release="true"
+            className="fixed inset-0 z-[80] bg-black/35"
+          />
+          <Dialog.Content
+            data-composer-focus-preserve="true"
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => event.preventDefault()}
+            className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] z-[81] rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 shadow-2xl outline-none sm:left-1/2 sm:right-auto sm:w-80 sm:-translate-x-1/2"
+          >
             <div className="flex items-center justify-between px-2 py-1.5">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
                 Add to message

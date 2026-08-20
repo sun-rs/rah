@@ -191,6 +191,11 @@ export interface ProviderConversationVisualArtifact {
   fragment: string;
 }
 
+export interface ProviderConversationVisualArtifactSource {
+  id: string;
+  path: string;
+}
+
 export interface ProviderStoredHistoryAdapter {
   /**
    * Declares whether archive can be requested while a provider session is
@@ -227,6 +232,13 @@ export interface ProviderStoredHistoryAdapter {
     | ProviderConversationVisualArtifact
     | undefined
     | Promise<ProviderConversationVisualArtifact | undefined>;
+  getSessionConversationVisualArtifactSource?(
+    sessionId: string,
+    artifactId: string,
+  ):
+    | ProviderConversationVisualArtifactSource
+    | undefined
+    | Promise<ProviderConversationVisualArtifactSource | undefined>;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
   getSessionConversationDirectory?(
     sessionId: string,

@@ -2,16 +2,22 @@ import type {
   TimelineAssistantContentPart,
   TimelineVisualArtifact,
 } from "@rah/runtime-protocol";
+import path from "node:path";
 
 const INLINE_VISUAL_MARKER = "::codex-inline-vis";
 const INLINE_VISUAL_DIRECTIVE =
   /^::codex-inline-vis\{file="([^"{}]+)"\}$/;
+const LEGACY_VISUAL_MARKER = "visualize";
+const LEGACY_VISUAL_SUFFIX = "";
 const SAFE_VISUAL_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.html$/;
+const PATH_ARTIFACT_PREFIX = "path~";
+const VISUAL_PATH_EVIDENCE = /(?:\/|\.codex\/)[^\\\s\"'`<>]+\.html\b/g;
 
 interface CodexInlineVisualDirective {
   start: number;
   end: number;
-  fileName: string;
+  artifactId: string;
+  label: string;
 }
 
 interface MarkdownFence {
@@ -24,17 +30,118 @@ export interface ParsedCodexAssistantContent {
   content?: TimelineAssistantContentPart[];
 }
 
-export function isSafeCodexVisualArtifactId(value: string): boolean {
-  return SAFE_VISUAL_FILE_NAME.test(value);
+export interface CodexVisualArtifactPathEvidenceState {
+  visualArtifactPathByFileName: Map<string, string>;
 }
 
-function visualArtifact(fileName: string): TimelineVisualArtifact {
+export function isSafeCodexVisualArtifactId(value: string): boolean {
+  return (
+    SAFE_VISUAL_FILE_NAME.test(value) ||
+    (value.startsWith(PATH_ARTIFACT_PREFIX) &&
+      codexVisualArtifactPathFromId(value) !== undefined)
+  );
+}
+
+export function codexVisualArtifactIdForPath(value: string): string | undefined {
+  const normalized = value.trim();
+  const fileName = path.posix.basename(normalized.replaceAll("\\", "/"));
+  if (
+    !SAFE_VISUAL_FILE_NAME.test(fileName) ||
+    !normalized.replaceAll("\\", "/").includes(".codex/visualizations/")
+  ) {
+    return undefined;
+  }
+  return `${PATH_ARTIFACT_PREFIX}${Buffer.from(normalized, "utf8").toString("base64url")}`;
+}
+
+export function codexVisualArtifactPathFromId(value: string): string | undefined {
+  if (!value.startsWith(PATH_ARTIFACT_PREFIX)) {
+    return undefined;
+  }
+  const encoded = value.slice(PATH_ARTIFACT_PREFIX.length);
+  if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+    return undefined;
+  }
+  try {
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    return codexVisualArtifactIdForPath(decoded) === value ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function collectCodexVisualArtifactPathEvidence(
+  value: unknown,
+  pathsByFileName: Map<string, string>,
+): void {
+  let serialized: string;
+  try {
+    serialized = typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    return;
+  }
+  for (const match of serialized.matchAll(VISUAL_PATH_EVIDENCE)) {
+    const candidate = match[0]?.replaceAll("\\/", "/");
+    if (!candidate || !codexVisualArtifactIdForPath(candidate)) {
+      continue;
+    }
+    pathsByFileName.set(path.posix.basename(candidate), candidate);
+  }
+}
+
+export function observeCodexVisualArtifactPathEvidence(
+  value: unknown,
+  state: CodexVisualArtifactPathEvidenceState,
+): void {
+  collectCodexVisualArtifactPathEvidence(value, state.visualArtifactPathByFileName);
+}
+
+function visualArtifact(artifactId: string, label: string): TimelineVisualArtifact {
   return {
-    id: fileName,
+    id: artifactId,
     format: "interactive_html",
     mimeType: "text/html",
-    label: fileName.replace(/\.html$/i, "").replace(/[-_]+/g, " "),
+    label: label.replace(/\.html$/i, "").replace(/[-_]+/g, " "),
   };
+}
+
+function parseVisualDirective(
+  line: string,
+  resolveVisualArtifactId?: (fileName: string) => string | undefined,
+): { artifactId: string; label: string } | undefined {
+  const inline = INLINE_VISUAL_DIRECTIVE.exec(line);
+  const fileName = inline?.[1];
+  if (fileName && isSafeCodexVisualArtifactId(fileName)) {
+    return {
+      artifactId: resolveVisualArtifactId?.(fileName) ?? fileName,
+      label: fileName,
+    };
+  }
+  if (!line.startsWith(LEGACY_VISUAL_MARKER) || !line.endsWith(LEGACY_VISUAL_SUFFIX)) {
+    return undefined;
+  }
+  try {
+    const payload = JSON.parse(
+      line.slice(LEGACY_VISUAL_MARKER.length, -LEGACY_VISUAL_SUFFIX.length),
+    ) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return undefined;
+    }
+    const visualPath = (payload as Record<string, unknown>).path;
+    if (typeof visualPath !== "string") {
+      return undefined;
+    }
+    const artifactId = codexVisualArtifactIdForPath(visualPath);
+    if (!artifactId) {
+      return undefined;
+    }
+    return {
+      artifactId,
+      label: path.posix.basename(visualPath.replaceAll("\\", "/")),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function pushTextPart(parts: TimelineAssistantContentPart[], value: string): void {
@@ -67,7 +174,10 @@ function closesFence(line: string, fence: MarkdownFence): boolean {
   return true;
 }
 
-function scanCodexInlineVisualDirectives(value: string): {
+function scanCodexInlineVisualDirectives(
+  value: string,
+  resolveVisualArtifactId?: (fileName: string) => string | undefined,
+): {
   directives: CodexInlineVisualDirective[];
   trailingLineStart: number;
   trailingLineInsideFence: boolean;
@@ -94,13 +204,12 @@ function scanCodexInlineVisualDirectives(value: string): {
       if (nextFence) {
         fence = nextFence;
       } else {
-        const directive = INLINE_VISUAL_DIRECTIVE.exec(line);
-        const fileName = directive?.[1];
-        if (fileName && isSafeCodexVisualArtifactId(fileName)) {
+        const directive = parseVisualDirective(line, resolveVisualArtifactId);
+        if (directive) {
           directives.push({
             start: cursor,
             end: lineEnd,
-            fileName,
+            ...directive,
           });
         }
       }
@@ -132,17 +241,23 @@ function scanCodexInlineVisualDirectives(value: string): {
  */
 export function parseCodexAssistantContent(
   value: string,
-  options: { streaming?: boolean } = {},
+  options: {
+    streaming?: boolean;
+    resolveVisualArtifactId?: (fileName: string) => string | undefined;
+  } = {},
 ): ParsedCodexAssistantContent {
   const parts: TimelineAssistantContentPart[] = [];
-  const scan = scanCodexInlineVisualDirectives(value);
+  const scan = scanCodexInlineVisualDirectives(
+    value,
+    options.resolveVisualArtifactId,
+  );
   let cursor = 0;
 
   for (const directive of scan.directives) {
     pushTextPart(parts, value.slice(cursor, directive.start));
     parts.push({
       kind: "visual",
-      artifact: visualArtifact(directive.fileName),
+      artifact: visualArtifact(directive.artifactId, directive.label),
     });
     cursor = directive.end;
   }
@@ -152,8 +267,10 @@ export function parseCodexAssistantContent(
   const incompleteDirectiveStart =
     options.streaming &&
     !scan.trailingLineInsideFence &&
-    trailingLine.startsWith(INLINE_VISUAL_MARKER) &&
-    !trailingLine.endsWith("}")
+    ((trailingLine.startsWith(INLINE_VISUAL_MARKER) &&
+      !trailingLine.endsWith("}")) ||
+      (trailingLine.startsWith(LEGACY_VISUAL_MARKER) &&
+        !trailingLine.endsWith(LEGACY_VISUAL_SUFFIX)))
       ? scan.trailingLineStart
       : undefined;
   if (
@@ -179,6 +296,22 @@ export function parseCodexAssistantContent(
             ? value.slice(0, incompleteDirectiveStart).trim()
             : value.trim(),
       };
+}
+
+export function parseCodexAssistantContentWithVisualEvidence(
+  value: string,
+  state: CodexVisualArtifactPathEvidenceState,
+  options: { streaming?: boolean } = {},
+): ParsedCodexAssistantContent {
+  return parseCodexAssistantContent(value, {
+    ...options,
+    resolveVisualArtifactId: (fileName) => {
+      const evidencedPath = state.visualArtifactPathByFileName.get(fileName);
+      return evidencedPath
+        ? codexVisualArtifactIdForPath(evidencedPath)
+        : undefined;
+    },
+  });
 }
 
 export function codexAssistantContentSignature(

@@ -392,6 +392,22 @@ function openCodeEnvForRequest(request: {
   return opencodeEnvForMcpServers(request.extraMcpServers);
 }
 
+function codexRuntimeEnv(): Record<string, string> | undefined {
+  // The child already inherits the daemon environment. Retain only the
+  // provider-history root that the live mirror must keep using even if a test
+  // or embedding host later mutates its process environment.
+  const codexHome = process.env.CODEX_HOME?.trim();
+  return codexHome ? { CODEX_HOME: codexHome } : undefined;
+}
+
+function claudeRuntimeEnv(): Record<string, string> | undefined {
+  // A long-lived tmux server keeps the environment from when that server was
+  // first created. Pass Claude's history root on the pane command itself so a
+  // daemon with an isolated/custom config dir cannot inherit a stale value.
+  const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : undefined;
+}
+
 export async function nativeTuiStartLaunchSpec(
   request: NativeTuiStartLaunchSpecRequest,
 ): Promise<NativeTuiLaunchSpec> {
@@ -401,6 +417,7 @@ export async function nativeTuiStartLaunchSpec(
     appendCodexModeArgs(args, request);
     appendCodexMcpArgs(args, request.extraMcpServers);
     appendInitialPrompt(args, request.initialPrompt);
+    const env = codexRuntimeEnv();
     return {
       provider: "codex",
       command,
@@ -408,6 +425,7 @@ export async function nativeTuiStartLaunchSpec(
       cwd: request.cwd,
       title: request.title ?? "Codex native TUI session",
       preview: previewCommand(command, args),
+      ...(env ? { env } : {}),
       ...launchConfigMetadata(request, "model_reasoning_effort"),
     };
   }
@@ -418,6 +436,7 @@ export async function nativeTuiStartLaunchSpec(
     appendClaudeMcpArgs(args, request.extraMcpServers);
     appendClaudeArgs(args, request, providerSessionId, "start");
     appendInitialPrompt(args, request.initialPrompt);
+    const env = claudeRuntimeEnv();
     return {
       provider: "claude",
       command,
@@ -426,6 +445,7 @@ export async function nativeTuiStartLaunchSpec(
       title: request.title ?? "Claude native TUI session",
       preview: previewCommand(command, args),
       providerSessionId,
+      ...(env ? { env } : {}),
       ...launchConfigMetadata(request, "effort"),
     };
   }
@@ -465,6 +485,7 @@ export async function nativeTuiResumeLaunchSpec(
     }
     appendCodexModeArgs(args, request);
     args.push(request.providerSessionId);
+    const env = codexRuntimeEnv();
     return {
       provider: "codex",
       command,
@@ -472,6 +493,7 @@ export async function nativeTuiResumeLaunchSpec(
       cwd: request.cwd,
       title: "Codex native TUI session",
       preview: previewCommand(command, args),
+      ...(env ? { env } : {}),
       ...launchConfigMetadata(request, "model_reasoning_effort"),
     };
   }
@@ -479,6 +501,7 @@ export async function nativeTuiResumeLaunchSpec(
     const { command, args } = splitLaunchArgv(await claudeLaunchSpec(), "claude");
     prepareClaudeLaunchConfig(request.cwd, request.modeId);
     appendClaudeArgs(args, request, request.providerSessionId, "resume");
+    const env = claudeRuntimeEnv();
     return {
       provider: "claude",
       command,
@@ -487,6 +510,7 @@ export async function nativeTuiResumeLaunchSpec(
       title: "Claude native TUI session",
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
+      ...(env ? { env } : {}),
       ...launchConfigMetadata(request, "effort"),
     };
   }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -49,8 +49,10 @@ import {
   type ComposerSurface,
 } from "../../../composer-contract";
 import {
+  HEADER_ACTION_ICON_SIZE,
   HEADER_MENU_DANGER_ITEM_CLASS,
   HEADER_MENU_ITEM_CLASS,
+  HEADER_MODE_ICON_SIZE,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
@@ -94,6 +96,20 @@ import {
 } from "../../../conversation-feed";
 import type { SessionSideLayout } from "../session/session-side-state";
 import type { SelectedConversationText } from "../../../composer-annotations";
+import type { SessionConversationNavigationRequest } from "../../../session-conversation-navigation";
+import { ComposerContextIndicator } from "../ComposerContextIndicator";
+import {
+  beginComposerExpansionGesture,
+  COMPOSER_FOCUS_PRESERVE_SELECTOR,
+  COMPOSER_FOCUS_RELEASE_SELECTOR,
+  COMPOSER_INTERACTIVE_SELECTOR,
+  COMPOSER_REVEALED_CONTROL_SELECTOR,
+  composerPointerPathMatches,
+  composerPointerTargetElement,
+  resolveComposerPointerFocusIntent,
+  shouldSuppressComposerControlClickAfterExpansion,
+  type ComposerExpansionGesture,
+} from "../../../composer-focus-ownership";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
 const TerminalPane = lazy(async () => ({
@@ -167,75 +183,6 @@ function resolveContextUsageDisplay(
   };
 }
 
-function ComposerContextIndicator(props: {
-  display: NonNullable<ReturnType<typeof resolveContextUsageDisplay>>;
-}) {
-  const rootRef = useRef<HTMLSpanElement | null>(null);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  return (
-    <span
-      ref={rootRef}
-      className="rah-chat-composer-secondary relative inline-flex shrink-0"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      <button
-        type="button"
-        className="inline-flex h-10 w-8 items-center justify-center rounded-full text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] md:h-9 lg:h-8"
-        aria-label={props.display.ariaLabel}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={(event) => {
-          event.preventDefault();
-          setOpen((current) => !current);
-        }}
-      >
-        <span
-          className="relative h-[18px] w-[18px] rounded-full"
-          style={{
-            background: `conic-gradient(var(--app-hint) ${props.display.percentUsed}%, color-mix(in srgb, var(--app-hint) 20%, transparent) 0)`,
-          }}
-          aria-hidden="true"
-        >
-          <span className="absolute inset-[3px] rounded-full bg-[var(--app-bg)]" />
-        </span>
-      </button>
-      {open ? (
-        <span
-          role="tooltip"
-          className="absolute bottom-full right-0 z-[110] mb-2 w-max max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-left text-xs leading-5 text-[var(--app-fg)] shadow-lg"
-        >
-          <span className="block text-[var(--app-hint)]">Context window</span>
-          <span className="block font-medium">{props.display.tooltip}</span>
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
 type SessionViewMode = "chat" | "tui";
 
 function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): notice is InlineWorkbenchNotice {
@@ -261,6 +208,8 @@ export function WorkbenchSelectedPane(props: {
   clientId: string;
   selectedProjection: SessionProjection | null;
   conversationNavigationRevision?: number;
+  conversationNavigationRequest?: SessionConversationNavigationRequest;
+  onConversationNavigationConsumed?: (revision: number) => void;
   selectedIsReadOnlyReplay: boolean;
   sidebarOpen: boolean;
   rightSidebarOpen: boolean;
@@ -276,7 +225,6 @@ export function WorkbenchSelectedPane(props: {
   canRespondToPermission: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
-  onOpenTurnFileChange?: (turnId: string, path: string) => void;
   onLoadConversationItemDetail?: (
     kind: ConversationItemDetailKind,
     itemId: string,
@@ -369,6 +317,7 @@ export function WorkbenchSelectedPane(props: {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const lastFloatingAnchorOffsetRef = useRef<number | null>(null);
+  const composerExpansionGestureRef = useRef<ComposerExpansionGesture | null>(null);
   const nativeTui = props.selectedSummary.session.nativeTui;
   const nativeTuiAvailable = Boolean(nativeTui?.viewAvailable);
   const nativeChatMirrorAvailable =
@@ -391,13 +340,11 @@ export function WorkbenchSelectedPane(props: {
   const onLoadConversationItemDetailRef = useRef(props.onLoadConversationItemDetail);
   const onPermissionRespondRef = useRef(props.onPermissionRespond);
   const onOpenLocalFileRef = useRef(props.onOpenLocalFile);
-  const onOpenTurnFileChangeRef = useRef(props.onOpenTurnFileChange);
 
   onLoadOlderHistoryRef.current = props.onLoadOlderHistory;
   onLoadConversationItemDetailRef.current = props.onLoadConversationItemDetail;
   onPermissionRespondRef.current = props.onPermissionRespond;
   onOpenLocalFileRef.current = props.onOpenLocalFile;
-  onOpenTurnFileChangeRef.current = props.onOpenTurnFileChange;
 
   const handleChatLoadOlderHistory = useCallback(() => {
     return onLoadOlderHistoryRef.current();
@@ -417,9 +364,6 @@ export function WorkbenchSelectedPane(props: {
 
   const handleChatOpenLocalFile = useCallback((path: string) => {
     onOpenLocalFileRef.current?.(path);
-  }, []);
-  const handleChatOpenTurnFileChange = useCallback((turnId: string, path: string) => {
-    onOpenTurnFileChangeRef.current?.(turnId, path);
   }, []);
   const isPwaDisplayMode = usePwaDisplayMode();
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
@@ -702,22 +646,47 @@ export function WorkbenchSelectedPane(props: {
 
   const focusPwaComposerFromPointer = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!isPwaDisplayMode) {
-        return;
-      }
-      setPwaComposerExpanded(true);
-      const target = event.target;
-      if (!(target instanceof Element)) {
-        return;
-      }
-      if (
-        target.closest(
-          "button,a,input,select,summary,[role='button'],[role='option'],[contenteditable='true']",
-        )
-      ) {
-        return;
-      }
       const textarea = props.composerRef.current;
+      const target = composerPointerTargetElement(event.nativeEvent);
+      const onInteractiveControl = composerPointerPathMatches(
+        event.nativeEvent,
+        COMPOSER_INTERACTIVE_SELECTOR,
+      );
+      // Expanding the one-line PWA composer changes the hit-test layout while
+      // the finger is still down. Own that first pointer sequence explicitly:
+      // it may expand and focus, but controls revealed under the same finger
+      // must wait for the next independent gesture.
+      composerExpansionGestureRef.current = beginComposerExpansionGesture({
+        isPwa: isPwaDisplayMode,
+        composerExpanded:
+          pwaComposerExpanded || document.activeElement === textarea,
+        onInteractiveControl,
+        pointerId: event.pointerId,
+      });
+      const intent = resolveComposerPointerFocusIntent({
+        isPwa: isPwaDisplayMode,
+        textareaIsActive: document.activeElement === textarea,
+        insideComposer: true,
+        onTextarea: target === textarea,
+        onInteractiveControl,
+        onFocusPreservingPortal: false,
+        explicitlyReleasesFocus: composerPointerPathMatches(
+          event.nativeEvent,
+          COMPOSER_FOCUS_RELEASE_SELECTOR,
+        ),
+      });
+      if (intent === "none" || intent === "release-textarea") {
+        return;
+      }
+      if (isPwaDisplayMode) {
+        setPwaComposerExpanded(true);
+      }
+      if (intent === "textarea") {
+        return;
+      }
+      if (intent === "preserve-textarea") {
+        event.preventDefault();
+      }
       if (!textarea || textarea.disabled || document.activeElement === textarea) {
         return;
       }
@@ -726,26 +695,94 @@ export function WorkbenchSelectedPane(props: {
       // render turns this into the familiar two-tap composer interaction.
       textarea.focus({ preventScroll: true });
     },
-    [isPwaDisplayMode, props.composerRef],
+    [isPwaDisplayMode, props.composerRef, pwaComposerExpanded],
+  );
+
+  const suppressRevealedControlPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const gesture = composerExpansionGestureRef.current;
+      if (
+        gesture?.pointerId !== event.pointerId ||
+        !composerPointerPathMatches(
+          event.nativeEvent,
+          COMPOSER_REVEALED_CONTROL_SELECTOR,
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
+
+  const suppressRevealedControlClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      const gesture = composerExpansionGestureRef.current;
+      composerExpansionGestureRef.current = null;
+      if (
+        !shouldSuppressComposerControlClickAfterExpansion({
+          gesture,
+          onRevealedControl: composerPointerPathMatches(
+            event.nativeEvent,
+            COMPOSER_REVEALED_CONTROL_SELECTOR,
+          ),
+          pointerGenerated: event.detail > 0,
+        })
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
+
+  const clearComposerExpansionGesture = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (composerExpansionGestureRef.current?.pointerId === event.pointerId) {
+        composerExpansionGestureRef.current = null;
+      }
+    },
+    [],
   );
 
   useEffect(() => {
-    if (!isPwaDisplayMode || !showComposer) {
+    if (!showComposer) {
       return;
     }
     const blurComposerOutside = (event: PointerEvent) => {
       const textarea = props.composerRef.current;
-      const target = event.target;
-      if (target instanceof Node && composerContainerRef.current?.contains(target)) {
+      const target = composerPointerTargetElement(event);
+      if (target && composerContainerRef.current?.contains(target)) {
         return;
       }
-      const targetElement =
-        target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
-      if (
-        targetElement?.closest(
-          '[data-session-access-panel="true"],[data-session-model-panel="true"]',
-        )
-      ) {
+      const intent = resolveComposerPointerFocusIntent({
+        isPwa: isPwaDisplayMode,
+        textareaIsActive: document.activeElement === textarea,
+        insideComposer: false,
+        onTextarea: target === textarea,
+        onInteractiveControl: false,
+        onFocusPreservingPortal: composerPointerPathMatches(
+          event,
+          COMPOSER_FOCUS_PRESERVE_SELECTOR,
+        ),
+        explicitlyReleasesFocus: composerPointerPathMatches(
+          event,
+          COMPOSER_FOCUS_RELEASE_SELECTOR,
+        ),
+      });
+      if (intent === "preserve-textarea") {
+        event.preventDefault();
+        if (textarea && !textarea.disabled && document.activeElement !== textarea) {
+          textarea.focus({ preventScroll: true });
+        }
+        if (isPwaDisplayMode) {
+          setPwaComposerExpanded(true);
+        }
+        return;
+      }
+      if (intent !== "outside" && intent !== "release-textarea") {
         return;
       }
       setPwaComposerExpanded(false);
@@ -817,9 +854,9 @@ export function WorkbenchSelectedPane(props: {
                 title={effectiveSessionViewMode === "chat" ? "Show native TUI" : "Show chat"}
               >
                 {effectiveSessionViewMode === "chat" ? (
-                  <SquareTerminal size={15} />
+                  <SquareTerminal size={HEADER_MODE_ICON_SIZE} aria-hidden="true" />
                 ) : (
-                  <MessageSquareText size={15} />
+                  <MessageSquareText size={HEADER_MODE_ICON_SIZE} aria-hidden="true" />
                 )}
               </ConversationHeaderIconButton>
               {!compactSessionViewToggle ? (
@@ -903,7 +940,11 @@ export function WorkbenchSelectedPane(props: {
                   : "Opening Side task from the latest completed turn"
               }
             >
-              <LoaderCircle size={15} className="animate-spin" />
+              <LoaderCircle
+                size={HEADER_ACTION_ICON_SIZE}
+                className="animate-spin"
+                aria-hidden="true"
+              />
             </ConversationHeaderIconButton>
           ) : null}
           {!props.selectedIsReadOnlyReplay ? (
@@ -960,7 +1001,7 @@ export function WorkbenchSelectedPane(props: {
                     type="button"
                     className={HEADER_MENU_ITEM_CLASS}
                     disabled={Boolean(props.branchOperationKind)}
-                    aria-label="Continue in new task"
+                    aria-label="Fork"
                     title="Starts another task in the same workspace. File changes are shared."
                     onClick={() => {
                       setSessionMenuOpen(false);
@@ -968,16 +1009,7 @@ export function WorkbenchSelectedPane(props: {
                     }}
                   >
                     <GitFork size={14} />
-                    <span className="flex min-w-0 flex-col items-start">
-                      <span>
-                        {props.branchOperationKind === "fork"
-                          ? "Creating..."
-                          : "Continue in new task"}
-                      </span>
-                      <span className="text-[10px] font-normal text-[var(--app-hint)]">
-                        Shares this workspace
-                      </span>
-                    </span>
+                    <span>{props.branchOperationKind === "fork" ? "Forking..." : "Fork"}</span>
                   </button>
                 ) : null}
                 {props.canCreateSide && props.onCreateSide ? (
@@ -985,7 +1017,7 @@ export function WorkbenchSelectedPane(props: {
                     type="button"
                     className={HEADER_MENU_ITEM_CLASS}
                     disabled={Boolean(props.branchOperationKind)}
-                    aria-label="Open Side task"
+                    aria-label="Side"
                     title="Opens an ephemeral Side task in the same workspace. File changes are shared."
                     onClick={() => {
                       setSessionMenuOpen(false);
@@ -993,16 +1025,7 @@ export function WorkbenchSelectedPane(props: {
                     }}
                   >
                     <PanelRightOpen size={14} />
-                    <span className="flex min-w-0 flex-col items-start">
-                      <span>
-                        {props.branchOperationKind === "side"
-                          ? "Opening..."
-                          : "Open Side task"}
-                      </span>
-                      <span className="text-[10px] font-normal text-[var(--app-hint)]">
-                        Ephemeral, shared workspace
-                      </span>
-                    </span>
+                    <span>{props.branchOperationKind === "side" ? "Opening..." : "Side"}</span>
                   </button>
                 ) : null}
                 {props.selectedSummary.session.relationship?.kind === "side" &&
@@ -1139,6 +1162,12 @@ export function WorkbenchSelectedPane(props: {
           key={chatThreadKey}
           sessionId={props.selectedSummary.session.id}
           navigationRevision={props.conversationNavigationRevision ?? 0}
+          {...(props.conversationNavigationRequest
+            ? { navigationRequest: props.conversationNavigationRequest }
+            : {})}
+          {...(props.onConversationNavigationConsumed
+            ? { onNavigationRequestConsumed: props.onConversationNavigationConsumed }
+            : {})}
           feed={chatFeed}
           conversationTurns={conversation?.turns ?? []}
           hideToolCalls={props.hideToolCallsInChat}
@@ -1167,9 +1196,6 @@ export function WorkbenchSelectedPane(props: {
           canRespondToPermission={props.canRespondToPermission}
           onPermissionRespond={handleChatPermissionRespond}
           {...(props.onOpenLocalFile ? { onOpenLocalFile: handleChatOpenLocalFile } : {})}
-          {...(props.onOpenTurnFileChange
-            ? { onOpenTurnFileChange: handleChatOpenTurnFileChange }
-            : {})}
           {...(props.onAddSelectedText
             ? { onAddSelectedText: props.onAddSelectedText }
             : {})}
@@ -1220,12 +1246,15 @@ export function WorkbenchSelectedPane(props: {
                 isPwa={isPwaDisplayMode}
                 expanded={isPwaDisplayMode && pwaComposerExpanded}
                 className={COMPOSER_LAYOUT.composeGridClassName}
+                onClickCapture={suppressRevealedControlClick}
                 onFocusCapture={() => {
                   if (isPwaDisplayMode) {
                     setPwaComposerExpanded(true);
                   }
                 }}
+                onPointerCancelCapture={clearComposerExpansionGesture}
                 onPointerDownCapture={focusPwaComposerFromPointer}
+                onPointerUpCapture={suppressRevealedControlPointerUp}
               >
                 <div
                   className="rah-chat-composer-input relative flex min-w-0 flex-col"
@@ -1252,7 +1281,7 @@ export function WorkbenchSelectedPane(props: {
                     textareaClassName={COMPOSER_LAYOUT.textareaClassName}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={props.draft}
-                    scopeKey={`session:${props.selectedSummary.session.id}`}
+                    scopeKey={`session:${chatThreadKey}`}
                     ariaLabel="Message composer"
                     onChange={props.onDraftChange}
                     onPaste={props.onComposerPaste}

@@ -4,6 +4,7 @@ import { useRef, type CSSProperties, type ReactNode } from "react";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
+  HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS,
 } from "./workbench/header-button-styles";
 
 export function Sheet(props: {
@@ -88,7 +89,7 @@ export function Sheet(props: {
                 <Dialog.Close asChild>
                   <button
                     type="button"
-                    className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} absolute right-2 top-[calc(env(safe-area-inset-top,0px)+0.5rem)] z-[60] bg-[var(--app-bg)]/90 backdrop-blur`}
+                    className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} absolute right-2 ${HEADER_EDGE_TOGGLE_SAFE_AREA_TOP_CLASS} z-[60] bg-[var(--app-bg)]/90 backdrop-blur`}
                     aria-label={props.floatingCloseLabel ?? "Close"}
                     title={props.floatingCloseLabel ?? "Close"}
                   >

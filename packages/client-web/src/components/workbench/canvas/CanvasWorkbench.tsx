@@ -25,6 +25,7 @@ import {
   type CanvasSplitJunctionDirections,
 } from "../../../canvas-layout";
 import {
+  HEADER_ACTION_ICON_SIZE,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
@@ -34,6 +35,10 @@ import {
 } from "../header-button-styles";
 import { ConversationHeader } from "../shells/ConversationHeader";
 import { CanvasLayoutDesigner, CanvasPaneSplitButton } from "./CanvasLayoutControls";
+import {
+  readCanvasSessionDragTarget,
+  type CanvasSessionDragTarget,
+} from "./canvas-session-drag";
 
 export type CanvasPaneView = {
   id: CanvasPaneId;
@@ -139,7 +144,7 @@ export function CanvasWorkbench(props: {
   onClearAllPanes: () => void;
   clearAllPanesDisabled: boolean;
   onExitCanvas: () => void;
-  onDropSession: (paneId: CanvasPaneId, sessionId: string) => void;
+  onDropSession: (paneId: CanvasPaneId, target: CanvasSessionDragTarget) => void;
   onDropCouncil: (paneId: CanvasPaneId, councilId: string) => void;
   renderPane: (paneId: CanvasPaneId) => ReactNode;
 }) {
@@ -202,13 +207,13 @@ export function CanvasWorkbench(props: {
       onClick={() => props.onActivatePane(pane.id)}
       onDragOver={(event) => {
         event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
+        event.dataTransfer.dropEffect = "copy";
       }}
       onDrop={(event) => {
         event.preventDefault();
-        const sessionId = event.dataTransfer.getData("application/x-rah-session-id");
-        if (sessionId) {
-          props.onDropSession(pane.id, sessionId);
+        const sessionTarget = readCanvasSessionDragTarget(event.dataTransfer);
+        if (sessionTarget) {
+          props.onDropSession(pane.id, sessionTarget);
           return;
         }
         const councilId = event.dataTransfer.getData("application/x-rah-council-id");
@@ -387,7 +392,7 @@ export function CanvasWorkbench(props: {
               aria-label="Clear all canvas panes"
               title="Clear all panes"
             >
-              <Eraser size={14} />
+              <Eraser size={HEADER_ACTION_ICON_SIZE} aria-hidden="true" />
             </button>
           </>
         }

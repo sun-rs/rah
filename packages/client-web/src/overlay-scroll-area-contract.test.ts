@@ -137,16 +137,23 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /visibilitychange/);
     assert.match(source, /pageshow/);
     assert.match(source, /window\.addEventListener\("focus"/);
+    assert.match(source, /window\.addEventListener\("blur", suspendAutoReplyNavigation\)/);
+    assert.match(source, /suspendOnConversationDeparture\(\)/);
     assert.match(source, /isDocumentHidden\(\)/);
+    assert.match(source, /suspendLatestReplyAutoNavigationState/);
+    assert.match(source, /conversationSurfaceForegroundRef/);
   });
 
   test("chat thread lets intentional upward scrolling break live bottom follow", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
+    const gestureSource = readSource(
+      "./components/chat/use-chat-viewport-gesture-ownership.ts",
+    );
 
     assert.match(source, /userDetachedFromBottomRef/);
     assert.match(source, /detachBottomFollowing/);
-    assert.match(source, /event\.deltaY < 0/);
-    assert.match(source, /touchmove/);
+    assert.match(gestureSource, /event\.deltaY < 0/);
+    assert.match(gestureSource, /touchmove/);
     assert.match(source, /bottomFollowRafRef/);
     assert.match(source, /\[overflow-anchor:none\]/);
   });
@@ -166,7 +173,7 @@ describe("overlay scroll area contract", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
 
     assert.match(source, /VIRTUAL_FEED_ROW_GAP_PX/);
-    assert.match(source, /const PROCESS_TO_FINAL_ROW_GAP_PX = 10/);
+    assert.match(source, /const PROCESS_TO_FINAL_ROW_GAP_PX = 8/);
     assert.match(source, /return PROCESS_TO_FINAL_ROW_GAP_PX/);
     assert.match(source, /rowGapPx/);
     assert.match(source, /paddingBottom: `\$\{props\.rowGapPx\}px`/);
@@ -177,6 +184,8 @@ describe("overlay scroll area contract", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
 
     assert.match(source, /requestOlderHistoryLoad/);
+    assert.match(source, /shouldRequestOlderConversationHistory/);
+    assert.match(source, /userDetachedFromLatest: userDetachedFromBottomRef\.current/);
     assert.match(source, /scheduleTopHistoryLoad/);
     assert.match(source, /isInTopHistoryLoadZone/);
     assert.match(source, /captureVisiblePrependAnchor/);
@@ -193,13 +202,47 @@ describe("overlay scroll area contract", () => {
     );
   });
 
-  test("explicit conversation navigation resets to latest before layout positioning", () => {
+  test("explicit conversation navigation distinguishes tail from an unread reply start", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
+    const gestureSource = readSource(
+      "./components/chat/use-chat-viewport-gesture-ownership.ts",
+    );
 
     assert.match(source, /navigationRevision\?: number/);
+    assert.match(source, /navigationRequest\?: SessionConversationNavigationRequest/);
     assert.match(
       source,
-      /useLayoutEffect\(\(\) => \{\n\s+previousEntryCountRef\.current = 0;[\s\S]*?sessionSwitchBottomLockRef\.current = true;[\s\S]*?node\.scrollTop = node\.scrollHeight;[\s\S]*?\}, \[props\.navigationRevision, props\.sessionId\]\)/,
+      /const shouldOpenAtReplyStart = requestedReplyStartIntentKey !== null;[\s\S]*?sessionSwitchBottomLockRef\.current = !shouldOpenAtReplyStart;[\s\S]*?pendingEntryReplyStartKeyRef\.current = requestedReplyStartIntentKey;/,
     );
+    assert.match(
+      source,
+      /if \(node\) \{[\s\S]*?node\.scrollTop = node\.scrollHeight;[\s\S]*?if \(!shouldOpenAtReplyStart\) \{\n\s+settleScrollToBottomOverFrames\(BOTTOM_USER_JUMP_SETTLE_FRAMES\);/,
+    );
+    assert.doesNotMatch(
+      source,
+      /if \(!shouldStickToBottom\) \{\n\s+sessionSwitchBottomLockRef\.current = false;/,
+    );
+    assert.match(
+      source,
+      /if \(!props\.historyLoading\) \{\n\s+settleScrollToBottomOverFrames\(BOTTOM_USER_JUMP_SETTLE_FRAMES\);\n\s+sessionSwitchBottomLockRef\.current = false;/,
+    );
+    assert.match(source, /pendingEntryReplyStartKeyRef\.current = null/);
+    assert.match(
+      source,
+      /latestReplyAutoNavigationRef\.current = suspendLatestReplyAutoNavigationState\(/,
+    );
+    assert.match(gestureSource, /capture: true/);
+    assert.match(gestureSource, /options\.releaseAnchors\(\)/);
+  });
+
+  test("latest reply navigation calibrates the virtual estimate to the mounted row", () => {
+    const source = readSource("./components/chat/reply-start-alignment.ts");
+
+    assert.match(source, /let alignmentFrame: number \| null = null/);
+    assert.match(source, /let anchorKey: string \| null = null/);
+    assert.match(source, /const alignNow = \(\) =>/);
+    assert.match(source, /const settle = \(\) =>/);
+    assert.match(source, /targetNode\.getBoundingClientRect\(\)\.top - node\.getBoundingClientRect\(\)\.top/);
+    assert.match(source, /alignmentFrame = requestFrame\(settle\)/);
   });
 });

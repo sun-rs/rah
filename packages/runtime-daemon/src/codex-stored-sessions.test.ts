@@ -78,6 +78,7 @@ describe("codex stored session discovery", () => {
     timestamp: string;
     text: string;
     originator?: string;
+    modelProvider?: string;
   }): string {
     const dir = path.join(tmpHome, args.rootName, "2026", "06", "02");
     mkdirSync(dir, { recursive: true });
@@ -97,6 +98,7 @@ describe("codex stored session discovery", () => {
             timestamp: args.timestamp,
             cwd: args.cwd,
             source: "cli",
+            ...(args.modelProvider ? { model_provider: args.modelProvider } : {}),
             ...(args.originator ? { originator: args.originator } : {}),
           },
         }),
@@ -147,6 +149,7 @@ describe("codex stored session discovery", () => {
       cwd,
       timestamp: "2026-06-02T00:00:00.000Z",
       text: "Review archived behavior",
+      modelProvider: "openai",
     });
 
     const records = discoverCodexStoredSessions();
@@ -154,6 +157,7 @@ describe("codex stored session discovery", () => {
     assert.equal(records[0]?.ref.providerSessionId, sessionId);
     assert.equal(records[0]?.archived, true);
     assert.equal(records[0]?.ref.providerState?.archived, true);
+    assert.equal(records[0]?.ref.modelProvider, "openai");
   });
 
   test("prefers active Codex rollout refs when archived duplicates exist", () => {

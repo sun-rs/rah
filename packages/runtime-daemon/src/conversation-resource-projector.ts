@@ -464,6 +464,35 @@ function localMarkdownImageLocations(text: string): ResourceLocation[] {
   return locations;
 }
 
+function standaloneLocalImageLinkLocations(text: string): ResourceLocation[] {
+  const locations: ResourceLocation[] = [];
+  let fence: { marker: string; length: number } | undefined;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(rawLine);
+    if (fenceMatch) {
+      const delimiter = fenceMatch[1]!;
+      if (!fence) {
+        fence = { marker: delimiter[0]!, length: delimiter.length };
+      } else if (delimiter[0] === fence.marker && delimiter.length >= fence.length) {
+        fence = undefined;
+      }
+      continue;
+    }
+    if (fence || rawLine.includes("![")) continue;
+
+    const match = /^(?:[^![\]]{0,120})?\[[^\]\r\n]+\]\(\s*(<[^>\r\n]+>|\/[^)\s\r\n]+)\s*\)\s*[.,;:。；：]?\s*$/.exec(
+      rawLine.trim(),
+    );
+    const destination = match?.[1]?.replace(/^<|>$/g, "");
+    if (!destination) continue;
+    const location = pathLocation(destination);
+    if (location?.kind === "image") locations.push(location);
+  }
+
+  return locations;
+}
+
 /**
  * Codex persists files supplied through Desktop in a small, human-readable
  * preamble.  The same preamble is present in stored rollout history even when
@@ -609,6 +638,18 @@ export function projectConversationTurnResources(items: readonly ConversationIte
         timeline.kind === "assistant_message" &&
         (item.role === "final" || timeline.phase === "final_answer")
       ) {
+        for (const location of standaloneLocalImageLinkLocations(timeline.text)) {
+          addOutput(
+            outputs,
+            {
+              ...location,
+              activity: "generated",
+              confidence: "inferred",
+              ...itemTimes(item),
+            },
+            item.id,
+          );
+        }
         for (const location of localMarkdownImageLocations(timeline.text)) {
           addOutput(
             outputs,

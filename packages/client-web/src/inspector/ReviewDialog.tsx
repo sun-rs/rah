@@ -4,6 +4,7 @@ import { ReviewSurface, type ReviewScope } from "./ReviewSurface";
 
 export function ReviewDialog(props: {
   scope: ReviewScope;
+  initialPath?: string;
   onClose: () => void;
 }) {
   const title =
@@ -45,7 +46,10 @@ export function ReviewDialog(props: {
               </button>
             </Dialog.Close>
           </div>
-          <ReviewSurface scope={props.scope} />
+          <ReviewSurface
+            scope={props.scope}
+            {...(props.initialPath ? { initialPath: props.initialPath } : {})}
+          />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -117,6 +117,7 @@ export function UserMessage(props: {
   imageCount?: number | undefined;
   attachments?: SessionInputAttachment[] | undefined;
   entryKey?: string | undefined;
+  presentation?: "bubble" | "guidance" | undefined;
   onOpenLocalFile?: ((path: string) => void) | undefined;
   onLoadDetail?: (() => Promise<void> | void) | undefined;
 }) {
@@ -159,6 +160,44 @@ export function UserMessage(props: {
       setTimeout(() => setCopied(false), 1500);
     }
   };
+
+  if (props.presentation === "guidance") {
+    return (
+      <div
+        ref={messageRef}
+        className="assistant-process-guidance-entry group/guidance min-w-0"
+        data-testid="chat-guidance-message"
+        data-feed-key={props.entryKey}
+      >
+        <div className="flex min-w-0 items-start gap-2 px-2 py-1.5">
+          <span className="mt-0.5 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-[var(--app-hint)]">
+            Guide
+          </span>
+          <div className="min-w-0 flex-1 text-[var(--app-fg)]">
+            {props.attachments?.length || imageCount > attachmentImageCount ? (
+              <UserMessageAttachments
+                attachments={props.attachments ?? []}
+                missingImageCount={missingImageCount}
+                onOpenLocalFile={props.onOpenLocalFile}
+              />
+            ) : null}
+            {visibleContent.text ? (
+              <CollapsibleUserMessageText text={visibleContent.text} />
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] opacity-0 outline-none transition-[background-color,color,opacity] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[var(--app-accent)] group-hover/guidance:opacity-100"
+            aria-label="Copy Guide"
+            title="Copy Guide"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

@@ -2,7 +2,7 @@
 
 状态：正式架构，canonical-only
 
-复核日期：2026-07-29
+复核日期：2026-08-14
 
 ## 1. 目标
 
@@ -44,6 +44,7 @@ Provider evidence
 projector 是以下事实的唯一 owner：
 
 - turn 边界、顺序和状态
+- turn 内语义展示顺序（初始 user → process/Guide → final）
 - process/final role
 - final answer identity
 - provider duration
@@ -76,6 +77,14 @@ item role 只有：
 - `process`
 - `final`
 - `system`
+
+Provider 的物理持久化顺序不等于展示顺序。尤其 Resume 时，Provider 可能先写入 context
+compaction 或其他启动过程，再回写触发本轮的 user item。协议层
+`orderConversationTurnItems` 是唯一的 turn 内排序 owner：最早的外部 `user` 固定为本轮边界，
+随后保留 process 与后续 Guide 的相对顺序，所有 `final` 收口在末尾。daemon projector、resident/
+history overlay、Web baseline/delta merge 与 renderer 都消费同一个规则；任何一层都不能按 arrival
+order 冻结错误顺序，也不能另写 timestamp/CSS 排序。后续 `user` 仍是 Worked 内的 Guide，不能被
+提升成新的初始问题。
 
 provider-native id 必须保持 opaque。canonical id 可跨 live、history、resume 和 detail hydration
 稳定定位同一 turn/item；内容 hash 不得冒充主身份。provider 只提供 turn/item key 而没有
@@ -155,15 +164,31 @@ provider 文件并产生同一种 canonical delta。前端不轮询原始历史�
 - `nextCursor`
 - `daemonRevision`
 - `pendingDeltas`
+- `needsRefresh`
+- `detachedBaseline`（仅浏览器内存恢复后的短暂状态）
 - `lastError`
 
 旧 `HistorySyncState` 已删除。
 
-浏览器内存仍是 Session A→B→A 的第一层热状态；整页 reload 后由仍在运行的 daemon 提供第二层
-有界热页。daemon 只缓存已经完成 materialization 的 canonical page，单条最多 1 MiB、全局最多
+浏览器内存仍是 Session A→B→A 的第一层热状态，但它不能与 Session catalog 共用生命周期：catalog
+刷新、read-only replay 收回或 WebSocket replay gap 只允许替换拓扑/auxiliary feed，不能顺带删除已加载
+的 Conversation。`session-conversation-memory-cache.ts` 以稳定的
+`{provider, providerSessionId}` 保存最多 16 项、单项约 8 MiB、总计约 32 MiB、30 分钟 LRU 的可读
+投影；它不产生 Session row，也不能让已从 provider catalog 消失的 Session 重新进入 Sidebar。
+重新选择时先同步显示该内存 baseline，再只请求当前可见 Session 的 canonical tail；请求期间保持
+`phase=ready`，失败也保留旧内容。新 runtime identity 不复用旧 `daemonRevision`/cursor，成功校准后
+以响应的 revision/cursor 替换 detached tail 的成员和分页边界，但同一 provider turn 的
+`itemsView=summary` 只是一份受 byte/item budget 限制的传输视图：其 omission 不能解释为删除。浏览器
+必须按 canonical/provider item identity 保留已展示 process/reasoning，并只让显式 delta removal 或
+full canonical view 删除它们。这样 PWA 后台重连不会把多段 thinking 收缩成最新一段。replay gap
+禁止对全部已加载 Session 执行并发补拉，非可见项在下次选择时惰性校准。
+
+整页 reload 或 iOS 回收 Web 进程后，浏览器内存自然消失，由仍在运行的 daemon 提供第二层有界热页。
+daemon 只缓存已经完成 materialization 的 canonical page，单条最多 1 MiB、全局最多
 128 条 / 32 MiB、30 分钟 LRU。复用必须同时满足同一 Runtime Session、cursor/limit、provider
 `sourceRevision` 和 resident `liveRevision`；含 `in_progress` turn 或 pending/running item 的页面绝不
-进入缓存。任一 revision 变化就删除旧项并重新读取 Provider，不能把旧页与新 baseline 猜测合并。
+进入缓存。任一 revision 变化就删除 daemon 旧项并重新读取 Provider，不能把旧 daemon page 与新
+baseline 猜测合并；这与浏览器“先画上次已读投影、再以 canonical tail 校准”的瞬时展示策略不同。
 这层只存在于 daemon 内存：刷新浏览器可复用，重启 daemon 后自然冷读；浏览器不把 Conversation
 正文写入 localStorage/IndexedDB，也不建立第二份持久化真相。当前 tab 只在 `sessionStorage` 保存
 最后选中 Session 的 provider 身份和 workspace；reload 后用该身份解析当前 live 或 stored 对象，再从
@@ -212,14 +237,27 @@ Outputs/Sources 是 Conversation projection 的派生索引，不依赖 Session 
 - 只有尚未被 server 接管的 optimistic user item 可以从本地 feed 注入。
 - 它不能决定 turn、final、process、duration 或失败状态。
 
+图片展示也只消费 canonical projection，不在 Markdown 组件里按文件扩展名猜测：
+
+- 显式 Markdown 图片由正文 renderer 在原位置显示；对应 Output 的 `sourceItemIds` 指向 final item，Chat 据此不再追加第二份。
+- Provider-native image artifact/attachment（例如 Codex `imageGeneration.savedPath`）投影为 `turn.outputs[kind=image]`；turn 终态后在 final answer 下方显示最多 8 个延迟加载、可换行的小缩略图，其余仍可从 Inspector 打开。
+- 普通 Markdown 文件链接永远先是链接。只为兼容缺少原生 artifact 的旧历史，daemon 可把独占一行、指向绝对本地图片路径的链接投影为 `confidence=inferred` 的 image output；host-file 读取必须验证真实图片签名，失败时渲染占位而不是尝试执行或内联任意内容。
+- 文档、源码、归档等非图片 Outputs 继续只由 Inspector 展示；Chat 不建立第二份通用资源卡片。
+
 展示规则：
 
 - active turn 的 process 展开。
 - terminal turn 的 process 默认折叠。
 - final answer 始终位于 process 外。
 - output 紧跟所属 final answer。
+- provider/model/effort 元信息由 `Working / Worked / Interrupted` 状态行最左侧的 provider
+  图标承载，与状态文字共享一行；不得进入 final footer，也不得在 Worked 与 final 正文之间插入
+  独立标题行。Desktop 悬停、窄屏点按图标显示完整 provider/model/effort 与来源；模型事实尚未
+  到达时仍显示 provider 身份。Copy 等 final action 保留在回复尾部。
 - task summary 使用底部 dock，不随过程消息滚走；plan、turn 状态和 activity 摘要都来自 canonical
   Conversation projection。
+- per-turn Changed Files 的 `审查` 与文件行统一进入冻结 turn artifact 的 Review surface；文件行只增加
+  initial selection，不再打开右侧 Inspector。compact/PWA 在 Review 顶部使用可折叠文件选择条。
 
 ## 9. Resume
 
@@ -293,5 +331,6 @@ npm run test:smoke-cleanup
 npm run test:smoke:conversation-providers
 ```
 
-验收不变量：连续相同输入不能合并；user/process/final 顺序稳定；中断锚定所属 turn；
+验收不变量：连续相同输入不能合并；即使 Resume 启动过程先于 prompt 到达，仍稳定显示
+user/process/final；中断锚定所属 turn；
 subagent 不提前 ready；分页不重复；Resume 不清空已展示 projection；长历史首屏保持有界。

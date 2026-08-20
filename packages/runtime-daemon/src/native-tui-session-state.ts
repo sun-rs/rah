@@ -38,6 +38,7 @@ export type NativeTuiSessionState = {
   startupTimestampMs: number;
   launchEnv?: Record<string, string>;
   providerSessionId?: string;
+  rejectedBindingProviderSessionIds?: Set<string>;
   promptState: NativeTuiPromptState;
   promptTracker: LocalTerminalPromptTracker;
   queuedInputs: NativeTuiQueuedInput[];
@@ -73,6 +74,13 @@ export function nativeTuiProviderRuntimeSession(
     startupTimestampMs: native.startupTimestampMs,
     ...(native.launchEnv ? { launchEnv: native.launchEnv } : {}),
     ...(native.providerSessionId ? { providerSessionId: native.providerSessionId } : {}),
+    ...(native.rejectedBindingProviderSessionIds?.size
+      ? {
+          excludedProviderSessionIds: [
+            ...native.rejectedBindingProviderSessionIds,
+          ],
+        }
+      : {}),
   };
 }
 
@@ -139,6 +147,58 @@ export function markNextNativeTuiQueuedInputSubmitting(
   return queued;
 }
 
+/**
+ * Native terminal providers do not return an input receipt from a PTY write.
+ * Every Web input therefore enters the same durable-in-memory handoff ledger
+ * before injection; only the structured provider echo may remove it.
+ */
+export function stageNativeTuiInputHandoff(
+  native: NativeTuiSessionState,
+  input: Omit<NativeTuiQueuedInput, "state">,
+  options: { maxQueueLength: number; submitImmediately: boolean },
+): NativeTuiQueuedInput | undefined {
+  if (!enqueueNativeTuiQueuedInput(native, input, options.maxQueueLength)) {
+    return undefined;
+  }
+  const staged = native.queuedInputs.at(-1);
+  if (!options.submitImmediately) {
+    return staged;
+  }
+  // A prompt observation may race a still-unacknowledged provider handoff. In
+  // that case the new input is validly queued, but must not be injected until
+  // the provider confirms the active input. Returning the staged item keeps
+  // "accepted into the handoff ledger" distinct from "safe to inject now".
+  return markNextNativeTuiQueuedInputSubmitting(native) ?? staged;
+}
+
+export function stageNativeTuiChatInput(
+  native: NativeTuiSessionState,
+  params: {
+    clientId: string;
+    text: string;
+    clientMessageId: string;
+    clientTurnId?: string | undefined;
+    mustWaitForPrompt: boolean;
+  },
+): NativeTuiQueuedInput | undefined {
+  return stageNativeTuiInputHandoff(
+    native,
+    {
+      clientId: params.clientId,
+      text: params.text,
+      queuedAt: new Date().toISOString(),
+      clientMessageId: params.clientMessageId,
+      ...(params.clientTurnId !== undefined
+        ? { clientTurnId: params.clientTurnId }
+        : {}),
+    },
+    {
+      maxQueueLength: 20,
+      submitImmediately: !params.mustWaitForPrompt,
+    },
+  );
+}
+
 export function confirmNativeTuiQueuedInput(
   native: NativeTuiSessionState,
   clientMessageId: string,
@@ -151,6 +211,19 @@ export function confirmNativeTuiQueuedInput(
   }
   native.queuedInputs.splice(index, 1);
   return true;
+}
+
+export function takeConfirmedNativeTuiQueuedInput(
+  native: NativeTuiSessionState,
+  clientMessageId: string,
+): NativeTuiQueuedInput | undefined {
+  const accepted = native.queuedInputs.find(
+    (item) => item.clientMessageId === clientMessageId,
+  );
+  if (!accepted || !confirmNativeTuiQueuedInput(native, clientMessageId)) {
+    return undefined;
+  }
+  return accepted;
 }
 
 export function updateNativeTuiQueuedInput(

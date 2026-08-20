@@ -9,10 +9,12 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { realpath } from "node:fs/promises";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
+import { codexVisualArtifactIdForPath } from "./codex-visual-artifacts";
 
 const PROVIDER_SESSION_ID = "019f7d82-3eaa-7093-8d75-27a51b60e2cf";
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
@@ -38,8 +40,19 @@ function createFixture() {
     "20",
     PROVIDER_SESSION_ID,
   );
+  const workspaceRoot = path.join(temporaryHome, "workspace");
+  const workspaceArtifactDirectory = path.join(
+    workspaceRoot,
+    ".codex",
+    "visualizations",
+    "2026",
+    "07",
+    "20",
+    PROVIDER_SESSION_ID,
+  );
   mkdirSync(path.dirname(rolloutPath), { recursive: true });
   mkdirSync(artifactDirectory, { recursive: true });
+  mkdirSync(workspaceArtifactDirectory, { recursive: true });
   writeFileSync(rolloutPath, "");
 
   const services = {
@@ -51,8 +64,8 @@ function createFixture() {
     provider: "codex",
     providerSessionId: PROVIDER_SESSION_ID,
     launchSource: "web",
-    cwd: temporaryHome,
-    rootDir: temporaryHome,
+    cwd: workspaceRoot,
+    rootDir: workspaceRoot,
   }).session.id;
   const adapter = new CodexStoredHistoryAdapter(services);
   adapter.hydrateStoredSessionsCatalog([
@@ -60,6 +73,8 @@ function createFixture() {
       ref: {
         provider: "codex",
         providerSessionId: PROVIDER_SESSION_ID,
+        cwd: workspaceRoot,
+        rootDir: workspaceRoot,
       },
       storagePath: rolloutPath,
       archived: false,
@@ -69,10 +84,71 @@ function createFixture() {
   return {
     temporaryHome,
     artifactDirectory,
+    workspaceArtifactDirectory,
     runtimeSessionId,
     adapter,
   };
 }
+
+test("reads workspace-local visuals before the legacy provider storage location", async () => {
+  const fixture = createFixture();
+  try {
+    writeFileSync(
+      path.join(fixture.artifactDirectory, "equity-curve.html"),
+      "<main>legacy</main>",
+    );
+    writeFileSync(
+      path.join(fixture.workspaceArtifactDirectory, "equity-curve.html"),
+      "<main>workspace</main>",
+    );
+
+    assert.equal(
+      (
+        await fixture.adapter.getSessionConversationVisualArtifact(
+          fixture.runtimeSessionId,
+          "equity-curve.html",
+        )
+      )?.fragment,
+      "<main>workspace</main>",
+    );
+  } finally {
+    rmSync(fixture.temporaryHome, { recursive: true, force: true });
+  }
+});
+
+test("reads a provider-evidenced workspace visual from a human-readable directory", async () => {
+  const fixture = createFixture();
+  try {
+    const evidencedDirectory = path.join(
+      path.dirname(path.dirname(path.dirname(path.dirname(fixture.workspaceArtifactDirectory)))),
+      "2026",
+      "08",
+      "15",
+      "sxx-optimal-combinations",
+    );
+    mkdirSync(evidencedDirectory, { recursive: true });
+    const sourcePath = path.join(
+      evidencedDirectory,
+      "optimal-candidate-combinations.html",
+    );
+    writeFileSync(sourcePath, "<main>evidenced</main>");
+    const artifactId = codexVisualArtifactIdForPath(
+      ".codex/visualizations/2026/08/15/sxx-optimal-combinations/optimal-candidate-combinations.html",
+    )!;
+
+    assert.equal(
+      (
+        await fixture.adapter.getSessionConversationVisualArtifact(
+          fixture.runtimeSessionId,
+          artifactId,
+        )
+      )?.fragment,
+      "<main>evidenced</main>",
+    );
+  } finally {
+    rmSync(fixture.temporaryHome, { recursive: true, force: true });
+  }
+});
 
 test("reads only ordinary bounded artifacts from the provider-owned task directory", async () => {
   const fixture = createFixture();
@@ -96,6 +172,33 @@ test("reads only ordinary bounded artifacts from the provider-owned task directo
     );
     assert.equal(
       await fixture.adapter.getSessionConversationVisualArtifact(
+        fixture.runtimeSessionId,
+        "../equity-curve.html",
+      ),
+      undefined,
+    );
+  } finally {
+    rmSync(fixture.temporaryHome, { recursive: true, force: true });
+  }
+});
+
+test("exposes only a verified visual source path for file-browser fallback", async () => {
+  const fixture = createFixture();
+  try {
+    const sourcePath = path.join(
+      fixture.workspaceArtifactDirectory,
+      "equity-curve.html",
+    );
+    writeFileSync(sourcePath, "<main>workspace</main>");
+
+    const source = await fixture.adapter.getSessionConversationVisualArtifactSource(
+      fixture.runtimeSessionId,
+      "equity-curve.html",
+    );
+    assert.equal(source?.id, "equity-curve.html");
+    assert.equal(await realpath(source?.path ?? ""), await realpath(sourcePath));
+    assert.equal(
+      await fixture.adapter.getSessionConversationVisualArtifactSource(
         fixture.runtimeSessionId,
         "../equity-curve.html",
       ),
