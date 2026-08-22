@@ -422,11 +422,10 @@ export class RuntimeEngine {
       },
       sendInput: (sessionId, request) => this.sendInput(sessionId, request),
       sendStructuredInput: (sessionId, request) => this.sendStructuredInput(sessionId, request),
-      interruptSession: (sessionId, request) => {
-        this.interruptSession(sessionId, request);
-      },
+      interruptSession: (sessionId, request) => this.interruptSession(sessionId, request),
       closeSession: (sessionId) => this.closeCouncilManagedSession(sessionId),
       hasSession: (sessionId) => this.sessionStore?.getSession(sessionId) !== undefined,
+      isSessionBusy: (sessionId) => Boolean(this.sessionStore?.getSession(sessionId)?.activeTurnId),
     });
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
@@ -1027,22 +1026,24 @@ export class RuntimeEngine {
       await this.refreshStoredSessionsCatalog({ provider });
     }
     await this.ensureStoredSessionCatalogRecord(provider, providerSessionId);
+    const runtimeSessionId = options?.runtimeSessionId;
+    const clientId = options?.clientId;
     let stoppedRuntimeRef: StoredSessionRef | null = null;
     let managedRuntime: StoredSessionState | undefined;
-    if (options?.runtimeSessionId) {
-      if (!options.clientId) {
+    if (runtimeSessionId) {
+      if (!clientId) {
         throw new Error("clientId is required when archiving a running session.");
       }
-      const managed = this.sessionStore.getSession(options.runtimeSessionId);
+      const managed = this.sessionStore.getSession(runtimeSessionId);
       if (!managed) {
-        throw new Error(`Unknown session ${options.runtimeSessionId}.`);
+        throw new Error(`Unknown session ${runtimeSessionId}.`);
       }
       if (
         managed.session.provider !== provider ||
         managed.session.providerSessionId !== providerSessionId
       ) {
         throw new Error(
-          `Managed session ${options.runtimeSessionId} does not match ${provider}:${providerSessionId}.`,
+          `Managed session ${runtimeSessionId} does not match ${provider}:${providerSessionId}.`,
         );
       }
       managedRuntime = managed;
@@ -1078,14 +1079,18 @@ export class RuntimeEngine {
             `${provider} reported ${archiveBackend} after declaring provider-native archive.`,
           );
         }
-      } else if (managedRuntime && options?.runtimeSessionId && options.clientId) {
-        await this.sessionLifecycle.closeSession(options.runtimeSessionId, {
-          clientId: options.clientId,
-        });
+      } else if (managedRuntime && runtimeSessionId && clientId) {
+        await this.sessionLifecycle.closeSessionBeforeStoredArchive(runtimeSessionId, clientId);
       }
 
       if (!managedRuntime || archiveBackend !== "provider_native") {
-        requireStoredSessionClosed(this.sessionStore, provider, providerSessionId, "archive");
+        requireStoredSessionClosed(
+          this.sessionStore,
+          provider,
+          providerSessionId,
+          "archive",
+          runtimeSessionId,
+        );
         const reportedArchiveBackend = await adapter?.archiveStoredSession?.(session);
         providerArchived = Boolean(adapter?.archiveStoredSession);
         if (reportedArchiveBackend) {
@@ -1103,15 +1108,8 @@ export class RuntimeEngine {
       });
       libraryArchived = true;
 
-      if (
-        managedRuntime &&
-        archiveBackend === "provider_native" &&
-        options?.runtimeSessionId &&
-        options.clientId
-      ) {
-        await this.sessionLifecycle.closeSession(options.runtimeSessionId, {
-          clientId: options.clientId,
-        });
+      if (managedRuntime && runtimeSessionId && clientId) {
+        await this.sessionLifecycle.releaseSessionAfterStoredArchive(runtimeSessionId, clientId);
       }
     } catch (error) {
       const rollbackErrors: unknown[] = [];
@@ -1131,10 +1129,11 @@ export class RuntimeEngine {
       }
       if (
         managedRuntime &&
+        !isReadOnlyReplaySession(managedRuntime) &&
         !this.sessionStore.getSession(managedRuntime.session.id)
       ) {
         const attachedClient = managedRuntime.clients.find(
-          (client) => client.id === options?.clientId,
+          (client) => client.id === clientId,
         );
         try {
           await this.resumeSession({

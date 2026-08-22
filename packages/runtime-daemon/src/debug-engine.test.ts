@@ -28,5 +28,14 @@ describe("DebugEngine structured UI scenarios", () => {
     ]) {
       assert.equal(types.has(type as never), true, type);
     }
+    const guideEvents = script.events.filter((event) => {
+      const payload = event.payload as {
+        item?: { kind?: string; inputPlacement?: string };
+      };
+      return event.type === "timeline.item.added" &&
+        payload.item?.kind === "user_message" &&
+        payload.item.inputPlacement === "turn_steer";
+    });
+    assert.equal(guideEvents.length, 1);
   });
 });

@@ -136,6 +136,16 @@ export interface TimelinePlanStep {
   status: TimelinePlanStepStatus;
 }
 
+/**
+ * Canonical placement of an external user input inside a provider turn.
+ *
+ * `turn_start` activates a new turn and renders as the ordinary user row.
+ * `turn_steer` was accepted into an already-running turn and renders inside
+ * that turn's process timeline. Clients must not infer this from viewport,
+ * arrival order, or the number of user rows they currently have loaded.
+ */
+export type TimelineUserInputPlacement = "turn_start" | "turn_steer";
+
 export type TimelineItem =
   | {
       kind: "user_message";
@@ -145,6 +155,9 @@ export type TimelineItem =
       messageId?: string;
       clientMessageId?: string;
       clientTurnId?: string;
+      inputPlacement?: TimelineUserInputPlacement;
+      /** Canonical turn-item id that was visible immediately before a steer. */
+      causalAfterItemId?: string;
     }
   | {
       kind: "assistant_message";

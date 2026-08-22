@@ -107,6 +107,13 @@ Desktop 的编译后前端只能证明当前产品如何消费协议，不能替
 - 改后续设置：`thread/settings/update`
 - 取消当前连接订阅：`thread/unsubscribe`
 
+`turn/start`/`turn/steer` 请求中的稳定输入字段叫 `clientUserMessageId`，而 server 返回的
+`UserMessageThreadItem` 使用 `clientId`。二者是同一输入身份的不同 wire 名称；RAH adapter
+必须统一后 exactly-once 投影，不能把 native echo 当成第二条 user message。`turn/start`
+canonical placement 为 `turn_start`；成功的 `turn/steer` 为 `turn_steer`。RAH Web 发起的
+Guide 还保留点击时的 turn-local causal anchor；外部客户端历史只按 rollout 原生顺序恢复，
+不伪造 anchor。
+
 `thread/unsubscribe` 不会立即杀掉 thread。最后一个订阅者离开后，server 会保留 thread，直到它没有活动且无订阅者 30 分钟才卸载。这与 RAH 的 Web 视图切换、TUI warm 生命周期是两个不同层次，不能混为一谈。
 
 ### Fork 与 Side

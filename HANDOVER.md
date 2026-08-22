@@ -288,7 +288,7 @@ Timeline 主 identity 来自：
 
 - **Pinned**：普通 Session 可置顶；支持拖拽排序。
 - **Council**：独立区域，只展示 running Council；Council 不再混入 Workspace session，也没有 pin 能力；支持区域内拖拽排序。
-- Council agent 的最终答复通过 `channel_post(content="...")` 发布；MCP schema 与 bootstrap prompt 都显式声明 `content`，daemon 同时兼容 `text/message` 别名，不能因模型使用常见 `message` 参数而丢失已生成的答复并终止监听。
+- Council agent 的成员关系、订阅、delivery cursor 与 busy queue 由 daemon 的 `CouncilDeliveryCoordinator` 单独持有；启动不发送 join/bootstrap 模型 turn。新消息先命中热 `channel_wait_new`，否则在 120ms 内按 agent 合并 canonical 原文并以稳定 input identity 直接 wake 原 managed session；精确 `session.input.accepted` 后才推进 cursor，busy turn 结束后才送下一批。30 秒热等待 timeout 返回 `sleeping/end_turn`，保留订阅与温热 session，禁止永久 heartbeat/re-wait。生命周期 system row 不进入 agent inbox；明确 `@agent` 缩小投递，`@all` 或无 mention 广播。最终答复仍通过 `channel_post(content="...")` 发布，daemon 兼容 `text/message` 别名。
 - 删除 stopped Council 时，daemon 必须先保留其全部 `providerSessionIds`，再把这些 agent history identity 写入 workbench hidden-session tombstone；删除 Council 不能让原本隔离的 agent 子 Session 回落成普通 Workspace/Recent 行。
 - **Workspaces**：注册的 workspace + 其非 archive sessions。
 
@@ -585,6 +585,7 @@ Changed files 权威性收敛包括：
 - Chat 的 detached-reader anchor 已从仅 row identity 收紧为“视口内稳定正文后代 + 像素偏移，canonical row 兜底”；同一超长 assistant row 内的 lazy image/Markdown 迟到布局不能再推动读者。Sidebar→Canvas drag target 同时支持 running runtime id 与 stopped/history provider ref；所有 Session 标题按钮都是拖动源，并使用专用 MIME + WebKit 纯文本回退与 copy drop 语义。
 - Active task summary 已收敛为 32px 进度胶囊；1280×720 真实 working session 实测只显示 `3/5 · 当前步骤`，无固定标题、状态或箭头，Desktop 点击后不获得 focus、不会锁住浮层。详情行在存在本轮权威 artifact 时固定以可点击的 `Changed N files` 开头，不存在时完全省略；当前真实 running session 的 DOM 顺序为 `Changed 26 files`、`Used 11 tools`、`Run 70 commands`、`Read 58 files`。
 - per-turn Changed Files 入口已与 Inspector panel state 解耦：390×844 standalone gate 使用真实冻结 artifact，验证“回复文件行 → 共享 Review（精确预选该文件）→ 关闭 → Chat”和“turn 审查 → 同一 Review → 关闭 → Chat”；两条路径结束后可见 Inspector 数量都为 0。Desktop、PWA 与 Canvas 均不得再为单个 turn 挂载临时 viewer 或右侧 Changed Files sidebar。PWA Review 的文件列表默认折叠在顶部下拉区，展开后可容纳更多文件，选择文件后自动收起。
+- 临时 inspection 生命周期由 `useWorkbenchInspectionLifecycle` 统一收口：普通 Session viewer 保存点击来源的 session/workspace/path，不再用当前 selection 重解释；切换 Session/Council/Canvas/workspace 或打开 Settings/Terminal 会关闭旧 viewer 与旧 owner Review。离开 Canvas 或顶层功能接管会清空 pane viewer，而 Canvas 内 active pane 切换仍保留各 pane 独立窗口。
 - 蓝色本地文件链接和行内文件路径已恢复原生文本选择；真实会话 27 个文件按钮的计算样式均为 `user-select: text`，普通点击仍能打开 Inspector，选区相交时的点击由确定性单测锁定为不打开。
 - 全局恢复提示已从完整 warning 底色/边框与重阴影收敛为低对比橙色混色、无投影 surface：orange-500 仅以 8% 混入页面底色、18% 混入普通边框。真页面量测：PWA 为 68px 高且不遮挡 New task；1280×720 Desktop 仍为 `384×49px`、右/下各 16px。Session Chat、Council、Canvas 现在共用单一 `WORKBENCH_HEADER_LAYOUT` 40px 单行标题栏协议，PWA gate 已跨三页断言标题高度一致且提示位于分割线下至少 4px。统一 composer 的 `+` 已收敛为正文色、20px/1.75 描边；权限/模型使用 15px/1.8 的 ghost 控件层级，PWA deterministic gate 与 Desktop 真页面均已核验。
 - 2026-08-05 零行为清理删除了没有生产 owner 的旧 `SessionControlPopover`、`ConversationOutputsCard`、`NativeTerminalProcess` 与 OpenCode ACP client/activity 整文件，并移除 `ProviderSelector` 已无 caller 的 rail/dialog 分支及配套 CSS；当前 OpenCode native local-server/API 路径、统一 composer 与资源卡片路径未改。新增 `check:source-reachability` 从三个 package 入口证明 409/411 个生产源码可达，另 2 个测试 helper 显式豁免；`check:repo-hygiene` 也会拒绝文档中失效的本地链接和 `npm run` 命令，避免后续重构再次形成无 owner 的代码或漂移文档。

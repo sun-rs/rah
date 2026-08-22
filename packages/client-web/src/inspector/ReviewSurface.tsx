@@ -3,7 +3,6 @@ import {
   ChevronDown,
   ChevronUp,
   FileDiff,
-  LoaderCircle,
   Search,
   Space,
   WrapText,
@@ -19,7 +18,7 @@ import {
   readTurnFileDiff,
   readWorkspaceGitDiff,
 } from "../api";
-import { DiffDisplay } from "./InspectorPreviewDisplays";
+import { FileInspectionDiffSurface } from "./FileInspectionDiffSurface";
 import {
   buildDiffRows,
   getDisplayPath,
@@ -284,43 +283,17 @@ export function ReviewSurface(props: { scope: ReviewScope; initialPath?: string 
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_19rem] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
         <div className="flex min-h-0 flex-col overflow-hidden p-3 max-md:order-2">
-          {!selectedFile ? (
-            <div className="flex h-full min-h-40 items-center justify-center text-sm text-[var(--app-hint)]">
-              No changes to review.
-            </div>
-          ) : diffLoading ? (
-            <div className="flex h-full min-h-40 items-center justify-center gap-2 text-sm text-[var(--app-hint)]">
-              <LoaderCircle size={15} className="animate-spin" />
-              Loading diff…
-            </div>
-          ) : diffError ? (
-            <div className="rounded-md bg-[var(--app-warning-bg)] px-3 py-2 text-sm text-[var(--app-hint)]">
-              {diffError}
-            </div>
-          ) : selectedFile.binary ? (
-            <div className="flex h-full min-h-40 items-center justify-center text-sm text-[var(--app-hint)]">
-              Binary changes cannot be rendered as text.
-            </div>
-          ) : diffRows.length === 0 ? (
-            <div className="flex h-full min-h-40 items-center justify-center text-sm text-[var(--app-hint)]">
-              No textual diff is available for this file.
-            </div>
-          ) : (
-            <div className="flex h-full min-h-0 flex-col gap-2">
-              {diffTruncated ? (
-                <div className="rounded-md bg-[var(--app-warning-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
-                  This frozen file diff exceeded the stored limit.
-                </div>
-              ) : null}
-              <DiffDisplay
-                rows={diffRows}
-                path={selectedFile.path}
-                wrapLines={wrapLines}
-                layout={diffLayout}
-                fillAvailable
-              />
-            </div>
-          )}
+          <FileInspectionDiffSurface
+            path={selectedFile?.path ?? null}
+            rows={diffRows}
+            loading={diffLoading}
+            error={diffError}
+            truncated={diffTruncated}
+            binary={selectedFile?.binary === true}
+            wrapLines={wrapLines}
+            layout={diffLayout}
+            truncatedLabel="This frozen file diff exceeded the stored limit."
+          />
         </div>
 
         <button

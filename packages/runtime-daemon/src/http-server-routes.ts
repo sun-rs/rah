@@ -14,6 +14,7 @@ import type {
   UploadAttachmentResponse,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
+import type { WorkbenchNoticePreferencesStore } from "./workbench-notice-preferences";
 import { applyCorsHeaders, validateApiRequest } from "./http-server-cors";
 import {
   type JsonHandler,
@@ -596,12 +597,13 @@ export function createPostRoutes(
 export async function handleHttpRequest(args: {
   engine: RuntimeEngine;
   postRoutes: Array<{ pattern: RegExp; handler: JsonHandler }>;
+  noticePreferences: WorkbenchNoticePreferencesStore;
   req: IncomingMessage;
   res: ServerResponse;
   runtimeIdentity?: RuntimeIdentityResponse | undefined;
   auth?: DeviceAuthManager | undefined;
 }): Promise<void> {
-  const { engine, postRoutes, req, res, runtimeIdentity, auth } = args;
+  const { engine, postRoutes, noticePreferences, req, res, runtimeIdentity, auth } = args;
   try {
     if (!req.url || !req.method) {
       writeText(req, res, 400, "Bad Request");
@@ -644,6 +646,22 @@ export async function handleHttpRequest(args: {
         return;
       }
       writeJson(req, res, 200, runtimeIdentity);
+      return;
+    }
+
+    if (
+      req.method === "GET" &&
+      pathname === "/api/workbench/notices/runtime-compatibility"
+    ) {
+      writeJson(req, res, 200, noticePreferences.runtimeCompatibilityState());
+      return;
+    }
+
+    if (
+      req.method === "PUT" &&
+      pathname === "/api/workbench/notices/runtime-compatibility/mute"
+    ) {
+      writeJson(req, res, 200, noticePreferences.muteRuntimeCompatibilityForToday());
       return;
     }
 

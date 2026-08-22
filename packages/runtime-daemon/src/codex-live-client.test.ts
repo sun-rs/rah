@@ -1141,6 +1141,7 @@ rl.on('line', (line) => {
     );
     await adapter.steerQueuedInput(sessionId, "message-guide", {
       clientId: "web-user",
+      causalAfterItemId: "visible-process-boundary",
     });
     assert.equal(
       services.sessionStore.getSession(sessionId)?.session.inputQueue?.length,
@@ -1162,6 +1163,13 @@ rl.on('line', (line) => {
         ? guidedUserEvents[0].payload.item.text
         : null,
       "guide this run",
+    );
+    assert.equal(
+      guidedUserEvents[0]?.type === "timeline.item.added" &&
+        guidedUserEvents[0].payload.item.kind === "user_message"
+        ? guidedUserEvents[0].payload.item.causalAfterItemId
+        : null,
+      "visible-process-boundary",
     );
     await assert.doesNotReject(
       adapter.steerQueuedInput(sessionId, "message-guide", {

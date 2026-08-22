@@ -14,3 +14,8 @@ export function isClientVisibleCouncilMessage(message: CouncilMessage): boolean 
     councilMessageText(message),
   );
 }
+
+/** Lifecycle/status rows are UI evidence, not conversational input for agents. */
+export function isAgentDeliverableCouncilMessage(message: CouncilMessage): boolean {
+  return message.role === "user" || message.role === "agent";
+}

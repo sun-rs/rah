@@ -210,6 +210,18 @@ npm run test:smoke:history-resume
 - 点 Changed Files 的 `审查` 与任一文件行都打开同一个 Review；点文件时该文件立即选中
 - Desktop、PWA、Canvas 都不得因 turn 文件点击而打开右侧 Inspector
 - 390×844 下文件列表默认折叠为 Review 顶部选择条，可展开、筛选、切换并再次折叠
+- Canvas A/B pane 分别点击回复文件时，两边各保留自己的 pane 内 viewer；B 的路径和加载结果不得改写 A
+- pane viewer 可独立折叠/展开/关闭；最大化另一个 pane 后恢复时内容仍在，清空 A 只关闭 A
+- Desktop 中 `>=560×480px` 的 pane 默认显示居中浮窗并可最大化；任一边低于阈值时默认占满 pane，显式还原/最大化不会被后续 resize 擅自覆盖
+- Desktop pane 浮窗只允许拖动上、下边缘改变高度，不能横向 resize 或移出 pane；最小高度 `280px`，最大高度不穿过 pane 顶部控制区与底边
+- pane viewer 折叠或窗口化时，点击当前文件或其他正文文件都应激活同一 viewer、解除折叠并切换标题/内容；窗口化必须保留一条不被覆盖的正文点击带，已调整高度和显式窗口形态不得因 retarget 重置
+- 390×844 PWA 默认占满 pane；文件 viewer 仍被 Canvas pane 裁剪，不得成为 viewport 级全局窗口
+- 同时触发两个 Changed Files 入口时页面始终只有一个全局 Review；关闭 Review 后各 pane viewer 仍在
+- Session 单文件 viewer 或 Changed Files Review 打开时，切换到另一个 Session/Council、Canvas、New workspace
+  或 Settings/Terminal 后必须关闭，且不得用目标页面的 session/workspace 偷换原读取 owner
+- 离开 Canvas 或打开顶层设置/终端时全部 pane viewer 关闭；Canvas 内只切换 A/B active pane 时不清空各 pane
+  自己的 viewer，但 A 的全局 Review 不得跟随到 B
+- 手机/PWA 点击 compatibility `Mute today` 后，桌面客户端重新聚焦或在同步周期内也隐藏；reload 与不同 host alias 仍保持，主机下一个本地日期重新出现
 
 ## 六、History
 

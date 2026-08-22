@@ -237,7 +237,24 @@ test("Guide immediately binds its optimistic message to the active canonical tur
           providerTurnId: "provider-turn",
           status: "in_progress",
           statusAuthority: "native",
-          items: [],
+          items: [
+            {
+              id: "reasoning-boundary",
+              turnId: "canonical-turn",
+              role: "process",
+              status: "completed",
+              content: {
+                kind: "timeline",
+                item: { kind: "reasoning", text: "Before Guide" },
+              },
+              source: {
+                provider: "codex",
+                channel: "structured_live",
+                authority: "authoritative",
+              },
+              revision: 1,
+            },
+          ],
           activities: [],
           failedItemCount: 0,
           revision: 1,
@@ -246,11 +263,14 @@ test("Guide immediately binds its optimistic message to the active canonical tur
     },
   };
   let state = commandState(projection);
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ session: summary }), {
+  let steerRequest: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input, init) => {
+    steerRequest = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({ session: summary }), {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch;
+    });
+  }) as typeof fetch;
 
   try {
     const steering = steerQueuedInputCommand({
@@ -273,7 +293,14 @@ test("Guide immediately binds its optimistic message to the active canonical tur
       optimistic?.kind === "timeline" ? optimistic.providerTurnId : undefined,
       "provider-turn",
     );
+    assert.equal(
+      optimistic?.kind === "timeline" && optimistic.item.kind === "user_message"
+        ? optimistic.item.inputPlacement
+        : undefined,
+      "turn_steer",
+    );
     await steering;
+    assert.equal(steerRequest?.causalAfterItemId, "reasoning-boundary");
   } finally {
     globalThis.fetch = originalFetch;
   }

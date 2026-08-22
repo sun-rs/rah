@@ -58,7 +58,11 @@ describe("translateCodexRolloutLine", () => {
         },
         activity: {
           type: "timeline_item",
-          item: { kind: "user_message", text: "Fix the bug" },
+          item: {
+            kind: "user_message",
+            text: "Fix the bug",
+            inputPlacement: "turn_start",
+          },
         },
       },
     ]);
@@ -86,6 +90,102 @@ describe("translateCodexRolloutLine", () => {
         },
       },
     ]);
+  });
+
+  test("recovers Guide placement and client identity from paired rollout records", () => {
+    const state = createCodexRolloutTranslationState({
+      providerSessionId: "thread-guide",
+    });
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-21T02:00:00.000Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-guide" },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-21T02:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          id: "initial-message",
+          role: "user",
+          content: [{ type: "input_text", text: "Start the audit" }],
+        },
+      },
+      state,
+    );
+    const reasoning = translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-21T02:00:02.000Z",
+        type: "event_msg",
+        payload: { type: "agent_reasoning", text: "Inspecting files" },
+      },
+      state,
+    );
+    const guide = translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-21T02:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          id: "guide-message",
+          role: "user",
+          content: [{ type: "input_text", text: "Focus on the reducer" }],
+        },
+      },
+      state,
+    );
+    const acknowledged = translateCodexRolloutLine(
+      {
+        timestamp: "2026-08-21T02:00:03.001Z",
+        type: "event_msg",
+        payload: {
+          type: "user_message",
+          client_id: "client-guide",
+          message: "Focus on the reducer",
+        },
+      },
+      state,
+    );
+
+    assert.equal(reasoning.some(
+      (activity) => activity.activity.type === "timeline_item",
+    ), true);
+    const guideActivity = guide.find(
+      (activity) => activity.activity.type === "timeline_item",
+    )?.activity;
+    assert.equal(
+      guideActivity?.type === "timeline_item" &&
+        guideActivity.item.kind === "user_message"
+        ? guideActivity.item.inputPlacement
+        : undefined,
+      "turn_steer",
+    );
+    assert.equal(
+      guideActivity?.type === "timeline_item" &&
+        guideActivity.item.kind === "user_message"
+        ? guideActivity.item.causalAfterItemId
+        : undefined,
+      undefined,
+    );
+    assert.equal(acknowledged.length, 1);
+    assert.equal(acknowledged[0]?.activity.type, "timeline_item_updated");
+    assert.equal(
+      acknowledged[0]?.activity.type === "timeline_item_updated" &&
+        acknowledged[0].activity.item.kind === "user_message"
+        ? acknowledged[0].activity.item.clientMessageId
+        : undefined,
+      "client-guide",
+    );
+    assert.deepEqual(
+      acknowledged[0]?.activity.type === "timeline_item_updated"
+        ? acknowledged[0].activity.identity
+        : undefined,
+      guideActivity?.type === "timeline_item" ? guideActivity.identity : undefined,
+    );
   });
 
   test("restores Codex Desktop history images without leaking its injected file envelope", async () => {
@@ -2466,7 +2566,11 @@ What changed?
     assert.deepEqual(activities.map((item) => item.activity), [
       {
         type: "timeline_item",
-        item: { kind: "user_message", text: "周几?" },
+        item: {
+          kind: "user_message",
+          text: "周几?",
+          inputPlacement: "turn_start",
+        },
       },
     ]);
   });
@@ -2515,7 +2619,12 @@ What changed?
     assert.equal(activities.length, 1);
     assert.deepEqual(activities[0]?.activity, {
       type: "timeline_item",
-      item: { kind: "user_message", text: "", imageCount: 1 },
+      item: {
+        kind: "user_message",
+        text: "",
+        inputPlacement: "turn_start",
+        imageCount: 1,
+      },
     });
   });
 

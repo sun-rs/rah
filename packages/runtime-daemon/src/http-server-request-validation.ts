@@ -273,7 +273,11 @@ export function parseReorderQueuedInputRequest(body: unknown): ReorderQueuedInpu
 
 export function parseSteerQueuedInputRequest(body: unknown): SteerQueuedInputRequest {
   const record = requireObjectBody(body);
-  return { clientId: requireString(record, "clientId") };
+  const causalAfterItemId = optionalString(record, "causalAfterItemId");
+  return {
+    clientId: requireString(record, "clientId"),
+    ...(causalAfterItemId ? { causalAfterItemId } : {}),
+  };
 }
 
 export function parseSetInputQueuePolicyRequest(body: unknown): SetInputQueuePolicyRequest {

@@ -243,7 +243,6 @@ function mergeTurnWithRetainedItems(
       return mergeProcessItem(currentItem, match);
     }
     const mergedContent =
-      itemsView === "full" &&
       currentItem.content.kind === "timeline" &&
       currentItem.content.item.kind === "user_message" &&
       match.content.kind === "timeline" &&
@@ -252,15 +251,39 @@ function mergeTurnWithRetainedItems(
             ...match.content,
             item: {
               ...match.content.item,
-              imageCount: Math.max(
-                currentItem.content.item.imageCount ?? 0,
-                match.content.item.imageCount ?? 0,
-              ),
-              ...(match.content.item.attachments?.length
-                ? { attachments: match.content.item.attachments }
-                : currentItem.content.item.attachments?.length
-                  ? { attachments: currentItem.content.item.attachments }
+              ...(match.content.item.clientMessageId !== undefined
+                ? { clientMessageId: match.content.item.clientMessageId }
+                : currentItem.content.item.clientMessageId !== undefined
+                  ? { clientMessageId: currentItem.content.item.clientMessageId }
                   : {}),
+              ...(match.content.item.clientTurnId !== undefined
+                ? { clientTurnId: match.content.item.clientTurnId }
+                : currentItem.content.item.clientTurnId !== undefined
+                  ? { clientTurnId: currentItem.content.item.clientTurnId }
+                  : {}),
+              ...(match.content.item.inputPlacement !== undefined
+                ? { inputPlacement: match.content.item.inputPlacement }
+                : currentItem.content.item.inputPlacement !== undefined
+                  ? { inputPlacement: currentItem.content.item.inputPlacement }
+                  : {}),
+              ...(match.content.item.causalAfterItemId !== undefined
+                ? { causalAfterItemId: match.content.item.causalAfterItemId }
+                : currentItem.content.item.causalAfterItemId !== undefined
+                  ? { causalAfterItemId: currentItem.content.item.causalAfterItemId }
+                  : {}),
+              ...(itemsView === "full"
+                ? {
+                    imageCount: Math.max(
+                      currentItem.content.item.imageCount ?? 0,
+                      match.content.item.imageCount ?? 0,
+                    ),
+                    ...(match.content.item.attachments?.length
+                      ? { attachments: match.content.item.attachments }
+                      : currentItem.content.item.attachments?.length
+                        ? { attachments: currentItem.content.item.attachments }
+                        : {}),
+                  }
+                : {}),
             },
           }
         : match.content;

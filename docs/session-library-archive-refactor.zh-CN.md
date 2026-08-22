@@ -94,6 +94,10 @@ restoreStoredSession?(session): Promise<void> | void;
 removeStoredSession?(session): Promise<void> | void;
 ```
 
+`storedSessionArchiveBackend` 与这些方法属于同一 capability。Adapter capability
+绑定必须同时保留该标量声明；不能只 bind 方法后再根据“是否存在 archive 方法”猜 backend，
+否则 `rah_snapshot` 会被误判成 `provider_native`，在 Provider 文件已经移动后触发错误回滚。
+
 `SessionActionCapabilities` 最终应区分 `archive` 与 `restore`。UI 面向 stored Session 时使用 daemon 计算后的 Library capability，不从 running Session capability 猜测。
 
 HTTP API：
@@ -303,7 +307,8 @@ require stopped
 - `StoredSessionRef.libraryState`、archive backend 与 remove disposition 协议；
 - 原子持久化的 `session-library.json` registry、损坏文件隔离与 provider-missing metadata snapshot；
 - Codex `thread/archive` / `thread/unarchive`，以及 provider 外部 restore 后的 native registry reconciliation；
-- Claude 的 `rah_overlay` archive/restore；
+- Claude 的 `rah_snapshot` 物理 JSONL 隔离、manifest archive/restore；只读历史投影不要求当前
+  Web client 处于 attach 状态，归档提交后再释放该内存投影；
 - OpenCode 已归档记录发现、restore，以及公开 CLI 永久 Delete；
 - `/archive`、`/restore`、`/remove` API 与 catalog revision 同步；
 - running Session 的 daemon 内 `close -> archive` 操作，失败时回退为 `stopped + workspace`；
@@ -319,7 +324,6 @@ require stopped
 
 后续增强不阻塞当前 archive 主链路：
 
-- Claude `rah_snapshot` durable archive；
 - 跨 provider 批量删除的 daemon batch endpoint 与部分失败报告；
 - 超大 workspace Session 清单虚拟化；
 - stored-history capability 独立对象，替代 UI 对 adapter 能力的默认推断。

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import type { SessionProjection } from "../types";
 import type { WorkbenchMode } from "./useWorkbenchPageController";
+import type { FileDetailSelection } from "../inspector/shared";
 import {
   applyCanvasPaneTarget,
   canvasRestorableTargetKey,
@@ -28,6 +29,32 @@ import {
   type CanvasLayoutNode,
   type CanvasSplitAxis,
 } from "../canvas-layout";
+
+export type CanvasPaneFilePreview = {
+  requestId: number;
+  sessionId: string;
+  workspaceRoot: string;
+  selection: FileDetailSelection;
+  collapsed: boolean;
+  presentation: "auto" | "windowed" | "maximized";
+};
+
+export function activateCanvasPaneFilePreview(
+  current: CanvasPaneFilePreview | undefined,
+  requestId: number,
+  sessionId: string,
+  workspaceRoot: string,
+  path: string,
+): CanvasPaneFilePreview {
+  return {
+    requestId,
+    sessionId,
+    workspaceRoot,
+    selection: { path, source: "local", sessionId },
+    collapsed: false,
+    presentation: current?.presentation ?? "auto",
+  };
+}
 
 export function useCanvasController(options: {
   projections: Map<string, SessionProjection>;
@@ -58,6 +85,10 @@ export function useCanvasController(options: {
   const [canvasPaneRightPanelsOpen, setCanvasPaneRightPanelsOpen] = useState<
     Record<CanvasPaneId, boolean>
   >(() => rememberedState?.rightPanelsOpen ?? createDefaultCanvasRightPanelsOpen());
+  const [canvasPaneFilePreviews, setCanvasPaneFilePreviews] = useState<
+    Partial<Record<CanvasPaneId, CanvasPaneFilePreview>>
+  >({});
+  const canvasFilePreviewRequestIdRef = useRef(0);
   const canvasStoredActivationInFlightRef = useRef<Set<string>>(new Set());
   const canvasResumingStoredKeysRef = useRef<Set<string>>(new Set());
   const [canvasResumingStoredKeys, setCanvasResumingStoredKeys] = useState<Set<string>>(
@@ -88,6 +119,21 @@ export function useCanvasController(options: {
   useEffect(() => {
     setCanvasPaneTargets((current) => enrichCanvasSessionTargets(current, options.projections));
   }, [options.projections]);
+
+  useEffect(() => {
+    setCanvasPaneFilePreviews((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const paneId of Object.keys(current) as CanvasPaneId[]) {
+        const target = canvasPaneTargets[paneId];
+        if (target.kind !== "session" && target.kind !== "stored") {
+          delete next[paneId];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [canvasPaneTargets]);
 
   const mobileCanvasLayoutOnly = shouldUseMobileCanvasLayout(options.viewportWidthPx);
   const effectiveCanvasLayout = mobileCanvasLayoutOnly ? mobileCanvasLayout : canvasLayout;
@@ -127,6 +173,71 @@ export function useCanvasController(options: {
       ...current,
       [paneId]: !current[paneId],
     }));
+  }, []);
+
+  const openCanvasPaneFilePreview = useCallback(
+    (
+      paneId: CanvasPaneId,
+      sessionId: string,
+      workspaceRoot: string,
+      path: string,
+    ) => {
+      canvasFilePreviewRequestIdRef.current += 1;
+      const requestId = canvasFilePreviewRequestIdRef.current;
+      setCanvasPaneFilePreviews((current) => ({
+        ...current,
+        [paneId]: activateCanvasPaneFilePreview(
+          current[paneId],
+          requestId,
+          sessionId,
+          workspaceRoot,
+          path,
+        ),
+      }));
+      // Local-file controls stop click propagation so text selection remains
+      // stable. Claim the pane here instead of relying on the pane frame click.
+      setActiveCanvasPaneId(paneId);
+    },
+    [],
+  );
+
+  const closeCanvasPaneFilePreview = useCallback((paneId: CanvasPaneId) => {
+    setCanvasPaneFilePreviews((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
+  }, []);
+
+  const setCanvasPaneFilePreviewCollapsed = useCallback(
+    (paneId: CanvasPaneId, collapsed: boolean) => {
+      setCanvasPaneFilePreviews((current) => {
+        const preview = current[paneId];
+        return preview
+          ? { ...current, [paneId]: { ...preview, collapsed } }
+          : current;
+      });
+    },
+    [],
+  );
+
+  const setCanvasPaneFilePreviewPresentation = useCallback(
+    (paneId: CanvasPaneId, presentation: "windowed" | "maximized") => {
+      setCanvasPaneFilePreviews((current) => {
+        const preview = current[paneId];
+        return preview
+          ? { ...current, [paneId]: { ...preview, presentation } }
+          : current;
+      });
+    },
+    [],
+  );
+
+  const clearAllCanvasPaneFilePreviews = useCallback(() => {
+    setCanvasPaneFilePreviews({});
   }, []);
 
   const markCanvasResumePending = useCallback((sessionId: string, ref: StoredSessionRef) => {
@@ -229,6 +340,14 @@ export function useCanvasController(options: {
       ...current,
       [paneId]: false,
     }));
+    setCanvasPaneFilePreviews((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     setActiveCanvasPaneId(nextSelection.activePaneId);
     return true;
   }, [
@@ -253,6 +372,14 @@ export function useCanvasController(options: {
     setCanvasPaneTargets((current) =>
       applyCanvasPaneTarget(current, paneId, target, options.projections),
     );
+    setCanvasPaneFilePreviews((current) => {
+      if (!current[paneId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     setActiveCanvasPaneId(paneId);
   }, [options.projections]);
 
@@ -298,6 +425,7 @@ export function useCanvasController(options: {
     mobileCanvasLayout,
     canvasPaneTargets,
     canvasPaneRightPanelsOpen,
+    canvasPaneFilePreviews,
     canvasStoredActivationInFlightRef,
     canvasResumingStoredKeysRef,
     canvasResumingStoredKeys,
@@ -313,6 +441,11 @@ export function useCanvasController(options: {
     setCanvasPendingSessionActions,
     setCanvasPaneRightPanelOpen,
     toggleCanvasPaneRightPanel,
+    openCanvasPaneFilePreview,
+    closeCanvasPaneFilePreview,
+    setCanvasPaneFilePreviewCollapsed,
+    setCanvasPaneFilePreviewPresentation,
+    clearAllCanvasPaneFilePreviews,
     markCanvasResumePending,
     clearCanvasResumePending,
     setCanvasLayout,

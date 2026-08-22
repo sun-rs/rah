@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -1368,6 +1378,99 @@ describe("RuntimeEngine", () => {
     );
 
     await engine.shutdown();
+  });
+
+  test("archives a detached Claude stored replay without requiring a live client attachment", async () => {
+    const providerSessionId = "claude-detached-archive";
+    const historyPath = path.join(projectDir, `${providerSessionId}.jsonl`);
+    writeFileSync(
+      historyPath,
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "user-detached-archive",
+          cwd: workDir,
+          sessionId: providerSessionId,
+          timestamp: "2026-08-22T12:00:00.000Z",
+          message: { content: "archive this history" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-detached-archive",
+          cwd: workDir,
+          sessionId: providerSessionId,
+          timestamp: "2026-08-22T12:00:01.000Z",
+          message: { content: [{ type: "text", text: "done" }] },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const engine = new RuntimeEngine();
+    try {
+      await engine.refreshStoredSessionsCatalog({ provider: "claude" });
+      const replay = await engine.resumeSession({
+        provider: "claude",
+        providerSessionId,
+        cwd: workDir,
+        preferStoredReplay: true,
+        attach: {
+          client: {
+            id: "web-history-viewer",
+            kind: "web",
+            connectionId: "web-history-viewer",
+          },
+          mode: "observe",
+        },
+      });
+      const runtimeSessionId = replay.session.session.id;
+      engine.detachSession(runtimeSessionId, { clientId: "web-history-viewer" });
+      assert.equal(engine.sessionStore.getSession(runtimeSessionId)?.clients.length, 0);
+      await assert.rejects(
+        engine.archiveStoredSession("claude", providerSessionId),
+        /Close session .* before attempting to archive/,
+      );
+      assert.equal(existsSync(historyPath), true);
+
+      const archived = await engine.archiveStoredSession(
+        "claude",
+        providerSessionId,
+        {
+          runtimeSessionId,
+          clientId: "web-sidebar-client",
+          storedSessionsMode: "all",
+        },
+      );
+
+      assert.equal(engine.sessionStore.getSession(runtimeSessionId), undefined);
+      assert.equal(existsSync(historyPath), false);
+      assert.equal(
+        archived.storedSessions.find(
+          (session) => session.providerSessionId === providerSessionId,
+        )?.libraryState?.backend,
+        "rah_snapshot",
+      );
+      const manifest = JSON.parse(
+        readFileSync(
+          path.join(
+            tmpRahHome,
+            "runtime-daemon",
+            "provider-archives",
+            "claude",
+            "manifest.json",
+          ),
+          "utf8",
+        ),
+      ) as { entries: Array<{ providerSessionId: string; state: string }> };
+      assert.deepEqual(
+        manifest.entries.map((entry) => ({
+          providerSessionId: entry.providerSessionId,
+          state: entry.state,
+        })),
+        [{ providerSessionId, state: "archived" }],
+      );
+    } finally {
+      await engine.shutdown();
+    }
   });
 
   test("listDirectory expands tilde to the current user home directory", async () => {

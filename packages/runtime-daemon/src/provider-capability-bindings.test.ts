@@ -16,6 +16,7 @@ test("stored history capability preserves Conversation paging methods", async ()
   const adapter: ProviderAdapter & ProviderStoredHistoryAdapter = {
     id: "history-canonical",
     providers: ["codex"],
+    storedSessionArchiveBackend: "rah_snapshot",
     async getConversationSummaryEvidencePage(sessionId) {
       return { sessionId, events: [], nextCursor: "older" };
     },
@@ -43,6 +44,7 @@ test("stored history capability preserves Conversation paging methods", async ()
 
   assert.equal(hasStoredHistoryCapability(adapter), true);
   const capability = bindStoredHistoryCapability(adapter);
+  assert.equal(capability.storedSessionArchiveBackend, "rah_snapshot");
   assert.equal(
     (await capability.getConversationSummaryEvidencePage?.("session-1"))?.nextCursor,
     "older",

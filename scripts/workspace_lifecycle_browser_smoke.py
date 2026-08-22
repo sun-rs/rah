@@ -43,6 +43,7 @@ CASE_IDS = [
     "CHAT-VISUAL-OUTPUTS-001",
     "SIDEBAR-DENSITY-001",
     "CANVAS-SESSION-DROP-001",
+    "CANVAS-PANE-FILE-VIEWER-001",
 ]
 
 
@@ -915,11 +916,204 @@ def main() -> int:
             expect(
                 canvas_first_pane.get_by_text(parent_title, exact=True)
             ).to_be_visible(timeout=20_000)
+            desktop_canvas_file_link = canvas_first_pane.locator(
+                ".prose-chat-local-file-link"
+            ).filter(has_text="rah-output-equity.svg").first
+            expect(desktop_canvas_file_link).to_be_visible(timeout=20_000)
+            desktop_canvas_file_link.click(timeout=10_000)
+            desktop_canvas_viewer_host = canvas_first_pane.locator(
+                '[data-testid="canvas-pane-file-viewer-host"]'
+            )
+            expect(desktop_canvas_viewer_host).to_have_attribute(
+                "data-canvas-pane-file-viewer-presentation",
+                "windowed",
+                timeout=10_000,
+            )
+            desktop_canvas_viewer_metrics = desktop_canvas_viewer_host.evaluate(
+                """
+                host => {
+                  const pane = host.closest('[data-canvas-pane-id]');
+                  const viewer = host.querySelector('[data-testid="inspector-file-viewer"]');
+                  if (!pane || !viewer) return null;
+                  const paneRect = pane.getBoundingClientRect();
+                  const viewerRect = viewer.getBoundingClientRect();
+                  return {
+                    paneWidth: paneRect.width,
+                    paneHeight: paneRect.height,
+                    left: viewerRect.left - paneRect.left,
+                    right: paneRect.right - viewerRect.right,
+                    top: viewerRect.top - paneRect.top,
+                    bottom: paneRect.bottom - viewerRect.bottom,
+                  };
+                }
+                """
+            )
+            if (
+                desktop_canvas_viewer_metrics is None
+                or desktop_canvas_viewer_metrics["paneWidth"] < 560
+                or desktop_canvas_viewer_metrics["paneHeight"] < 480
+                or desktop_canvas_viewer_metrics["left"] < 8
+                or desktop_canvas_viewer_metrics["right"] < 8
+                or desktop_canvas_viewer_metrics["top"] <= 32
+                or desktop_canvas_viewer_metrics["bottom"] < 8
+            ):
+                raise AssertionError(
+                    "Wide Canvas pane did not open a bounded pane-local window: "
+                    f"{desktop_canvas_viewer_metrics!r}"
+                )
+            desktop_canvas_viewer = canvas_first_pane.locator(
+                '[data-testid="inspector-file-viewer"]'
+            )
+            desktop_resize_top = desktop_canvas_viewer.locator(
+                '[data-pane-window-resize-direction="n"]'
+            )
+            desktop_resize_bottom = desktop_canvas_viewer.locator(
+                '[data-pane-window-resize-direction="s"]'
+            )
+            expect(desktop_resize_top).to_be_visible(timeout=10_000)
+            expect(desktop_resize_bottom).to_be_visible(timeout=10_000)
+            viewer_before_resize = desktop_canvas_viewer.bounding_box()
+            bottom_handle_box = desktop_resize_bottom.bounding_box()
+            if viewer_before_resize is None or bottom_handle_box is None:
+                raise AssertionError("Canvas pane-window resize handles have no bounds")
+            page.mouse.move(
+                bottom_handle_box["x"] + bottom_handle_box["width"] / 2,
+                bottom_handle_box["y"] + bottom_handle_box["height"] / 2,
+            )
+            page.mouse.down()
+            page.mouse.move(
+                bottom_handle_box["x"] + bottom_handle_box["width"] / 2,
+                bottom_handle_box["y"] - 180,
+                steps=8,
+            )
+            page.mouse.up()
+            viewer_after_resize = desktop_canvas_viewer.bounding_box()
+            if (
+                viewer_after_resize is None
+                or viewer_after_resize["height"] > viewer_before_resize["height"] - 140
+                or abs(viewer_after_resize["width"] - viewer_before_resize["width"]) > 1
+                or abs(viewer_after_resize["y"] - viewer_before_resize["y"]) > 1
+                or viewer_after_resize["height"] < 280
+            ):
+                raise AssertionError(
+                    "Canvas pane window did not resize vertically from its bottom edge: "
+                    f"before={viewer_before_resize!r}, after={viewer_after_resize!r}"
+                )
+            adjusted_viewer_height = viewer_after_resize["height"]
+
+            desktop_canvas_correlation_link = canvas_first_pane.locator(
+                ".prose-chat-local-file-link"
+            ).filter(has_text="rah-output-correlation.svg").first
+            desktop_canvas_correlation_link.evaluate(
+                "element => element.scrollIntoView({ block: 'end' })"
+            )
+            expect(desktop_canvas_correlation_link).to_be_visible(timeout=10_000)
+            equity_request_id = desktop_canvas_viewer_host.get_attribute(
+                "data-canvas-pane-file-viewer-request-id"
+            )
+            desktop_canvas_correlation_link.click(timeout=10_000)
+            expect(
+                desktop_canvas_viewer.locator(
+                    '[data-testid="inspector-file-viewer-path"]'
+                )
+            ).to_contain_text("rah-output-correlation.svg", timeout=10_000)
+            correlation_request_id = desktop_canvas_viewer_host.get_attribute(
+                "data-canvas-pane-file-viewer-request-id"
+            )
+            viewer_after_retarget = desktop_canvas_viewer.bounding_box()
+            if (
+                not equity_request_id
+                or correlation_request_id == equity_request_id
+                or viewer_after_retarget is None
+                or abs(viewer_after_retarget["height"] - adjusted_viewer_height) > 1
+            ):
+                raise AssertionError(
+                    "Windowed Canvas retarget did not refresh identity and preserve height: "
+                    f"equity={equity_request_id!r}, correlation={correlation_request_id!r}, "
+                    f"height={viewer_after_retarget!r}"
+                )
+
+            desktop_canvas_correlation_link.evaluate(
+                "element => element.scrollIntoView({ block: 'end' })"
+            )
+            desktop_canvas_correlation_link.click(timeout=10_000)
+            repeated_request_id = desktop_canvas_viewer_host.get_attribute(
+                "data-canvas-pane-file-viewer-request-id"
+            )
+            if repeated_request_id == correlation_request_id:
+                raise AssertionError(
+                    "Clicking the current Canvas file did not reactivate its viewer"
+                )
+
+            desktop_canvas_viewer.get_by_role(
+                "button", name="Collapse file viewer", exact=True
+            ).click(timeout=10_000)
+            expect(
+                canvas_first_pane.locator(
+                    '[data-testid="canvas-pane-file-viewer-collapsed"]'
+                )
+            ).to_be_visible(timeout=10_000)
+            desktop_canvas_file_link.evaluate(
+                "element => element.scrollIntoView({ block: 'end' })"
+            )
+            desktop_canvas_file_link.click(timeout=10_000)
+            expect(desktop_canvas_viewer).to_be_visible(timeout=10_000)
+            expect(
+                desktop_canvas_viewer.locator(
+                    '[data-testid="inspector-file-viewer-path"]'
+                )
+            ).to_contain_text("rah-output-equity.svg", timeout=10_000)
+            viewer_after_expand_retarget = desktop_canvas_viewer.bounding_box()
+            if (
+                viewer_after_expand_retarget is None
+                or abs(
+                    viewer_after_expand_retarget["height"] - adjusted_viewer_height
+                )
+                > 1
+            ):
+                raise AssertionError(
+                    "Collapsed Canvas retarget did not restore the adjusted window height: "
+                    f"{viewer_after_expand_retarget!r}"
+                )
+            canvas_first_pane.get_by_role(
+                "button", name="Maximize file viewer within pane", exact=True
+            ).click(timeout=10_000)
+            expect(desktop_canvas_viewer_host).to_have_attribute(
+                "data-canvas-pane-file-viewer-presentation",
+                "maximized",
+                timeout=10_000,
+            )
+            canvas_first_pane.get_by_role(
+                "button", name="Restore file viewer window", exact=True
+            ).click(timeout=10_000)
+            expect(desktop_canvas_viewer_host).to_have_attribute(
+                "data-canvas-pane-file-viewer-presentation",
+                "windowed",
+                timeout=10_000,
+            )
+            canvas_first_pane.locator(
+                '[data-testid="inspector-file-viewer"]'
+            ).get_by_role("button", name="Close", exact=True).click(timeout=10_000)
+            page.get_by_role("button", name="3", exact=True).click(timeout=10_000)
+            expect(page.locator("[data-canvas-pane-id]")).to_have_count(
+                3, timeout=10_000
+            )
+            canvas_first_pane.get_by_text(
+                "rah-output-equity.svg", exact=True
+            ).click(timeout=10_000)
+            expect(desktop_canvas_viewer_host).to_have_attribute(
+                "data-canvas-pane-file-viewer-presentation",
+                "maximized",
+                timeout=10_000,
+            )
             save_browser_screenshot(
                 page,
                 artifact_dir,
-                "02b-desktop-canvas-stopped-session-drop",
+                "02b-desktop-canvas-adaptive-file-viewer",
             )
+            canvas_first_pane.locator(
+                '[data-testid="inspector-file-viewer"]'
+            ).get_by_role("button", name="Close", exact=True).click(timeout=10_000)
             page.get_by_role(
                 "button", name="Close canvas view", exact=True
             ).click(timeout=10_000)
@@ -1946,6 +2140,68 @@ def main() -> int:
                     "PWA Council and Canvas do not share one header/notice geometry: "
                     f"council={council_header_metrics!r} canvas={canvas_header_metrics!r}"
                 )
+            pwa_canvas_first_pane = pwa_page.locator(
+                "[data-canvas-pane-id]"
+            ).first
+            pwa_canvas_first_pane.get_by_role(
+                "button", name="Chats", exact=True
+            ).click(timeout=10_000)
+            pwa_page.get_by_role(
+                "button", name=f"Open {parent_title}", exact=True
+            ).click(timeout=10_000)
+            pwa_canvas_file_link = pwa_canvas_first_pane.get_by_text(
+                "rah-output-equity.svg", exact=True
+            )
+            expect(pwa_canvas_file_link).to_be_visible(timeout=20_000)
+            pwa_canvas_file_link.click(timeout=10_000)
+            pwa_canvas_viewer_host = pwa_canvas_first_pane.locator(
+                '[data-testid="canvas-pane-file-viewer-host"]'
+            )
+            expect(pwa_canvas_viewer_host).to_have_attribute(
+                "data-canvas-pane-file-viewer-presentation",
+                "maximized",
+                timeout=10_000,
+            )
+            pwa_canvas_viewer_metrics = pwa_canvas_viewer_host.evaluate(
+                """
+                host => {
+                  const pane = host.closest('[data-canvas-pane-id]');
+                  const viewer = host.querySelector('[data-testid="inspector-file-viewer"]');
+                  if (!pane || !viewer) return null;
+                  const paneRect = pane.getBoundingClientRect();
+                  const viewerRect = viewer.getBoundingClientRect();
+                  return {
+                    paneWidth: paneRect.width,
+                    paneHeight: paneRect.height,
+                    left: viewerRect.left - paneRect.left,
+                    right: paneRect.right - viewerRect.right,
+                    top: viewerRect.top - paneRect.top,
+                    bottom: paneRect.bottom - viewerRect.bottom,
+                  };
+                }
+                """
+            )
+            if (
+                pwa_canvas_viewer_metrics is None
+                or pwa_canvas_viewer_metrics["paneWidth"] >= 560
+                or pwa_canvas_viewer_metrics["paneHeight"] >= 480
+                or abs(pwa_canvas_viewer_metrics["left"]) > 2
+                or abs(pwa_canvas_viewer_metrics["right"]) > 2
+                or abs(pwa_canvas_viewer_metrics["top"] - 32) > 2
+                or abs(pwa_canvas_viewer_metrics["bottom"]) > 2
+            ):
+                raise AssertionError(
+                    "PWA Canvas viewer did not fill only its compact pane: "
+                    f"{pwa_canvas_viewer_metrics!r}"
+                )
+            save_browser_screenshot(
+                pwa_page,
+                artifact_dir,
+                "03b-pwa-canvas-adaptive-file-viewer",
+            )
+            pwa_canvas_first_pane.locator(
+                '[data-testid="inspector-file-viewer"]'
+            ).get_by_role("button", name="Close", exact=True).click(timeout=10_000)
             pwa_page.locator('button[aria-label="Open sidebar"]:visible').click(
                 timeout=10_000
             )
@@ -2761,6 +3017,7 @@ def main() -> int:
                         "Desktop Session hover actions reuse the row surface without a separate background plate or shadow, and long stopped titles fade beneath both Pin/Unpin and Archive slots.",
                         "Desktop Session tooltips have one owner: cross-row hover replaces the active card, leaving clears it, and pending timers cannot reopen it after a page pointerdown.",
                         "A stopped provider-history Session is a native draggable source and its stable provider identity fills the target Canvas pane without removing the Sidebar row.",
+                        "Canvas local-file viewers use a vertically resizable bounded window in >=560x480 panes, preserve adjusted height while retargeting from windowed or collapsed state, reactivate the current file, fill only compact panes, and keep explicit maximize/restore controls.",
                         "Workspace New task selects that exact workspace in the composer.",
                         "Desktop and iOS PWA New task tuck a compact 40px workspace accessory 8px beneath the composer with the composer owning the overlap, use a 28px trigger, and keep long-name marquee bounded.",
                         "Desktop and touch New task provider modules stay borderless and item backgrounds stay transparent; Desktop selection uses a blue text-width marker, touch uses 48px targets with a blue 24x2 icon marker, and the single grouped pointer hover surface disappears after leave.",

@@ -2438,11 +2438,13 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
 
   switch (item.kind) {
     case "user_message":
-      if (!isOptionalString(item.clientMessageId)) {
-        addIssue(sink, "error", "timeline.client_message_id.invalid", "timeline clientMessageId must be a string", `${path}.clientMessageId`);
+      if (!isOptionalString(item.clientMessageId)) addIssue(sink, "error", "timeline.client_message_id.invalid", "timeline clientMessageId must be a string", `${path}.clientMessageId`);
+      if (!isOptionalString(item.clientTurnId)) addIssue(sink, "error", "timeline.client_turn_id.invalid", "timeline clientTurnId must be a string", `${path}.clientTurnId`);
+      if (item.inputPlacement !== undefined && item.inputPlacement !== "turn_start" && item.inputPlacement !== "turn_steer") {
+        addIssue(sink, "error", "timeline.input_placement.invalid", "timeline inputPlacement must be turn_start or turn_steer", `${path}.inputPlacement`);
       }
-      if (!isOptionalString(item.clientTurnId)) {
-        addIssue(sink, "error", "timeline.client_turn_id.invalid", "timeline clientTurnId must be a string", `${path}.clientTurnId`);
+      if (!isOptionalString(item.causalAfterItemId)) {
+        addIssue(sink, "error", "timeline.causal_after_item_id.invalid", "timeline causalAfterItemId must be a string", `${path}.causalAfterItemId`);
       }
       if (
         item.imageCount !== undefined &&

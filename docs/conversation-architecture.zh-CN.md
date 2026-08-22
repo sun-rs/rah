@@ -80,11 +80,14 @@ item role 只有：
 
 Provider 的物理持久化顺序不等于展示顺序。尤其 Resume 时，Provider 可能先写入 context
 compaction 或其他启动过程，再回写触发本轮的 user item。协议层
-`orderConversationTurnItems` 是唯一的 turn 内排序 owner：最早的外部 `user` 固定为本轮边界，
-随后保留 process 与后续 Guide 的相对顺序，所有 `final` 收口在末尾。daemon projector、resident/
+`orderConversationTurnItems` 是唯一的 turn 内排序 owner：canonical `user_message.inputPlacement`
+明确区分 `turn_start` 与 `turn_steer`；缺少该字段的旧历史才允许用最早外部 `user` 作为兼容推断。
+`turn_steer` 可携带 `causalAfterItemId`，即使 native echo 迟到，也必须恢复到该 canonical item
+之后，而不是按到达时刻沉到 Worked 底部；历史没有精确 anchor 时保留 provider-native 顺序，
+不得猜测。随后所有 `final` 收口在末尾。daemon projector、resident/
 history overlay、Web baseline/delta merge 与 renderer 都消费同一个规则；任何一层都不能按 arrival
-order 冻结错误顺序，也不能另写 timestamp/CSS 排序。后续 `user` 仍是 Worked 内的 Guide，不能被
-提升成新的初始问题。
+order 冻结错误顺序，也不能另写 timestamp/CSS 排序。只有明确接受为 `turn_steer`（或由旧历史
+可靠推导出的同 turn 后续 user）才是 Worked 内 Guide；重复 native echo 不得被数量启发式误判。
 
 provider-native id 必须保持 opaque。canonical id 可跨 live、history、resume 和 detail hydration
 稳定定位同一 turn/item；内容 hash 不得冒充主身份。provider 只提供 turn/item key 而没有

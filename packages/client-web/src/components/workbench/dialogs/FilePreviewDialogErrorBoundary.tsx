@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 type FilePreviewDialogErrorBoundaryProps = {
   resetKey: string;
+  presentation?: "floating" | "pane" | "pane-window";
   onClose: () => void;
   children: ReactNode;
 };
@@ -38,12 +39,20 @@ export class FilePreviewDialogErrorBoundary extends Component<
     }
     return (
       <>
-        <div className="fixed inset-0 z-40 bg-black/45" />
+        {this.props.presentation === "floating" || !this.props.presentation ? (
+          <div className="fixed inset-0 z-40 bg-black/45" />
+        ) : null}
         <div
           role="dialog"
           aria-modal="true"
           aria-label="File preview failed"
-          className="fixed left-1/2 top-1/2 z-50 flex w-[min(30rem,88vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-4 text-sm text-[var(--app-fg)] shadow-2xl"
+          className={
+            this.props.presentation === "pane"
+              ? "pointer-events-auto absolute inset-x-3 top-11 z-[31] flex flex-col gap-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-4 text-sm text-[var(--app-fg)] shadow-xl"
+              : this.props.presentation === "pane-window"
+                ? "pointer-events-auto absolute left-1/2 top-[calc(50%+1rem)] z-[31] flex w-[min(30rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-4 text-sm text-[var(--app-fg)] shadow-xl"
+              : "fixed left-1/2 top-1/2 z-50 flex w-[min(30rem,88vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-4 text-sm text-[var(--app-fg)] shadow-2xl"
+          }
         >
           <div>
             <div className="font-semibold">File preview failed</div>

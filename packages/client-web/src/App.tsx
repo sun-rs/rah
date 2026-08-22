@@ -50,6 +50,7 @@ import {
   useForegroundWakeRecovery,
 } from "./hooks/useForegroundSessionRecovery";
 import { useWorkbenchPageController } from "./hooks/useWorkbenchPageController";
+import { useWorkbenchInspectionLifecycle } from "./hooks/useWorkbenchInspectionLifecycle";
 import { useSessionModelDrafts } from "./hooks/useSessionModelDrafts";
 import { useRuntimeCompatibilityNotice } from "./hooks/useRuntimeCompatibilityNotice";
 import {
@@ -132,6 +133,7 @@ import {
   WorkbenchTerminalDialog,
 } from "./app-lazy-components";
 import { FilePreviewDialogErrorBoundary } from "./components/workbench/dialogs/FilePreviewDialogErrorBoundary";
+import { CanvasPaneFileViewer } from "./components/workbench/canvas/CanvasPaneFileViewer";
 import type { CanvasSessionDragTarget } from "./components/workbench/canvas/canvas-session-drag";
 import {
   PROVIDER_CHOICES,
@@ -361,12 +363,8 @@ export function App() {
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
       createEmptyCanvasNewSessionDrafts(),
     );
-  const [linkedFilePreviewPath, setLinkedFilePreviewPath] = useState<string | null>(null);
   const [mainInspectorOpenRequest, setMainInspectorOpenRequest] =
     useState<InspectorOpenFileRequest | null>(null);
-  const [canvasInspectorOpenRequests, setCanvasInspectorOpenRequests] = useState<
-    Partial<Record<CanvasPaneId, InspectorOpenFileRequest>>
-  >({});
   const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
   const [terminalDialogMounted, setTerminalDialogMounted] = useState(false);
   const {
@@ -436,6 +434,7 @@ export function App() {
     activeCanvasPaneId,
     canvasPaneTargets,
     canvasPaneRightPanelsOpen,
+    canvasPaneFilePreviews,
     canvasStoredActivationInFlightRef,
     canvasResumingStoredKeysRef,
     canvasResumingStoredKeys,
@@ -450,6 +449,11 @@ export function App() {
     setCanvasMaximizedPaneId,
     setCanvasPaneRightPanelOpen,
     toggleCanvasPaneRightPanel,
+    openCanvasPaneFilePreview,
+    closeCanvasPaneFilePreview,
+    setCanvasPaneFilePreviewCollapsed,
+    setCanvasPaneFilePreviewPresentation,
+    clearAllCanvasPaneFilePreviews,
     markCanvasResumePending,
     clearCanvasResumePending,
     setCanvasLayout,
@@ -710,6 +714,25 @@ export function App() {
   const activeCanvasProjection = resolveCanvasProjection(activeCanvasPaneId);
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
   const activeCanvasCouncil = resolveCanvasCouncil(activeCanvasPaneId);
+  const {
+    linkedFilePreview,
+    openLinkedFilePreview,
+    closeLinkedFilePreview,
+  } = useWorkbenchInspectionLifecycle({
+    mode: workbenchMode,
+    selectedSessionId,
+    selectedCouncilId,
+    selectedWorkspaceDir: selectedWorkspaceOnlyDir,
+    activeCanvasPaneId,
+    activeCanvasTarget: canvasPaneTargets[activeCanvasPaneId],
+    activeCanvasSessionId: activeCanvasSummary?.session.id ?? null,
+    settingsOpen,
+    terminalOpen,
+    fileReferenceOpen,
+    workspacePickerOpen,
+    newCouncilDialogOpen: homeNewCouncilDialogOpen,
+    clearCanvasPaneFilePreviews: clearAllCanvasPaneFilePreviews,
+  });
   const visibleCanvasPaneKey = visibleCanvasPaneIds.join(":");
   const visibleNotificationTargets = useMemo<NotificationTarget[]>(() => {
     const targets: NotificationTarget[] = [];
@@ -764,36 +787,16 @@ export function App() {
     setVisibleSessionIds,
   });
 
-  const openLinkedFilePreview = useCallback((path: string) => {
-    setLinkedFilePreviewPath(path);
-  }, []);
-
   useEffect(() => {
     setMainInspectorOpenRequest(null);
   }, [selectedSessionId]);
 
   const setCanvasPaneSession = (paneId: CanvasPaneId, sessionId: string) => {
-    setCanvasInspectorOpenRequests((current) => {
-      if (!current[paneId]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[paneId];
-      return next;
-    });
     setCanvasPaneTarget(paneId, createCanvasSessionTarget(sessionId, projections));
     setSelectedSessionId(sessionId);
   };
 
   const setCanvasPaneStoredRef = (paneId: CanvasPaneId, ref: StoredSessionRef) => {
-    setCanvasInspectorOpenRequests((current) => {
-      if (!current[paneId]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[paneId];
-      return next;
-    });
     setCanvasPaneTarget(paneId, { kind: "stored", ref });
   };
 
@@ -816,14 +819,6 @@ export function App() {
   };
 
   const setCanvasPaneCouncil = (paneId: CanvasPaneId, councilId: string) => {
-    setCanvasInspectorOpenRequests((current) => {
-      if (!current[paneId]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[paneId];
-      return next;
-    });
     setCanvasPaneTarget(paneId, { kind: "council", councilId });
     setSelectedCouncilId(councilId);
   };
@@ -833,14 +828,6 @@ export function App() {
     const council = resolveCanvasCouncil(paneId);
     const sessionId = projection?.summary.session.id;
     const shouldCloseReadOnlyReplay = projection ? isReadOnlyReplay(projection.summary) : false;
-    setCanvasInspectorOpenRequests((current) => {
-      if (!current[paneId]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[paneId];
-      return next;
-    });
     setCanvasPaneTarget(paneId, { kind: "empty" });
     setCanvasPaneRightPanelOpen(paneId, false);
     if (sessionId && selectedSessionId === sessionId) {
@@ -862,14 +849,6 @@ export function App() {
     if (!removeCanvasPane(paneId)) {
       return;
     }
-    setCanvasInspectorOpenRequests((current) => {
-      if (!current[paneId]) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[paneId];
-      return next;
-    });
     if (sessionId && selectedSessionId === sessionId) {
       setSelectedSessionId(null);
     }
@@ -899,6 +878,7 @@ export function App() {
       }
     }
     setCanvasPaneTargets(createEmptyCanvasTargets());
+    clearAllCanvasPaneFilePreviews();
     setCanvasMaximizedPaneId(null);
     if (selectedSessionId && clearedSessionIds.has(selectedSessionId)) {
       setSelectedSessionId(null);
@@ -1879,7 +1859,13 @@ export function App() {
         onRespondToPermission={(sessionId, requestId, response) =>
           respondToPermission(sessionId, requestId, response)
         }
-        onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
+        onOpenLocalFile={(sessionId, path) =>
+          openLinkedFilePreview({
+            path,
+            sessionId,
+            workspaceRoot: summary.session.rootDir || summary.session.cwd || "",
+          })
+        }
         onLoadConversationItemDetail={(sessionId, kind, itemId) =>
           loadConversationItemDetail(sessionId, kind, itemId)
         }
@@ -2308,6 +2294,21 @@ export function App() {
               onExitCanvas={exitCanvasMode}
               onDropSession={setCanvasPaneSessionTarget}
               onDropCouncil={setCanvasPaneCouncil}
+              renderPaneOverlay={(paneId) => {
+                const preview = canvasPaneFilePreviews[paneId];
+                return preview ? (
+                  <CanvasPaneFileViewer
+                    preview={preview}
+                    onCollapsedChange={(collapsed) =>
+                      setCanvasPaneFilePreviewCollapsed(paneId, collapsed)
+                    }
+                    onPresentationChange={(presentation) =>
+                      setCanvasPaneFilePreviewPresentation(paneId, presentation)
+                    }
+                    onClose={() => closeCanvasPaneFilePreview(paneId)}
+                  />
+                ) : null;
+              }}
               renderPane={(paneId) => {
                 const typedPaneId = paneId;
                 const target = canvasPaneTargets[typedPaneId];
@@ -2754,9 +2755,6 @@ export function App() {
                               availableWorkspaceDir ||
                               ""
                             }
-                            openFileRequest={
-                              canvasInspectorOpenRequests[typedPaneId] ?? null
-                            }
                             onOpenTerminal={() => {
                               setTerminalDialogMounted(true);
                               setTerminalOpen(true);
@@ -2835,7 +2833,20 @@ export function App() {
                     onRespondToPermission={(sessionId, requestId, response) =>
                       respondToPermission(sessionId, requestId, response)
                     }
-                    onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
+                    onOpenLocalFile={(sessionId, path) => {
+                      const originSession = projections.get(sessionId)?.summary.session;
+                      openCanvasPaneFilePreview(
+                        typedPaneId,
+                        sessionId,
+                        originSession?.rootDir ||
+                          originSession?.cwd ||
+                          summary.session.rootDir ||
+                          summary.session.cwd ||
+                          availableWorkspaceDir ||
+                          "",
+                        path,
+                      );
+                    }}
                     onLoadConversationItemDetail={(sessionId, kind, itemId) =>
                       loadConversationItemDetail(sessionId, kind, itemId)
                     }
@@ -2978,7 +2989,13 @@ export function App() {
               }
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
-              onOpenLocalFile={openLinkedFilePreview}
+              onOpenLocalFile={(path) =>
+                openLinkedFilePreview({
+                  path,
+                  sessionId: selectedSummary.session.id,
+                  workspaceRoot: selectedInspectorWorkspaceDir,
+                })
+              }
               onLoadConversationItemDetail={(kind, itemId) =>
                 loadConversationItemDetail(selectedSummary.session.id, kind, itemId)
               }
@@ -3434,20 +3451,23 @@ export function App() {
         </div>
       </WorkbenchErrorBoundary>
 
-      {linkedFilePreviewPath ? (
+      {linkedFilePreview ? (
         <FilePreviewDialogErrorBoundary
-          resetKey={linkedFilePreviewPath}
-          onClose={() => setLinkedFilePreviewPath(null)}
+          resetKey={`${linkedFilePreview.sessionId ?? "workspace"}:${linkedFilePreview.path}`}
+          onClose={closeLinkedFilePreview}
         >
           <InspectorFileDetailDialog
-            sessionId={selectedSummary?.session.id ?? null}
-            workspaceRoot={selectedInspectorWorkspaceDir}
+            sessionId={linkedFilePreview.sessionId}
+            workspaceRoot={linkedFilePreview.workspaceRoot}
             selection={{
-              path: linkedFilePreviewPath,
+              path: linkedFilePreview.path,
               source: "local",
+              ...(linkedFilePreview.sessionId
+                ? { sessionId: linkedFilePreview.sessionId }
+                : {}),
             }}
             onRefreshChanges={() => undefined}
-            onClose={() => setLinkedFilePreviewPath(null)}
+            onClose={closeLinkedFilePreview}
           />
         </FilePreviewDialogErrorBoundary>
       ) : null}

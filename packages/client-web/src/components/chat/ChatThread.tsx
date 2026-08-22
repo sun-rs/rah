@@ -32,8 +32,7 @@ import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
 import { TaskSummaryDock } from "./TaskSummaryDock";
 import { ConversationFileChangesCard } from "./ConversationFileChangesCard";
 import { ConversationVisualOutputGallery } from "./ConversationVisualOutputGallery";
-import { ReviewDialog } from "../../inspector/ReviewDialog";
-import type { ReviewScope } from "../../inspector/ReviewSurface";
+import { useReviewOverlay } from "../../inspector/ReviewOverlay";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
 import { ObservationCard } from "./ObservationCard";
@@ -588,10 +587,7 @@ export const ChatThread = memo(function ChatThread(props: {
   );
   const loadingProcessTurnIdsRef = useRef(loadingProcessTurnIds);
   loadingProcessTurnIdsRef.current = loadingProcessTurnIds;
-  const [reviewRequest, setReviewRequest] = useState<{
-    scope: ReviewScope;
-    initialPath?: string;
-  } | null>(null);
+  const { openReview, updateOpenTurnReview } = useReviewOverlay();
   const isPwaDisplayMode = usePwaDisplayMode();
   const resolveChatDisplayRowGapPx = useCallback(
     (row: ChatDisplayRow, index: number, rows: readonly ChatDisplayRow[]) =>
@@ -641,7 +637,7 @@ export const ChatThread = memo(function ChatThread(props: {
       fileChanges: ConversationTurnFileChangesProjection,
       initialPath?: string,
     ) => {
-      setReviewRequest({
+      openReview({
         scope: {
           kind: "turn",
           sessionId: props.sessionId,
@@ -655,7 +651,7 @@ export const ChatThread = memo(function ChatThread(props: {
         ...(initialPath ? { initialPath } : {}),
       });
     },
-    [props.sessionId],
+    [openReview, props.sessionId],
   );
   const currentPlanTurnId =
     currentPlan?.turn.providerTurnId ?? currentPlan?.turn.id ?? null;
@@ -664,27 +660,12 @@ export const ChatThread = memo(function ChatThread(props: {
     if (!currentPlanTurnId || !currentPlanFileChanges) {
       return;
     }
-    setReviewRequest((current) => {
-      if (
-        current?.scope.kind !== "turn" ||
-        current.scope.turnId !== currentPlanTurnId ||
-        (current.scope.files === currentPlanFileChanges.files &&
-          current.scope.totalAdditions === currentPlanFileChanges.totalAdditions &&
-          current.scope.totalDeletions === currentPlanFileChanges.totalDeletions)
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        scope: {
-          ...current.scope,
-          files: currentPlanFileChanges.files,
-          totalAdditions: currentPlanFileChanges.totalAdditions,
-          totalDeletions: currentPlanFileChanges.totalDeletions,
-        },
-      };
-    });
-  }, [currentPlanFileChanges, currentPlanTurnId]);
+    updateOpenTurnReview(
+      props.sessionId,
+      currentPlanTurnId,
+      currentPlanFileChanges,
+    );
+  }, [currentPlanFileChanges, currentPlanTurnId, props.sessionId, updateOpenTurnReview]);
   const entries = useMemo(
     () => withoutInlinePlans(visibleEntriesWithPlans),
     [visibleEntriesWithPlans],
@@ -2143,15 +2124,6 @@ export const ChatThread = memo(function ChatThread(props: {
               }
             : {})}
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
-        />
-      ) : null}
-      {reviewRequest ? (
-        <ReviewDialog
-          scope={reviewRequest.scope}
-          {...(reviewRequest.initialPath
-            ? { initialPath: reviewRequest.initialPath }
-            : {})}
-          onClose={() => setReviewRequest(null)}
         />
       ) : null}
     </div>

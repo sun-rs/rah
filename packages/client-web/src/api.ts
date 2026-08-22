@@ -104,6 +104,7 @@ import type {
   PairingCodeStatusResponse,
   RevokeTrustedDeviceResponse,
   RuntimeIdentityResponse,
+  RuntimeCompatibilityNoticeStateResponse,
 } from "@rah/runtime-protocol";
 
 const DEFAULT_DAEMON_PORT = 43111;
@@ -279,6 +280,19 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
 
 export async function readRuntimeIdentity(): Promise<RuntimeIdentityResponse> {
   return requestJson<RuntimeIdentityResponse>("/api/runtime");
+}
+
+export async function readRuntimeCompatibilityNoticeState(): Promise<RuntimeCompatibilityNoticeStateResponse> {
+  return requestJson<RuntimeCompatibilityNoticeStateResponse>(
+    "/api/workbench/notices/runtime-compatibility",
+  );
+}
+
+export async function muteRuntimeCompatibilityNoticeForToday(): Promise<RuntimeCompatibilityNoticeStateResponse> {
+  return requestJson<RuntimeCompatibilityNoticeStateResponse>(
+    "/api/workbench/notices/runtime-compatibility/mute",
+    { method: "PUT" },
+  );
 }
 
 export async function readSessionConversationVisualArtifactDocument(

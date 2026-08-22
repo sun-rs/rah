@@ -23,6 +23,17 @@ export function runtimeCompatibilityLocalDate(now = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+export function isRuntimeCompatibilityMutedUntil(
+  mutedUntil: string | undefined,
+  now = new Date(),
+): boolean {
+  if (!mutedUntil) {
+    return false;
+  }
+  const timestamp = Date.parse(mutedUntil);
+  return Number.isFinite(timestamp) && timestamp > now.getTime();
+}
+
 export function isRuntimeCompatibilityMutedToday(
   persistence: RuntimeCompatibilityMutePersistence | undefined,
   now = new Date(),

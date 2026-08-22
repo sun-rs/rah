@@ -120,6 +120,20 @@ replay gap 只重建 daemon-owned topology/auxiliary feed。仍存在于权威 c
 - Sidebar 到 Canvas 的拖动使用稳定 session target：running 使用 runtime id，stopped/history 使用
   `{provider, providerSessionId}`。所有可见 session 都是可拖动源，Canvas 只消费该 target 并复用既有
   `setCanvasPaneSession` / `setCanvasPaneStoredRef` owner，不能要求 Session 先 running。
+- Canvas 回复文件 viewer 是非持久化 pane 状态，由 `useCanvasController` 以 `CanvasPaneId` 保存；不同 pane
+  可以同时打开，隐藏/最大化不清除，retarget/clear/remove 只清理所属 pane。`App` 不得再维护一个全局
+  `linkedFilePreviewPath` 来承接 Canvas 点击。viewer 的 `auto/windowed/maximized` 偏好也属于同一 pane 状态；
+  `auto` 由 viewer 自己观测 pane 内容框，而不是按 viewport 或设备类型建立另一条响应式状态路径。正文文件
+  点击是同一 pane viewer 的 activation/retarget：无论原 viewer 已折叠还是正在窗口化，都必须更新 request
+  identity、解除折叠并激活所属 pane；窗口化时用户调整的垂直几何继续留在 viewer 实例内，换文件不重置。
+- Changed Files Review 由根级 `ReviewOverlayProvider` 唯一持有。`ChatThread`、Task summary 与 Inspector
+  只能发送 scope/request，不得拥有 `ReviewDialog` state 或 Portal；Review 与单文件 viewer 共享
+  `FileInspectionDiffSurface`，但不共享窗口生命周期。
+- `useWorkbenchInspectionLifecycle` 是跨页面临时 inspection 的唯一失效 owner。普通 Session 单文件 viewer
+  必须把点击来源的 `sessionId + workspaceRoot + path` 一起保存，不能在渲染时重新读取当前 selection；Session、
+  Council、workspace、Canvas active pane 或顶层设置/终端/选择器上下文改变时，普通 viewer 与不属于目标 owner
+  的根级 Review 必须在绘制前关闭。离开 Canvas 或顶层功能接管页面时清空全部 pane viewer；仅在 Canvas 内切换
+  active pane 不清空其他 pane 的本地 viewer，从而继续允许 A/B 同时存在。
 - drag payload 同时写入 RAH 专用 MIME 与带命名空间的纯文本回退，drop 语义为 copy；普通文本和非法
   provider payload 不得被当成 session。
 

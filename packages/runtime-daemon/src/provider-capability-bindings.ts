@@ -55,6 +55,9 @@ export function bindStoredHistoryCapability(
   adapter: ProviderAdapter & ProviderStoredHistoryAdapter,
 ): ProviderStoredHistoryAdapter {
   return {
+    ...(adapter.storedSessionArchiveBackend
+      ? { storedSessionArchiveBackend: adapter.storedSessionArchiveBackend }
+      : {}),
     ...(adapter.resumeStoredSession
       ? { resumeStoredSession: adapter.resumeStoredSession.bind(adapter) }
       : {}),

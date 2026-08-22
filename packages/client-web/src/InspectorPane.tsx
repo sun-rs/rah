@@ -15,8 +15,7 @@ import { InspectorFilesPane } from "./inspector/InspectorFilesPane";
 import { InspectorHeader } from "./inspector/InspectorHeader";
 import { InspectorResourcesPane } from "./inspector/InspectorResourcesPane";
 import { InspectorTurnChangesPane } from "./inspector/InspectorTurnChangesPane";
-import { ReviewDialog } from "./inspector/ReviewDialog";
-import type { ReviewScope } from "./inspector/ReviewSurface";
+import { useReviewOverlay } from "./inspector/ReviewOverlay";
 import {
   invalidateCachedConversationResourceIndex,
   loadCachedConversationResourceIndex,
@@ -86,7 +85,7 @@ export function InspectorPane(props: {
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
-  const [reviewScope, setReviewScope] = useState<ReviewScope | null>(null);
+  const { openReview } = useReviewOverlay();
   const gitStatusRequestRef = useRef(0);
   const turnChangesRequestRef = useRef(0);
   const initialResourceCache = props.sessionId
@@ -572,15 +571,17 @@ export function InspectorPane(props: {
                   if (!turnChanges) {
                     return;
                   }
-                  setReviewScope({
-                    kind: "turn",
-                    sessionId: turnChanges.sessionId,
-                    turnId: turnChanges.turnId,
-                    workspaceRoot: props.workspaceRoot,
-                    files: turnChanges.fileChanges.files,
-                    totalAdditions: turnChanges.fileChanges.totalAdditions,
-                    totalDeletions: turnChanges.fileChanges.totalDeletions,
-                    truncated: turnChanges.truncated,
+                  openReview({
+                    scope: {
+                      kind: "turn",
+                      sessionId: turnChanges.sessionId,
+                      turnId: turnChanges.turnId,
+                      workspaceRoot: props.workspaceRoot,
+                      files: turnChanges.fileChanges.files,
+                      totalAdditions: turnChanges.fileChanges.totalAdditions,
+                      totalDeletions: turnChanges.fileChanges.totalDeletions,
+                      truncated: turnChanges.truncated,
+                    },
                   });
                 }}
                 onOpenFile={setSelectedFile}
@@ -669,12 +670,6 @@ export function InspectorPane(props: {
           selection={selectedFile}
           onRefreshChanges={() => void loadGitStatus(selectedBaseBranch)}
           onClose={() => setSelectedFile(null)}
-        />
-      ) : null}
-      {reviewScope ? (
-        <ReviewDialog
-          scope={reviewScope}
-          onClose={() => setReviewScope(null)}
         />
       ) : null}
     </div>

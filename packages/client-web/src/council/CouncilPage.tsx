@@ -1353,8 +1353,8 @@ export function CouncilPage(props: {
                         onClick={() => requestReinjectAgent(agent.id)}
                         disabled={loading || !terminalEnabled || agent.status === "stopped"}
                         className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                        title="Send bootstrap prompt"
-                        aria-label={`Send bootstrap prompt to ${agent.label}`}
+                        title="Wake or recover agent"
+                        aria-label={`Wake or recover ${agent.label}`}
                       >
                         <Send size={12} />
                       </button>
@@ -1663,21 +1663,24 @@ export function CouncilPage(props: {
                   const agent = actorAgent(selectedCouncil, item.actorId);
                   const label = actorLabel(selectedCouncil, item.actorId);
                   const isReady = item.status === "ready";
-                  const isJoined = item.status === "joined";
+                  const isWarm = item.status === "subscribed" || item.status === "sleeping";
+                  const isActive = item.status === "joined" || item.status === "waking" || item.status === "working" || item.status === "queued";
                   return (
                     <div
                       key={item.key}
                       className={COUNCIL_SYSTEM_NOTICE_CLASS}
                     >
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        isReady ? "bg-emerald-500" : isJoined ? "bg-amber-500" : "bg-zinc-400"
+                        isReady ? "bg-emerald-500" : isWarm ? "bg-sky-500" : isActive ? "bg-amber-500" : "bg-zinc-400"
                       }`} />
                       {agent ? <ProviderLogo provider={agent.provider} className="h-3 w-3 shrink-0" variant="bare" /> : null}
                       <span className="min-w-0 truncate">{label}</span>
                       <span className={`shrink-0 ${
                         isReady
                           ? "text-emerald-600 dark:text-emerald-300"
-                          : isJoined
+                          : isWarm
+                            ? "text-sky-600 dark:text-sky-300"
+                          : isActive
                             ? "text-amber-600 dark:text-amber-300"
                             : "text-[var(--app-hint)]"
                       }`}>{item.status}</span>
@@ -1969,13 +1972,13 @@ export function CouncilPage(props: {
 
       <ConfirmDialog
         open={pendingPromptAgent !== null}
-        title="Send bootstrap prompt?"
+        title="Wake agent?"
         description={
           pendingPromptAgent
-            ? `Send the Council bootstrap prompt to "${pendingPromptAgent.label}"? Use this when the agent is not listening or needs recovery.`
-            : "Send the Council bootstrap prompt to this agent?"
+            ? `Wake "${pendingPromptAgent.label}" in its existing managed session? Normal Council messages wake subscribed agents automatically.`
+            : "Wake this Council agent?"
         }
-        confirmLabel={loading ? "Sending…" : "Send prompt"}
+        confirmLabel={loading ? "Waking…" : "Wake"}
         pending={loading}
         modal={false}
         onOpenChange={(open) => {
@@ -2401,8 +2404,8 @@ export function CouncilPage(props: {
                 onClick={() => requestReinjectAgent(activeTerminalAgent.id)}
                 disabled={loading || !isCouncilAgentTerminalAvailable(activeTerminalAgent)}
                 className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                title={`Send bootstrap prompt to ${activeTerminalAgent.label}`}
-                aria-label={`Send bootstrap prompt to ${activeTerminalAgent.label}`}
+                title={`Wake or recover ${activeTerminalAgent.label}`}
+                aria-label={`Wake or recover ${activeTerminalAgent.label}`}
               >
                 <Send size={14} />
               </button>

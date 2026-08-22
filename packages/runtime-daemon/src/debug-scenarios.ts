@@ -519,7 +519,11 @@ const structuredUiScenario: DebugScenario = {
       delayMs: 70,
       kind: "timeline",
       turnId: structuredTurnId,
-      item: { kind: "user_message", text: "Show me the structured activity feed." },
+      item: {
+        kind: "user_message",
+        text: "Show me the structured activity feed.",
+        inputPlacement: "turn_start",
+      },
     },
     {
       delayMs: 100,
@@ -740,6 +744,26 @@ const structuredUiScenario: DebugScenario = {
           ],
         },
         result: { content: [{ type: "text", text: "README excerpt from MCP result." }] },
+      },
+    },
+    {
+      delayMs: 755,
+      kind: "timeline",
+      turnId: structuredTurnId,
+      item: {
+        kind: "user_message",
+        text: "Keep the protocol evidence, then verify the responsive rendering.",
+        clientMessageId: "debug-guide-message",
+        inputPlacement: "turn_steer",
+      },
+    },
+    {
+      delayMs: 760,
+      kind: "timeline",
+      turnId: structuredTurnId,
+      item: {
+        kind: "reasoning",
+        text: "The Guide is now part of this turn before the responsive verification.",
       },
     },
     {

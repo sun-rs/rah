@@ -375,6 +375,10 @@ describe("sidebar layout contract", () => {
     const cardSource = readSource("./components/chat/ConversationFileChangesCard.tsx");
     const threadSource = readSource("./components/chat/ChatThread.tsx");
     const reviewSource = readSource("./inspector/ReviewSurface.tsx");
+    const fileDialogSource = readSource("./inspector/InspectorFileDetailDialog.tsx");
+    const sharedSurfaceSource = readSource("./inspector/FileInspectionDiffSurface.tsx");
+    const overlaySource = readSource("./inspector/ReviewOverlay.tsx");
+    const mainSource = readSource("./main.tsx");
 
     assert.match(cardSource, /onOpenFile\?: \(path: string\) => void/);
     assert.match(cardSource, /onClick=\{\(\) => props\.onOpenFile\?\.\(file\.path\)\}/);
@@ -383,7 +387,7 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(threadSource, /onOpenTurnFileChange/);
     assert.match(
       threadSource,
-      /const openTurnReview = useCallback\([\s\S]*?setReviewRequest\(\{[\s\S]*?kind:\s*"turn",/,
+      /const openTurnReview = useCallback\([\s\S]*?openReview\(\{[\s\S]*?kind:\s*"turn",/,
     );
     assert.match(threadSource, /onReview=\{\(\) => openTurnReview\(row\.turnId, row\.fileChanges\)\}/);
     assert.match(
@@ -394,9 +398,15 @@ describe("sidebar layout contract", () => {
       threadSource,
       /onOpenFile=\{\(path\) =>\s*openTurnReview\(row\.turnId, row\.fileChanges, path\)/,
     );
-    assert.match(threadSource, /<ReviewDialog[\s\S]*?scope=\{reviewRequest\.scope\}/);
+    assert.doesNotMatch(threadSource, /<ReviewDialog/);
+    assert.match(overlaySource, /const \[request, setRequest\] = useState<ReviewOverlayRequest \| null>/);
+    assert.match(overlaySource, /<ReviewDialog[\s\S]*?scope=\{request\.scope\}/);
+    assert.match(mainSource, /<ReviewOverlayProvider>[\s\S]*?<App \/>/);
     assert.match(reviewSource, /aria-controls="review-mobile-file-list"/);
     assert.match(reviewSource, /mobileFilesOpen \? "max-md:flex" : "max-md:hidden"/);
+    assert.match(reviewSource, /<FileInspectionDiffSurface/);
+    assert.match(fileDialogSource, /<FileInspectionDiffSurface/);
+    assert.match(sharedSurfaceSource, /<DiffDisplay/);
   });
 
   test("keeps the Inspector file viewer nonmodal, persistent, resizable, and horizontally scrollable", () => {
@@ -408,6 +418,15 @@ describe("sidebar layout contract", () => {
     assert.match(dialogSource, /onInteractOutside=\{\(event\) => event\.preventDefault\(\)\}/);
     assert.match(dialogSource, /data-inspector-file-viewer="true"/);
     assert.match(dialogSource, /RESIZE_HANDLES\.map/);
+    assert.match(dialogSource, /floating \? "floating" : paneWindow \? "pane-window" : "pane"/);
+    assert.match(dialogSource, /absolute inset-x-0 bottom-0 top-8/);
+    assert.match(dialogSource, /Maximize file viewer within pane/);
+    assert.match(dialogSource, /Restore file viewer window/);
+    assert.match(dialogSource, /Resize pane file viewer from top/);
+    assert.match(dialogSource, /Resize pane file viewer from bottom/);
+    assert.match(dialogSource, /right: "1rem"/);
+    assert.match(dialogSource, /width: PANE_WINDOW_DEFAULT_WIDTH/);
+    assert.match(dialogSource, /resizePaneWindowVertically/);
     assert.match(dialogSource, /beginInteraction\(event, "resize", handle\.direction\)/);
     assert.match(
       dialogSource,
@@ -424,6 +443,44 @@ describe("sidebar layout contract", () => {
     assert.match(previewSource, /data-testid="inspector-diff-scroll"/);
     assert.match(previewSource, /grid-cols-\[4rem_2rem_max-content\]/);
     assert.match(previewSource, /grid-cols-\[4rem_max-content\]/);
+  });
+
+  test("owns linked-file viewers by Canvas pane while keeping the main viewer global", () => {
+    const appSource = readSource("./App.tsx");
+    const controllerSource = readSource("./hooks/useCanvasController.ts");
+    const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
+    const paneViewerSource = readSource(
+      "./components/workbench/canvas/CanvasPaneFileViewer.tsx",
+    );
+
+    assert.match(
+      controllerSource,
+      /Partial<Record<CanvasPaneId, CanvasPaneFilePreview>>/,
+    );
+    assert.match(
+      controllerSource,
+      /openCanvasPaneFilePreview[\s\S]*?activateCanvasPaneFilePreview[\s\S]*?setActiveCanvasPaneId\(paneId\)/,
+    );
+    assert.match(
+      controllerSource,
+      /activateCanvasPaneFilePreview[\s\S]*?collapsed: false[\s\S]*?current\?\.presentation \?\? "auto"/,
+    );
+    assert.match(appSource, /renderPaneOverlay=\{\(paneId\) => \{/);
+    assert.match(
+      appSource,
+      /onOpenLocalFile=\{\(sessionId, path\) => \{[\s\S]*?openCanvasPaneFilePreview\([\s\S]*?typedPaneId/,
+    );
+    assert.match(canvasSource, /props\.renderPaneOverlay\?\.\(pane\.id\)/);
+    assert.match(paneViewerSource, /resolveCanvasPaneFileViewerPresentation/);
+    assert.match(paneViewerSource, /presentation === "windowed" \? "pane-window" : "pane"/);
+    assert.match(paneViewerSource, /ResizeObserver/);
+    assert.match(paneViewerSource, /canvas-pane-file-viewer-collapsed/);
+    assert.match(appSource, /linkedFilePreview \? \(/);
+    assert.match(
+      appSource,
+      /sessionId=\{linkedFilePreview\.sessionId\}[\s\S]*?workspaceRoot=\{linkedFilePreview\.workspaceRoot\}/,
+    );
+    assert.doesNotMatch(appSource, /canvasInspectorOpenRequests/);
   });
 
   test("renders workspace and turn changes through a filtered directory tree", () => {

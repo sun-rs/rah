@@ -6,7 +6,10 @@ import type {
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
-import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
+import {
+  conversationStateFromRuntimeState,
+  orderConversationTurnItems,
+} from "@rah/runtime-protocol";
 import * as api from "./api";
 import { readErrorMessage } from "./session-store-bootstrap";
 import {
@@ -613,14 +616,23 @@ export async function steerQueuedInputCommand(args: {
   sessionId: string;
   clientMessageId: string;
 }) {
-  const queuedInput = args.get().projections
-    .get(args.sessionId)
+  const initialProjection = args.get().projections.get(args.sessionId);
+  const queuedInput = initialProjection
     ?.summary.session.inputQueue?.find(
       (item) => item.clientMessageId === args.clientMessageId,
     );
   if (!queuedInput) {
     return;
   }
+  const activeTurn = [...(initialProjection?.conversation?.turns ?? [])]
+    .reverse()
+    .find(
+      (turn) =>
+        turn.status === "in_progress" && turn.finalAnswerItemId === undefined,
+    );
+  const causalAfterItemId = activeTurn
+    ? orderConversationTurnItems(activeTurn.items).at(-1)?.id
+    : undefined;
   args.set((state) => {
     const projection = state.projections.get(args.sessionId);
     if (!projection) {
@@ -629,14 +641,10 @@ export async function steerQueuedInputCommand(args: {
     const imageCount = queuedInput.attachments?.filter(
       (attachment) => attachment.kind === "image",
     ).length;
-    const activeTurn = [...(projection.conversation?.turns ?? [])]
-      .reverse()
-      .find(
-        (turn) =>
-          turn.status === "in_progress" && turn.finalAnswerItemId === undefined,
-      );
     const optimistic = appendOptimisticUserMessage(projection, queuedInput.text, {
       clientMessageId: queuedInput.clientMessageId,
+      inputPlacement: "turn_steer",
+      ...(causalAfterItemId ? { causalAfterItemId } : {}),
       ...(queuedInput.clientTurnId ? { clientTurnId: queuedInput.clientTurnId } : {}),
       ...(queuedInput.attachments?.length ? { attachments: queuedInput.attachments } : {}),
       ...(imageCount !== undefined ? { imageCount } : {}),
@@ -675,7 +683,10 @@ export async function steerQueuedInputCommand(args: {
     const summary = await api.steerQueuedSessionInput(
       args.sessionId,
       args.clientMessageId,
-      { clientId: args.get().clientId },
+      {
+        clientId: args.get().clientId,
+        ...(causalAfterItemId ? { causalAfterItemId } : {}),
+      },
     );
     args.set((state) => ({
       projections: updateSessionSummaryInProjectionMap(state.projections, summary),

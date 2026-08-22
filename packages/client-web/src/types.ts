@@ -2383,14 +2383,12 @@ export function sortFeed(feed: FeedEntry[]): FeedEntry[] {
 export function appendOptimisticUserMessage(
   current: SessionProjection,
   text: string,
-  options?: {
-    clientMessageId?: string;
+  options?: { clientMessageId?: string;
     clientTurnId?: string;
     imageCount?: number;
     attachments?: SessionInputAttachment[];
-    turnId?: string;
-    canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
-    providerTurnId?: string;
+    turnId?: string; canonicalTurnId?: TimelineIdentity["canonicalTurnId"]; providerTurnId?: string;
+    inputPlacement?: Extract<TimelineItem, { kind: "user_message" }>["inputPlacement"]; causalAfterItemId?: string;
   },
 ): SessionProjection {
   const ts = new Date().toISOString();
@@ -2407,6 +2405,8 @@ export function appendOptimisticUserMessage(
     ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
     ...(options?.imageCount ? { imageCount: options.imageCount } : {}),
     ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
+    inputPlacement: options?.inputPlacement ?? "turn_start",
+    ...(options?.causalAfterItemId !== undefined ? { causalAfterItemId: options.causalAfterItemId } : {}),
   };
   return {
     ...current,

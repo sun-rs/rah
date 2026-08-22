@@ -14,13 +14,19 @@
 - [Session Library 与 Archive](./session-library-archive-refactor.zh-CN.md)
 - [RAH 1.0 里程碑说明](./1.0-notes.zh-CN.md)
 - [Claude Tmux Native Mode 边界](./claude-tmux-native-mode.zh-CN.md)
-- [Council Listening Control 边界](./council-listening-control.zh-CN.md)
+- [Council Delivery / Listening Control 边界](./council-listening-control.zh-CN.md)
 - [Session Controls 重构设计](./session-controls-refactor-design.zh-CN.md)
 - [Scrollbar UI 协议](./ui-scrollbar-protocol.zh-CN.md)
 - [远程访问：Tailscale、Cloudflare 与 Surge 共存](./remote-access-tailscale-cloudflare.zh-CN.md)
 - [设备认证与配对边界](./device-authentication.zh-CN.md)
 - [Fork 与 Side 生命周期协议](./fork-side-lifecycle.zh-CN.md)
 - [Council MCP Session Projection](./council-mcp-projection.zh-CN.md)
+
+## 1.1 目标架构提案
+
+- [RAH Agent OS：Room-first 架构与生态借力路线](./agent-os-room-first-architecture.zh-CN.md)
+
+该文档描述长期目标与迁移边界，不代表当前 `main` 已经从 provider-session-first 切换为 Room-first。当前行为仍以上一节和 Provider/历史权威文档为准。
 
 ## 2. Provider 与能力边界
 

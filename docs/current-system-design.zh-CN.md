@@ -257,10 +257,13 @@ Session Inspector 与 Council Agents 的展开按钮属于共享对象标题栏�
 
 Inspector `Changes` 默认以当前 checkout 分支的 HEAD 为 baseline，展示当前 worktree 中 staged、unstaged 和 untracked 的统一文件树；它不是 base-branch review。选择器必须明确标成 `Diff baseline`，并在真实 checkout 项后标注 `current branch`；远端跟踪引用（例如 `origin/main`）不是当前分支。分支下拉只改变只读 diff baseline，不执行 checkout。选择非当前分支时，UI 必须明确称为 worktree diff，不能称为未提交变动。Sources 只收录可再次打开的用户附件、网页搜索/打开记录，以及 provider 明确暴露为 URL 的外部或 Git 引用；agent 通过 CLI 读取的普通项目文件属于 Process/Files，不属于 Sources，本地 list/search 目录、查询词、shell argv 和没有可打开资源的裸工具调用同样不能进入。Sources 由 provider 持久历史按需补齐，不要求 session 已在 RAH 中 resume/运行；空集合表示 provider 历史没有记录上述资源，而不是 session 尚未激活。
 
+Changed Files Review 是 workbench 根级唯一 overlay：Chat、Task summary 与 Inspector 只提交 `ReviewScope`，不能各自挂载全局 Portal。单文件预览与 Review 复用同一 diff inspection surface 与偏好，但窗口 ownership 分开：普通 Session 单文件预览仍是一个非模态浮窗；Canvas 单文件预览按 `CanvasPaneId` 持有，每个 pane 最多一个且不同 pane 可以同时存在。普通 viewer 与 pane viewer 的读取目标都必须保留点击来源的 session、workspace root 与 path，不能回退到当前全局 selected session；异步读取结果也只能提交给自己的实例。Session、Council、workspace、Canvas active pane 或设置/终端等顶层上下文发生改变时，普通 viewer 与不属于目标 owner 的 Review 在下一次绘制前失效；离开 Canvas 或由顶层功能接管时清空全部 pane viewer，但 Canvas 内仅切换 active pane 不销毁其他 pane 的独立 viewer。
+
 Canvas pane 的持久化语义是固定槽位与可变布局树模型：
 
 - Canvas 最多有 8 个固定 pane，内部 ID 固定为 `canvas-1` 到 `canvas-8`。
 - remembered target 的 provider identity 恢复属于 pane 本地操作：恢复失败写入该 target 的本地错误卡片，不得写入全局 workbench error。这样即使用户在异步恢复结束前切到 Council、Chat 或 New，也不会在新页面看到与当前页面无关的陈旧 Session notice。
+- 回复中的本地文件在所属 pane 内打开，viewer 被 pane 边界裁剪并可折叠为 pane 内标题条。默认形态由 pane 自己的内容框决定：至少 `560×480px` 时使用靠右的 pane 内浮窗，保留左侧底层对话点击带；宽或高不足时占满 pane 内容区；因此 390×844 PWA、三列和较矮的多行 pane 自然最大化，而足够大的 Desktop pane 可以在 viewer 打开时继续点击正文文件并 retarget。窗口化 viewer 只开放上、下边缘调整高度，不开放移动或横向 resize，最小高度为 `280px` 且始终夹在 pane 边界内；这样可以按需露出底层对话，同时维持 pane 布局稳定。用户可显式最大化或还原，显式选择和已调整高度在该 viewer 后续换文件时保留；点击当前或其他正文文件会以新 request identity 激活同一 viewer、解除折叠并切换内容。最大化或临时隐藏 pane 也保留 viewer。替换、清空或移除 pane 只清除该 pane 的 viewer，绝不能让 B pane 的点击改写 A pane 的内容。
 - Pane 外层标题只表达固定槽位身份，显示为 `Pane 1` 到 `Pane 8`；编号必须从固定 pane ID 推导，不能根据当前可见数组下标重新编号，因此最大化 `canvas-2` 依然显示 `Pane 2`。session / Council 的真实标题、状态、操作只由内部对象标题栏负责。
 - 布局是持久化的二叉 split tree。每个 split 只记录横向或纵向轴、稳定 ID、比例和两个子节点；pane target 不属于布局树，因此改变布局不会重建会话状态。
 - 顶部快捷按钮保留常用的双列、双行、三列和 `2 x 2`；布局设计器可以直接选择规则网格，包括 `2 x 3` 和 `4 x 2`。每个 pane 还可以局部 `Split right` 或 `Split below`，因此双列可以扩展成等宽三列，也可以只把左列拆成上下两个形成 `2 + 1`。
@@ -385,7 +388,7 @@ Native local server 与 tmux attach 的目标是：
 
 - 普通 running session 中，Codex/OpenCode 的 provider session 始终由 daemon 管理的 native local server 持有；Chat 与 Web TUI 都是 client/view。
 - Claude 的真实 provider TUI 始终运行在 daemon 管理的 tmux session/pane 中；Web terminal、PWA/iPad/iPhone、Canvas pane 都只是 view client。
-- Council 是例外：Council agent 以 provider TUI + MCP bootstrap 形式运行在 RAH 管理的 agent PTY 中，用来保持 agent 自己的工具循环；它不代表普通 Codex/OpenCode session 的 runtime 边界。
+- Council 是例外：Council agent 运行在 RAH 管理的 provider session 中，并挂载 Council MCP 协作工具；daemon subscription/direct wake 负责消息激活，短时 MCP waiter 只负责热讨论。它不代表普通 Codex/OpenCode session 的 runtime 边界。
 - provider session 只从 Web/PWA/Canvas 创建或 resume；公开 CLI 不再提供 provider session handoff。
 - Web TUI view 断开只 detach，不杀 session；显式 stop/close 才关闭或解除 RAH 管理。
 - Web UI 可以立即看到 running session，并在 reload/focus 后通过 provider event/history 或 tmux replay 追上。
@@ -514,9 +517,13 @@ Council 使用“摘要目录 + 显式消息窗口 + 单条实时增量”，不
 
 Council 的创建、改名、增删 agent 等显式 mutation 是低频、用户触发的事务响应，但 store/runtime 内部仍优先返回轻量摘要；如果页面需要消息窗口，应通过选中 Council 的分页接口单独 hydrate，不能把完整 transcript 扩展到持续列表或消息广播。
 
-Council MCP 的 `channel_post` canonical 参数为 `content`，工具 schema 与 bootstrap prompt 都必须明确该参数。daemon 边界同时接受历史 `text` 和常见 `message` 别名，避免 agent 已完成任务却因为参数名差异丢失最终答复并退出监听。
+Council MCP 的 `channel_post` canonical 参数为 `content`，工具 schema 与 daemon wake prompt 都必须明确该参数。daemon 边界同时接受历史 `text` 和常见 `message` 别名，避免 agent 已完成任务却因为参数名差异丢失最终答复。
 
-Council 对话的用户可见消息协议是“当前生命周期 + 最终答复”：同一个 agent 的 `sent -> joined -> listening` 是单调推进的状态机，前端只保留一个稳定状态行，并在原时间线位置依次更新为 `sent -> joined -> ready`；不得为每个阶段追加独立消息。不同 agent 各自保留一行；只过滤已知的 `channel_wait_new` timeout transport noise。bootstrap 初始化指令只进入受管 agent session，不写入 Council 对话。agent 工作过程使用 `channel_set_status`，`channel_post` 只发布一次面向用户的最终答复，禁止思考过程、工具旁白、进度和阶段性草稿。最终答复继续使用 agent/provider 对应的 Council 气泡视觉，不把多个 agent 的输出合并成匿名正文。
+Council delivery 的单一 owner 是 runtime daemon 的 `CouncilDeliveryCoordinator`。managed session 启动后 daemon 直接登记 Council/agent/session 订阅，不发送 join/bootstrap 模型 turn；Claude 等 MCP `tools/list` ready 后才允许 wake，但 ready 本身同样不发送 prompt。新消息先命中 active `channel_wait_new` 热 waiter；没有 waiter 时在 120ms 内按 agent 合并 canonical 消息，并通过原 Session input queue 直接注入包含完整原文、稳定 `clientMessageId/clientTurnId` 的 wake。busy 或已有 wake 时只排队；精确 `session.input.accepted` 才推进 delivery cursor，turn terminal 后才调度下一批。不得退化为“通知 agent 有新消息，再让它读 inbox”的两段路径。
+
+agent 完成本批消息后只做一次 30 秒热等待；timeout 返回 `sleeping: true / next_action: end_turn`，结束模型 turn 但保留 daemon 订阅和 provider session。明确 `@<agent name>` 由 daemon 缩小投递范围，`@all` 或无已知 mention 的消息广播。生命周期 system row 永远不进入 agent 的 wait/inbox/history wake 路径。
+
+Council 对话的用户可见消息协议是“当前生命周期 + 最终答复”：同一个 agent 的 `subscribed / waking / working / queued / listening / sleeping` 更新同一条稳定状态行，不为每次状态迁移堆叠独立正文；旧 `sent / joined / listening` 仍可兼容折叠。agent 工作过程使用 `channel_set_status`，`channel_post` 只发布一次面向用户的最终答复，禁止思考过程、工具旁白、进度和阶段性草稿。最终答复继续使用 agent/provider 对应的 Council 气泡视觉，不把多个 agent 的输出合并成匿名正文。
 
 硬约束：
 
@@ -668,7 +675,7 @@ iOS standalone/PWA 与 Desktop Conversation 共享一个仅作用于 Session/Cou
 
 Composer 的视觉密度与 Conversation 正文密度独立：Desktop 和 PWA 可以采用不同宽度参数，但都使用同一白色 surface、相同控件层级和 focus 状态机。PWA 的宽度动画只能改变 surface 的水平 inset，不能改变 textarea 内容、丢失选区/注释、移动 Send 到框外或造成页面横向滚动。
 
-PWA 的全局恢复提示不能居中覆盖 composer、消息正文或主要按钮。它固定在顶部 safe-area 控制行下方，以单行紧凑 toast 呈现；`390×844` 下高度不得超过 72px。PWA 与 Wide Desktop 共用低对比橙色恢复提示语义：使用明确的 orange-500 基色，背景只把橙色以约 8% 混入页面底色，边框以约 18% 混入普通边框，不使用投影；橙色主要保留给小图标，不能退回偏黄或土黄色 warning surface。Session Chat、Council、Canvas 及其他带标题的工作台页面必须共用 `WORKBENCH_HEADER_LAYOUT` 的 40px 单行高度，提示条也从同一 2.5rem token 计算 top，始终落在标题栏分割线以下。滚动宿主仍须给卡片留出内边距，不能裁掉四角。Web/daemon generation 不一致在所有响应式尺寸共享唯一文案：`Restart RAH to update` / `Restart it on the host, then refresh this page.`；隐藏 PID 与 generation 等诊断细节，只保留键盘/触控可达的 `Mute today`，不提供无法完成后台重启的 Retry。静音日期先写入当前页面内存，并容错同步 localStorage、sessionStorage 与到本地午夜失效的同源 cookie；任一持久化层不可用时仍继续其余层，异步 compatibility probe 不得覆盖当前页面的静音，reload 后读取任一有效层即可恢复。Wide Desktop 只改变几何并固定在真正的右下角：最大宽度 24rem，距右侧和底部各 16px，不得再消费 composer、底部浮动控件或 keyboard anchor 预留量；普通宽屏单 notice 应收敛为约 49px 高的横向 toast。窄屏非 PWA 仍可使用居中 callout，避免把角落 toast 强塞进不足宽度。
+PWA 的全局恢复提示不能居中覆盖 composer、消息正文或主要按钮。它固定在顶部 safe-area 控制行下方，以单行紧凑 toast 呈现；`390×844` 下高度不得超过 72px。PWA 与 Wide Desktop 共用低对比橙色恢复提示语义：使用明确的 orange-500 基色，背景只把橙色以约 8% 混入页面底色，边框以约 18% 混入普通边框，不使用投影；橙色主要保留给小图标，不能退回偏黄或土黄色 warning surface。Session Chat、Council、Canvas 及其他带标题的工作台页面必须共用 `WORKBENCH_HEADER_LAYOUT` 的 40px 单行高度，提示条也从同一 2.5rem token 计算 top，始终落在标题栏分割线以下。滚动宿主仍须给卡片留出内边距，不能裁掉四角。Web/daemon generation 不一致在所有响应式尺寸共享唯一文案：`Restart RAH to update` / `Restart it on the host, then refresh this page.`；隐藏 PID 与 generation 等诊断细节，只保留键盘/触控可达的 `Mute today`，不提供无法完成后台重启的 Retry。`Mute today` 由 daemon 的 `WorkbenchNoticePreferencesStore` 按主机本地午夜持久化；同一个 `RAH_HOME` 下，手机 PWA、Mac 浏览器与不同同源别名都读取同一状态，客户端在重新聚焦及短周期同步时收敛。浏览器仍先写当前页面内存，并容错同步 localStorage、sessionStorage 与同源 cookie，但这些仅用于“新 Web 连接尚未实现 notice API 的旧 daemon”兼容窗口；任一层不可用不能阻止其余层。该静音只作用于 generation compatibility advisory，不能吞掉 workbench、session、认证或 transport 错误。Wide Desktop 只改变几何并固定在真正的右下角：最大宽度 24rem，距右侧和底部各 16px，不得再消费 composer、底部浮动控件或 keyboard anchor 预留量；普通宽屏单 notice 应收敛为约 49px 高的横向 toast。窄屏非 PWA 仍可使用居中 callout，避免把角落 toast 强塞进不足宽度。
 
 `Worked` 的兼容耗时使用该可见 turn 的 user message 时间到 final answer 时间；这与 Codex persisted `task_started/task_complete` 的用户可感知区间一致，也避免为纯展示再维护第二套计时状态。分页尚未加载到 user message 时可以退化为首个已知 process item 时间，加载完整边界后应自动校正。
 

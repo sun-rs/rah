@@ -1,5 +1,7 @@
 # RAH 架构对照与强化路线
 
+> 范围说明：本文记录当前 `provider-session-first` 1.x 架构的强化路线。长期的 Room-first Agent OS 目标、外部项目借力边界与渐进迁移方案见 [RAH Agent OS：Room-first 架构与生态借力路线](./agent-os-room-first-architecture.zh-CN.md)。迁移完成前，目标架构不能被当作当前 `main` 的已实现行为。
+
 这份文档回答三个问题：
 
 1. `RAH / hapi / paseo / AionUi ACP 2.0 / Herdr` 各自最强的点是什么

@@ -958,6 +958,7 @@ export class CouncilStore {
       limit?: number;
       excludeClientId?: string;
       excludeActorIdWhenClientMissing?: string;
+      messageFilter?: (message: CouncilMessage) => boolean;
     },
   ): CouncilMessage[] {
     this.requireCouncil(councilId);
@@ -970,6 +971,9 @@ export class CouncilStore {
     const results: CouncilMessage[] = [];
     for (let index = startIndex; index < councilMessages.length; index += 1) {
       const message = councilMessages[index]!;
+      if (options?.messageFilter && !options.messageFilter(message)) {
+        continue;
+      }
       if (options?.excludeClientId && message.clientId === options.excludeClientId) {
         continue;
       }

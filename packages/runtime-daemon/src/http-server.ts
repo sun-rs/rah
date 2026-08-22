@@ -8,6 +8,7 @@ import { createPostRoutes, handleHttpRequest } from "./http-server-routes";
 import { attachWebSocketHandlers } from "./http-server-websocket";
 import { DeviceAuthManager } from "./device-auth";
 import { runBackgroundCommand } from "./background-command";
+import { WorkbenchNoticePreferencesStore } from "./workbench-notice-preferences";
 
 export interface RahDaemon {
   host: string;
@@ -114,11 +115,21 @@ export async function startRahDaemon(options?: {
   const auth = options?.auth === false ? undefined : options?.auth ?? new DeviceAuthManager();
   const httpDrainTimeoutMs = options?.httpDrainTimeoutMs ?? DEFAULT_HTTP_DRAIN_TIMEOUT_MS;
   const postRoutes = createPostRoutes(engine);
+  const noticePreferences = new WorkbenchNoticePreferencesStore();
+  noticePreferences.load();
   let runtimeIdentity: RuntimeIdentityResponse | undefined;
   let closePromise: Promise<void> | undefined;
 
   const server = createServer(async (req, res) => {
-    await handleHttpRequest({ engine, postRoutes, req, res, runtimeIdentity, auth });
+    await handleHttpRequest({
+      engine,
+      postRoutes,
+      noticePreferences,
+      req,
+      res,
+      runtimeIdentity,
+      auth,
+    });
   });
   const websockets = attachWebSocketHandlers(server, engine, auth);
 
@@ -160,7 +171,7 @@ export async function startRahDaemon(options?: {
           } catch (error) {
             webSocketCloseError = error;
           }
-          await Promise.all([serverClosed, engineShutdown]);
+          await Promise.all([serverClosed, engineShutdown, noticePreferences.flush()]);
           clearTimeout(forceDrainTimer);
 
           if (serverCloseError || webSocketCloseError || engineShutdownError) {

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { DeviceAuthGate } from "./components/DeviceAuthGate";
 import { installStaleDynamicImportRecovery } from "./lazy-module-reload";
+import { ReviewOverlayProvider } from "./inspector/ReviewOverlay";
 import "./index.css";
 import "./styles.css";
 
@@ -16,7 +17,9 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <DeviceAuthGate>
-      <App />
+      <ReviewOverlayProvider>
+        <App />
+      </ReviewOverlayProvider>
     </DeviceAuthGate>
   </StrictMode>,
 );

@@ -517,6 +517,55 @@ test("assistant timeline messages accept only canonical message phases", () => {
   );
 });
 
+test("user timeline messages validate canonical input placement and causal anchors", () => {
+  const baseEvent = {
+    id: "evt-user-placement",
+    seq: 1,
+    ts: "2026-08-21T00:00:00.000Z",
+    sessionId: "session-1",
+    type: "timeline.item.added" as const,
+    source: {
+      provider: "codex" as const,
+      channel: "structured_live" as const,
+      authority: "derived" as const,
+    },
+  };
+  const valid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: {
+        kind: "user_message" as const,
+        text: "Focus on the reducer",
+        inputPlacement: "turn_steer" as const,
+        causalAfterItemId: "canonical-item-1",
+      },
+    },
+  });
+  assert.equal(valid.some((issue) => issue.severity === "error"), false);
+
+  const invalid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: {
+        kind: "user_message",
+        text: "Focus on the reducer",
+        inputPlacement: "floating",
+        causalAfterItemId: 42,
+      },
+    },
+  } as never);
+  assert.equal(
+    invalid.some((issue) => issue.code === "timeline.input_placement.invalid"),
+    true,
+  );
+  assert.equal(
+    invalid.some(
+      (issue) => issue.code === "timeline.causal_after_item_id.invalid",
+    ),
+    true,
+  );
+});
+
 test("assistant timeline messages validate ordered interactive visual content", () => {
   const baseEvent = {
     id: "evt-assistant-visual",

@@ -35,7 +35,17 @@ import {
   type CodexVisualArtifactPathEvidenceState, type ParsedCodexAssistantContent,
 } from "./codex-visual-artifacts";
 import type { ProviderActivity } from "./provider-activity";
-import { codexRuntimeModelFromTurnContext } from "./timeline-runtime-model";
+import {
+  correlateCodexRolloutUserMessage,
+  rememberCodexRolloutUserMessage,
+  takeCodexRolloutUserPlacement,
+} from "./codex-rollout-user-input";
+import {
+  codexRolloutPayload,
+  createCodexRolloutTurnState,
+  syncCodexRolloutTurnState,
+  type CodexRolloutTurnState,
+} from "./codex-rollout-turn-state";
 
 export interface CodexTranslatedActivity {
   activity: ProviderActivity;
@@ -69,7 +79,8 @@ interface CodexTerminalSessionToolState {
   started: boolean;
 }
 
-export interface CodexRolloutTranslationState extends CodexVisualArtifactPathEvidenceState {
+export interface CodexRolloutTranslationState extends CodexVisualArtifactPathEvidenceState,
+  CodexRolloutTurnState {
   pendingToolCalls: Map<string, PendingToolCall>;
   terminalSessions: Map<number, CodexTerminalSessionToolState>;
   completedToolCallIds: Set<string>;
@@ -77,10 +88,7 @@ export interface CodexRolloutTranslationState extends CodexVisualArtifactPathEvi
   lastTimelineIdentity: TimelineIdentity | null;
   lastTimelinePhase?: AssistantMessagePhase | undefined;
   lastGoalEventSignatureByThread: Map<string, string>;
-  providerSessionId?: string | undefined;
-  currentTurnId?: string | undefined;
-  currentRuntimeModel?: TimelineRuntimeModel | undefined;
-  nextTimelineItemIndex: number; compactionCountByTurnId: Map<string, number>;
+  compactionCountByTurnId: Map<string, number>;
 }
 
 export function createCodexRolloutTranslationState(
@@ -92,12 +100,10 @@ export function createCodexRolloutTranslationState(
     lastTimelineTextSignature: null,
     lastTimelineIdentity: null,
     lastGoalEventSignatureByThread: new Map(),
-    nextTimelineItemIndex: 0, compactionCountByTurnId: new Map(),
+    ...createCodexRolloutTurnState(options),
+    compactionCountByTurnId: new Map(),
     visualArtifactPathByFileName: new Map(),
   };
-  if (options.providerSessionId !== undefined) {
-    state.providerSessionId = options.providerSessionId;
-  }
   return state;
 }
 
@@ -132,7 +138,6 @@ const IGNORED_PERSISTED_EVENT_MSG_TYPES = new Set([
   "task_started",
   "task_complete",
   "token_count",
-  "user_message",
   "exec_command_begin",
   "exec_command_output_delta",
   "exec_command_end",
@@ -533,55 +538,6 @@ function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identi
   return identity !== undefined ? { identity } : {};
 }
 
-function payloadRecord(record: Record<string, unknown>): Record<string, unknown> | null {
-  return record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
-    ? (record.payload as Record<string, unknown>)
-    : null;
-}
-
-function syncRolloutStateFromRecord(
-  state: CodexRolloutTranslationState,
-  record: Record<string, unknown>,
-) {
-  const payload = payloadRecord(record);
-  if (!payload) {
-    return;
-  }
-  if (record.type === "session_meta" && typeof payload.id === "string") {
-    state.providerSessionId = state.providerSessionId ?? payload.id;
-    return;
-  }
-  if (record.type !== "event_msg" && record.type !== "turn_context") {
-    return;
-  }
-  const turnId = typeof payload.turn_id === "string" ? payload.turn_id : undefined;
-  if (!turnId) {
-    return;
-  }
-  if (record.type === "turn_context") {
-    if (state.currentTurnId !== turnId) {
-      state.currentTurnId = turnId;
-      state.nextTimelineItemIndex = 0;
-    }
-    state.currentRuntimeModel = codexRuntimeModelFromTurnContext(payload);
-    return;
-  }
-  if (payload.type === "task_started") {
-    if (state.currentTurnId !== turnId) {
-      state.currentTurnId = turnId;
-      state.nextTimelineItemIndex = 0;
-    }
-    return;
-  }
-  if (payload.type === "task_complete" || payload.type === "turn_aborted") {
-    if (state.currentTurnId === turnId) {
-      state.currentTurnId = undefined;
-      state.currentRuntimeModel = undefined;
-      state.nextTimelineItemIndex = 0;
-    }
-  }
-}
-
 function createHistoryTimelineIdentity(
   state: CodexRolloutTranslationState,
   params: {
@@ -595,7 +551,7 @@ function createHistoryTimelineIdentity(
   }
   const itemIndex = state.nextTimelineItemIndex;
   state.nextTimelineItemIndex += 1;
-  return createCodexTimelineIdentity({
+  const identity = createCodexTimelineIdentity({
     providerSessionId: state.providerSessionId,
     turnId: state.currentTurnId,
     itemKind: params.itemKind,
@@ -605,6 +561,7 @@ function createHistoryTimelineIdentity(
     ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
     ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
   });
+  return identity;
 }
 
 function createHistoryCompactionIdentity(
@@ -1550,9 +1507,9 @@ function translateCodexRolloutLineUnscoped(
 
   const record = line as Record<string, unknown>;
   const turnIdBeforeSync = state.currentTurnId;
-  syncRolloutStateFromRecord(state, record);
+  syncCodexRolloutTurnState(state, record);
   if (record.type === "event_msg") {
-    const payload = payloadRecord(record);
+    const payload = codexRolloutPayload(record);
     if (!payload) {
       return [];
     }
@@ -1786,6 +1743,31 @@ function translateCodexRolloutLineUnscoped(
         ),
       ];
     }
+    if (payload.type === "user_message") {
+      const clientMessageId =
+        typeof payload.client_id === "string" ? payload.client_id : undefined;
+      const message = typeof payload.message === "string" ? payload.message : undefined;
+      const correlated = correlateCodexRolloutUserMessage(state, {
+        clientMessageId,
+        turnId: state.currentTurnId ?? turnIdBeforeSync,
+        text: message ? stripCodexContextualFragments(message) : undefined,
+      });
+      if (correlated) {
+        return [
+          persistedActivity(
+            record,
+            {
+              type: "timeline_item_updated",
+              turnId: correlated.turnId,
+              item: correlated.item,
+              identity: correlated.identity,
+            },
+            "authoritative",
+          ),
+        ];
+      }
+      return [];
+    }
     if (typeof payload.type === "string" && IGNORED_PERSISTED_EVENT_MSG_TYPES.has(payload.type)) {
       return [];
     }
@@ -1796,7 +1778,7 @@ function translateCodexRolloutLineUnscoped(
     return [];
   }
 
-  const payload = payloadRecord(record);
+  const payload = codexRolloutPayload(record);
   if (!payload || typeof payload.type !== "string") {
     return invalidRolloutActivity(record, "response_item payload type was missing");
   }
@@ -1898,9 +1880,13 @@ function translateCodexRolloutLineUnscoped(
         return [];
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
+      const placement = takeCodexRolloutUserPlacement(state);
       const identity = createHistoryTimelineIdentity(state, {
         itemKind: "user_message",
         ...(messageId !== null ? { providerMessageId: messageId } : {}),
+      });
+      const userItem = rememberCodexRolloutUserMessage(state, {
+        turnId: state.currentTurnId, text, identity, placement, imageCount, attachments,
       });
       rememberTimelineTextIdentity(state, identity);
       return [
@@ -1925,14 +1911,7 @@ function translateCodexRolloutLineUnscoped(
           record,
           {
             type: "timeline_item",
-            item: {
-              kind: "user_message",
-              text,
-              ...(imageCount > 0 ? { imageCount } : {}),
-              ...(attachments.length > 0
-                ? { attachments }
-                : {}),
-            },
+            item: userItem,
             ...timelineIdentityProps(identity),
           },
           "authoritative",

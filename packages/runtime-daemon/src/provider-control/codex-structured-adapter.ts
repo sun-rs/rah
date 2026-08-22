@@ -298,6 +298,7 @@ export class CodexAdapter implements ProviderAdapter {
     live: LiveCodexSession,
     request: SessionInputRequest,
     queuedInput?: RuntimeQueuedInput,
+    causalAfterItemIdFromClient?: string,
   ): Promise<void> {
     const turnId = live.currentTurnId;
     if (!live.threadId || !turnId || live.turnStartInFlight) {
@@ -318,6 +319,10 @@ export class CodexAdapter implements ProviderAdapter {
     }
     const submittedMessage = {
       text: request.text,
+      inputPlacement: "turn_steer" as const,
+      ...(causalAfterItemIdFromClient
+        ? { causalAfterItemId: causalAfterItemIdFromClient }
+        : {}),
       ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
       ...(request.clientTurnId ? { clientTurnId: request.clientTurnId } : {}),
@@ -681,6 +686,7 @@ export class CodexAdapter implements ProviderAdapter {
     }
     recordCodexSubmittedUserMessage(live.translationState, {
       text: request.text,
+      inputPlacement: "turn_start",
       ...(request.attachments?.length ? { attachments: request.attachments } : {}),
       ...(request.clientMessageId !== undefined
         ? { clientMessageId: request.clientMessageId }
@@ -1154,7 +1160,12 @@ export class CodexAdapter implements ProviderAdapter {
       this.drainQueuedInput(live);
       return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
     }
-    await this.steerLiveTurn(live, queuedInput, queuedInput);
+    await this.steerLiveTurn(
+      live,
+      queuedInput,
+      queuedInput,
+      request.causalAfterItemId,
+    );
     return toSessionSummary(this.services.sessionStore.getSession(sessionId)!);
   }
 

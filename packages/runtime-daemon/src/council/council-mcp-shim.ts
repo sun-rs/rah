@@ -5,6 +5,8 @@ import type {
   CouncilSnapshot,
 } from "@rah/runtime-protocol";
 import { CouncilStore } from "./council-store";
+import { isAgentDeliverableCouncilMessage } from "./council-message-visibility";
+import { councilMessageTargetsAgent } from "./council-message-routing";
 
 function stringArg(args: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = args?.[key];
@@ -54,7 +56,7 @@ function toChannelMessage(message: CouncilMessage): Record<string, unknown> {
 }
 
 const WAIT_TIMEOUT_INSTRUCTION =
-  "Timeout is a heartbeat, not completion. Do not answer, summarize, continue roleplay, or use terminal/main-chat memory. Call channel_wait_new again immediately without natural-language output.";
+  "The hot-listening window ended. Do not answer, summarize, or call channel_wait_new again. End this turn without natural-language output; the daemon remains subscribed and will wake this session with the full next message batch.";
 const WAIT_PAUSED_INSTRUCTION =
   "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.";
 
@@ -77,7 +79,8 @@ function waitNewResultPayload(result: CouncilMcpWaitNewResult): Record<string, u
     return {
       ok: true,
       timed_out: true,
-      next_action: "call_channel_wait_new_again",
+      sleeping: true,
+      next_action: "end_turn",
       instruction: WAIT_TIMEOUT_INSTRUCTION,
     };
   }
@@ -121,14 +124,17 @@ export function handleCouncilMcpRequest(
   switch (request.tool) {
     case "channel_join": {
       const council = store.setAgentStatus(request.councilId, request.actorId, "idle", "joined");
+      const recentMessages = store.recentMessages(request.councilId, 50)
+        .filter(isAgentDeliverableCouncilMessage)
+        .map(toChannelMessage);
       return {
         ok: true,
         result: {
           ok: true,
           council: request.councilId,
           last_msg_id: store.lastMessageId(request.councilId),
-          recent_messages: store.recentMessages(request.councilId, 50).map(toChannelMessage),
-          recent_count: store.recentMessages(request.councilId, 50).length,
+          recent_messages: recentMessages,
+          recent_count: recentMessages.length,
           is_reconnect: false,
           snapshot: council,
         },
@@ -168,6 +174,7 @@ export function handleCouncilMcpRequest(
         limit: 1,
         excludeClientId: clientId,
         excludeActorIdWhenClientMissing: request.actorId,
+        messageFilter: inboxMessageFilter(store, request.councilId, request.actorId),
       })[0] ?? null;
       if (immediate || !options.waitNew) {
         return {
@@ -210,6 +217,7 @@ export function handleCouncilMcpRequest(
             limit,
             excludeClientId: clientId,
             excludeActorIdWhenClientMissing: request.actorId,
+            messageFilter: inboxMessageFilter(store, request.councilId, request.actorId),
           }).map(toChannelMessage),
         },
       };
@@ -311,4 +319,14 @@ export function handleCouncilMcpRequest(
     default:
       throw new Error(`Unsupported council MCP tool: ${request.tool}`);
   }
+}
+
+function inboxMessageFilter(
+  store: CouncilStore,
+  councilId: string,
+  actorId: string,
+): (message: CouncilMessage) => boolean {
+  const agentIds = store.councilState(councilId).agents.map((agent) => agent.id);
+  return (message) => isAgentDeliverableCouncilMessage(message) &&
+    councilMessageTargetsAgent(message, actorId, agentIds);
 }

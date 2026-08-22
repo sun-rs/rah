@@ -82,6 +82,21 @@ test("keeps independent lifecycle rows for different agents", () => {
   );
 });
 
+test("folds daemon subscription, wake, hot-listening, and sleep into one lifecycle row", () => {
+  const items = projectCouncilDisplayItems(snapshot([
+    systemMessage(1, "agent-a subscribed"),
+    systemMessage(2, "agent-a waking"),
+    systemMessage(3, "agent-a working"),
+    systemMessage(4, "agent-a queued"),
+    systemMessage(5, "agent-a listening"),
+    systemMessage(6, "agent-a sleeping"),
+  ]));
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.kind === "agent-status" ? items[0].status : null, "sleeping");
+  assert.equal(items[0]?.kind === "agent-status" ? items[0].messageId : null, 6);
+});
+
 test("filters only the wait timeout transport noise", () => {
   const items = projectCouncilDisplayItems(snapshot([
     systemMessage(1, "wait timed out; no active listener is currently blocking on channel_wait_new"),

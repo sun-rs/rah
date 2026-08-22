@@ -312,6 +312,31 @@ export class RuntimeSessionLifecycle {
     );
   }
 
+  async releaseSessionAfterStoredArchive(
+    sessionId: string,
+    clientId: string,
+  ): Promise<void> {
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) {
+      return;
+    }
+    if (isReadOnlyReplaySession(state)) {
+      this.removeConfirmedSession(sessionId, { clientId }, "stopped");
+      return;
+    }
+    await this.closeSession(sessionId, { clientId });
+  }
+
+  async closeSessionBeforeStoredArchive(
+    sessionId: string,
+    clientId: string,
+  ): Promise<void> {
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (state && !isReadOnlyReplaySession(state)) {
+      await this.closeSession(sessionId, { clientId });
+    }
+  }
+
   /**
    * Roll back a newly-created live Session whose transactional first input was
    * not accepted. Unlike an ordinary Stop this never remembers the shell as

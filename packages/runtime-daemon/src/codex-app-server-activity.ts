@@ -27,9 +27,15 @@ import {
   CODEX_CONTEXT_COMPACTION_AGGREGATE_ITEM_KEY,
   createCodexAggregateTimelineIdentity,
   createCodexLiveEphemeralTimelineIdentity,
-  createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
+import {
+  createCodexAppServerTimelineState,
+  createLiveTimelineIdentity,
+  inferredUserInputPlacement,
+  rememberCanonicalUserMessage,
+  type CodexAppServerTimelineState,
+} from "./codex-app-server-timeline-state";
 import { runtimeStateFromCodexThreadStatus } from "./codex-thread-status";
 import {
   cacheProviderHistoryImageParts,
@@ -79,7 +85,7 @@ type PendingLiveToolCall = {
 };
 
 export interface CodexAppServerTranslationState extends CodexSubmittedUserMessageState,
-  CodexVisualArtifactPathEvidenceState {
+  CodexVisualArtifactPathEvidenceState, CodexAppServerTimelineState {
   pendingToolCalls: Map<string, PendingLiveToolCall>;
   agentMessageByItemId: Map<string, string[]>;
   visibleAgentMessageTextByItemId: Map<string, string>;
@@ -94,10 +100,6 @@ export interface CodexAppServerTranslationState extends CodexSubmittedUserMessag
   compactionCountByTurnId: Map<string, number>;
   activeCompactionItemKeysByTurnId: Map<string, Set<string>>;
   reasoningSectionBreakKeys: Set<string>;
-  timelineItemIndexByProviderItemKey: Map<string, number>;
-  userTimelineItemIndexByTurnId: Map<string, number>;
-  reservedUserTimelineItemIndexByTurnId: Map<string, number>;
-  nextTimelineItemIndexByTurnId: Map<string, number>;
   pendingRuntimeModel?: TimelineRuntimeModel;
   runtimeModelByTurnId: Map<string, TimelineRuntimeModel>;
   providerSessionIdByTurnId: Map<string, string>;
@@ -128,10 +130,7 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     compactionCountByTurnId: new Map(),
     activeCompactionItemKeysByTurnId: new Map(),
     reasoningSectionBreakKeys: new Set(),
-    timelineItemIndexByProviderItemKey: new Map(),
-    userTimelineItemIndexByTurnId: new Map(),
-    reservedUserTimelineItemIndexByTurnId: new Map(),
-    nextTimelineItemIndexByTurnId: new Map(),
+    ...createCodexAppServerTimelineState(),
     ...createCodexSubmittedUserMessageState(),
     runtimeModelByTurnId: new Map(),
     providerSessionIdByTurnId: new Map(),
@@ -550,89 +549,21 @@ function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identi
   return identity !== undefined ? { identity } : {};
 }
 
-function allocateTimelineItemIndex(
-  state: CodexAppServerTranslationState,
-  params: {
-    turnId: string;
-    itemKind: "user_message" | "assistant_message" | "reasoning" | "plan" | "compaction";
-    providerItemKey: string;
-  },
-): number {
-  const scopedKey = `${params.turnId}:${params.providerItemKey}`;
-  const existing = state.timelineItemIndexByProviderItemKey.get(scopedKey);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const knownUserIndex = state.userTimelineItemIndexByTurnId.get(params.turnId);
-  if (params.itemKind === "user_message") {
-    const reservedUserIndex = state.reservedUserTimelineItemIndexByTurnId.get(params.turnId);
-    if (reservedUserIndex !== undefined) {
-      state.reservedUserTimelineItemIndexByTurnId.delete(params.turnId);
-      state.timelineItemIndexByProviderItemKey.set(scopedKey, reservedUserIndex);
-      return reservedUserIndex;
-    }
-  } else if (knownUserIndex === undefined) {
-    // Codex app-server can stream assistant/reasoning items without first
-    // echoing the user message for web/headless turns. The rollout JSONL always
-    // contains that user message as the first timeline item, so reserve slot 0
-    // for the first later user echo to keep live and history canonical ids
-    // aligned. Do not reuse it for later user messages in the same turn.
-    const userIndex = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
-    state.nextTimelineItemIndexByTurnId.set(params.turnId, userIndex + 1);
-    state.userTimelineItemIndexByTurnId.set(params.turnId, userIndex);
-    state.reservedUserTimelineItemIndexByTurnId.set(params.turnId, userIndex);
-  }
-  const next = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
-  state.nextTimelineItemIndexByTurnId.set(params.turnId, next + 1);
-  state.timelineItemIndexByProviderItemKey.set(scopedKey, next);
-  if (params.itemKind === "user_message") {
-    if (knownUserIndex === undefined) {
-      state.userTimelineItemIndexByTurnId.set(params.turnId, next);
-    }
-  }
-  return next;
-}
-
-function createLiveTimelineIdentity(
-  state: CodexAppServerTranslationState,
-  params: {
-    providerSessionId?: string | undefined;
-    turnId: string;
-    itemKind: "user_message" | "assistant_message" | "reasoning" | "plan" | "compaction";
-    providerItemKey: string;
-    providerEventId?: string;
-    providerMessageId?: string;
-  },
-): TimelineIdentity | undefined {
-  if (!params.providerSessionId) {
-    return undefined;
-  }
-  const itemIndex = allocateTimelineItemIndex(state, {
-    turnId: params.turnId,
-    itemKind: params.itemKind,
-    providerItemKey: `${params.itemKind}:${params.providerItemKey}`,
-  });
-  return createCodexTimelineIdentity({
-    providerSessionId: params.providerSessionId,
-    turnId: params.turnId,
-    itemKind: params.itemKind,
-    itemIndex,
-    origin: "live",
-    confidence: "derived",
-    ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
-    ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
-  });
-}
-
 export function codexSubmittedUserMessageActivity(state: CodexAppServerTranslationState,
   params: CodexLiveSubmittedUserMessageParams): ProviderActivity | null {
+  const inputPlacement =
+    params.message.inputPlacement ?? inferredUserInputPlacement(state, params.turnId);
+  const message = {
+    ...params.message,
+    inputPlacement,
+  };
   const messageId =
-    params.message.clientMessageId ??
-    params.message.clientTurnId ??
+    message.clientMessageId ??
+    message.clientTurnId ??
     `client-input:${params.turnId}:${Date.now().toString(36)}`;
-  return createCodexSubmittedUserMessageActivity(state, {
+  const activity = createCodexSubmittedUserMessageActivity(state, {
     turnId: params.turnId,
-    message: params.message,
+    message,
     identity: createLiveTimelineIdentity(state, {
       providerSessionId: params.providerSessionId,
       turnId: params.turnId,
@@ -641,6 +572,10 @@ export function codexSubmittedUserMessageActivity(state: CodexAppServerTranslati
       providerMessageId: messageId,
     }),
   });
+  if (activity) {
+    rememberCanonicalUserMessage(state, params.turnId);
+  }
+  return activity;
 }
 
 function createLiveTimelineIdentityFromNotification(
@@ -1686,12 +1621,24 @@ function mapThreadItem(
       // ahead of that notification, though, so bind here as well and consume
       // by stable message identity (with text only as a provider fallback).
       bindCodexSubmittedUserMessageToTurn(state, turnId);
+      // The v2 request field is `clientUserMessageId`, while the native
+      // UserMessageThreadItem echo exposes that value as `clientId`. Consume
+      // all known spellings, but treat the native id as the exactly-once key.
+      const nativeClientMessageId =
+        stringField(item, "clientId") ??
+        stringField(item, "clientUserMessageId") ??
+        stringField(item, "clientMessageId") ??
+        undefined;
+      if (
+        nativeClientMessageId !== undefined &&
+        state.emittedClientUserMessageIds.has(nativeClientMessageId)
+      ) {
+        state.emittedUserMessageItemIds.add(id);
+        return [];
+      }
       const submitted = takeCodexSubmittedUserMessageForEcho(state, turnId, {
         providerMessageId: id,
-        clientMessageId:
-          stringField(item, "clientUserMessageId") ??
-          stringField(item, "clientMessageId") ??
-          undefined,
+        clientMessageId: nativeClientMessageId,
         text,
       });
       const submittedKey = submitted
@@ -1702,7 +1649,6 @@ function mapThreadItem(
         state.emittedClientUserMessageIds.has(submittedKey)
       ) {
         state.emittedUserMessageItemIds.add(id);
-        state.emittedClientUserMessageIds.delete(submittedKey);
         return [];
       }
       const nativeAttachments = submitted?.attachments?.length
@@ -1730,6 +1676,8 @@ function mapThreadItem(
         persistedContent.imageCount,
         attachments.filter((attachment) => attachment.kind === "image").length,
       );
+      const inputPlacement =
+        submitted?.inputPlacement ?? inferredUserInputPlacement(state, turnId);
       const identity = createLiveTimelineIdentity(state, {
         providerSessionId,
         turnId,
@@ -1755,6 +1703,10 @@ function mapThreadItem(
                 ...(submitted?.clientTurnId !== undefined
                   ? { clientTurnId: submitted.clientTurnId }
                   : {}),
+                inputPlacement,
+                ...(submitted?.causalAfterItemId !== undefined
+                  ? { causalAfterItemId: submitted.causalAfterItemId }
+                  : {}),
                 ...(attachments.length
                   ? { attachments }
                   : {}),
@@ -1779,6 +1731,9 @@ function mapThreadItem(
         // response, it is already the canonical projection. Mark it before
         // the RPC continuation can attempt the same client input again.
         markCodexSubmittedUserMessageEmitted(state, submitted);
+      }
+      if (activities.some((activity) => activity.type === "timeline_item")) {
+        rememberCanonicalUserMessage(state, turnId);
       }
       state.emittedUserMessageItemIds.add(id);
       return activities;

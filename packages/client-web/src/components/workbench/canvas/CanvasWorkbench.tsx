@@ -147,6 +147,7 @@ export function CanvasWorkbench(props: {
   onDropSession: (paneId: CanvasPaneId, target: CanvasSessionDragTarget) => void;
   onDropCouncil: (paneId: CanvasPaneId, councilId: string) => void;
   renderPane: (paneId: CanvasPaneId) => ReactNode;
+  renderPaneOverlay?: (paneId: CanvasPaneId) => ReactNode;
 }) {
   const panesById = new Map(props.panes.map((pane) => [pane.id, pane] as const));
   const paneCount = canvasLayoutPaneCount(props.layout);
@@ -287,6 +288,7 @@ export function CanvasWorkbench(props: {
       {pane.active ? (
         <div className="pointer-events-none absolute inset-0 z-[20] rounded-lg ring-1 ring-inset ring-sky-400/70" />
       ) : null}
+      {props.renderPaneOverlay?.(pane.id)}
     </section>
   );
 

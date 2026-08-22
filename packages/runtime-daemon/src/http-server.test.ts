@@ -264,6 +264,35 @@ describe("startRahDaemon", () => {
     assert.equal(typeof identity.startedAt, "string");
   });
 
+  test("shares runtime compatibility mute state across clients", async () => {
+    const origin = `http://127.0.0.1:${port}`;
+    const before = await requestJson({
+      port,
+      path: "/api/workbench/notices/runtime-compatibility",
+      headers: { Origin: origin },
+    });
+    assert.equal(before.status, 200);
+    assert.deepEqual(before.json, {});
+
+    const muted = await requestJson({
+      port,
+      path: "/api/workbench/notices/runtime-compatibility/mute",
+      method: "PUT",
+      headers: { Origin: origin, "x-rah-client": "web" },
+    });
+    assert.equal(muted.status, 200);
+    const mutedUntil = (muted.json as { mutedUntil?: unknown }).mutedUntil;
+    assert.equal(typeof mutedUntil, "string");
+    assert.ok(Date.parse(mutedUntil as string) > Date.now());
+
+    const otherClient = await requestJson({
+      port,
+      path: "/api/workbench/notices/runtime-compatibility",
+      headers: { Origin: origin },
+    });
+    assert.deepEqual(otherClient.json, { mutedUntil });
+  });
+
   test("serves the provider-neutral conversation turn projection", async () => {
     const state = engine.sessionStore.createManagedSession({
       provider: "custom",

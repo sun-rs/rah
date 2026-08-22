@@ -64,6 +64,30 @@ describe("conversation turn item order", () => {
     );
   });
 
+  test("restores a late-arriving Guide to its causal anchor", () => {
+    const prompt = item("prompt", "user", "2026-08-14T08:37:45.004Z");
+    if (prompt.content.kind === "timeline" && prompt.content.item.kind === "user_message") {
+      prompt.content.item.inputPlacement = "turn_start";
+    }
+    const guide = item("guide", "user", "2026-08-14T08:38:00.000Z");
+    if (guide.content.kind === "timeline" && guide.content.item.kind === "user_message") {
+      guide.content.item.inputPlacement = "turn_steer";
+      guide.content.item.causalAfterItemId = "reasoning-before";
+    }
+    const items = [
+      prompt,
+      item("reasoning-before", "process", "2026-08-14T08:37:46.000Z"),
+      item("reasoning-after", "process", "2026-08-14T08:38:01.000Z"),
+      item("answer", "final", "2026-08-14T08:43:07.811Z"),
+      guide,
+    ];
+
+    assert.deepEqual(
+      orderConversationTurnItems(items).map((candidate) => candidate.id),
+      ["prompt", "reasoning-before", "guide", "reasoning-after", "answer"],
+    );
+  });
+
   test("does not mistake a timestamped Guide for an undated activation prompt", () => {
     const items = [
       item("preflight", "process", "2026-08-14T08:37:44.995Z", 1),

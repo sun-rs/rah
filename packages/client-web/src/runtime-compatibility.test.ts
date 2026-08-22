@@ -5,6 +5,7 @@ import {
   deriveRuntimeCompatibilityDescriptor,
   browserRuntimeCompatibilityMutePersistence,
   isRuntimeCompatibilityMutedToday,
+  isRuntimeCompatibilityMutedUntil,
   muteRuntimeCompatibilityForToday,
   RUNTIME_COMPATIBILITY_MUTED_DATE_KEY,
   RUNTIME_COMPATIBILITY_MUTED_DATE_COOKIE,
@@ -73,6 +74,19 @@ test("mutes compatibility notices for the current local calendar day", () => {
   assert.equal(values.get(RUNTIME_COMPATIBILITY_MUTED_DATE_KEY), "2026-08-13");
   assert.equal(isRuntimeCompatibilityMutedToday(persistence, today), true);
   assert.equal(isRuntimeCompatibilityMutedToday(persistence, tomorrow), false);
+});
+
+test("accepts only future daemon-owned mute deadlines", () => {
+  const now = new Date("2026-08-13T12:00:00.000Z");
+  assert.equal(
+    isRuntimeCompatibilityMutedUntil("2026-08-13T12:00:01.000Z", now),
+    true,
+  );
+  assert.equal(
+    isRuntimeCompatibilityMutedUntil("2026-08-13T12:00:00.000Z", now),
+    false,
+  );
+  assert.equal(isRuntimeCompatibilityMutedUntil("not-a-date", now), false);
 });
 
 test("falls back when iOS rejects one persistence surface", () => {

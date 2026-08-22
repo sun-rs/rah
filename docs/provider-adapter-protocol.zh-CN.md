@@ -122,9 +122,11 @@ Provider 状态：
 
 ## 6.1 Turn 内追加输入与 Guide
 
-一个 Provider turn 不只包含首条 user message，也可以包含零到多条由 Guide/steer 接受的追加输入。daemon 必须为每条输入保留稳定的 `clientMessageId/clientTurnId`，并把它投影为同一 `turnId` 下独立的 canonical `user_message`；前端只按 canonical item 顺序把这些消息插入 thinking/activity 流，不能把它们重建成 final 后的下一轮气泡。
+一个 Provider turn 不只包含首条 user message，也可以包含零到多条由 Guide/steer 接受的追加输入。daemon 必须为每条输入保留稳定的 `clientMessageId/clientTurnId`，并把 Provider 实际接受结果投影为 `inputPlacement: turn_start | turn_steer`。Web 发起 Guide 时同时提交点击瞬间的 `causalAfterItemId`；前端只按该 canonical 语义与顺序渲染，不能通过“当前加载到的第几个 user”、viewport、文本或到达时间决定 Guide。历史记录没有精确 anchor 时保留 provider-native JSONL 顺序，禁止用“最近一条文本 timeline”猜测命令卡之间的边界。
 
 Codex app-server 的 native user echo 与 `turn/steer` RPC continuation 可能互相抢先。两条路径必须通过稳定 client identity 做 exactly-once 投影：native echo 先到时 RPC continuation 不再重复发布；RPC 先成功时后续 native echo 被吸收。若 Provider 在 steer 请求飞行期间结束当前 turn，canonical queue 仍拥有原消息，并把它自然排入下一 turn；这种边界竞态与重复 Guide 请求都按幂等成功处理，不能把“queue item 已转 submitting/accepted”误报为用户操作失败。
+
+Codex v2 请求使用 `clientUserMessageId`，但 native `UserMessageThreadItem` 回声字段是 `clientId`；adapter 必须把两者归一为同一个 canonical client identity，并在 turn 完成后保留有界 exactly-once tombstone，以吸收迟到回声。rollout fallback 则把相邻的 `response_item.message(role=user)` 与 `event_msg.user_message.client_id` 合并为同一个 item。
 
 ## 7. Actions
 

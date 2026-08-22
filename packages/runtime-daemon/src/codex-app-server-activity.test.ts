@@ -906,6 +906,7 @@ describe("translateCodexAppServerNotification", () => {
           kind: "user_message",
           text: "周几?",
           messageId: "user-1",
+          inputPlacement: "turn_start",
         },
       },
     ]);
@@ -917,6 +918,7 @@ describe("translateCodexAppServerNotification", () => {
       text: "连续提问",
       clientMessageId: "client-message-1",
       clientTurnId: "client-turn-1",
+      inputPlacement: "turn_start",
       attachments: [
         {
           id: "attachment-1",
@@ -961,6 +963,7 @@ describe("translateCodexAppServerNotification", () => {
       messageId: "client-message-1",
       clientMessageId: "client-message-1",
       clientTurnId: "client-turn-1",
+      inputPlacement: "turn_start",
       attachments: [
         {
           id: "attachment-1",
@@ -989,10 +992,17 @@ describe("translateCodexAppServerNotification", () => {
       },
       state,
     );
+    const initialActivity = started.find(
+      (item) => item.activity.type === "timeline_item",
+    )?.activity;
+    const initialItemId = initialActivity?.type === "timeline_item"
+      ? initialActivity.identity?.canonicalItemId
+      : undefined;
     const guidedMessage = {
       text: "guided prompt",
       clientMessageId: "client-message-2",
       clientTurnId: "client-turn-2",
+      ...(initialItemId ? { causalAfterItemId: initialItemId } : {}),
     };
     recordCodexSubmittedUserMessageForTurn(state, "turn-1", guidedMessage);
     const projectedGuide = codexSubmittedUserMessageActivity(state, {
@@ -1043,6 +1053,8 @@ describe("translateCodexAppServerNotification", () => {
         messageId: "client-message-2",
         clientMessageId: "client-message-2",
         clientTurnId: "client-turn-2",
+        inputPlacement: "turn_steer",
+        causalAfterItemId: initialItemId,
       },
     );
     assert.deepEqual(guidedEcho, []);
@@ -1066,7 +1078,7 @@ describe("translateCodexAppServerNotification", () => {
           item: {
             type: "userMessage",
             id: "native-guide-race",
-            clientUserMessageId: "client-message-race",
+            clientId: "client-message-race",
             content: [{ type: "text", text: "guide before rpc response" }],
           },
         },
@@ -1088,6 +1100,54 @@ describe("translateCodexAppServerNotification", () => {
       1,
     );
     assert.equal(rpcContinuation, null);
+  });
+
+  test("absorbs an official clientId echo that arrives after turn completion", () => {
+    const state = createCodexAppServerTranslationState();
+    recordCodexSubmittedUserMessage(state, {
+      text: "new turn prompt",
+      clientMessageId: "client-message-late",
+      clientTurnId: "client-turn-late",
+    });
+    const started = translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: { threadId: "thread-late", turn: { id: "turn-late" } },
+      },
+      state,
+    );
+    translateCodexAppServerNotification(
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-late",
+          turn: { id: "turn-late", status: "completed" },
+        },
+      },
+      state,
+    );
+    const lateEcho = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-late",
+          turnId: "turn-late",
+          item: {
+            type: "userMessage",
+            id: "provider-message-late",
+            clientId: "client-message-late",
+            content: [{ type: "text", text: "new turn prompt" }],
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(
+      started.filter((item) => item.activity.type === "timeline_item").length,
+      1,
+    );
+    assert.deepEqual(lateEcho, []);
   });
 
   test("maps live image user messages without exposing data urls as text", () => {
@@ -1121,6 +1181,7 @@ describe("translateCodexAppServerNotification", () => {
         kind: "user_message",
         text: "这是什么意思",
         messageId: "user-image",
+        inputPlacement: "turn_start",
         imageCount: 1,
       },
     );

@@ -74,6 +74,15 @@ export interface RuntimeIdentityResponse {
   webBuildId?: string;
 }
 
+/**
+ * Daemon-owned preference for the advisory Web/daemon generation notice.
+ * The timestamp is computed in the daemon host's local timezone so every
+ * trusted client observes one shared "today" boundary.
+ */
+export interface RuntimeCompatibilityNoticeStateResponse {
+  mutedUntil?: string;
+}
+
 export interface TrustedDeviceDescriptor {
   id: string;
   name: string;
@@ -362,6 +371,8 @@ export interface ReorderQueuedInputRequest {
 
 export interface SteerQueuedInputRequest {
   clientId: string;
+  /** Conversation item visible immediately before the Guide click. */
+  causalAfterItemId?: string;
 }
 
 /** @deprecated Follow-up input always queues; retained for older clients. */

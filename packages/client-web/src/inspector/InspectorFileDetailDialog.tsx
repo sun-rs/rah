@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
+} from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { LoaderCircle, X } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, Minus, X } from "lucide-react";
 import type { NotebookPreviewData } from "@rah/runtime-protocol";
 import {
   applyGitFileAction,
@@ -16,7 +24,6 @@ import { SEGMENTED_CONTROL_FLAT_ACTIVE_CLASS } from "../components/segmented-con
 import type { DiffLayout, FileDetailSelection } from "./shared";
 import {
   DelimitedTablePreview,
-  DiffDisplay,
   FileContentDisplay,
   ImageFilePreview,
   MarkdownFilePreview,
@@ -24,6 +31,7 @@ import {
 } from "./InspectorPreviewDisplays";
 import { resolveFilePreviewKind } from "./file-preview-utils";
 import { HtmlFilePreview } from "./HtmlFilePreview";
+import { FileInspectionDiffSurface } from "./FileInspectionDiffSurface";
 import {
   buildDiffRows,
   getChangeScopeLabel,
@@ -45,9 +53,24 @@ type ViewerInteraction = {
   startY: number;
   geometry: ViewerGeometry;
 };
+export type PaneWindowVerticalGeometry = { top: number; height: number };
+type PaneWindowResizeDirection = "n" | "s";
+type PaneWindowResizeInteraction = {
+  direction: PaneWindowResizeDirection;
+  startY: number;
+  geometry: PaneWindowVerticalGeometry;
+  boundsHeight: number;
+};
 
 const VIEWER_MIN_WIDTH = 480;
 const VIEWER_MIN_HEIGHT = 320;
+export const PANE_WINDOW_MIN_HEIGHT = 280;
+export const PANE_WINDOW_DEFAULT_HEIGHT =
+  "min(68rem, max(42rem, 82%), calc(100% - 4rem))";
+export const PANE_WINDOW_DEFAULT_WIDTH =
+  "min(52rem, max(22rem, calc(60% - 1rem)), calc(100% - 2rem))";
+const PANE_WINDOW_TOP_BOUNDARY = 40;
+const PANE_WINDOW_BOTTOM_MARGIN = 16;
 
 const RESIZE_HANDLES: ReadonlyArray<{ direction: ResizeDirection; className: string }> = [
   { direction: "n", className: "left-3 right-3 top-0 h-2 cursor-ns-resize" },
@@ -97,6 +120,51 @@ function DiffLayoutControl(props: {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+}
+
+function fitPaneWindowVerticalGeometry(
+  geometry: PaneWindowVerticalGeometry,
+  boundsHeight: number,
+): PaneWindowVerticalGeometry {
+  const bottomLimit = Math.max(PANE_WINDOW_TOP_BOUNDARY + 1, boundsHeight - PANE_WINDOW_BOTTOM_MARGIN);
+  const availableHeight = Math.max(1, bottomLimit - PANE_WINDOW_TOP_BOUNDARY);
+  const minimumHeight = Math.min(PANE_WINDOW_MIN_HEIGHT, availableHeight);
+  const height = clamp(geometry.height, minimumHeight, availableHeight);
+  return {
+    top: clamp(
+      geometry.top,
+      PANE_WINDOW_TOP_BOUNDARY,
+      bottomLimit - height,
+    ),
+    height,
+  };
+}
+
+export function resizePaneWindowVertically(
+  geometry: PaneWindowVerticalGeometry,
+  direction: PaneWindowResizeDirection,
+  deltaY: number,
+  boundsHeight: number,
+): PaneWindowVerticalGeometry {
+  const fitted = fitPaneWindowVerticalGeometry(geometry, boundsHeight);
+  const bottomLimit = Math.max(PANE_WINDOW_TOP_BOUNDARY + 1, boundsHeight - PANE_WINDOW_BOTTOM_MARGIN);
+  const availableHeight = Math.max(1, bottomLimit - PANE_WINDOW_TOP_BOUNDARY);
+  const minimumHeight = Math.min(PANE_WINDOW_MIN_HEIGHT, availableHeight);
+  if (direction === "n") {
+    const bottom = fitted.top + fitted.height;
+    const top = clamp(
+      fitted.top + deltaY,
+      PANE_WINDOW_TOP_BOUNDARY,
+      bottom - minimumHeight,
+    );
+    return { top, height: bottom - top };
+  }
+  const bottom = clamp(
+    fitted.top + fitted.height + deltaY,
+    fitted.top + minimumHeight,
+    bottomLimit,
+  );
+  return { top: fitted.top, height: bottom - fitted.top };
 }
 
 type ViewerBounds = { left: number; top: number; width: number; height: number };
@@ -179,6 +247,13 @@ export function InspectorFileDetailDialog(props: {
   sessionId: string | null;
   workspaceRoot: string;
   selection: FileDetailSelection;
+  presentation?: "floating" | "pane" | "pane-window";
+  paneWindowGeometry?: PaneWindowVerticalGeometry | null;
+  onPaneWindowGeometryChange?: Dispatch<
+    SetStateAction<PaneWindowVerticalGeometry | null>
+  >;
+  onCollapse?: () => void;
+  onPresentationChange?: (presentation: "pane" | "pane-window") => void;
   onRefreshChanges: () => void;
   onClose: () => void;
 }) {
@@ -208,13 +283,28 @@ export function InspectorFileDetailDialog(props: {
     () => readDiffPreferences().diffLayout,
   );
   const [geometry, setGeometry] = useState<ViewerGeometry>(() => initialViewerGeometry(props.sessionId));
+  const [internalPaneWindowGeometry, setInternalPaneWindowGeometry] =
+    useState<PaneWindowVerticalGeometry | null>(null);
+  const paneWindowGeometry =
+    props.paneWindowGeometry === undefined
+      ? internalPaneWindowGeometry
+      : props.paneWindowGeometry;
+  const setPaneWindowGeometry =
+    props.onPaneWindowGeometryChange ?? setInternalPaneWindowGeometry;
   const interactionRef = useRef<ViewerInteraction | null>(null);
+  const paneWindowResizeRef = useRef<PaneWindowResizeInteraction | null>(null);
+  const paneWindowContentRef = useRef<HTMLDivElement | null>(null);
   const userAdjustedGeometryRef = useRef(false);
   const isLocalLinkedFile = props.selection.source === "local";
   const isTurnChange = props.selection.source === "turn_changes";
+  const paneWindow = props.presentation === "pane-window";
+  const floating = props.presentation === undefined || props.presentation === "floating";
   const effectiveSessionId = props.selection.sessionId ?? props.sessionId;
 
   useEffect(() => {
+    if (!floating) {
+      return;
+    }
     const finishInteraction = () => {
       interactionRef.current = null;
       document.body.style.removeProperty("cursor");
@@ -269,9 +359,71 @@ export function InspectorFileDetailDialog(props: {
       window.removeEventListener("resize", handleResize);
       finishInteraction();
     };
-  }, [props.sessionId]);
+  }, [floating, props.sessionId]);
 
   useEffect(() => {
+    if (!paneWindow) {
+      return;
+    }
+    const finishResize = () => {
+      paneWindowResizeRef.current = null;
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      const interaction = paneWindowResizeRef.current;
+      if (!interaction) return;
+      setPaneWindowGeometry(
+        resizePaneWindowVertically(
+          interaction.geometry,
+          interaction.direction,
+          event.clientY - interaction.startY,
+          interaction.boundsHeight,
+        ),
+      );
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+      finishResize();
+    };
+  }, [paneWindow]);
+
+  const paneWindowGeometryAdjusted = paneWindowGeometry !== null;
+  useEffect(() => {
+    if (!paneWindow || !paneWindowGeometryAdjusted) {
+      return;
+    }
+    const bounds = paneWindowContentRef.current?.offsetParent;
+    if (!(bounds instanceof HTMLElement)) {
+      return;
+    }
+    const fitToBounds = () => {
+      const boundsHeight = bounds.getBoundingClientRect().height;
+      setPaneWindowGeometry((current) =>
+        current
+          ? fitPaneWindowVerticalGeometry(current, boundsHeight)
+          : current,
+      );
+    };
+    fitToBounds();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", fitToBounds);
+      return () => window.removeEventListener("resize", fitToBounds);
+    }
+    const observer = new ResizeObserver(fitToBounds);
+    observer.observe(bounds);
+    return () => observer.disconnect();
+  }, [paneWindow, paneWindowGeometryAdjusted]);
+
+  useEffect(() => {
+    if (!floating) {
+      return;
+    }
     const anchor = findViewerAnchor(props.sessionId);
     if (!anchor) return;
     const recenter = () => {
@@ -284,14 +436,14 @@ export function InspectorFileDetailDialog(props: {
     const observer = new ResizeObserver(recenter);
     observer.observe(anchor);
     return () => observer.disconnect();
-  }, [props.sessionId]);
+  }, [floating, props.sessionId]);
 
   const beginInteraction = (
     event: ReactPointerEvent,
     mode: ViewerInteraction["mode"],
     direction?: ResizeDirection,
   ) => {
-    if (event.button !== 0) return;
+    if (!floating || event.button !== 0) return;
     event.preventDefault();
     userAdjustedGeometryRef.current = true;
     interactionRef.current = {
@@ -311,7 +463,37 @@ export function InspectorFileDetailDialog(props: {
             ? "ew-resize"
             : direction === "ne" || direction === "sw"
               ? "nesw-resize"
-              : "nwse-resize";
+          : "nwse-resize";
+  };
+
+  const beginPaneWindowResize = (
+    event: ReactPointerEvent,
+    direction: PaneWindowResizeDirection,
+  ) => {
+    if (!paneWindow || event.button !== 0) return;
+    const content = paneWindowContentRef.current;
+    const bounds = content?.offsetParent;
+    if (!content || !(bounds instanceof HTMLElement)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const contentRect = content.getBoundingClientRect();
+    const boundsRect = bounds.getBoundingClientRect();
+    const nextGeometry = fitPaneWindowVerticalGeometry(
+      {
+        top: contentRect.top - boundsRect.top,
+        height: contentRect.height,
+      },
+      boundsRect.height,
+    );
+    setPaneWindowGeometry(nextGeometry);
+    paneWindowResizeRef.current = {
+      direction,
+      startY: event.clientY,
+      geometry: nextGeometry,
+      boundsHeight: boundsRect.height,
+    };
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "ns-resize";
   };
 
   useEffect(() => {
@@ -509,25 +691,59 @@ export function InspectorFileDetailDialog(props: {
     }
   };
 
-  return (
-    <Dialog.Root open modal={false} onOpenChange={(open) => (!open ? props.onClose() : undefined)}>
-      <Dialog.Portal>
-        <Dialog.Content
+  const dialogContent = (
+    <Dialog.Content
+          ref={paneWindowContentRef}
           data-inspector-file-viewer="true"
+          data-file-viewer-presentation={
+            floating ? "floating" : paneWindow ? "pane-window" : "pane"
+          }
           data-testid="inspector-file-viewer"
-          style={{ left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }}
+          style={
+            floating
+              ? {
+                  left: geometry.x,
+                  top: geometry.y,
+                  width: geometry.width,
+                  height: geometry.height,
+                }
+              : paneWindow
+                ? paneWindowGeometry
+                  ? {
+                      right: "1rem",
+                      top: paneWindowGeometry.top,
+                      width: PANE_WINDOW_DEFAULT_WIDTH,
+                      height: paneWindowGeometry.height,
+                    }
+                  : {
+                      right: "1rem",
+                      top: "calc(50% + 1rem)",
+                      width: PANE_WINDOW_DEFAULT_WIDTH,
+                      height: PANE_WINDOW_DEFAULT_HEIGHT,
+                      transform: "translateY(-50%)",
+                    }
+              : undefined
+          }
           onInteractOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => event.preventDefault()}
           onOpenAutoFocus={(event) => event.preventDefault()}
-          className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none max-md:!inset-0 max-md:!h-[100dvh] max-md:!w-screen max-md:!max-w-none max-md:!rounded-none max-md:!border-0 max-md:!pt-[env(safe-area-inset-top)] max-md:!pb-[env(safe-area-inset-bottom)]"
+          className={
+            floating
+              ? "fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none max-md:!inset-0 max-md:!h-[100dvh] max-md:!w-screen max-md:!max-w-none max-md:!rounded-none max-md:!border-0 max-md:!pt-[env(safe-area-inset-top)] max-md:!pb-[env(safe-area-inset-bottom)]"
+              : paneWindow
+                ? "pointer-events-auto absolute z-[30] flex flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none"
+              : "pointer-events-auto absolute inset-x-0 bottom-0 top-8 z-[30] flex flex-col overflow-hidden border-t border-[var(--app-border)] bg-[var(--app-bg)] shadow-xl focus:outline-none"
+          }
         >
           <div className="flex items-start justify-between gap-4 border-b border-[var(--app-border)] px-4 py-3 md:px-5 md:py-4">
             <div className="min-w-0 flex-1">
               <div
                 data-testid="inspector-file-viewer-drag-handle"
-                className="cursor-move touch-none select-none"
-                onPointerDown={(event) => beginInteraction(event, "move")}
-                title="Drag to move the file viewer"
+                className={floating ? "cursor-move touch-none select-none" : "select-none"}
+                onPointerDown={
+                  floating ? (event) => beginInteraction(event, "move") : undefined
+                }
+                title={floating ? "Drag to move the file viewer" : undefined}
               >
                 <Dialog.Title className="truncate text-base font-semibold text-[var(--app-fg)]">
                   {fileName}
@@ -564,6 +780,38 @@ export function InspectorFileDetailDialog(props: {
                 </div>
               ) : null}
             </div>
+            {!floating && props.onCollapse ? (
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                onClick={props.onCollapse}
+                aria-label="Collapse file viewer"
+                title="Collapse file viewer"
+              >
+                <Minus size={16} />
+              </button>
+            ) : null}
+            {!floating && props.onPresentationChange ? (
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                onClick={() =>
+                  props.onPresentationChange?.(paneWindow ? "pane" : "pane-window")
+                }
+                aria-label={
+                  paneWindow
+                    ? "Maximize file viewer within pane"
+                    : "Restore file viewer window"
+                }
+                title={
+                  paneWindow
+                    ? "Maximize within pane"
+                    : "Restore window"
+                }
+              >
+                {paneWindow ? <Maximize2 size={16} /> : <Minimize2 size={16} />}
+              </button>
+            ) : null}
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -698,41 +946,19 @@ export function InspectorFileDetailDialog(props: {
 
           <div className="flex min-h-0 flex-1 flex-col overflow-auto rah-scroll-code scrollbar-stable p-3 md:p-5">
             {displayMode === "diff" ? (
-              diffLoading ? (
-                <div className="flex items-center gap-2 text-sm text-[var(--app-hint)]">
-                  <LoaderCircle size={14} className="animate-spin" />
-                  Loading diff…
-                </div>
-              ) : diffError ? (
-                <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-warning-bg)] p-3 text-xs text-[var(--app-hint)]">
-                  Diff unavailable: {diffError}
-                </div>
-              ) : hasDiff ? (
-                <div className="flex h-full min-h-0 flex-col gap-3">
-                  {diffTruncated ? (
-                    <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-warning-bg)] p-3 text-xs text-[var(--app-hint)]">
-                      This diff exceeded the stored per-turn limit. Showing the available prefix.
-                    </div>
-                  ) : null}
-                  <DiffDisplay
-                    rows={diffRows}
-                    path={props.selection.path}
-                    wrapLines={wrapLines}
-                    layout={diffLayout}
-                    fillAvailable
-                  />
-                </div>
-              ) : diffTruncated ? (
-                <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-warning-bg)] p-3 text-xs text-[var(--app-hint)]">
-                  This file is part of the turn, but its diff exceeded the stored per-turn limit.
-                </div>
-              ) : showDiffUnavailable ? (
-                <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-3 text-sm text-[var(--app-hint)]">
-                  This binary change does not have a text diff preview.
-                </div>
-              ) : (
-                <div className="text-sm text-[var(--app-hint)]">No diff for this file.</div>
-              )
+              <FileInspectionDiffSurface
+                path={props.selection.path}
+                rows={diffRows}
+                loading={diffLoading}
+                error={diffError}
+                truncated={diffTruncated}
+                binary={showDiffUnavailable}
+                wrapLines={wrapLines}
+                layout={diffLayout}
+                emptyLabel="No diff for this file."
+                errorPrefix="Diff unavailable: "
+                truncatedLabel="This diff exceeded the stored per-turn limit. Showing the available prefix."
+              />
             ) : fileLoading ? (
               <div className="flex items-center gap-2 text-sm text-[var(--app-hint)]">
                 <LoaderCircle size={14} className="animate-spin" />
@@ -795,7 +1021,7 @@ export function InspectorFileDetailDialog(props: {
               </div>
             )}
           </div>
-          {RESIZE_HANDLES.map((handle) => (
+          {floating ? RESIZE_HANDLES.map((handle) => (
             <div
               key={handle.direction}
               role="separator"
@@ -804,9 +1030,32 @@ export function InspectorFileDetailDialog(props: {
               className={`absolute z-10 touch-none max-md:hidden ${handle.className}`}
               onPointerDown={(event) => beginInteraction(event, "resize", handle.direction)}
             />
-          ))}
+          )) : paneWindow ? (
+            <>
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize pane file viewer from top"
+                data-pane-window-resize-direction="n"
+                className="absolute left-3 right-3 top-0 z-10 h-2 cursor-ns-resize touch-none"
+                onPointerDown={(event) => beginPaneWindowResize(event, "n")}
+              />
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize pane file viewer from bottom"
+                data-pane-window-resize-direction="s"
+                className="absolute bottom-0 left-3 right-3 z-10 h-2 cursor-ns-resize touch-none"
+                onPointerDown={(event) => beginPaneWindowResize(event, "s")}
+              />
+            </>
+          ) : null}
         </Dialog.Content>
-      </Dialog.Portal>
+  );
+
+  return (
+    <Dialog.Root open modal={false} onOpenChange={(open) => (!open ? props.onClose() : undefined)}>
+      {floating ? <Dialog.Portal>{dialogContent}</Dialog.Portal> : dialogContent}
     </Dialog.Root>
   );
 }

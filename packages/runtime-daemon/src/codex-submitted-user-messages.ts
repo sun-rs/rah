@@ -1,6 +1,7 @@
 import type {
   SessionInputAttachment,
   TimelineIdentity,
+  TimelineUserInputPlacement,
 } from "@rah/runtime-protocol";
 import type { ProviderActivity } from "./provider-activity";
 
@@ -9,6 +10,8 @@ export type CodexSubmittedUserMessage = {
   attachments?: SessionInputAttachment[];
   clientMessageId?: string;
   clientTurnId?: string;
+  inputPlacement?: TimelineUserInputPlacement;
+  causalAfterItemId?: string;
 };
 
 export type CodexLiveSubmittedUserMessageParams = {
@@ -50,7 +53,10 @@ export function recordCodexSubmittedUserMessage(
   ) {
     return;
   }
-  state.pendingSubmittedUserMessages.push(message);
+  state.pendingSubmittedUserMessages.push({
+    ...message,
+    inputPlacement: message.inputPlacement ?? "turn_start",
+  });
   if (state.pendingSubmittedUserMessages.length > 128) {
     state.pendingSubmittedUserMessages.splice(
       0,
@@ -88,7 +94,10 @@ export function recordCodexSubmittedUserMessageForTurn(
   ) {
     return;
   }
-  messages.push(message);
+  messages.push({
+    ...message,
+    inputPlacement: message.inputPlacement ?? "turn_steer",
+  });
   state.submittedUserMessagesByTurnId.set(turnId, messages);
 }
 
@@ -178,6 +187,12 @@ export function createCodexSubmittedUserMessageActivity(
         : {}),
       ...(params.message.clientTurnId !== undefined
         ? { clientTurnId: params.message.clientTurnId }
+        : {}),
+      ...(params.message.inputPlacement !== undefined
+        ? { inputPlacement: params.message.inputPlacement }
+        : {}),
+      ...(params.message.causalAfterItemId !== undefined
+        ? { causalAfterItemId: params.message.causalAfterItemId }
         : {}),
       ...(params.message.attachments?.length
         ? { attachments: params.message.attachments }

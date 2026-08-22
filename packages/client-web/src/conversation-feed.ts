@@ -197,6 +197,47 @@ function isUserTimelineEntry(entry: FeedEntry): entry is UserTimelineEntry {
   return entry.kind === "timeline" && entry.item.kind === "user_message";
 }
 
+function userInputPlacement(
+  item: ConversationItemProjection,
+): "turn_start" | "turn_steer" | undefined {
+  return item.content.kind === "timeline" &&
+    item.content.item.kind === "user_message"
+    ? item.content.item.inputPlacement
+    : undefined;
+}
+
+function mergeAnchoredOptimisticGuides(
+  canonicalEntries: readonly FeedEntry[],
+  optimisticGuides: readonly UserTimelineEntry[],
+  initialUserItemId: string | undefined,
+): FeedEntry[] {
+  const merged = [...canonicalEntries];
+  const lastInsertionByAnchor = new Map<string, number>();
+  for (const guide of optimisticGuides) {
+    const anchor = guide.item.causalAfterItemId;
+    if (!anchor) {
+      merged.push(guide);
+      continue;
+    }
+    const previousInsertion = lastInsertionByAnchor.get(anchor);
+    let insertionIndex = previousInsertion;
+    if (insertionIndex === undefined) {
+      if (anchor === initialUserItemId) {
+        insertionIndex = 0;
+      } else {
+        const anchorIndex = merged.findIndex(
+          (entry) =>
+            "canonicalItemId" in entry && entry.canonicalItemId === anchor,
+        );
+        insertionIndex = anchorIndex >= 0 ? anchorIndex + 1 : merged.length;
+      }
+    }
+    merged.splice(insertionIndex, 0, guide);
+    lastInsertionByAnchor.set(anchor, insertionIndex + 1);
+  }
+  return merged;
+}
+
 /**
  * The canonical conversation only consumes unresolved optimistic user
  * messages from the legacy live feed. Process output, tool details, and other
@@ -538,9 +579,14 @@ export function conversationDisplayRows(
     // item arrives (notably when the turn interrupts during handoff). Keep
     // that row at the top-level turn boundary. Only a later user message in a
     // turn that already has its first user item is an in-process Guide.
-    const ownerMap = ownerTurn.items.some((item) => item.role === "user")
-      ? supplementalGuidesByTurn
-      : supplementalInitialUsersByTurn;
+    const ownerMap =
+      entry.item.inputPlacement === "turn_steer"
+        ? supplementalGuidesByTurn
+        : entry.item.inputPlacement === "turn_start"
+          ? supplementalInitialUsersByTurn
+          : ownerTurn.items.some((item) => item.role === "user")
+            ? supplementalGuidesByTurn
+            : supplementalInitialUsersByTurn;
     const current = ownerMap.get(ownerTurn.id) ?? [];
     current.push(entry);
     ownerMap.set(ownerTurn.id, current);
@@ -579,9 +625,14 @@ export function conversationDisplayRows(
     // complete entry set available so an explicit Worked expansion cannot
     // disappear merely because completed tool cards are hidden globally.
     const processEntryByKey = activeEntryByKey;
-    const firstUserItemId = turnItems.find((item) => item.role === "user")?.id;
+    const firstUserItemId =
+      turnItems.find(
+        (item) => item.role === "user" && userInputPlacement(item) === "turn_start",
+      )?.id ?? turnItems.find((item) => item.role === "user")?.id;
     const isInTurnGuideItem = (item: ConversationItemProjection) =>
-      item.role === "user" && item.id !== firstUserItemId;
+      item.role === "user" &&
+      (userInputPlacement(item) === "turn_steer" ||
+        (userInputPlacement(item) === undefined && item.id !== firstUserItemId));
     const canonicalProcessEntries = turnItems
       .filter((item) => item.role === "process" || isInTurnGuideItem(item))
       .map((item) => processEntryByKey.get(conversationItemFeedKey(item.id)))
@@ -591,10 +642,11 @@ export function conversationDisplayRows(
     // it never flashes below the final reply while the native echo and
     // conversation delta are still in flight. The canonical item replaces it
     // by clientMessageId without changing the visual location.
-    const processEntries = [
-      ...canonicalProcessEntries,
-      ...(supplementalGuidesByTurn.get(turn.id) ?? []),
-    ];
+    const processEntries = mergeAnchoredOptimisticGuides(
+      canonicalProcessEntries,
+      supplementalGuidesByTurn.get(turn.id) ?? [],
+      firstUserItemId,
+    );
     const finalRuntimeModel =
       finalItem?.content.kind === "timeline" &&
       finalItem.content.item.kind === "assistant_message"

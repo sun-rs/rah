@@ -8,7 +8,7 @@ export type CouncilDisplayItem =
     kind: "agent-status";
     key: string;
     actorId: string;
-    status: "sent" | "joined" | "ready";
+    status: "sent" | "joined" | "subscribed" | "waking" | "working" | "queued" | "ready" | "sleeping";
     messageId: number;
   };
 
@@ -28,14 +28,21 @@ function isCouncilSystemNoise(message: CouncilMessage): boolean {
   );
 }
 
-function councilAgentSystemStatus(message: CouncilMessage): "sent" | "joined" | "ready" | null {
+function councilAgentSystemStatus(
+  message: CouncilMessage,
+): "sent" | "joined" | "subscribed" | "waking" | "working" | "queued" | "ready" | "sleeping" | null {
   if (message.role !== "system" || message.actorId === "system") {
     return null;
   }
   const text = messageText(message);
   if (text === `${message.actorId} sent`) return "sent";
   if (text === `${message.actorId} joined`) return "joined";
+  if (text === `${message.actorId} subscribed`) return "subscribed";
+  if (text === `${message.actorId} waking`) return "waking";
+  if (text === `${message.actorId} working`) return "working";
+  if (text === `${message.actorId} queued`) return "queued";
   if (text === `${message.actorId} listening`) return "ready";
+  if (text === `${message.actorId} sleeping`) return "sleeping";
   return null;
 }
 

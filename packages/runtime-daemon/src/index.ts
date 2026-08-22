@@ -11,5 +11,6 @@ export * from "./codex-rollout-activity";
 export * from "./codex-stored-sessions";
 export * from "./claude-session-files";
 export * from "./workbench-state";
+export * from "./workbench-notice-preferences";
 export * from "./runtime-engine";
 export * from "./http-server";
